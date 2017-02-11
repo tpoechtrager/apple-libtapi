@@ -1,0 +1,123 @@
+#!/bin/sh
+# LLVM LOCAL file B&I
+
+set -x
+
+# Build LLVM the "Apple way".
+# Parameters:
+
+HOSTS_LIST=`echo $RC_ARCHS | sed 's/[[:space:]]/;/g'`
+
+# The first parameter is a yes/no that indicates whether assertions should be
+# enabled in the LLVM libs/tools.
+LLVM_ASSERTIONS="$1"
+
+# The second parameter is a yes/no that indicates whether this is an optimized
+# build.
+LLVM_OPTIMIZED="$2"
+
+SDKROOT_PATH=`xcodebuild -version -sdk $SDKROOT Path`
+
+if [ "$LLVM_OPTIMIZED" = "yes" ]; then
+    BUILD_TYPE=RelWithDebInfo
+else
+    BUILD_TYPE=Debug
+    # Never build a debug dylib.  The debug info is far too large.
+    LLVM_BUILD_LTO="no"
+fi
+
+# Figure out how many make processes to run.
+SYSCTL=`sysctl -n hw.activecpu`
+# sysctl -n hw.* does not work when invoked via B&I chroot /BuildRoot.
+# Builders can default to 2, since even if they are single processor,
+# nothing else is running on the machine.
+if [ -z "$SYSCTL" ]; then
+    SYSCTL=2
+fi
+
+CMAKE=`xcrun -find cmake`
+NINJA=`xcrun -find ninja`
+CC=`xcrun -find clang`
+CXX=`xcrun -find clang++`
+PREFIX=$DSTROOT/AppStoreTools/AppAnalyzer/usr/local/
+CMAKE_OPTS="\
+  -DLLVM_TARGETS_TO_BUILD='ARM;AArch64;X86' \
+  -DLLVM_BUILD_API_ANALYZER=On \
+  -DLLVM_ENABLE_ASSERTIONS:BOOL=$LLVM_ASSERTIONS \
+  -DLLVM_ENABLE_ZLIB:BOOL=OFF \
+  -DLLVM_ENABLE_TERMINFO:BOOL=OFF \
+  -DCLANG_VENDOR:STRING='Apple' \
+  -DAPPLE_BITCODE_VERSION=$RC_ProjectSourceVersion \
+  -DLLVM_REQUIRES_RTTI:BOOL=OFF \
+  -DLLVM_BUILD_RUNTIME:BOOL=OFF \
+  -DCMAKE_INSTALL_PREFIX=$PREFIX \
+  -DLLVM_INCLUDE_TESTS=OFF \
+  -DLLVM_INCLUDE_EXAMPLES=OFF \
+  -DLLVM_INCLUDE_UTILS:BOOL=OFF \
+  -DLLVM_ENABLE_CRASH_OVERRIDES=OFF \
+  -DLLVM_INCLUDE_DOCS=OFF \
+  -DLLVM_BUILD_TOOLS=OFF \
+  -DCLANG_TOOL_DRIVER_BUILD=OFF \
+  -DCLANG_TOOL_C_INDEX_TEST_BUILD=OFF \
+  -DCLANG_TOOL_CLANG_CHECK_BUILD=OFF \
+  -DCLANG_TOOL_ARCMT_TEST_BUILD=OFF \
+  -DCLANG_TOOL_SCAN_BUILD_BUILD=OFF \
+  -DCLANG_TOOL_SCAN_VIEW_BUILD=OFF \
+  -DCLANG_TOOL_CLANG_FORMAT_BUILD=OFF \
+  -DCLANG_TOOL_DIAGTOOL_BUILD=OFF \
+  -DCLANG_TOOL_C_ARCMT_TEST_BUILD=OFF \
+  -DCLANG_TOOL_LIBCLANG_BUILD=OFF \
+  -DCLANG_TOOL_SERVICE_BUILD=OFF \
+  -DCLANG_TOOL_XPC_BUILD=OFF \
+  -DCLANG_TOOL_INDEXSTORE_BUILD=OFF \
+  -DCLANG_TOOL_CORE_BUILD=OFF \
+  -DCLANG_TOOL_CLANG_SERVICE_BUILD=OFF \
+  -DLLVM_EXTERNALIZE_DEBUGINFO=ON \
+  -DCMAKE_MAKE_PROGRAM=$NINJA \
+  -DCMAKE_CXX_COMPILER=$CXX \
+  -DCMAKE_C_COMPILER=$CC"
+
+# Build the LLVM tree universal.
+mkdir -p $OBJROOT/obj-llvm || exit 1
+cd $OBJROOT/obj-llvm || exit 1
+
+$CMAKE -G 'Ninja' $CMAKE_OPTS \
+    -DCMAKE_BUILD_TYPE=$BUILD_TYPE \
+    -DCMAKE_C_FLAGS_RELWITHDEBINFO:STRING="-Os -flto -gline-tables-only" \
+    -DCMAKE_CXX_FLAGS_RELWITHDEBINFO:STRING="-Os -flto -gline-tables-only" \
+    -DCMAKE_OSX_ARCHITECTURES="$HOSTS_LIST" \
+    "$SRCROOT" \
+    || exit 1
+
+$NINJA install
+if ! test $? == 0 ; then
+    echo "error: LLVM 'ninja install' failed!"
+    exit 1
+fi
+
+rm -rf $PREFIX/bin
+$NINJA api-analyzer
+if ! test $? == 0 ; then
+    echo "error: LLVM 'ninja install' failed!"
+    exit 1
+fi
+
+# Just copy api-analyzer to Root
+mkdir -p $PREFIX/bin
+ditto bin/api-analyzer $PREFIX/bin/api-analyzer
+ditto bin/api-analyzer.dSYM $SYMROOT/api-analyzer.dSYM
+
+# Save .dSYM files and .a archives
+cd $PREFIX || exit 1
+find . \( -path \*.dSYM/\* \) -print \
+    | cpio -pdml $SYMROOT || exit 1
+
+find $PREFIX -name \*.dSYM -print | xargs rm -r || exit 1
+
+chgrp -h -R wheel $DSTROOT
+chgrp -R wheel $DSTROOT
+
+################################################################################
+# w00t! Done!
+
+exit 0

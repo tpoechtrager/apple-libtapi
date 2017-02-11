@@ -1,0 +1,127 @@
+#!/bin/sh
+# LLVM LOCAL file B&I
+
+set -x
+
+# Build LLVM the "Apple way".
+# Parameters:
+
+HOSTS_LIST=`echo $RC_ARCHS | sed 's/[[:space:]]/;/g'`
+
+# The first parameter is a yes/no that indicates whether assertions should be
+# enabled in the LLVM libs/tools.
+LLVM_ASSERTIONS="$1"
+
+# The second parameter is a yes/no that indicates whether this is an optimized
+# build.
+LLVM_OPTIMIZED="$2"
+
+SDKROOT_PATH=`xcodebuild -version -sdk $SDKROOT Path`
+
+BUILDIT_DIR="utils/buildit"
+if [ "${SRCROOT/$BUILDIT_DIR}" != "${SRCROOT}" ] ; then
+  SRCROOT=`cd ${SRCROOT}/../../ && pwd`
+fi
+
+if [ "$LLVM_OPTIMIZED" = "yes" ]; then
+    BUILD_TYPE=RelWithDebInfo
+else
+    BUILD_TYPE=Debug
+fi
+
+CMAKE=`xcrun -find cmake`
+NINJA=`xcrun -find ninja`
+CC=`xcrun -find clang`
+CXX=`xcrun -find clang++`
+STRIP=`xcrun -find strip`
+UNIFDEF=`xcrun -find unifdef`
+
+PREFIX=$DSTROOT/usr/local/LLVMForJavaScriptCore
+CMAKE_OPTS="\
+  -DCMAKE_MACOSX_RPATH:BOOL=TRUE \
+  -DLLVM_TARGETS_TO_BUILD:STRING='X86' \
+  -DLLVM_ENABLE_ASSERTIONS:BOOL=$LLVM_ASSERTIONS \
+  -DLLVM_ENABLE_ZLIB:BOOL=OFF \
+  -DLLVM_ENABLE_TERMINFO:BOOL=OFF \
+  -DLLVM_REQUIRES_RTTI:BOOL=OFF \
+  -DLLVM_BUILD_RUNTIME:BOOL=OFF \
+  -DCMAKE_INSTALL_PREFIX:STRING=$PREFIX \
+  -DLLVM_INCLUDE_TESTS:BOOL=OFF \
+  -DLLVM_INCLUDE_EXAMPLES:BOOL=OFF \
+  -DLLVM_ENABLE_LIBCXX:BOOL=ON \
+  -DLLVM_INCLUDE_UTILS:BOOL=OFF \
+  -DLLVM_ENABLE_BACKTRACES:BOOL=OFF \
+  -DLLVM_ENABLE_CRASH_OVERRIDES:BOOL=OFF \
+  -DLLVM_BUILD_TOOLS:BOOL=OFF \
+  -DLLVM_INCLUDE_UTILS:BOOL=OFF \
+  -DLLVM_INCLUDE_DOCS:BOOL=OFF \
+  -DCMAKE_MAKE_PROGRAM:STRING=$NINJA \
+  -DCMAKE_CXX_COMPILER:STRING=$CXX \
+  -DCMAKE_C_COMPILER:STRING=$CC"
+
+# Build the LLVM tree universal.
+mkdir -p $OBJROOT/obj-llvm || exit 1
+cd $OBJROOT/obj-llvm || exit 1
+
+$CMAKE -G 'Ninja' $CMAKE_OPTS \
+    -DCMAKE_BUILD_TYPE:STRING=$BUILD_TYPE \
+    -DCMAKE_C_FLAGS_RELWITHDEBINFO:STRING="-O3 -gline-tables-only -DNDEBUG" \
+    -DCMAKE_CXX_FLAGS_RELWITHDEBINFO:STRING="-O3 -gline-tables-only -DNDEBUG" \
+    -DCMAKE_OSX_ARCHITECTURES:STRING="$HOSTS_LIST" \
+    "$SRCROOT" \
+    || exit 1
+
+$NINJA install -v
+if ! test $? == 0 ; then
+    echo "error: LLVM 'ninja install' failed!"
+    exit 1
+fi
+
+# Remove files we don't need.
+rm -rf $PREFIX/bin || exit 1
+rm -rf $PREFIX/share || exit 1
+find $PREFIX \( -name '*.dylib' -o -name lto.h \) -exec rm {} + || exit 1
+
+# Install Version.h
+LLVM_MAJOR_VERSION=`echo $RC_ProjectSourceVersion | awk -F'.' '{print$1}'`
+LLVM_MINOR_VERSION=`echo $RC_ProjectSourceVersion | awk -F'.' '{print$2}'`
+LLVM_BUILD_VERSION=`echo $RC_ProjectSourceVersion | awk -F'.' '{print$3}'`
+
+echo "#define LLVM_VERSION ${LLVM_MAJOR_VERSION}" > $PREFIX/include/llvm/Version.h
+echo "#define LLVM_MINOR_VERSION ${LLVM_MINOR_VERSION}" >> $PREFIX/include/llvm/Version.h
+echo "#define LLVM_BUILD_VERSION ${LLVM_BUILD_VERSION}" >> $PREFIX/include/llvm/Version.h
+echo "#define LLVM_FULL_VERSION ${RC_ProjectSourceVersion}" >> $PREFIX/include/llvm/Version.h
+
+# Run unifdef to preprocess the installed headers to reflect whether this was a
+# debug or release build.
+UNIFDEF_CMD="$UNIFDEF -k -ULLVM_ENABLE_STATS -U_GLIBCXX_DEBUG -UXDEBUG"
+if [ "$LLVM_ASSERTIONS" = yes ]; then
+  UNIFDEF_CMD="$UNIFDEF_CMD -UNDEBUG -D_DEBUG"
+else
+  UNIFDEF_CMD="$UNIFDEF_CMD -DNDEBUG -U_DEBUG -ULLVM_ENABLE_DUMP"
+fi
+for F in `find $PREFIX/include -type f`; do
+  $UNIFDEF_CMD -o $F $F
+done
+
+# Clean out SYMROOT in case -noclean was passed to buildit.
+rm -rf $SYMROOT/* || exit 1
+
+# Save archives before stripping.
+cd $PREFIX || exit 1
+find . -name '*.a' -print | cpio -pdml $SYMROOT || exit 1
+
+# Strip local symbols from llvm libraries.
+if [ "x$LLVM_DEBUG" != "x1" ]; then
+  for F in `find $PREFIX/lib/ -type f -name '*.a'`; do
+    $STRIP -Sx $F
+  done
+fi
+
+chgrp -h -R wheel $DSTROOT
+chgrp -R wheel $DSTROOT
+
+################################################################################
+# w00t! Done!
+
+exit 0
