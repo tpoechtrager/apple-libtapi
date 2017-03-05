@@ -2,21 +2,20 @@
 
 pushd "${0%/*}" &>/dev/null
 
-if [ ! -d build ]; then
-  ./build.sh
-fi
+source tools/tools.sh
 
-if [ -z "$INSTALLPREFIX" ]; then
-  INSTALLPREFIX=/usr/local
-fi
+pushd build &>/dev/null
 
-set -x
+INSTALLPREFIX=\
+\ $(cat CMakeCache.txt | grep CMAKE_INSTALL_PREFIX:PATH |\
+    head -n1 | tr '=' '\n' | tail -n1)
 
-mkdir -p $INSTALLPREFIX/lib
+mkdir -p $INSTALLPREFIX
 mkdir -p $INSTALLPREFIX/include
+cp -rva ../src/apple-llvm/src/projects/libtapi/include/tapi $INSTALLPREFIX/include
+cp -va projects/libtapi/include/tapi/Version.inc $INSTALLPREFIX/include/tapi
 
-cp build/lib/libtapi.so $INSTALLPREFIX/lib
-cp -r src/apple-llvm/src/projects/libtapi/include/tapi $INSTALLPREFIX/include
-cp build/projects/libtapi/include/tapi/Version.inc $INSTALLPREFIX/include/tapi
+$MAKE install-libtapi
 
+popd &>/dev/null
 popd &>/dev/null

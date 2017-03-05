@@ -1,4 +1,6 @@
-set(LLVM_EXPORTED_SYMBOL_FILE ${CMAKE_CURRENT_SOURCE_DIR}/libtapi.exports)
+if(NOT CYGWIN)
+  set(LLVM_EXPORTED_SYMBOL_FILE ${CMAKE_CURRENT_SOURCE_DIR}/libtapi.exports)
+endif()
 
 add_tapi_library(libtapi
   SHARED

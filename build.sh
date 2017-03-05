@@ -2,18 +2,7 @@
 
 pushd "${0%/*}" &>/dev/null
 
-if [ -z "$CC" ] && [ -z "$CXX" ]; then
-
-which clang &>/dev/null && {
-  export CC=clang
-  export CXX=clang++
-}
-
-fi
-
-if [ -z "$JOBS" ]; then
-  JOBS=$(tools/cpucount/get_cpu_count.sh)
-fi
+source tools/tools.sh
 
 rm -rf build
 mkdir build
@@ -22,8 +11,9 @@ pushd build &>/dev/null
 
 cmake ../src/apple-llvm/src \
  -DLLVM_INCLUDE_TESTS=OFF \
- -DCMAKE_BUILD_TYPE=RELEASE
-make libtapi -j $JOBS
+ -DCMAKE_BUILD_TYPE=RELEASE \
+ -DCMAKE_INSTALL_PREFIX=$INSTALLPREFIX
+$MAKE libtapi -j $JOBS
 
 popd &>/dev/null
 popd &>/dev/null
