@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 
-pushd "${0%/*}" &>/dev/null
+set -e
 
+pushd "${0%/*}" &>/dev/null
 source tools/tools.sh
 
 rm -rf build

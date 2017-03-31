@@ -1,9 +1,9 @@
 #/usr/bin/env bash
 
+set -e
+
 pushd "${0%/*}" &>/dev/null
-
 source tools/tools.sh
-
 pushd build &>/dev/null
 
 INSTALLPREFIX=\
