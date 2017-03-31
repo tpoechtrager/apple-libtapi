@@ -40,7 +40,7 @@ elif [ "$TARGET" == "MINGW32" ]; then
   export CXX=i686-w64-mingw32-g++
 fi
 
-if [ -n "$TARGET" -a $PLATFORM != $TARGET ]; then
+if [ -n "$TARGET" -a "$PLATFORM" != "$TARGET" ]; then
   VERSION=$(cat ../VERSION.txt | grep llvm: | tr ' ' '\n' | tail -n1)
   CMAKE_EXTRA_ARGS+="-DLLVM_TABLEGEN=/opt/compiler/apple-llvm/$VERSION/bin/llvm-tblgen"
 fi
