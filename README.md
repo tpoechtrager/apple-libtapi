@@ -14,3 +14,7 @@ CMake, Python and GCC or Clang
     [INSTALLPREFIX=<prefix>] ./build.sh  
     ./install.sh
 
+## Travis CI ##
+
+[![Build Status](https://travis-ci.org/tpoechtrager/apple-libtapi.svg?branch=master)](https://travis-ci.org/tpoechtrager/apple-libtapi)
+
