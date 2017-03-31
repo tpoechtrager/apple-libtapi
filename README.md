@@ -1,4 +1,4 @@
-# Apple libtapi, Version 1.30.0 # 
+# Apple TAPI library, Version 1.30.0 # 
 
 Sources taken from: 
 
