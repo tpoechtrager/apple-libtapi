@@ -2,12 +2,12 @@
 
 Sources taken from: 
 
-https://opensource.apple.com/tarballs/clang
+https://opensource.apple.com/tarballs/clang  
 https://opensource.apple.com/tarballs/tapi 
 
 ## Dependencies: ##
 
-CMake, Python and GCC or Clang
+CMake, Python and GCC 4.8+ or Clang
 
 ## Installation: ##
 
