@@ -25,6 +25,8 @@ TAPI_NAMESPACE_INTERNAL_BEGIN
 
 static constexpr unsigned numPlatformBits = 3;
 
+#undef i386
+
 enum Arch : uint32_t {
   unknown = 0U,
   armv7   = 1U << 0,

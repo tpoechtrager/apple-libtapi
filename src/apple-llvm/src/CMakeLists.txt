@@ -695,8 +695,8 @@ if( LLVM_INCLUDE_TESTS )
       EXCLUDE_FROM_ALL
       NO_INSTALL)
   endif()
-  add_subdirectory(test)
-  add_subdirectory(unittests)
+  #add_subdirectory(test)
+  #add_subdirectory(unittests)
   if (MSVC)
     # This utility is used to prevent crashing tests from calling Dr. Watson on
     # Windows.

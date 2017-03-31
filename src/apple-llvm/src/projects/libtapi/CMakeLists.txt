@@ -1,9 +1,5 @@
 cmake_minimum_required(VERSION 2.8.12.2)
 
-#if(NOT APPLE)
-#  message(FATAL_ERROR "Unsupported configuration.")
-#endif()
-
 set(TAPI_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR})
 set(TAPI_BINARY_DIR ${CMAKE_CURRENT_BINARY_DIR})
 
