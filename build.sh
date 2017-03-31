@@ -13,6 +13,7 @@ pushd build &>/dev/null
 CMAKE_EXTRA_ARGS=""
 
 if [ "$TARGET" == "Darwin" ]; then
+  export MACOSX_DEPLOYMENT_TARGET=10.9
   CMAKE_EXTRA_ARGS+="-DCMAKE_SYSTEM_NAME=Darwin "
   export CC="$(xcrun -f clang) -stdlib=libc++"
   export CXX="$(xcrun -f clang++) -stdlib=libc++"
