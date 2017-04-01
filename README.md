@@ -16,5 +16,5 @@ CMake, Python and GCC 4.8+ or Clang
 
 ## Travis CI ##
 
-[![Build Status](https://travis-ci.org/tpoechtrager/apple-libtapi.svg?branch=master)](https://travis-ci.org/tpoechtrager/apple-libtapi)
+[![Build Status](https://travis-ci.org/tpoechtrager/apple-libtapi.svg?branch=1.30.0)](https://travis-ci.org/tpoechtrager/apple-libtapi)
 
