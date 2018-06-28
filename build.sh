@@ -46,7 +46,7 @@ if [ -n "$TARGET" -a "$PLATFORM" != "$TARGET" ]; then
   CMAKE_EXTRA_ARGS+="-DLLVM_TABLEGEN=/opt/compiler/apple-llvm/$VERSION/bin/llvm-tblgen"
 fi
 
-cmake ../src/apple-llvm/src \
+cmake ../src/llvm \
  -DLLVM_INCLUDE_TESTS=OFF \
  -DCMAKE_BUILD_TYPE=RELEASE \
  -DCMAKE_INSTALL_PREFIX=$INSTALLPREFIX \

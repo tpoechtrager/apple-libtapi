@@ -12,7 +12,7 @@ INSTALLPREFIX=\
 
 mkdir -p $INSTALLPREFIX
 mkdir -p $INSTALLPREFIX/include
-cp -rva ../src/apple-llvm/src/projects/libtapi/include/tapi $INSTALLPREFIX/include
+cp -rva ../src/llvm/projects/libtapi/include/tapi $INSTALLPREFIX/include
 cp -va projects/libtapi/include/tapi/Version.inc $INSTALLPREFIX/include/tapi
 
 $MAKE install-libtapi
