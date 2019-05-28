@@ -144,13 +144,23 @@ Prints the list of options.
 .PP
 \-allowable_client <value>
 .RS 4
-Restricts what can link against the dynamic library being created.
+Restricts what can link against the dynamic library being created. Per default
+this option applies to all provided architectures. The use of -Xarch_<arch>
+before the option limits the effect to the provided architecture <arch>.
 .RE
 
 .PP
 \-reexport_install_name <name>
 .RS 4
-Reexport the specified internal "install path" (LC_ID_DYLIB).
+Reexport the specified internal "install path" (LC_ID_DYLIB). Per default this
+option applies to all provided architectures. The use of -Xarch_<arch> before
+the option limits the effect to the provided architecture <arch>.
+.RE
+
+.PP
+\-umbrella <framework_name>
+.RS 4
+Specifies that the dylib being linked is re-exported through an umbrella framework of the specified name.
 .RE
 
 .PP
@@ -178,15 +188,15 @@ Add additional private header file/directory for parsing.
 .RE
 
 .PP
-\-exclude\-public\-header <path>
+\-exclude\-public\-header <glob>
 .RS 4
-Exclude public header from parsing.
+Exclude public headers that match the glob from parsing.
 .RE
 
 .PP
-\-exclude\-private\-header <path>
+\-exclude\-private\-header <glob>
 .RS 4
-Exclude private header from parsing.
+Exclude private header that match the glob from parsing.
 .RE
 
 .PP

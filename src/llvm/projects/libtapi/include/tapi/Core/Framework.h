@@ -17,8 +17,10 @@
 #define TAPI_CORE_FRAMEWORK_H
 
 #include "tapi/Core/ExtendedInterfaceFile.h"
+#include "tapi/Core/HeaderFile.h"
 #include "tapi/Core/InterfaceFile.h"
 #include "tapi/Core/LLVM.h"
+#include "tapi/Core/Path.h"
 #include "tapi/Core/XPI.h"
 #include "tapi/Defines.h"
 #include "llvm/ADT/StringRef.h"
@@ -32,12 +34,14 @@ enum class HeaderType;
 
 struct Framework {
   std::string _baseDirectory;
-  std::map<std::string, HeaderType> _headerFiles;
-  std::vector<std::string> _dynamicLibraryFiles;
+  HeaderSeq _headerFiles;
+  PathSeq _moduleMaps;
+  PathSeq _dynamicLibraryFiles;
   std::vector<Framework> _subFrameworks;
   std::vector<Framework> _versions;
   std::vector<std::unique_ptr<ExtendedInterfaceFile>> _interfaceFiles;
   std::unique_ptr<XPISet> _headerSymbols;
+  bool isDynamicLibrary{false};
 
   Framework(StringRef directory) : _baseDirectory(directory) {}
 
@@ -45,9 +49,12 @@ struct Framework {
 
   StringRef getPath() const { return _baseDirectory; }
 
-  void addHeaderFile(StringRef path, HeaderType type) {
-    _headerFiles.emplace(path, type);
+  void addHeaderFile(StringRef fullPath, HeaderType type,
+                     StringRef relativePath = StringRef()) {
+    _headerFiles.emplace_back(fullPath, type, relativePath);
   }
+
+  void addModuleMap(StringRef path) { _moduleMaps.emplace_back(path); }
 
   void addDynamicLibraryFile(StringRef path) {
     _dynamicLibraryFiles.emplace_back(path);

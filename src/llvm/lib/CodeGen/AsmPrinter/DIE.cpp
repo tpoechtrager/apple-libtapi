@@ -388,6 +388,7 @@ void DIEInteger::EmitValue(const AsmPrinter *Asm, dwarf::Form Form) const {
   case dwarf::DW_FORM_data2:
   case dwarf::DW_FORM_strx2:
   case dwarf::DW_FORM_addrx2:
+  case dwarf::DW_FORM_strx3:
   case dwarf::DW_FORM_strp:
   case dwarf::DW_FORM_ref4:
   case dwarf::DW_FORM_data4:
@@ -410,6 +411,7 @@ void DIEInteger::EmitValue(const AsmPrinter *Asm, dwarf::Form Form) const {
   case dwarf::DW_FORM_GNU_str_index:
   case dwarf::DW_FORM_GNU_addr_index:
   case dwarf::DW_FORM_ref_udata:
+  case dwarf::DW_FORM_strx:
   case dwarf::DW_FORM_udata:
     Asm->EmitULEB128(Integer);
     return;
@@ -438,6 +440,8 @@ unsigned DIEInteger::SizeOf(const AsmPrinter *AP, dwarf::Form Form) const {
   case dwarf::DW_FORM_strx2:
   case dwarf::DW_FORM_addrx2:
     return sizeof(int16_t);
+  case dwarf::DW_FORM_strx3:
+    return 3;
   case dwarf::DW_FORM_ref4:
   case dwarf::DW_FORM_data4:
   case dwarf::DW_FORM_ref_sup4:
@@ -469,6 +473,7 @@ unsigned DIEInteger::SizeOf(const AsmPrinter *AP, dwarf::Form Form) const {
   case dwarf::DW_FORM_GNU_str_index:
   case dwarf::DW_FORM_GNU_addr_index:
   case dwarf::DW_FORM_ref_udata:
+  case dwarf::DW_FORM_strx:
   case dwarf::DW_FORM_udata:
     return getULEB128Size(Integer);
   case dwarf::DW_FORM_sdata:
@@ -564,44 +569,46 @@ void DIEDelta::print(raw_ostream &O) const {
 /// EmitValue - Emit string value.
 ///
 void DIEString::EmitValue(const AsmPrinter *AP, dwarf::Form Form) const {
-  assert(
-      (Form == dwarf::DW_FORM_strp || Form == dwarf::DW_FORM_GNU_str_index) &&
-      "Expected valid string form");
-
   // Index of string in symbol table.
-  if (Form == dwarf::DW_FORM_GNU_str_index) {
+  switch (Form) {
+  case dwarf::DW_FORM_GNU_str_index:
+  case dwarf::DW_FORM_strx:
+  case dwarf::DW_FORM_strx1:
+  case dwarf::DW_FORM_strx2:
+  case dwarf::DW_FORM_strx3:
+  case dwarf::DW_FORM_strx4:
     DIEInteger(S.getIndex()).EmitValue(AP, Form);
     return;
-  }
-
-  // Relocatable symbol.
-  assert(Form == dwarf::DW_FORM_strp);
-  if (AP->MAI->doesDwarfUseRelocationsAcrossSections()) {
-    DIELabel(S.getSymbol()).EmitValue(AP, Form);
+  case dwarf::DW_FORM_strp:
+    if (AP->MAI->doesDwarfUseRelocationsAcrossSections())
+      DIELabel(S.getSymbol()).EmitValue(AP, Form);
+    else
+      DIEInteger(S.getOffset()).EmitValue(AP, Form);
     return;
+  default:
+    llvm_unreachable("Expected valid string form");
   }
-
-  // Offset into symbol table.
-  DIEInteger(S.getOffset()).EmitValue(AP, Form);
 }
 
 /// SizeOf - Determine size of delta value in bytes.
 ///
 unsigned DIEString::SizeOf(const AsmPrinter *AP, dwarf::Form Form) const {
-  assert(
-      (Form == dwarf::DW_FORM_strp || Form == dwarf::DW_FORM_GNU_str_index) &&
-      "Expected valid string form");
-
   // Index of string in symbol table.
-  if (Form == dwarf::DW_FORM_GNU_str_index)
+  switch (Form) {
+  case dwarf::DW_FORM_GNU_str_index:
+  case dwarf::DW_FORM_strx:
+  case dwarf::DW_FORM_strx1:
+  case dwarf::DW_FORM_strx2:
+  case dwarf::DW_FORM_strx3:
+  case dwarf::DW_FORM_strx4:
     return DIEInteger(S.getIndex()).SizeOf(AP, Form);
-
-  // Relocatable symbol.
-  if (AP->MAI->doesDwarfUseRelocationsAcrossSections())
-    return DIELabel(S.getSymbol()).SizeOf(AP, Form);
-
-  // Offset into symbol table.
-  return DIEInteger(S.getOffset()).SizeOf(AP, Form);
+  case dwarf::DW_FORM_strp:
+    if (AP->MAI->doesDwarfUseRelocationsAcrossSections())
+      return DIELabel(S.getSymbol()).SizeOf(AP, Form);
+    return DIEInteger(S.getOffset()).SizeOf(AP, Form);
+  default:
+    llvm_unreachable("Expected valid string form");
+  }
 }
 
 LLVM_DUMP_METHOD
@@ -615,8 +622,8 @@ void DIEString::print(raw_ostream &O) const {
 void DIEInlineString::EmitValue(const AsmPrinter *AP, dwarf::Form Form) const {
   if (Form == dwarf::DW_FORM_string) {
     for (char ch : S)
-      AP->EmitInt8(ch);
-    AP->EmitInt8(0);
+      AP->emitInt8(ch);
+    AP->emitInt8(0);
     return;
   }
   llvm_unreachable("Expected valid string form");
@@ -722,9 +729,9 @@ unsigned DIELoc::ComputeSize(const AsmPrinter *AP) const {
 void DIELoc::EmitValue(const AsmPrinter *Asm, dwarf::Form Form) const {
   switch (Form) {
   default: llvm_unreachable("Improper form for block");
-  case dwarf::DW_FORM_block1: Asm->EmitInt8(Size);    break;
-  case dwarf::DW_FORM_block2: Asm->EmitInt16(Size);   break;
-  case dwarf::DW_FORM_block4: Asm->EmitInt32(Size);   break;
+  case dwarf::DW_FORM_block1: Asm->emitInt8(Size);    break;
+  case dwarf::DW_FORM_block2: Asm->emitInt16(Size);   break;
+  case dwarf::DW_FORM_block4: Asm->emitInt32(Size);   break;
   case dwarf::DW_FORM_block:
   case dwarf::DW_FORM_exprloc:
     Asm->EmitULEB128(Size); break;
@@ -773,10 +780,12 @@ unsigned DIEBlock::ComputeSize(const AsmPrinter *AP) const {
 void DIEBlock::EmitValue(const AsmPrinter *Asm, dwarf::Form Form) const {
   switch (Form) {
   default: llvm_unreachable("Improper form for block");
-  case dwarf::DW_FORM_block1: Asm->EmitInt8(Size);    break;
-  case dwarf::DW_FORM_block2: Asm->EmitInt16(Size);   break;
-  case dwarf::DW_FORM_block4: Asm->EmitInt32(Size);   break;
+  case dwarf::DW_FORM_block1: Asm->emitInt8(Size);    break;
+  case dwarf::DW_FORM_block2: Asm->emitInt16(Size);   break;
+  case dwarf::DW_FORM_block4: Asm->emitInt32(Size);   break;
   case dwarf::DW_FORM_block:  Asm->EmitULEB128(Size); break;
+  case dwarf::DW_FORM_string: break;
+  case dwarf::DW_FORM_data16: break;
   }
 
   for (const auto &V : values())
@@ -791,6 +800,7 @@ unsigned DIEBlock::SizeOf(const AsmPrinter *AP, dwarf::Form Form) const {
   case dwarf::DW_FORM_block2: return Size + sizeof(int16_t);
   case dwarf::DW_FORM_block4: return Size + sizeof(int32_t);
   case dwarf::DW_FORM_block:  return Size + getULEB128Size(Size);
+  case dwarf::DW_FORM_data16: return 16;
   default: llvm_unreachable("Improper form for block");
   }
 }

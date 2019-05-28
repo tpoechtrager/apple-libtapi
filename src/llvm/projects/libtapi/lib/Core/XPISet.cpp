@@ -135,7 +135,8 @@ ObjCSelector *XPISet::addObjCSelector(ObjCContainer *container, StringRef name,
                                       bool isInstanceMethod, bool isDynamic,
                                       clang::PresumedLoc /*loc*/,
                                       XPIAccess access, Architecture arch,
-                                      const AvailabilityInfo &info) {
+                                      const AvailabilityInfo &info,
+                                      bool isDerivedFromProtocol) {
   const auto *objcClass = container;
   bool isCategory = false;
   if (auto *category = dyn_cast<ObjCCategory>(container)) {
@@ -151,8 +152,9 @@ ObjCSelector *XPISet::addObjCSelector(ObjCContainer *container, StringRef name,
       std::forward_as_tuple(nullptr));
   ObjCSelector *objcSelector = nullptr;
   if (result.second) {
-    objcSelector = ObjCSelector::create(allocator, name, isInstanceMethod,
-                                        isDynamic, access);
+    objcSelector =
+        ObjCSelector::create(allocator, name, isInstanceMethod, isDynamic,
+                             access, isDerivedFromProtocol);
     result.first->second = objcSelector;
   } else {
     objcSelector = cast<ObjCSelector>(result.first->second);
@@ -247,7 +249,6 @@ GlobalSymbol *XPISet::addGlobalSymbol(StringRef name, ArchitectureSet archs,
 
   return globalSymbol;
 }
-
 
 ObjCClass *XPISet::addObjCClass(StringRef name, ArchitectureSet archs,
                                 XPIAccess access, ObjCClass *superClass) {
@@ -434,6 +435,19 @@ const XPI *XPISet::findSymbol(XPIKind kind, StringRef name) const {
 
 const XPI *XPISet::findSymbol(const XPI &xpi) const {
   return findSymbol(xpi.getKind(), xpi.getName());
+}
+
+bool XPISet::removeSymbol(XPIKind kind, StringRef name) {
+  assert((kind == XPIKind::GlobalSymbol || kind == XPIKind::ObjectiveCClass ||
+          kind == XPIKind::ObjectiveCClassEHType ||
+          kind == XPIKind::ObjectiveCInstanceVariable) &&
+         "Not a symbol kind");
+  auto it = _symbols.find({kind, name});
+  if (it == _symbols.end())
+    return false;
+
+  _symbols.erase(it);
+  return true;
 }
 
 const ObjCSelector *XPISet::findSelector(const SelectorsMapKey &key) const {

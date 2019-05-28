@@ -40,8 +40,8 @@ struct Header {
   HeaderType type;
   std::string path;
 };
-}
-} // end namespace json::v1.
+} // namespace v1
+} // namespace json_file
 
 class JSONFile : public File {
 public:
@@ -64,8 +64,8 @@ class YAMLDocumentHandler : public DocumentHandler {
   bool canWrite(const File *file) const override;
   bool handleDocument(llvm::yaml::IO &io, const File *&file) const override;
 };
-}
-} // end namespace json_file::v1.
+} // namespace v1
+} // namespace json_file
 
 TAPI_NAMESPACE_INTERNAL_END
 

@@ -25,19 +25,6 @@ using namespace llvm;
 
 TAPI_NAMESPACE_INTERNAL_BEGIN
 
-static StringRef getPlatformName(Platform platform);
-
-raw_ostream &operator<<(raw_ostream &os, Platform platform) {
-  os << getPlatformName(platform);
-  return os;
-}
-
-const DiagnosticBuilder &operator<<(const DiagnosticBuilder &db,
-                                    Platform platform) {
-  db.AddString(getPlatformName(platform));
-  return db;
-}
-
 bool PackedVersion::parse32(StringRef str) {
   _version = 0;
 
@@ -134,23 +121,6 @@ const DiagnosticBuilder &operator<<(const DiagnosticBuilder &db,
   os << version;
   db.AddString(string);
   return db;
-}
-
-static StringRef getPlatformName(Platform platform) {
-  switch (platform) {
-  case Platform::Unknown:
-    return "Unknown";
-  case Platform::OSX:
-    return "macOS";
-  case Platform::iOS:
-    return "iOS";
-  case Platform::watchOS:
-    return "watchOS";
-  case Platform::tvOS:
-    return "tvOS";
-  case Platform::bridgeOS:
-    return "bridgeOS";
-  }
 }
 
 TAPI_NAMESPACE_INTERNAL_END

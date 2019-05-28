@@ -7,13 +7,13 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// \file
-// \brief This file contains constants used for implementing Dwarf
-// debug support.
-//
-// For details on the Dwarf specfication see the latest DWARF Debugging
-// Information Format standard document on http://www.dwarfstd.org. This
-// file often includes support for non-released standard features.
+/// \file
+/// This file contains constants used for implementing Dwarf
+/// debug support.
+///
+/// For details on the Dwarf specfication see the latest DWARF Debugging
+/// Information Format standard document on http://www.dwarfstd.org. This
+/// file often includes support for non-released standard features.
 //
 //===----------------------------------------------------------------------===//
 
@@ -57,12 +57,14 @@ enum LLVMConstants : uint32_t {
   DWARF_VENDOR_MIPS = 6
 };
 
-// Special ID values that distinguish a CIE from a FDE in DWARF CFI.
-// Not inside an enum because a 64-bit value is needed.
+/// Special ID values that distinguish a CIE from a FDE in DWARF CFI.
+/// Not inside an enum because a 64-bit value is needed.
+/// @{
 const uint32_t DW_CIE_ID = UINT32_MAX;
 const uint64_t DW64_CIE_ID = UINT64_MAX;
+/// @}
 
-// Identifier of an invalid DIE offset in the .debug_info section.
+/// Identifier of an invalid DIE offset in the .debug_info section.
 const uint32_t DW_INVALID_OFFSET = UINT32_MAX;
 
 enum Tag : uint16_t {
@@ -70,7 +72,7 @@ enum Tag : uint16_t {
 #include "llvm/BinaryFormat/Dwarf.def"
   DW_TAG_lo_user = 0x4080,
   DW_TAG_hi_user = 0xffff,
-  DW_TAG_user_base = 0x1000 // Recommended base for user tags.
+  DW_TAG_user_base = 0x1000 ///< Recommended base for user tags.
 };
 
 inline bool isType(Tag T) {
@@ -323,15 +325,51 @@ enum UnitType : unsigned char {
   DW_UT_hi_user = 0xff
 };
 
+enum Index {
+#define HANDLE_DW_IDX(ID, NAME) DW_IDX_##NAME = ID,
+#include "llvm/BinaryFormat/Dwarf.def"
+  DW_IDX_lo_user = 0x2000,
+  DW_IDX_hi_user = 0x3fff
+};
+
+inline bool isUnitType(uint8_t UnitType) {
+  switch (UnitType) {
+  case DW_UT_compile:
+  case DW_UT_type:
+  case DW_UT_partial:
+  case DW_UT_skeleton:
+  case DW_UT_split_compile:
+  case DW_UT_split_type:
+    return true;
+  default:
+    return false;
+  }
+}
+
+inline bool isUnitType(dwarf::Tag T) {
+  switch (T) {
+  case DW_TAG_compile_unit:
+  case DW_TAG_type_unit:
+  case DW_TAG_partial_unit:
+  case DW_TAG_skeleton_unit:
+    return true;
+  default:
+    return false;
+  }
+}
+
 // Constants for the DWARF v5 Accelerator Table Proposal
 enum AcceleratorTable {
   // Data layout descriptors.
-  DW_ATOM_null = 0u,       // Marker as the end of a list of atoms.
+  DW_ATOM_null = 0u,       ///  Marker as the end of a list of atoms.
   DW_ATOM_die_offset = 1u, // DIE offset in the debug_info section.
   DW_ATOM_cu_offset = 2u, // Offset of the compile unit header that contains the
                           // item in question.
   DW_ATOM_die_tag = 3u,   // A tag entry.
   DW_ATOM_type_flags = 4u, // Set of flags for a type.
+
+  DW_ATOM_type_type_flags = 5u, // Dsymutil type extension.
+  DW_ATOM_qual_name_hash = 6u,  // Dsymutil qualified hash extension.
 
   // DW_ATOM_type_flags values.
 
@@ -382,7 +420,6 @@ StringRef CaseString(unsigned Case);
 StringRef ConventionString(unsigned Convention);
 StringRef InlineCodeString(unsigned Code);
 StringRef ArrayOrderString(unsigned Order);
-StringRef DiscriminantString(unsigned Discriminant);
 StringRef LNStandardString(unsigned Standard);
 StringRef LNExtendedString(unsigned Encoding);
 StringRef MacinfoString(unsigned Encoding);
@@ -392,6 +429,7 @@ StringRef UnitTypeString(unsigned);
 StringRef AtomTypeString(unsigned Atom);
 StringRef GDBIndexEntryKindString(GDBIndexEntryKind Kind);
 StringRef GDBIndexEntryLinkageString(GDBIndexEntryLinkage Linkage);
+StringRef IndexString(unsigned Idx);
 /// @}
 
 /// \defgroup DwarfConstantsParsing Dwarf constants parsing functions
@@ -447,11 +485,11 @@ unsigned LanguageVendor(SourceLanguage L);
 /// or is an extension if extensions are allowed.
 bool isValidFormForVersion(Form F, unsigned Version, bool ExtensionsOk = true);
 
-/// \brief Returns the symbolic string representing Val when used as a value
+/// Returns the symbolic string representing Val when used as a value
 /// for attribute Attr.
 StringRef AttributeValueString(uint16_t Attr, unsigned Val);
 
-/// \brief Decsribes an entry of the various gnu_pub* debug sections.
+/// Describes an entry of the various gnu_pub* debug sections.
 ///
 /// The gnu_pub* kind looks like:
 ///

@@ -91,4 +91,11 @@ const DiagnosticBuilder &operator<<(const DiagnosticBuilder &db,
   return db;
 }
 
+ArchitectureSet mapToArchitectureSet(const std::vector<Triple> &targets) {
+  ArchitectureSet result;
+  for (const auto &target : targets)
+    result |= getArchType(target.getArchName());
+  return result;
+}
+
 TAPI_NAMESPACE_INTERNAL_END

@@ -92,7 +92,7 @@ public:
   ///
 };
 
-} // end tapi namespace.
+} // namespace tapi
 
 ///
 /// @}

@@ -19,7 +19,7 @@
 #include "tapi/Core/Framework.h"
 #include "tapi/Core/HeaderFile.h"
 #include "tapi/Core/Utils.h"
-#include "tapi/Driver/Diagnostics.h"
+#include "tapi/Diagnostics/Diagnostics.h"
 #include "clang/Basic/Diagnostic.h"
 #include "clang/Basic/VirtualFileSystem.h"
 #include "llvm/Support/Path.h"
@@ -63,15 +63,16 @@ bool DirectoryScanner::scanDylibDirectory(
   }
 
   frameworks.emplace_back(directory);
-  auto &framework = frameworks.back();
+  auto &dylib = frameworks.back();
+  dylib.isDynamicLibrary = true;
 
   if (directoryEntryPublic) {
-    if (!scanHeaders(framework, directoryEntryPublic->getName(),
+    if (!scanHeaders(dylib, directoryEntryPublic->getName(),
                      HeaderType::Public))
       return false;
   }
   if (directoryEntryPrivate) {
-    if (!scanHeaders(framework, directoryEntryPrivate->getName(),
+    if (!scanHeaders(dylib, directoryEntryPrivate->getName(),
                      HeaderType::Private))
       return false;
   }
@@ -80,8 +81,7 @@ bool DirectoryScanner::scanDylibDirectory(
 }
 
 bool DirectoryScanner::scanDirectory(StringRef directory,
-                                     std::vector<Framework> &frameworks,
-                                     bool scanDylibLocations) const {
+                                     std::vector<Framework> &frameworks) const {
   if (scanDylibLocations)
     return scanDylibDirectory(directory, frameworks);
 
@@ -190,6 +190,11 @@ bool DirectoryScanner::scanFrameworkDirectory(Framework &framework) const {
         return false;
       continue;
     }
+    // Scan for module maps.
+    else if (fileName.compare("Modules") == 0) {
+      if (!scanModules(framework, path))
+        return false;
+    }
     // Check for sub frameworks.
     else if (fileName.compare("Frameworks") == 0) {
       if (!scanSubFrameworksDirectory(framework._subFrameworks, path))
@@ -230,7 +235,7 @@ bool DirectoryScanner::scanHeaders(Framework &framework, StringRef path,
   auto &fs = *_fm.getVirtualFileSystem();
   for (vfs::recursive_directory_iterator i(fs, path, ec), ie; i != ie;
        i.increment(ec)) {
-    auto path = i->getName();
+    auto headerPath = i->getName();
 
     // Skip files that not exist. This usually happens for broken symlinks.
     if (ec == std::errc::no_such_file_or_directory) {
@@ -239,19 +244,45 @@ bool DirectoryScanner::scanHeaders(Framework &framework, StringRef path,
     }
 
     if (ec) {
-      diag.report(diag::err) << path << ec.message();
+      diag.report(diag::err) << headerPath << ec.message();
       return false;
     }
 
     // Ignore tmp files from unifdef.
-    auto filename = sys::path::filename(path);
+    auto filename = sys::path::filename(headerPath);
     if (filename.startswith("."))
       continue;
 
-    if (!isHeaderFile(path))
+    if (!isHeaderFile(headerPath))
       continue;
 
-    framework.addHeaderFile(path, type);
+    framework.addHeaderFile(headerPath, type,
+                            headerPath.drop_front(path.size()));
+  }
+
+  return true;
+}
+
+bool DirectoryScanner::scanModules(Framework &framework, StringRef path) const {
+  std::error_code ec;
+  auto &fs = *_fm.getVirtualFileSystem();
+  for (vfs::recursive_directory_iterator i(fs, path, ec), ie; i != ie;
+       i.increment(ec)) {
+    auto path = i->getName();
+
+    // Skip files that not exist. This usually happens for broken symlinks.
+    if (ec == std::errc::no_such_file_or_directory) {
+      ec.clear();
+      continue;
+    } else if (ec) {
+      diag.report(diag::err) << path << ec.message();
+      return false;
+    }
+
+    if (!path.endswith(".modulemap"))
+      continue;
+
+    framework.addModuleMap(path);
   }
 
   return true;
@@ -345,11 +376,14 @@ Expected<bool> DirectoryScanner::isDynamicLibrary(StringRef path) const {
       fileType.get() == FileType::MachO_DynamicLibrary_Stub)
     return true;
 
+  if (allowBundles && (fileType.get() == FileType::MachO_Bundle))
+    return true;
+
   return false;
 }
 
 bool DirectoryScanner::addDylibsAsFramework(
-    StringRef name, StringRef path, const std::vector<std::string> &dylibs,
+    StringRef name, StringRef path, const PathSeq &dylibs,
     std::vector<Framework> &frameworks) const {
   assert(_fm.isDirectory(path, false) && "Directory must exists");
   frameworks.emplace_back(path);
@@ -374,8 +408,7 @@ bool DirectoryScanner::addDylibsAsFramework(
 
 bool DirectoryScanner::scanSDKContent(StringRef directory,
                                       std::vector<Framework> &frameworks,
-                                      Configuration &configuration,
-                                      bool scanAll) const {
+                                      Configuration *config) const {
   // Build a Unix framework for information in /usr/include and /usr/lib
   frameworks.emplace_back(directory);
   auto &SDKFramework = frameworks.back();
@@ -395,26 +428,30 @@ bool DirectoryScanner::scanSDKContent(StringRef directory,
   // Scan dylibs.
   if (!scanLibraryDirectory(SDKFramework, getDirectory("usr/lib")))
     return false;
+
   if (!scanLibraryDirectory(SDKFramework, getDirectory("usr/local/lib")))
     return false;
+
   // Adding all the frameworks in /System.
   if (!scanFrameworksDirectory(SDKFramework._subFrameworks,
                                getDirectory("System/Library/Frameworks")))
     return false;
+
   if (!scanFrameworksDirectory(
           SDKFramework._subFrameworks,
           getDirectory("System/Library/PrivateFrameworks")))
     return false;
 
   // Add dylib configurations.
-  for (const auto &dylibs : configuration.pathToDylibConfig) {
-    if (!addDylibsAsFramework(dylibs.second->name, dylibs.second->path,
-                              dylibs.second->binaries,
-                              SDKFramework._subFrameworks))
-      return false;
+  if (config) {
+    for (const auto &dylibs : config->dylibConfigs) {
+      if (!addDylibsAsFramework(dylibs->name, directory, dylibs->binaries,
+                                SDKFramework._subFrameworks))
+        return false;
+    }
   }
 
-  if (!scanAll)
+  if (!scanAllLocations)
     return true;
 
   // Scan the bundles and extensions in /System/Library.
@@ -446,6 +483,15 @@ bool DirectoryScanner::scanSDKContent(StringRef directory,
   }
 
   return true;
+}
+
+bool DirectoryScanner::scan(StringRef directory,
+                            std::vector<Framework> &frameworks,
+                            Configuration *config) const {
+  if (!scanSDK)
+    return scanDirectory(directory, frameworks);
+
+  return scanSDKContent(directory, frameworks, config);
 }
 
 TAPI_NAMESPACE_INTERNAL_END

@@ -30,6 +30,7 @@
 #include "clang/StaticAnalyzer/Core/BugReporter/BugType.h"
 #include "clang/StaticAnalyzer/Core/Checker.h"
 #include "clang/StaticAnalyzer/Core/CheckerManager.h"
+#include "clang/StaticAnalyzer/Core/PathSensitive/CheckerHelpers.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/CheckerContext.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/CallEvent.h"
 
@@ -40,21 +41,6 @@ using namespace clang;
 using namespace ento;
 
 namespace {
-// Do not reorder! The getMostNullable method relies on the order.
-// Optimization: Most pointers expected to be unspecified. When a symbol has an
-// unspecified or nonnull type non of the rules would indicate any problem for
-// that symbol. For this reason only nullable and contradicted nullability are
-// stored for a symbol. When a symbol is already contradicted, it can not be
-// casted back to nullable.
-enum class Nullability : char {
-  Contradicted, // Tracked nullability is contradicted by an explicit cast. Do
-                // not report any nullability related issue for this symbol.
-                // This nullability is propagated aggressively to avoid false
-                // positive results. See the comment on getMostNullable method.
-  Nullable,
-  Unspecified,
-  Nonnull
-};
 
 /// Returns the most nullable nullability. This is used for message expressions
 /// like [receiver method], where the nullability of this expression is either
@@ -345,17 +331,6 @@ NullabilityChecker::NullabilityBugVisitor::VisitNode(const ExplodedNode *N,
                                                     nullptr);
 }
 
-static Nullability getNullabilityAnnotation(QualType Type) {
-  const auto *AttrType = Type->getAs<AttributedType>();
-  if (!AttrType)
-    return Nullability::Unspecified;
-  if (AttrType->getAttrKind() == AttributedType::attr_nullable)
-    return Nullability::Nullable;
-  else if (AttrType->getAttrKind() == AttributedType::attr_nonnull)
-    return Nullability::Nonnull;
-  return Nullability::Unspecified;
-}
-
 /// Returns true when the value stored at the given location is null
 /// and the passed in type is nonnnull.
 static bool checkValueAtLValForInvariantViolation(ProgramStateRef State,
@@ -560,8 +535,7 @@ void NullabilityChecker::checkPreStmt(const ReturnStmt *S,
   if (State->get<InvariantViolated>())
     return;
 
-  auto RetSVal =
-      State->getSVal(S, C.getLocationContext()).getAs<DefinedOrUnknownSVal>();
+  auto RetSVal = C.getSVal(S).getAs<DefinedOrUnknownSVal>();
   if (!RetSVal)
     return;
 
@@ -873,7 +847,7 @@ void NullabilityChecker::checkPostObjCMessage(const ObjCMethodCall &M,
     // are either item retrieval related or not interesting nullability wise.
     // Using this fact, to keep the code easier to read just ignore the return
     // value of every instance method of dictionaries.
-    if (M.isInstanceMessage() && Name.find("Dictionary") != StringRef::npos) {
+    if (M.isInstanceMessage() && Name.contains("Dictionary")) {
       State =
           State->set<NullabilityMap>(ReturnRegion, Nullability::Contradicted);
       C.addTransition(State);
@@ -881,7 +855,7 @@ void NullabilityChecker::checkPostObjCMessage(const ObjCMethodCall &M,
     }
     // For similar reasons ignore some methods of Cocoa arrays.
     StringRef FirstSelectorSlot = M.getSelector().getNameForSlot(0);
-    if (Name.find("Array") != StringRef::npos &&
+    if (Name.contains("Array") &&
         (FirstSelectorSlot == "firstObject" ||
          FirstSelectorSlot == "lastObject")) {
       State =
@@ -894,7 +868,7 @@ void NullabilityChecker::checkPostObjCMessage(const ObjCMethodCall &M,
     // encodings are used. Using lossless encodings is so frequent that ignoring
     // this class of methods reduced the emitted diagnostics by about 30% on
     // some projects (and all of that was false positives).
-    if (Name.find("String") != StringRef::npos) {
+    if (Name.contains("String")) {
       for (auto Param : M.parameters()) {
         if (Param->getName() == "encoding") {
           State = State->set<NullabilityMap>(ReturnRegion,
@@ -977,8 +951,7 @@ void NullabilityChecker::checkPostStmt(const ExplicitCastExpr *CE,
   if (DestNullability == Nullability::Unspecified)
     return;
 
-  auto RegionSVal =
-      State->getSVal(CE, C.getLocationContext()).getAs<DefinedOrUnknownSVal>();
+  auto RegionSVal = C.getSVal(CE).getAs<DefinedOrUnknownSVal>();
   const MemRegion *Region = getTrackRegion(*RegionSVal);
   if (!Region)
     return;

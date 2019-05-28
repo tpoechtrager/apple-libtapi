@@ -19,6 +19,7 @@
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/type_traits.h"
+#include "llvm/Support/ErrorHandling.h"
 #include <algorithm>
 #include <cassert>
 #include <cstddef>
@@ -238,6 +239,8 @@ void SmallVectorTemplateBase<T, isPodLike>::grow(size_t MinSize) {
   if (NewCapacity < MinSize)
     NewCapacity = MinSize;
   T *NewElts = static_cast<T*>(malloc(NewCapacity*sizeof(T)));
+  if (NewElts == nullptr)
+    report_bad_alloc_error("Allocation of SmallVector element failed.");
 
   // Move the elements over.
   this->uninitialized_move(this->begin(), this->end(), NewElts);
@@ -293,7 +296,7 @@ protected:
     // use memcpy here. Note that I and E are iterators and thus might be
     // invalid for memcpy if they are equal.
     if (I != E)
-      memcpy(Dest, I, (E - I) * sizeof(T));
+      memcpy((void*)Dest, I, (E - I) * sizeof(T));
   }
 
   /// Double the size of the allocated memory, guaranteeing space for at
@@ -306,7 +309,7 @@ public:
   void push_back(const T &Elt) {
     if (LLVM_UNLIKELY(this->EndX >= this->CapacityX))
       this->grow();
-    memcpy(this->end(), &Elt, sizeof(T));
+    memcpy((void*)this->end(), &Elt, sizeof(T));
     this->setEnd(this->end()+1);
   }
 
@@ -924,8 +927,8 @@ public:
   }
 };
 
-template<typename T, unsigned N>
-static inline size_t capacity_in_bytes(const SmallVector<T, N> &X) {
+template <typename T, unsigned N>
+inline size_t capacity_in_bytes(const SmallVector<T, N> &X) {
   return X.capacity_in_bytes();
 }
 

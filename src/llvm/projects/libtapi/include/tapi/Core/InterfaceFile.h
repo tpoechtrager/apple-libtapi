@@ -64,14 +64,16 @@ public:
   const_symbol_range exports() const { return _symbols; }
   const_symbol_range undefineds() const { return _undefineds; }
 
-  bool convertTo(FileType fileType, StringRef path = {});
   bool contains(SymbolKind kind, StringRef name,
                 Symbol const **result = nullptr) const;
 
   llvm::Expected<std::unique_ptr<InterfaceFile>>
   extract(Architecture arch) const;
   llvm::Expected<std::unique_ptr<InterfaceFile>>
-  merge(const InterfaceFile *otherInterface) const;
+  remove(Architecture arch) const;
+  llvm::Expected<std::unique_ptr<InterfaceFile>>
+  merge(const InterfaceFile *otherInterface,
+        bool allowArchitectureMerges = false) const;
   void printSymbols(ArchitectureSet archs) const;
 
 private:

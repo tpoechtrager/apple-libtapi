@@ -644,14 +644,14 @@ ObjCPropertyDecl *Sema::CreatePropertyDecl(Scope *S,
     PDecl->setInvalidDecl();
   }
 
-  ProcessDeclAttributes(S, PDecl, FD.D);
-
   // Regardless of setter/getter attribute, we save the default getter/setter
   // selector names in anticipation of declaration of setter/getter methods.
   PDecl->setGetterName(GetterSel, GetterNameLoc);
   PDecl->setSetterName(SetterSel, SetterNameLoc);
   PDecl->setPropertyAttributesAsWritten(
                           makePropertyAttributesAsWritten(AttributesAsWritten));
+
+  ProcessDeclAttributes(S, PDecl, FD.D);
 
   if (Attributes & ObjCDeclSpec::DQ_PR_readonly)
     PDecl->setPropertyAttributes(ObjCPropertyDecl::OBJC_PR_readonly);
@@ -897,14 +897,24 @@ SelectPropertyForSynthesisFromProtocols(Sema &S, SourceLocation AtLoc,
                                                  : HasUnexpectedAttribute;
         Mismatches.push_back({Prop, Kind, AttributeName});
       };
-      if (isIncompatiblePropertyAttribute(OriginalAttributes, Attr,
+      // The ownership might be incompatible unless the property has no explicit
+      // ownership.
+      bool HasOwnership = (Attr & (ObjCPropertyDecl::OBJC_PR_retain |
+                                   ObjCPropertyDecl::OBJC_PR_strong |
+                                   ObjCPropertyDecl::OBJC_PR_copy |
+                                   ObjCPropertyDecl::OBJC_PR_assign |
+                                   ObjCPropertyDecl::OBJC_PR_unsafe_unretained |
+                                   ObjCPropertyDecl::OBJC_PR_weak)) != 0;
+      if (HasOwnership &&
+          isIncompatiblePropertyAttribute(OriginalAttributes, Attr,
                                           ObjCPropertyDecl::OBJC_PR_copy)) {
         Diag(OriginalAttributes & ObjCPropertyDecl::OBJC_PR_copy, "copy");
         continue;
       }
-      if (areIncompatiblePropertyAttributes(
-              OriginalAttributes, Attr, ObjCPropertyDecl::OBJC_PR_retain |
-                                            ObjCPropertyDecl::OBJC_PR_strong)) {
+      if (HasOwnership && areIncompatiblePropertyAttributes(
+                              OriginalAttributes, Attr,
+                              ObjCPropertyDecl::OBJC_PR_retain |
+                                  ObjCPropertyDecl::OBJC_PR_strong)) {
         Diag(OriginalAttributes & (ObjCPropertyDecl::OBJC_PR_retain |
                                    ObjCPropertyDecl::OBJC_PR_strong),
              "retain (or strong)");
@@ -1290,6 +1300,14 @@ Decl *Sema::ActOnPropertyImplDecl(Scope *S,
         // An abstract type is as bad as an incomplete type.
         CompleteTypeErr = true;
       }
+      if (!CompleteTypeErr) {
+        const RecordType *RecordTy = PropertyIvarType->getAs<RecordType>();
+        if (RecordTy && RecordTy->getDecl()->hasFlexibleArrayMember()) {
+          Diag(PropertyIvarLoc, diag::err_synthesize_variable_sized_ivar)
+            << PropertyIvarType;
+          CompleteTypeErr = true; // suppress later diagnostics about the ivar
+        }
+      }
       if (CompleteTypeErr)
         Ivar->setInvalidDecl();
       ClassImpDecl->addDecl(Ivar);
@@ -1599,7 +1617,11 @@ Sema::DiagnosePropertyMismatch(ObjCPropertyDecl *Property,
   // meaningless for readonly properties, so don't diagnose if the
   // atomic property is 'readonly'.
   checkAtomicPropertyMismatch(*this, SuperProperty, Property, false);
-  if (Property->getSetterName() != SuperProperty->getSetterName()) {
+  // Readonly properties from protocols can be implemented as "readwrite"
+  // with a custom setter name.
+  if (Property->getSetterName() != SuperProperty->getSetterName() &&
+      !(SuperProperty->isReadOnly() &&
+        isa<ObjCProtocolDecl>(SuperProperty->getDeclContext()))) {
     Diag(Property->getLocation(), diag::warn_property_attribute)
       << Property->getDeclName() << "setter" << inheritedName;
     Diag(SuperProperty->getLocation(), diag::note_property_declare);
@@ -1895,7 +1917,7 @@ void Sema::DefaultSynthesizeProperties(Scope *S, ObjCImplDecl *IMPDecl,
                             /* property = */ Prop->getIdentifier(),
                             /* ivar = */ Prop->getDefaultSynthIvarName(Context),
                             Prop->getLocation(), Prop->getQueryKind()));
-    if (PIDecl) {
+    if (PIDecl && !Prop->isUnavailable()) {
       Diag(Prop->getLocation(), diag::warn_missing_explicit_synthesis);
       Diag(IMPDecl->getLocation(), diag::note_while_in_implementation);
     }
@@ -2394,6 +2416,8 @@ void Sema::ProcessPropertyDecl(ObjCPropertyDecl *property) {
           SectionAttr::CreateImplicit(Context, SectionAttr::GNU_section,
                                       SA->getName(), Loc));
 
+    ProcessAPINotes(GetterMethod);
+
     if (getLangOpts().ObjCAutoRefCount)
       CheckARCMethodDecl(GetterMethod);
   } else
@@ -2459,6 +2483,9 @@ void Sema::ProcessPropertyDecl(ObjCPropertyDecl *property) {
         SetterMethod->addAttr(
             SectionAttr::CreateImplicit(Context, SectionAttr::GNU_section,
                                         SA->getName(), Loc));
+
+    ProcessAPINotes(SetterMethod);
+
       // It's possible for the user to have set a very odd custom
       // setter selector that causes it to have a method family.
       if (getLangOpts().ObjCAutoRefCount)

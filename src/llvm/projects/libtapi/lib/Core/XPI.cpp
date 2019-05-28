@@ -203,8 +203,10 @@ ObjCCategory *ObjCCategory::create(BumpPtrAllocator &A, ObjCClass *baseClass,
 
 ObjCSelector *ObjCSelector::create(BumpPtrAllocator &A, StringRef name,
                                    bool isInstanceMethod, bool isDynamic,
-                                   XPIAccess access) {
-  return new (A) ObjCSelector(name, isInstanceMethod, isDynamic, access);
+                                   XPIAccess access,
+                                   bool isDerivedFromProtocol) {
+  return new (A) ObjCSelector(name, isInstanceMethod, isDynamic, access,
+                              isDerivedFromProtocol);
 }
 
 TAPI_NAMESPACE_INTERNAL_END

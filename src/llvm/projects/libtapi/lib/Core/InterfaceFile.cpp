@@ -15,6 +15,7 @@
 #include "tapi/Core/InterfaceFile.h"
 #include "tapi/Core/ExtendedInterfaceFile.h"
 #include "tapi/Core/Path.h"
+#include "tapi/Core/TapiError.h"
 #include "tapi/Core/XPI.h"
 #include "llvm/Support/ErrorHandling.h"
 
@@ -98,57 +99,6 @@ void InterfaceFile::addUndefinedSymbol(SymbolKind kind, StringRef name,
   addUndefinedSymbolImpl(kind, name, archs, flags, copyStrings);
 }
 
-bool InterfaceFile::convertTo(FileType fileType, StringRef path) {
-  switch (fileType) {
-  case FileType::TBD_V1:
-  case FileType::TBD_V2:
-    if (!path.empty() && !path.endswith(".tbd"))
-      return false;
-    break;
-  case FileType::API_V1:
-    if (!path.empty() && !path.endswith(".api"))
-      return false;
-    break;
-  case FileType::SPI_V1:
-    if (!path.empty() && !path.endswith(".spi"))
-      return false;
-    break;
-  default:
-    return false;
-  }
-
-  if ((fileType == FileType::TBD_V1) &&
-      (!isTwoLevelNamespace() || !isApplicationExtensionSafe()))
-    return false;
-
-  setFileType(fileType);
-
-  if (!path.empty())
-    setPath(path.str());
-  else {
-    SmallString<PATH_MAX> newpath(getPath());
-    StringRef extension;
-    switch (fileType) {
-    case FileType::TBD_V1:
-    case FileType::TBD_V2:
-      extension = ".tbd";
-      break;
-    case FileType::API_V1:
-      extension = ".api";
-      break;
-    case FileType::SPI_V1:
-      extension = ".spi";
-      break;
-    default:
-      llvm_unreachable("Unsupported file type for conversion.");
-    }
-    TAPI_INTERNAL::replace_extension(newpath, extension);
-    setPath(newpath.str().str());
-  }
-
-  return true;
-}
-
 bool InterfaceFile::contains(SymbolKind kind, StringRef name,
                              Symbol const **result) const {
   auto it = find_if(_symbols, [kind, name](const Symbol *symbol) {
@@ -213,17 +163,88 @@ InterfaceFile::extract(Architecture arch) const {
 }
 
 Expected<std::unique_ptr<InterfaceFile>>
-InterfaceFile::merge(const InterfaceFile *otherInterface) const {
+InterfaceFile::remove(Architecture arch) const {
+  if (_architectures == arch)
+    return make_error<StringError>("cannot remove last architecture slice '" +
+                                       getArchName(arch) + "'",
+                                   inconvertibleErrorCode());
+
+  if (!_architectures.has(arch))
+    return make_error<TapiError>(TapiErrorCode::NoSuchArchitecture);
+
+  std::unique_ptr<InterfaceFile> interface(new InterfaceFile());
+  interface->setFileType(getFileType());
+  interface->setPath(getPath());
+  interface->setPlatform(getPlatform());
+  ArchitectureSet archs = getArchitectures();
+  archs.clear(arch);
+  interface->setArchitectures(archs);
+  interface->setInstallName(getInstallName());
+  interface->setCurrentVersion(getCurrentVersion());
+  interface->setCompatibilityVersion(getCompatibilityVersion());
+  interface->setSwiftABIVersion(getSwiftABIVersion());
+  interface->setTwoLevelNamespace(isTwoLevelNamespace());
+  interface->setApplicationExtensionSafe(isApplicationExtensionSafe());
+  interface->setInstallAPI(isInstallAPI());
+  interface->setObjCConstraint(getObjCConstraint());
+  interface->setParentUmbrella(getParentUmbrella());
+
+  for (const auto &lib : allowableClients()) {
+    auto archs = lib.getArchitectures();
+    archs.clear(arch);
+    if (archs.empty())
+      continue;
+    interface->addAllowableClient(lib.getInstallName(), archs);
+  }
+
+  for (const auto &lib : reexportedLibraries()) {
+    auto archs = lib.getArchitectures();
+    archs.clear(arch);
+    if (archs.empty())
+      continue;
+    interface->addReexportedLibrary(lib.getInstallName(), archs);
+  }
+
+  for (const auto &uuid : uuids())
+    if (uuid.first != arch)
+      interface->addUUID(uuid.first, uuid.second);
+
+  for (const auto *symbol : symbols()) {
+    auto archs = symbol->getArchitectures();
+    archs.clear(arch);
+    if (archs.empty())
+      continue;
+    interface->addSymbol(symbol->getKind(), symbol->getName(), archs,
+                         symbol->getFlags());
+  }
+
+  for (const auto *symbol : undefineds()) {
+    auto archs = symbol->getArchitectures();
+    archs.clear(arch);
+    if (archs.empty())
+      continue;
+    interface->addUndefinedSymbol(symbol->getKind(), symbol->getName(), archs,
+                                  symbol->getFlags());
+  }
+
+  return std::move(interface);
+}
+
+Expected<std::unique_ptr<InterfaceFile>>
+InterfaceFile::merge(const InterfaceFile *otherInterface,
+                     bool allowArchitectureMerges) const {
   // Verify files can be merged.
   if (getFileType() != otherInterface->getFileType()) {
     return make_error<StringError>("file types do not match",
                                    inconvertibleErrorCode());
   }
 
-  if ((getArchitectures() & otherInterface->getArchitectures()) !=
-      Architecture::unknown) {
-    return make_error<StringError>("architectures overlap",
-                                   inconvertibleErrorCode());
+  if (!allowArchitectureMerges) {
+    if ((getArchitectures() & otherInterface->getArchitectures()) !=
+        Architecture::unknown) {
+      return make_error<StringError>("architectures overlap",
+                                     inconvertibleErrorCode());
+    }
   }
 
   if (getPlatform() != otherInterface->getPlatform()) {
@@ -246,7 +267,9 @@ InterfaceFile::merge(const InterfaceFile *otherInterface) const {
                                    inconvertibleErrorCode());
   }
 
-  if (getSwiftABIVersion() != otherInterface->getSwiftABIVersion()) {
+  if ((getSwiftABIVersion() != 0) &&
+      (otherInterface->getSwiftABIVersion() != 0) &&
+      (getSwiftABIVersion() != otherInterface->getSwiftABIVersion())) {
     return make_error<StringError>("swift ABI versions do not match",
                                    inconvertibleErrorCode());
   }
@@ -268,7 +291,9 @@ InterfaceFile::merge(const InterfaceFile *otherInterface) const {
                                    inconvertibleErrorCode());
   }
 
-  if (getObjCConstraint() != otherInterface->getObjCConstraint()) {
+  if ((getObjCConstraint() != ObjCConstraint::None) &&
+      (otherInterface->getObjCConstraint() != ObjCConstraint::None) &&
+      (getObjCConstraint() != otherInterface->getObjCConstraint())) {
     return make_error<StringError>("installapi flags do not match",
                                    inconvertibleErrorCode());
   }
@@ -285,11 +310,21 @@ InterfaceFile::merge(const InterfaceFile *otherInterface) const {
   interface->setInstallName(getInstallName());
   interface->setCurrentVersion(getCurrentVersion());
   interface->setCompatibilityVersion(getCompatibilityVersion());
-  interface->setSwiftABIVersion(getSwiftABIVersion());
+
+  if (getSwiftABIVersion() == 0)
+    interface->setSwiftABIVersion(otherInterface->getSwiftABIVersion());
+  else
+    interface->setSwiftABIVersion(getSwiftABIVersion());
+
   interface->setTwoLevelNamespace(isTwoLevelNamespace());
   interface->setApplicationExtensionSafe(isApplicationExtensionSafe());
   interface->setInstallAPI(isInstallAPI());
-  interface->setObjCConstraint(getObjCConstraint());
+
+  if (getObjCConstraint() == ObjCConstraint::None)
+    interface->setObjCConstraint(otherInterface->getObjCConstraint());
+  else
+    interface->setObjCConstraint(getObjCConstraint());
+
   interface->setParentUmbrella(getParentUmbrella());
 
   interface->setArchitectures(getArchitectures() |
@@ -347,7 +382,7 @@ void InterfaceFile::printSymbolsForArch(Architecture arch) const {
       exports.emplace_back(symbol->getName());
       break;
     case SymbolKind::ObjectiveCClass:
-      if (getPlatform() == Platform::OSX && arch == Architecture::i386) {
+      if (getPlatform() == Platform::macOS && arch == Architecture::i386) {
         exports.emplace_back(".objc_class_name_" + symbol->getName().str());
       } else {
         exports.emplace_back("_OBJC_CLASS_$_" + symbol->getName().str());

@@ -16,8 +16,7 @@ install(TARGETS tapi-run
   RUNTIME DESTINATION bin
   COMPONENT tapi-run
   )
-add_custom_target(install-tapi-run
-  DEPENDS tapi-run
-  COMMAND "${CMAKE_COMMAND}" -DCMAKE_INSTALL_COMPONENT=tapi-run
-          -P "${CMAKE_BINARY_DIR}/cmake_install.cmake"
-  )
+add_llvm_install_targets(install-tapi-run
+                         DEPENDS tapi-run
+                         COMPONENT tapi-run)
+

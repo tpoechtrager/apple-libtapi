@@ -1,0 +1,12 @@
+--- !tapi-tbd-v2
+archs:           [ i386, x86_64, x86_64h ]
+platform:        macosx
+flags:           [ not_app_extension_safe ]
+install-name:    /System/Library/Frameworks/Inlining.framework/Versions/A/Inlining
+exports:         
+  - archs:           [ i386 ]
+    symbols:         [ _bar_sym1, _foo_sym1 ]
+  - archs:           [ x86_64, x86_64h ]
+    re-exports:      [ /System/Library/Frameworks/Public.framework/Versions/A/Public ]
+    symbols:         [ _bar_sym2, _foo_sym2 ]
+...

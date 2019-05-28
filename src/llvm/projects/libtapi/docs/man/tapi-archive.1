@@ -10,6 +10,8 @@ tapi\-archive \- Merge or thin text-based stub files
 
 \fItapi archive\fR \-\-extract <architecture> <file> \-o <file>
 
+\fItapi archive\fR \-\-remove <architecture> <file> \-o <file>
+
 \fItapi archive\fR \-\-merge <files> \-o <file>
 
 
@@ -35,6 +37,12 @@ and 1 otherwise.
 \-\-extract <architecture>
 .RS 4
 Extracts the specified architecture and writes the result to a new file.
+.RE
+
+.PP
+\-\-remove <architecture>
+.RS 4
+Removes the specified architecture and writes the result to a new file.
 .RE
 
 .PP

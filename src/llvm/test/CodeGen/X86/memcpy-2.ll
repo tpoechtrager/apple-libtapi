@@ -43,8 +43,8 @@ entry:
 
 ; X86-64-LABEL: t1:
 ; X86-64: movaps _.str(%rip), %xmm0
-; X86-64: movaps %xmm0
 ; X86-64: movb $0
+; X86-64: movaps %xmm0
 ; X86-64: movq $0
   %tmp1 = alloca [25 x i8]
   %tmp2 = bitcast [25 x i8]* %tmp1 to i8*

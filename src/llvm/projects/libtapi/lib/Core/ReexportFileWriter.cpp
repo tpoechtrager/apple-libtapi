@@ -55,7 +55,7 @@ Error ReexportFileWriter::writeFile(raw_ostream &os, const File *file) const {
       os << symbol->getName() << "\n";
       break;
     case XPIKind::ObjectiveCClass:
-      if (platform == Platform::OSX && arch == Architecture::i386)
+      if (platform == Platform::macOS && arch == Architecture::i386)
         os << ".objc_class_name_" << symbol->getName() << "\n";
       else {
         os << "_OBJC_CLASS_$_" << symbol->getName() << "\n";

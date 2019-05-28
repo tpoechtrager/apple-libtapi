@@ -28,10 +28,6 @@
 
 TAPI_NAMESPACE_INTERNAL_BEGIN
 
-raw_ostream &operator<<(raw_ostream &os, Platform platform);
-const DiagnosticBuilder &operator<<(const DiagnosticBuilder &db,
-                                    Platform platform);
-
 struct PackedVersion {
   uint32_t _version{0};
 

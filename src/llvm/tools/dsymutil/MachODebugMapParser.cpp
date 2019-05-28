@@ -9,7 +9,8 @@
 
 #include "BinaryHolder.h"
 #include "DebugMap.h"
-#include "dsymutil.h"
+#include "ErrorReporting.h"
+#include "MachOUtils.h"
 #include "llvm/ADT/Optional.h"
 #include "llvm/Object/MachO.h"
 #include "llvm/Support/Path.h"
@@ -23,10 +24,12 @@ using namespace llvm::object;
 class MachODebugMapParser {
 public:
   MachODebugMapParser(StringRef BinaryPath, ArrayRef<std::string> Archs,
-                      StringRef PathPrefix = "", bool Verbose = false)
+                      StringRef PathPrefix = "",
+                      bool PaperTrailWarnings = false, bool Verbose = false)
       : BinaryPath(BinaryPath), Archs(Archs.begin(), Archs.end()),
-        PathPrefix(PathPrefix), MainBinaryHolder(Verbose),
-        CurrentObjectHolder(Verbose), CurrentDebugMapObject(nullptr) {}
+        PathPrefix(PathPrefix), PaperTrailWarnings(PaperTrailWarnings),
+        MainBinaryHolder(Verbose), CurrentObjectHolder(Verbose),
+        CurrentDebugMapObject(nullptr) {}
 
   /// \brief Parses and returns the DebugMaps of the input binary.
   /// The binary contains multiple maps in case it is a universal
@@ -42,6 +45,7 @@ private:
   std::string BinaryPath;
   SmallVector<StringRef, 1> Archs;
   std::string PathPrefix;
+  bool PaperTrailWarnings;
 
   /// Owns the MemoryBuffer for the main binary.
   BinaryHolder MainBinaryHolder;
@@ -55,7 +59,7 @@ private:
   BinaryHolder CurrentObjectHolder;
   /// Map of the currently processed object file symbol addresses.
   StringMap<Optional<uint64_t>> CurrentObjectAddresses;
-  /// Element of the debug map corresponfing to the current object file.
+  /// Element of the debug map corresponding to the current object file.
   DebugMapObject *CurrentDebugMapObject;
 
   /// Holds function info while function scope processing.
@@ -70,6 +74,7 @@ private:
                             sys::TimePoint<std::chrono::seconds> Timestamp);
   void resetParserState();
   uint64_t getMainBinarySymbolAddress(StringRef Name);
+  std::vector<StringRef> getMainBinarySymbolNames(uint64_t Value);
   void loadMainBinarySymbols(const MachOObjectFile &MainBinary);
   void loadCurrentObjectFileSymbols(const object::MachOObjectFile &Obj);
   void handleStabSymbolTableEntry(uint32_t StringIndex, uint8_t Type,
@@ -96,12 +101,24 @@ private:
   }
   void dumpOneBinaryStab(const MachOObjectFile &MainBinary,
                          StringRef BinaryPath);
+
+  void Warning(const Twine &Msg, StringRef File = StringRef()) {
+    warn_ostream() << "("
+                   << MachOUtils::getArchName(Result->getTriple().getArchName())
+                   << ") " << File << " " << Msg << "\n";
+
+    if (PaperTrailWarnings) {
+      if (!File.empty())
+        Result->addDebugMapObject(File, sys::TimePoint<std::chrono::seconds>());
+      if (Result->end() != Result->begin())
+        (*--Result->end())->addWarning(Msg.str());
+    }
+  }
 };
 
-static void Warning(const Twine &Msg) { errs() << "warning: " + Msg + "\n"; }
 } // anonymous namespace
 
-/// Reset the parser state coresponding to the current object
+/// Reset the parser state corresponding to the current object
 /// file. This is to be called after an object file is finished
 /// processing.
 void MachODebugMapParser::resetParserState() {
@@ -122,19 +139,19 @@ void MachODebugMapParser::switchToNewDebugMapObject(
   auto MachOOrError =
       CurrentObjectHolder.GetFilesAs<MachOObjectFile>(Path, Timestamp);
   if (auto Error = MachOOrError.getError()) {
-    Warning(Twine("cannot open debug object \"") + Path.str() + "\": " +
-            Error.message() + "\n");
+    Warning("unable to open object file: " + Error.message(), Path.str());
     return;
   }
 
   auto ErrOrAchObj =
       CurrentObjectHolder.GetAs<MachOObjectFile>(Result->getTriple());
-  if (auto Err = ErrOrAchObj.getError()) {
-    return Warning(Twine("cannot open debug object \"") + Path.str() + "\": " +
-                   Err.message() + "\n");
+  if (auto Error = ErrOrAchObj.getError()) {
+    Warning("unable to open object file: " + Error.message(), Path.str());
+    return;
   }
 
-  CurrentDebugMapObject = &Result->addDebugMapObject(Path, Timestamp);
+  CurrentDebugMapObject =
+      &Result->addDebugMapObject(Path, Timestamp, MachO::N_OSO);
   loadCurrentObjectFileSymbols(*ErrOrAchObj);
 }
 
@@ -211,9 +228,11 @@ void MachODebugMapParser::dumpSymTabEntry(raw_ostream &OS, uint64_t Index,
                                           uint8_t SectionIndex, uint16_t Flags,
                                           uint64_t Value) {
   // Index
-  OS << '[' << format_decimal(Index, 6) << "] "
+  OS << '[' << format_decimal(Index, 6)
+     << "] "
      // n_strx
-     << format_hex_no_prefix(StringIndex, 8) << ' '
+     << format_hex_no_prefix(StringIndex, 8)
+     << ' '
      // n_type...
      << format_hex_no_prefix(Type, 2) << " (";
 
@@ -252,9 +271,11 @@ void MachODebugMapParser::dumpSymTabEntry(raw_ostream &OS, uint64_t Index,
 
   OS << ") "
      // n_sect
-     << format_hex_no_prefix(SectionIndex, 2) << "     "
+     << format_hex_no_prefix(SectionIndex, 2)
+     << "     "
      // n_desc
-     << format_hex_no_prefix(Flags, 4) << "   "
+     << format_hex_no_prefix(Flags, 4)
+     << "   "
      // n_value
      << format_hex_no_prefix(Value, 16);
 
@@ -348,9 +369,15 @@ void MachODebugMapParser::handleStabSymbolTableEntry(uint32_t StringIndex,
   if (Type == MachO::N_OSO)
     return switchToNewDebugMapObject(Name, sys::toTimePoint(Value));
 
-  // If the last N_OSO object file wasn't found,
-  // CurrentDebugMapObject will be null. Do not update anything
-  // until we find the next valid N_OSO entry.
+  if (Type == MachO::N_AST) {
+    SmallString<80> Path(PathPrefix);
+    sys::path::append(Path, Name);
+    Result->addDebugMapObject(Path, sys::toTimePoint(Value), Type);
+    return;
+  }
+
+  // If the last N_OSO object file wasn't found, CurrentDebugMapObject will be
+  // null. Do not update anything until we find the next valid N_OSO entry.
   if (!CurrentDebugMapObject)
     return;
 
@@ -382,13 +409,27 @@ void MachODebugMapParser::handleStabSymbolTableEntry(uint32_t StringIndex,
   }
 
   auto ObjectSymIt = CurrentObjectAddresses.find(Name);
-  if (ObjectSymIt == CurrentObjectAddresses.end())
-    return Warning("could not find object file symbol for symbol " +
-                   Twine(Name));
+
+  // If the name of a (non-static) symbol is not in the current object, we
+  // check all its aliases from the main binary.
+  if (ObjectSymIt == CurrentObjectAddresses.end() && Type != MachO::N_STSYM) {
+    for (const auto &Alias : getMainBinarySymbolNames(Value)) {
+      ObjectSymIt = CurrentObjectAddresses.find(Alias);
+      if (ObjectSymIt != CurrentObjectAddresses.end())
+        break;
+    }
+  }
+
+  if (ObjectSymIt == CurrentObjectAddresses.end()) {
+    Warning("could not find object file symbol for symbol " + Twine(Name));
+    return;
+  }
+
   if (!CurrentDebugMapObject->addSymbol(Name, ObjectSymIt->getValue(), Value,
-                                        Size))
-    return Warning(Twine("failed to insert symbol '") + Name +
-                   "' in the debug map.");
+                                        Size)) {
+    Warning(Twine("failed to insert symbol '") + Name + "' in the debug map.");
+    return;
+  }
 }
 
 /// Load the current object file symbols into CurrentObjectAddresses.
@@ -429,6 +470,17 @@ uint64_t MachODebugMapParser::getMainBinarySymbolAddress(StringRef Name) {
   return Sym->second;
 }
 
+/// Get all symbol names in the main binary for the given value.
+std::vector<StringRef>
+MachODebugMapParser::getMainBinarySymbolNames(uint64_t Value) {
+  std::vector<StringRef> Names;
+  for (const auto &Entry : MainBinarySymbolAddresses) {
+    if (Entry.second == Value)
+      Names.push_back(Entry.first());
+  }
+  return Names;
+}
+
 /// Load the interesting main binary symbols' addresses into
 /// MainBinarySymbolAddresses.
 void MachODebugMapParser::loadMainBinarySymbols(
@@ -450,7 +502,9 @@ void MachODebugMapParser::loadMainBinarySymbols(
     // are the only ones that need to be queried because the address
     // of common data won't be described in the debug map. All other
     // addresses should be fetched for the debug map.
-    if (!(Sym.getFlags() & SymbolRef::SF_Global))
+    uint8_t SymType =
+        MainBinary.getSymbolTableEntry(Sym.getRawDataRefImpl()).n_type;
+    if (!(SymType & (MachO::N_EXT | MachO::N_PEXT)))
       continue;
     Expected<section_iterator> SectionOrErr = Sym.getSection();
     if (!SectionOrErr) {
@@ -479,13 +533,14 @@ namespace llvm {
 namespace dsymutil {
 llvm::ErrorOr<std::vector<std::unique_ptr<DebugMap>>>
 parseDebugMap(StringRef InputFile, ArrayRef<std::string> Archs,
-              StringRef PrependPath, bool Verbose, bool InputIsYAML) {
-  if (!InputIsYAML) {
-    MachODebugMapParser Parser(InputFile, Archs, PrependPath, Verbose);
-    return Parser.parse();
-  } else {
+              StringRef PrependPath, bool PaperTrailWarnings, bool Verbose,
+              bool InputIsYAML) {
+  if (InputIsYAML)
     return DebugMap::parseYAMLDebugMap(InputFile, PrependPath, Verbose);
-  }
+
+  MachODebugMapParser Parser(InputFile, Archs, PrependPath, PaperTrailWarnings,
+                             Verbose);
+  return Parser.parse();
 }
 
 bool dumpStab(StringRef InputFile, ArrayRef<std::string> Archs,

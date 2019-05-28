@@ -1,4 +1,4 @@
-//===--- Module.cpp - Describe a module -----------------------------------===//
+//===- Module.cpp - Describe a module -------------------------------------===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -16,12 +16,22 @@
 #include "clang/Basic/CharInfo.h"
 #include "clang/Basic/FileManager.h"
 #include "clang/Basic/LangOptions.h"
+#include "clang/Basic/SourceLocation.h"
 #include "clang/Basic/TargetInfo.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringMap.h"
+#include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/StringSwitch.h"
+#include "llvm/Support/Compiler.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
+#include <algorithm>
+#include <cassert>
+#include <functional>
+#include <string>
+#include <utility>
+#include <vector>
 
 using namespace clang;
 
@@ -32,9 +42,11 @@ Module::Module(StringRef Name, SourceLocation DefinitionLoc, Module *Parent,
       IsMissingRequirement(false), HasIncompatibleModuleFile(false),
       IsAvailable(true), IsFromModuleFile(false), IsFramework(IsFramework),
       IsExplicit(IsExplicit), IsSystem(false), IsExternC(false),
-      IsInferred(false), InferSubmodules(false), InferExplicitSubmodules(false),
+      IsInferred(false), IsSwiftInferImportAsMember(false),
+      InferSubmodules(false), InferExplicitSubmodules(false),
       InferExportWildcard(false), ConfigMacrosExhaustive(false),
-      NoUndeclaredIncludes(false), NameVisibility(Hidden) {
+      NoUndeclaredIncludes(false), ModuleMapIsPrivate(false),
+      NameVisibility(Hidden) {
   if (Parent) {
     if (!Parent->isAvailable())
       IsAvailable = false;
@@ -44,6 +56,8 @@ Module::Module(StringRef Name, SourceLocation DefinitionLoc, Module *Parent,
       IsExternC = true;
     if (Parent->NoUndeclaredIncludes)
       NoUndeclaredIncludes = true;
+    if (Parent->ModuleMapIsPrivate)
+      ModuleMapIsPrivate = true;
     IsMissingRequirement = Parent->IsMissingRequirement;
     
     Parent->SubModuleIndex[Name] = Parent->SubModules.size();
@@ -68,6 +82,11 @@ static bool hasFeature(StringRef Feature, const LangOptions &LangOpts,
                         .Case("coroutines", LangOpts.CoroutinesTS)
                         .Case("cplusplus", LangOpts.CPlusPlus)
                         .Case("cplusplus11", LangOpts.CPlusPlus11)
+                        .Case("cplusplus14", LangOpts.CPlusPlus14)
+                        .Case("cplusplus17", LangOpts.CPlusPlus17)
+                        .Case("c99", LangOpts.C99)
+                        .Case("c11", LangOpts.C11)
+                        .Case("c17", LangOpts.C17)
                         .Case("freestanding", LangOpts.Freestanding)
                         .Case("gnuinlineasm", LangOpts.GNUAsm)
                         .Case("objc", LangOpts.ObjC1)
@@ -85,11 +104,16 @@ static bool hasFeature(StringRef Feature, const LangOptions &LangOpts,
 
 bool Module::isAvailable(const LangOptions &LangOpts, const TargetInfo &Target,
                          Requirement &Req,
-                         UnresolvedHeaderDirective &MissingHeader) const {
+                         UnresolvedHeaderDirective &MissingHeader,
+                         Module *&ShadowingModule) const {
   if (IsAvailable)
     return true;
 
   for (const Module *Current = this; Current; Current = Current->Parent) {
+    if (Current->ShadowingModule) {
+      ShadowingModule = Current->ShadowingModule;
+      return false;
+    }
     for (unsigned I = 0, N = Current->Requirements.size(); I != N; ++I) {
       if (hasFeature(Current->Requirements[I].first, LangOpts, Target) !=
               Current->Requirements[I].second) {
@@ -130,6 +154,7 @@ static StringRef getModuleNameFromComponent(
     const std::pair<std::string, SourceLocation> &IdComponent) {
   return IdComponent.first;
 }
+
 static StringRef getModuleNameFromComponent(StringRef R) { return R; }
 
 template<typename InputIter>
@@ -361,6 +386,8 @@ void Module::print(raw_ostream &OS, unsigned Indent) const {
       OS << " [system]";
     if (IsExternC)
       OS << " [extern_c]";
+    if (IsSwiftInferImportAsMember)
+      OS << " [swift_infer_import_as_member]";
   }
 
   OS << " {\n";
@@ -440,6 +467,11 @@ void Module::print(raw_ostream &OS, unsigned Indent) const {
     }
   }
 
+  if (!ExportAsModule.empty()) {
+    OS.indent(Indent + 2);
+    OS << "export_as" << ExportAsModule << "\n";
+  }
+  
   for (submodule_const_iterator MI = submodule_begin(), MIEnd = submodule_end();
        MI != MIEnd; ++MI)
     // Print inferred subframework modules so that we don't need to re-infer

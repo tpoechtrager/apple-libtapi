@@ -306,6 +306,15 @@ void AArch64MachObjectWriter::recordRelocation(
     bool CanUseLocalRelocation =
         canUseLocalRelocation(Section, *Symbol, Log2Size);
     if (Symbol->isTemporary() && (Value || !CanUseLocalRelocation)) {
+      // Make sure that the symbol is actually in a section here. If it isn't,
+      // emit an error and exit.
+      if (!Symbol->isInSection()) {
+        Asm.getContext().reportError(
+            Fixup.getLoc(),
+            "unsupported relocation of local symbol '" + Symbol->getName() +
+                "'. Must have non-local symbol earlier in section.");
+        return;
+      }
       const MCSection &Sec = Symbol->getSection();
       if (!Asm.getContext().getAsmInfo()->isSectionAtomizableBySymbols(Sec))
         Symbol->setUsedInReloc();
@@ -430,10 +439,10 @@ void AArch64MachObjectWriter::recordRelocation(
   Writer->addRelocation(RelSymbol, Fragment->getParent(), MRE);
 }
 
-MCObjectWriter *llvm::createAArch64MachObjectWriter(raw_pwrite_stream &OS,
-                                                    uint32_t CPUType,
-                                                    uint32_t CPUSubtype) {
+std::unique_ptr<MCObjectWriter>
+llvm::createAArch64MachObjectWriter(raw_pwrite_stream &OS, uint32_t CPUType,
+                                    uint32_t CPUSubtype) {
   return createMachObjectWriter(
-      new AArch64MachObjectWriter(CPUType, CPUSubtype), OS,
+      llvm::make_unique<AArch64MachObjectWriter>(CPUType, CPUSubtype), OS,
       /*IsLittleEndian=*/true);
 }

@@ -1,4 +1,4 @@
-llvm: 5.0.2
-clang: 5.0.2
-tapi: 2.0.0
+swift-llvm: 90aab6a99c173c9a045dce348a88c73e1fc4f1e8
+clang: 3c8cb332b1fed69f67aecfd56675b0ff297f2a01
+tapi: 1000.10.18
 

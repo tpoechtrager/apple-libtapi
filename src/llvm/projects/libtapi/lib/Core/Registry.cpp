@@ -13,10 +13,8 @@
 //===----------------------------------------------------------------------===//
 
 #include "tapi/Core/Registry.h"
-#include "tapi/Core/ConfigurationFile.h"
 #include "tapi/Core/MachODylibReader.h"
 #include "tapi/Core/ReexportFileWriter.h"
-#include "tapi/Core/TextAPI_v1.h"
 #include "tapi/Core/TextStub_v1.h"
 #include "tapi/Core/TextStub_v2.h"
 #include "tapi/Core/TextStub_v3.h"
@@ -27,6 +25,47 @@
 using namespace llvm;
 
 TAPI_NAMESPACE_INTERNAL_BEGIN
+
+namespace {
+
+// Diagnostic reader. It can read all the YAML file with !tapi tag and returns
+// proper error when started to read the file.
+class DiagnosticReader : public Reader {
+  bool canRead(file_magic fileType, MemoryBufferRef bufferRef,
+               FileType types = FileType::All) const override;
+  Expected<FileType> getFileType(file_magic magic,
+                                 MemoryBufferRef bufferRef) const override;
+  Expected<std::unique_ptr<File>>
+  readFile(std::unique_ptr<MemoryBuffer> memBuffer, ReadFlags readFlags,
+           ArchitectureSet arches) const override;
+};
+
+} // namespace
+
+bool DiagnosticReader::canRead(file_magic fileType, MemoryBufferRef bufferRef,
+                               FileType types) const {
+  auto str = bufferRef.getBuffer().trim();
+  if (!str.startswith("--- !tapi") || !str.endswith("..."))
+    return false;
+
+  return true;
+}
+
+Expected<FileType>
+DiagnosticReader::getFileType(file_magic magic,
+                              MemoryBufferRef bufferRef) const {
+  return Invalid;
+}
+
+Expected<std::unique_ptr<File>>
+DiagnosticReader::readFile(std::unique_ptr<MemoryBuffer> memBuffer,
+                           ReadFlags readFlags, ArchitectureSet arches) const {
+  auto str = memBuffer->getBuffer().trim();
+  auto tag = str.split('\n').first.drop_front(4);
+  return make_error<StringError>(
+      "unsupported tapi file type \'" + tag.str() + "\' in YAML",
+      std::make_error_code(std::errc::not_supported));
+}
 
 bool Registry::canRead(MemoryBufferRef memBuffer, FileType types) const {
   auto data = memBuffer.getBuffer();
@@ -80,9 +119,9 @@ Registry::readFile(std::unique_ptr<MemoryBuffer> memBuffer, ReadFlags readFlags,
       "unsupported file type", std::make_error_code(std::errc::not_supported));
 }
 
-Error Registry::writeFile(const File *file) const {
+Error Registry::writeFile(const File *file, const std::string &path) const {
   std::error_code ec;
-  raw_fd_ostream os(file->getPath(), ec, sys::fs::F_Text);
+  raw_fd_ostream os(path, ec, sys::fs::F_Text);
   if (ec)
     return errorCodeToError(ec);
   auto error = writeFile(os, file);
@@ -117,10 +156,6 @@ void Registry::addYAMLReaders() {
       std::unique_ptr<DocumentHandler>(new stub::v2::YAMLDocumentHandler));
   reader->add(
       std::unique_ptr<DocumentHandler>(new stub::v3::YAMLDocumentHandler));
-  reader->add(
-      std::unique_ptr<DocumentHandler>(new api::v1::YAMLDocumentHandler));
-  reader->add(std::unique_ptr<DocumentHandler>(
-      new configuration::v1::YAMLDocumentHandler));
   add(std::unique_ptr<Reader>(std::move(reader)));
 }
 
@@ -132,13 +167,13 @@ void Registry::addYAMLWriters() {
       std::unique_ptr<DocumentHandler>(new stub::v2::YAMLDocumentHandler));
   writer->add(
       std::unique_ptr<DocumentHandler>(new stub::v3::YAMLDocumentHandler));
-  writer->add(
-      std::unique_ptr<DocumentHandler>(new api::v1::YAMLDocumentHandler));
   add(std::unique_ptr<Writer>(std::move(writer)));
 }
 
 void Registry::addReexportWriters() {
   add(std::unique_ptr<Writer>(new ReexportFileWriter));
 }
+
+void Registry::addDiagnosticReader() { add(make_unique<DiagnosticReader>()); }
 
 TAPI_NAMESPACE_INTERNAL_END

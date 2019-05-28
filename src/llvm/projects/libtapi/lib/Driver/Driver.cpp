@@ -61,20 +61,12 @@ bool Driver::run(ArrayRef<const char *> args) {
     return Driver::run(*diag, options);
   case TAPICommand::Archive:
     return Archive::run(*diag, options);
-  case TAPICommand::Scan:
-    return Scan::run(*diag, options);
   case TAPICommand::Stubify:
     return Stub::run(*diag, options);
   case TAPICommand::InstallAPI:
     return InstallAPI::run(*diag, options);
   case TAPICommand::Reexport:
     return Reexport::run(*diag, options);
-  case TAPICommand::SDKDB:
-    return SDKDB::run(*diag, options);
-  case TAPICommand::SDKDBVerifier:
-    return SDKDBVerifier::run(*diag, options);
-  case TAPICommand::GenerateAPITests:
-    return GenerateAPITests::run(*diag, options);
   }
   llvm_unreachable("invalid/unknown driver command");
 }

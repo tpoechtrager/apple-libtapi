@@ -124,11 +124,17 @@ YAMLReader::readFile(std::unique_ptr<MemoryBuffer> memBuffer,
     return make_error<StringError>("malformed file\n" + ctx.errorMessage,
                                    yin.error());
 
-  if (files.size() != 1)
-    return nullptr;
+  if (files.empty())
+    return errorCodeToError(std::make_error_code(std::errc::not_supported));
 
   auto *file = const_cast<File *>(files.front());
   file->setMemoryBuffer(std::move(memBuffer));
+
+  for (auto it = std::next(files.begin()); it != files.end(); ++it) {
+    auto *document = const_cast<File *>(*it);
+    file->addDocument(std::unique_ptr<File>(document));
+  }
+
   return std::unique_ptr<File>(file);
 }
 
@@ -144,8 +150,14 @@ Error YAMLWriter::writeFile(raw_ostream &os, const File *file) const {
   ctx.path = file->getPath();
   llvm::yaml::Output yout(os, &ctx, /*WrapColumn=*/80);
 
+  std::vector<const File *> files;
+  files.emplace_back(file);
+
+  for (auto &it : file->_documents)
+    files.emplace_back(it.get());
+
   // Stream out yaml.
-  yout << file;
+  yout << files;
 
   return Error::success();
 }

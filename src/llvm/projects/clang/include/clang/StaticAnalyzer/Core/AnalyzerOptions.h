@@ -1,4 +1,4 @@
-//===--- AnalyzerOptions.h - Analysis Engine Options ------------*- C++ -*-===//
+//===- AnalyzerOptions.h - Analysis Engine Options --------------*- C++ -*-===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -19,18 +19,18 @@
 #include "llvm/ADT/IntrusiveRefCntPtr.h"
 #include "llvm/ADT/Optional.h"
 #include "llvm/ADT/StringMap.h"
+#include "llvm/ADT/StringRef.h"
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace clang {
-class ASTConsumer;
-class DiagnosticsEngine;
-class Preprocessor;
-class LangOptions;
 
 namespace ento {
+
 class CheckerBase;
-}
+
+} // namespace ento
 
 /// Analysis - Set of available source code analyses.
 enum Analyses {
@@ -123,26 +123,29 @@ enum IPAKind {
 
 class AnalyzerOptions : public RefCountedBase<AnalyzerOptions> {
 public:
-  typedef llvm::StringMap<std::string> ConfigTable;
+  using ConfigTable = llvm::StringMap<std::string>;
 
   static std::vector<StringRef>
   getRegisteredCheckers(bool IncludeExperimental = false);
 
   /// \brief Pair of checker name and enable/disable.
-  std::vector<std::pair<std::string, bool> > CheckersControlList;
+  std::vector<std::pair<std::string, bool>> CheckersControlList;
   
   /// \brief A key-value table of use-specified configuration values.
   ConfigTable Config;
-  AnalysisStores AnalysisStoreOpt;
-  AnalysisConstraints AnalysisConstraintsOpt;
-  AnalysisDiagClients AnalysisDiagOpt;
-  AnalysisPurgeMode AnalysisPurgeOpt;
+  AnalysisStores AnalysisStoreOpt = RegionStoreModel;
+  AnalysisConstraints AnalysisConstraintsOpt = RangeConstraintsModel;
+  AnalysisDiagClients AnalysisDiagOpt = PD_HTML;
+  AnalysisPurgeMode AnalysisPurgeOpt = PurgeStmt;
   
   std::string AnalyzeSpecificFunction;
+
+  /// Store full compiler invocation for reproducible instructions in the
+  /// generated report.
+  std::string FullCompilerInvocation;
   
   /// \brief The maximum number of times the analyzer visits a block.
   unsigned maxBlockVisitOnPath;
-  
   
   /// \brief Disable all analyzer checks.
   ///
@@ -179,17 +182,31 @@ public:
   unsigned NoRetryExhausted : 1;
   
   /// \brief The inlining stack depth limit.
-  unsigned InlineMaxStackDepth;
+  // Cap the stack depth at 4 calls (5 stack frames, base + 4 calls).
+  unsigned InlineMaxStackDepth = 5;
   
   /// \brief The mode of function selection used during inlining.
-  AnalysisInliningMode InliningMode;
+  AnalysisInliningMode InliningMode = NoRedundancy;
+
+  enum class ExplorationStrategyKind {
+    DFS,
+    BFS,
+    UnexploredFirst,
+    UnexploredFirstQueue,
+    BFSBlockDFSContents,
+    NotSet
+  };
 
 private:
+  ExplorationStrategyKind ExplorationStrategy = ExplorationStrategyKind::NotSet;
+
   /// \brief Describes the kinds for high-level analyzer mode.
   enum UserModeKind {
     UMK_NotSet = 0,
+
     /// Perform shallow but fast analyzes.
     UMK_Shallow = 1,
+
     /// Perform deep analyzes.
     UMK_Deep = 2
   };
@@ -197,10 +214,10 @@ private:
   /// Controls the high-level analyzer mode, which influences the default 
   /// settings for some of the lower-level config options (such as IPAMode).
   /// \sa getUserMode
-  UserModeKind UserMode;
+  UserModeKind UserMode = UMK_NotSet;
 
   /// Controls the mode of inter-procedural analysis.
-  IPAKind IPAMode;
+  IPAKind IPAMode = IPAK_NotSet;
 
   /// Controls which C++ member functions will be considered for inlining.
   CXXInlineableMemberKind CXXMemberInliningMode;
@@ -214,9 +231,18 @@ private:
   /// \sa IncludeLifetimeInCFG
   Optional<bool> IncludeLifetimeInCFG;
 
+  /// \sa IncludeLoopExitInCFG
+  Optional<bool> IncludeLoopExitInCFG;
+
+  /// \sa IncludeRichConstructorsInCFG
+  Optional<bool> IncludeRichConstructorsInCFG;
+
   /// \sa mayInlineCXXStandardLibrary
   Optional<bool> InlineCXXStandardLibrary;
   
+  /// \sa includeScopesInCFG
+  Optional<bool> IncludeScopesInCFG;
+
   /// \sa mayInlineTemplateFunctions
   Optional<bool> InlineTemplateFunctions;
 
@@ -228,6 +254,9 @@ private:
 
   /// \sa mayInlineCXXSharedPtrDtor
   Optional<bool> InlineCXXSharedPtrDtor;
+
+  /// \sa mayInlineCXXTemporaryDtors
+  Optional<bool> InlineCXXTemporaryDtors;
 
   /// \sa mayInlineObjCMethod
   Optional<bool> ObjCInliningMode;
@@ -257,6 +286,8 @@ private:
   /// \sa StableReportFilename
   Optional<bool> StableReportFilename;
 
+  Optional<bool> SerializeStats;
+
   /// \sa getGraphTrimInterval
   Optional<unsigned> GraphTrimInterval;
 
@@ -275,8 +306,21 @@ private:
   /// \sa shouldWidenLoops
   Optional<bool> WidenLoops;
 
+  /// \sa shouldUnrollLoops
+  Optional<bool> UnrollLoops;
+
   /// \sa shouldDisplayNotesAsEvents
   Optional<bool> DisplayNotesAsEvents;
+
+  /// \sa getCTUDir
+  Optional<StringRef> CTUDir;
+
+  /// \sa getCTUIndexName
+  Optional<StringRef> CTUIndexName;
+
+  /// \sa naiveCTUEnabled
+  Optional<bool> NaiveCTU;
+
 
   /// A helper function that retrieves option for a given full-qualified
   /// checker name.
@@ -305,6 +349,15 @@ private:
                              bool SearchInParents = false);
 
 public:
+  AnalyzerOptions()
+      : DisableAllChecks(false), ShowCheckerHelp(false),
+        ShowEnabledCheckerList(false), AnalyzeAll(false),
+        AnalyzerDisplayProgress(false), AnalyzeNestedBlocks(false),
+        eagerlyAssumeBinOpBifurcation(false), TrimGraph(false),
+        visualizeExplodedGraphWithGraphViz(false),
+        visualizeExplodedGraphWithUbiGraph(false), UnoptimizedCFG(false),
+        PrintStats(false), NoRetryExhausted(false), CXXMemberInliningMode() {}
+
   /// Interprets an option's string value as a boolean. The "true" string is
   /// interpreted as true and the "false" string is interpreted as false.
   ///
@@ -380,6 +433,8 @@ public:
   /// outside of AnalyzerOptions.
   UserModeKind getUserMode();
 
+  ExplorationStrategyKind getExplorationStrategy();
+
   /// \brief Returns the inter-procedural analysis mode.
   IPAKind getIPAMode();
 
@@ -414,6 +469,26 @@ public:
   /// This is controlled by the 'cfg-lifetime' config option, which accepts
   /// the values "true" and "false".
   bool includeLifetimeInCFG();
+
+  /// Returns whether or not the end of the loop information should be included
+  /// in the CFG.
+  ///
+  /// This is controlled by the 'cfg-loopexit' config option, which accepts
+  /// the values "true" and "false".
+  bool includeLoopExitInCFG();
+
+  /// Returns whether or not construction site information should be included
+  /// in the CFG C++ constructor elements.
+  ///
+  /// This is controlled by the 'cfg-rich-constructors' config options,
+  /// which accepts the values "true" and "false".
+  bool includeRichConstructorsInCFG();
+
+  /// Returns whether or not scope information should be included in the CFG.
+  ///
+  /// This is controlled by the 'cfg-scope-info' config option, which accepts
+  /// the values "true" and "false".
+  bool includeScopesInCFG();
 
   /// Returns whether or not C++ standard library functions may be considered
   /// for inlining.
@@ -450,6 +525,17 @@ public:
   /// This is controlled by the 'c++-shared_ptr-inlining' config option, which
   /// accepts the values "true" and "false".
   bool mayInlineCXXSharedPtrDtor();
+
+  /// Returns true if C++ temporary destructors should be inlined during
+  /// analysis.
+  ///
+  /// If temporary destructors are disabled in the CFG via the
+  /// 'cfg-temporary-dtors' option, temporary destructors would not be
+  /// inlined anyway.
+  ///
+  /// This is controlled by the 'c++-temp-dtor-inlining' config option, which
+  /// accepts the values "true" and "false".
+  bool mayInlineCXXTemporaryDtors();
 
   /// Returns whether or not paths that go through null returns should be
   /// suppressed.
@@ -498,6 +584,14 @@ public:
   /// This is controlled by the 'stable-report-filename' config option,
   /// which accepts the values "true" and "false". Default = false
   bool shouldWriteStableReportFilename();
+
+  /// \return Whether the analyzer should
+  /// serialize statistics to plist output.
+  /// Statistics would be serialized in JSON format inside the main dictionary
+  /// under the \c statistics key.
+  /// Available only if compiled in assert mode or with LLVM statistics
+  /// explicitly enabled.
+  bool shouldSerializeStats();
 
   /// Returns whether irrelevant parts of a bug report path should be pruned
   /// out of the final output.
@@ -560,6 +654,10 @@ public:
   /// This is controlled by the 'widen-loops' config option.
   bool shouldWidenLoops();
 
+  /// Returns true if the analysis should try to unroll loops with known bounds.
+  /// This is controlled by the 'unroll-loops' config option.
+  bool shouldUnrollLoops();
+
   /// Returns true if the bug reporter should transparently treat extra note
   /// diagnostic pieces as event diagnostic pieces. Useful when the diagnostic
   /// consumer doesn't support the extra note pieces.
@@ -568,36 +666,20 @@ public:
   /// to false when unset.
   bool shouldDisplayNotesAsEvents();
 
-public:
-  AnalyzerOptions() :
-    AnalysisStoreOpt(RegionStoreModel),
-    AnalysisConstraintsOpt(RangeConstraintsModel),
-    AnalysisDiagOpt(PD_HTML),
-    AnalysisPurgeOpt(PurgeStmt),
-    DisableAllChecks(0),
-    ShowCheckerHelp(0),
-    ShowEnabledCheckerList(0),
-    AnalyzeAll(0),
-    AnalyzerDisplayProgress(0),
-    AnalyzeNestedBlocks(0),
-    eagerlyAssumeBinOpBifurcation(0),
-    TrimGraph(0),
-    visualizeExplodedGraphWithGraphViz(0),
-    visualizeExplodedGraphWithUbiGraph(0),
-    UnoptimizedCFG(0),
-    PrintStats(0),
-    NoRetryExhausted(0),
-    // Cap the stack depth at 4 calls (5 stack frames, base + 4 calls).
-    InlineMaxStackDepth(5),
-    InliningMode(NoRedundancy),
-    UserMode(UMK_NotSet),
-    IPAMode(IPAK_NotSet),
-    CXXMemberInliningMode() {}
+  /// Returns the directory containing the CTU related files.
+  StringRef getCTUDir();
 
+  /// Returns the name of the file containing the CTU index of functions.
+  StringRef getCTUIndexName();
+
+  /// Returns true when naive cross translation unit analysis is enabled.
+  /// This is an experimental feature to inline functions from another
+  /// translation units.
+  bool naiveCTUEnabled();
 };
   
-typedef IntrusiveRefCntPtr<AnalyzerOptions> AnalyzerOptionsRef;
+using AnalyzerOptionsRef = IntrusiveRefCntPtr<AnalyzerOptions>;
   
-}
+} // namespace clang
 
-#endif
+#endif // LLVM_CLANG_STATICANALYZER_CORE_ANALYZEROPTIONS_H

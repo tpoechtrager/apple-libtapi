@@ -66,6 +66,9 @@ FunctionPass *createX86OptimizeLEAs();
 /// Return a pass that transforms setcc + movzx pairs into xor + setcc.
 FunctionPass *createX86FixupSetCC();
 
+/// Return a pass that lowers EFLAGS copy pseudo instructions.
+FunctionPass *createX86FlagsCopyLoweringPass();
+
 /// Return a pass that expands WinAlloca pseudo-instructions.
 FunctionPass *createX86WinAllocaExpander();
 
@@ -93,9 +96,13 @@ FunctionPass *createX86CmovConverterPass();
 /// the upper portions of registers, and to save code size.
 FunctionPass *createX86FixupBWInsts();
 
+/// Return a Machine IR pass that reassigns instruction chains from one domain
+/// to another, when profitable.
+FunctionPass *createX86DomainReassignmentPass();
+
 void initializeFixupBWInstPassPass(PassRegistry &);
 
-/// This pass replaces EVEX ecnoded of AVX-512 instructiosn by VEX 
+/// This pass replaces EVEX encoded of AVX-512 instructiosn by VEX
 /// encoding when possible in order to reduce code size.
 FunctionPass *createX86EvexToVexInsts();
 

@@ -14,6 +14,7 @@
 #include "clang/Driver/Tool.h"
 #include "clang/Driver/ToolChain.h"
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringRef.h"
@@ -67,6 +68,8 @@ static bool skipArgs(const char *Flag, bool HaveCrashVFS, int &SkipNum,
     .Default(false);
   if (IsInclude)
     return HaveCrashVFS ? false : true;
+  if (StringRef(Flag).startswith("-index-store-path"))
+    return true;
 
   // The remaining flags are treated as a single argument.
 
@@ -87,6 +90,8 @@ static bool skipArgs(const char *Flag, bool HaveCrashVFS, int &SkipNum,
   if (IsInclude)
     return HaveCrashVFS ? false : true;
   if (FlagRef.startswith("-fmodules-cache-path="))
+    return true;
+  if (FlagRef.startswith("-fapinotes-cache-path="))
     return true;
 
   SkipNum = 0;
@@ -219,6 +224,7 @@ void Command::Print(raw_ostream &OS, const char *Terminator, bool Quote,
   }
 
   bool HaveCrashVFS = CrashInfo && !CrashInfo->VFSPath.empty();
+  bool HaveIndexStorePath = CrashInfo && !CrashInfo->IndexStorePath.empty();
   for (size_t i = 0, e = Args.size(); i < e; ++i) {
     const char *const Arg = Args[i];
 
@@ -282,6 +288,24 @@ void Command::Print(raw_ostream &OS, const char *Terminator, bool Quote,
     printArg(OS, ModCachePath, Quote);
   }
 
+  if (CrashInfo && HaveIndexStorePath) {
+    SmallString<128> IndexStoreDir;
+
+    if (HaveCrashVFS) {
+      IndexStoreDir = llvm::sys::path::parent_path(
+          llvm::sys::path::parent_path(CrashInfo->VFSPath));
+      llvm::sys::path::append(IndexStoreDir, "index-store");
+    } else {
+      IndexStoreDir = "index-store";
+    }
+
+    OS << ' ';
+    printArg(OS, "-index-store-path", Quote);
+    OS << ' ';
+    printArg(OS, IndexStoreDir.c_str(), Quote);
+  }
+
+
   if (ResponseFile != nullptr) {
     OS << "\n Arguments passed via response file:\n";
     writeResponseFile(OS);
@@ -307,8 +331,8 @@ void Command::setEnvironment(llvm::ArrayRef<const char *> NewEnvironment) {
   Environment.push_back(nullptr);
 }
 
-int Command::Execute(const StringRef **Redirects, std::string *ErrMsg,
-                     bool *ExecutionFailed) const {
+int Command::Execute(ArrayRef<llvm::Optional<StringRef>> Redirects,
+                     std::string *ErrMsg, bool *ExecutionFailed) const {
   SmallVector<const char*, 128> Argv;
 
   const char **Envp;
@@ -378,8 +402,8 @@ static bool ShouldFallback(int ExitCode) {
   return ExitCode != 0;
 }
 
-int FallbackCommand::Execute(const StringRef **Redirects, std::string *ErrMsg,
-                             bool *ExecutionFailed) const {
+int FallbackCommand::Execute(ArrayRef<llvm::Optional<StringRef>> Redirects,
+                             std::string *ErrMsg, bool *ExecutionFailed) const {
   int PrimaryStatus = Command::Execute(Redirects, ErrMsg, ExecutionFailed);
   if (!ShouldFallback(PrimaryStatus))
     return PrimaryStatus;
@@ -410,7 +434,7 @@ void ForceSuccessCommand::Print(raw_ostream &OS, const char *Terminator,
   OS << " || (exit 0)" << Terminator;
 }
 
-int ForceSuccessCommand::Execute(const StringRef **Redirects,
+int ForceSuccessCommand::Execute(ArrayRef<llvm::Optional<StringRef>> Redirects,
                                  std::string *ErrMsg,
                                  bool *ExecutionFailed) const {
   int Status = Command::Execute(Redirects, ErrMsg, ExecutionFailed);

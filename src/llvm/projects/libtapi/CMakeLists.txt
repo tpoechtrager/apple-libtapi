@@ -1,5 +1,3 @@
-cmake_minimum_required(VERSION 3.4.3)
-
 #if(NOT APPLE)
 #  message(FATAL_ERROR "Unsupported configuration.")
 #endif()
@@ -34,16 +32,15 @@ set(TAPI_VENDOR ${PACKAGE_VENDOR} CACHE STRING
   "Vendor-specific text for showing with version information.")
 
 if (TAPI_VENDOR)
-  add_definitions( -DTAPI_VENDOR="${TAPI_VENDOR} " )
+  add_definitions( -DTAPI_VENDOR="${TAPI_VENDOR} ")
 endif()
-set(BACKEND_PACKAGE_STRING "${PACKAGE_STRING}")
 
 if(DEFINED ENV{RC_SUPPORTED_ARCHS})
-  string(REPLACE " " ";" SUPPORTED_ARCHS $ENV{RC_SUPPORTED_ARCHS})
-else()
-  set(SUPPORTED_ARCHS i386 x86_64 x86_64h armv4t armv6 armv5 armv7 armv7s armv7k armv6m armv7m armv7em arm64)
+  string(REPLACE " " ";" TAPI_SUPPORTED_ARCHS $ENV{RC_SUPPORTED_ARCHS})
+elseif(NOT DEFINED TAPI_SUPPORTED_ARCHS)
+  set(TAPI_SUPPORTED_ARCHS i386 x86_64 x86_64h armv4t armv6 armv5 armv7 armv7s armv7k armv6m armv7m armv7em arm64)
 endif()
-message(STATUS "Supported Architectures: ${SUPPORTED_ARCHS}")
+message(STATUS "Supported Architectures: ${TAPI_SUPPORTED_ARCHS}")
 
 set(KNOWN_ARCHS i386 x86_64 x86_64h armv4t armv6 armv5 armv7 armv7s armv7k armv6m armv7m armv7em arm64)
 
@@ -51,7 +48,7 @@ set (CONFIG_FILE ${CMAKE_CURRENT_BINARY_DIR}/include/tapi/Core/ArchitectureConfi
 file(WRITE ${CONFIG_FILE} "#ifndef TAPI_CORE_ARCHITECTURE_CONFIG_H\n")
 file(APPEND ${CONFIG_FILE} "#define TAPI_CORE_ARCHITECTURE_CONFIG_H\n\n")
 
-foreach(arch ${SUPPORTED_ARCHS})
+foreach(arch ${TAPI_SUPPORTED_ARCHS})
   if(arch IN_LIST KNOWN_ARCHS)
     string(TOUPPER ${arch} ARCH)
     file(APPEND ${CONFIG_FILE} "#define SUPPORT_ARCH_${ARCH} 1\n")
@@ -66,6 +63,11 @@ file(APPEND ${CONFIG_FILE} "\n#endif // TAPI_CORE_ARCHITECTURE_CONFIG_H\n")
 configure_file(
   ${CMAKE_CURRENT_SOURCE_DIR}/include/tapi/Version.inc.in
   ${CMAKE_CURRENT_BINARY_DIR}/include/tapi/Version.inc)
+
+# Check if the linker support -no_inits.
+SET(CMAKE_REQUIRED_FLAGS "-Wl,-no_inits")
+check_c_compiler_flag("" LINKER_SUPPORTS_NO_INITS)
+
 
 macro(add_tapi_library name)
   cmake_parse_arguments(ARG
@@ -127,11 +129,9 @@ macro(add_tapi_library name)
         RUNTIME DESTINATION bin)
 
       if (${ARG_SHARED} AND NOT CMAKE_CONFIGURATION_TYPES)
-        add_custom_target(install-${name}
-                          DEPENDS ${name}
-                          COMMAND "${CMAKE_COMMAND}"
-                                  -DCMAKE_INSTALL_COMPONENT=${name}
-                                  -P "${CMAKE_BINARY_DIR}/cmake_install.cmake")
+        add_llvm_install_targets(install-${name}
+                                 DEPENDS ${name}
+                                 COMPONENT ${name})
       endif()
     endif()
 
@@ -150,7 +150,6 @@ macro(add_tapi_executable name)
 endmacro(add_tapi_executable)
 
 function(tapi_clang_tablegen)
-  if(0)
   cmake_parse_arguments(CTG "" "SOURCE;TARGET" "" ${ARGN})
 
   if( NOT CTG_SOURCE )
@@ -164,7 +163,6 @@ function(tapi_clang_tablegen)
     add_public_tablegen_target(${CTG_TARGET})
     set_target_properties( ${CTG_TARGET} PROPERTIES FOLDER "Tapi tablegenning")
     set_property(GLOBAL APPEND PROPERTY TAPI_TABLEGEN_TARGETS ${CTG_TARGET})
-  endif()
   endif()
 endfunction(tapi_clang_tablegen)
 

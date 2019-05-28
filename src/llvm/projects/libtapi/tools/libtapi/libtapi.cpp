@@ -21,9 +21,14 @@
 namespace llvm {
 
 // Prevent the inclusion of lib/Support/Debug.cpp, because we don't want the
-// static initializers. Only do this for release mode.
-#ifdef NDEBUG
+// static initializers.
 raw_ostream &dbgs() { return errs(); }
+
+#ifndef NDEBUG
+#undef isCurrentDebugType
+bool isCurrentDebugType(const char *Type) { abort(); }
+
+bool DebugFlag = false;
 #endif
 
 void report_bad_alloc_error(const char *, bool) { abort(); }
@@ -39,5 +44,19 @@ void report_fatal_error(const Twine &, bool) { abort(); }
 void llvm_unreachable_internal(const char *, const char *, unsigned) {
   abort();
 }
+
+namespace sys {
+
+#ifdef __APPLE__
+
+bool RemoveFileOnSignal(StringRef Filename, std::string *ErrMsg) { abort(); }
+
+void DontRemoveFileOnSignal(StringRef Filename) { abort(); }
+
+void AddSignalHandler(void (*)(void *), void *) { abort(); }
+
+#endif
+
+} // end namespace sys.
 
 } // end namespace llvm.

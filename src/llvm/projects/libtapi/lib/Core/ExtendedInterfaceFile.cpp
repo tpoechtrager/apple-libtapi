@@ -20,6 +20,20 @@ using namespace llvm;
 
 TAPI_NAMESPACE_INTERNAL_BEGIN
 
+static XPIKind convertSymbolKindToXPIKind(SymbolKind kind) {
+  switch (kind) {
+  case SymbolKind::GlobalSymbol:
+    return XPIKind::GlobalSymbol;
+  case SymbolKind::ObjectiveCClass:
+    return XPIKind::ObjectiveCClass;
+  case SymbolKind::ObjectiveCClassEHType:
+    return XPIKind::ObjectiveCClassEHType;
+  case SymbolKind::ObjectiveCInstanceVariable:
+    return XPIKind::ObjectiveCInstanceVariable;
+  }
+  llvm_unreachable("unexpected SymbolKind kind");
+}
+
 void ExtendedInterfaceFile::addSymbol(XPIKind kind, StringRef name,
                                       ArchitectureSet archs, SymbolFlags flags,
                                       XPIAccess access) {
@@ -89,57 +103,6 @@ void ExtendedInterfaceFile::addUndefinedSymbol(XPIKind kind, StringRef name,
   }
 }
 
-bool ExtendedInterfaceFile::convertTo(FileType fileType, StringRef path) {
-  switch (fileType) {
-  case FileType::TBD_V1:
-  case FileType::TBD_V2:
-    if (!path.empty() && !path.endswith(".tbd"))
-      return false;
-    break;
-  case FileType::API_V1:
-    if (!path.empty() && !path.endswith(".api"))
-      return false;
-    break;
-  case FileType::SPI_V1:
-    if (!path.empty() && !path.endswith(".spi"))
-      return false;
-    break;
-  default:
-    return false;
-  }
-
-  if ((fileType == FileType::TBD_V1) &&
-      (!isTwoLevelNamespace() || !isApplicationExtensionSafe()))
-    return false;
-
-  setFileType(fileType);
-
-  if (!path.empty())
-    setPath(path.str());
-  else {
-    SmallString<PATH_MAX> newpath(getPath());
-    StringRef extension;
-    switch (fileType) {
-    case FileType::TBD_V1:
-    case FileType::TBD_V2:
-      extension = ".tbd";
-      break;
-    case FileType::API_V1:
-      extension = ".api";
-      break;
-    case FileType::SPI_V1:
-      extension = ".spi";
-      break;
-    default:
-      llvm_unreachable("Unsupported file type for conversion.");
-    }
-    TAPI_INTERNAL::replace_extension(newpath, extension);
-    setPath(newpath.str().str());
-  }
-
-  return true;
-}
-
 bool ExtendedInterfaceFile::contains(XPIKind kind, StringRef name,
                                      XPI const **result) const {
   if (auto *it = _symbols->findSymbol(kind, name)) {
@@ -151,18 +114,21 @@ bool ExtendedInterfaceFile::contains(XPIKind kind, StringRef name,
   return false;
 }
 
-Expected<std::unique_ptr<ExtendedInterfaceFile>> ExtendedInterfaceFile::merge(
-    const ExtendedInterfaceFile *otherInterface) const {
+Expected<std::unique_ptr<ExtendedInterfaceFile>>
+ExtendedInterfaceFile::merge(const ExtendedInterfaceFile *otherInterface,
+                             bool allowArchitectureMerges) const {
   // Verify files can be merged.
   if (getFileType() != otherInterface->getFileType()) {
     return make_error<StringError>("file types do not match",
                                    inconvertibleErrorCode());
   }
 
-  if ((getArchitectures() & otherInterface->getArchitectures()) !=
-      Architecture::unknown) {
-    return make_error<StringError>("architectures overlap",
-                                   inconvertibleErrorCode());
+  if (!allowArchitectureMerges) {
+    if ((getArchitectures() & otherInterface->getArchitectures()) !=
+        Architecture::unknown) {
+      return make_error<StringError>("architectures overlap",
+                                     inconvertibleErrorCode());
+    }
   }
 
   if (getPlatform() != otherInterface->getPlatform()) {
@@ -277,6 +243,14 @@ Expected<std::unique_ptr<ExtendedInterfaceFile>> ExtendedInterfaceFile::merge(
   return std::move(interface);
 }
 
+bool ExtendedInterfaceFile::removeSymbol(XPIKind kind, StringRef name) {
+  return _symbols->removeSymbol(kind, name);
+}
+
+bool ExtendedInterfaceFile::removeSymbol(SymbolKind kind, StringRef name) {
+  return removeSymbol(convertSymbolKindToXPIKind(kind), name);
+}
+
 void ExtendedInterfaceFile::printSymbolsForArch(Architecture arch) const {
   std::vector<std::string> exports;
   for (const auto *symbol : this->exports()) {
@@ -288,7 +262,7 @@ void ExtendedInterfaceFile::printSymbolsForArch(Architecture arch) const {
       exports.emplace_back(symbol->getName());
       break;
     case XPIKind::ObjectiveCClass:
-      if (getPlatform() == Platform::OSX && arch == Architecture::i386) {
+      if (getPlatform() == Platform::macOS && arch == Architecture::i386) {
         exports.emplace_back(".objc_class_name_" + symbol->getName().str());
       } else {
         exports.emplace_back("_OBJC_CLASS_$_" + symbol->getName().str());

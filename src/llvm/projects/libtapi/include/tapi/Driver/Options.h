@@ -14,10 +14,13 @@
 #include "tapi/Core/FileManager.h"
 #include "tapi/Core/InterfaceFile.h"
 #include "tapi/Core/LLVM.h"
+#include "tapi/Core/Path.h"
+#include "tapi/Core/Platform.h"
 #include "tapi/Defines.h"
-#include "tapi/Driver/Diagnostics.h"
+#include "tapi/Diagnostics/Diagnostics.h"
 #include "tapi/Driver/DriverOptions.h"
 #include "clang/Frontend/FrontendOptions.h"
+#include "llvm/ADT/Triple.h"
 #include "llvm/Option/Option.h"
 #include <set>
 #include <string>
@@ -33,13 +36,9 @@ using Macro = std::pair<std::string, bool /*isUndef*/>;
 enum class TAPICommand : unsigned {
   Driver,
   Archive,
-  Scan,
   Stubify,
   InstallAPI,
   Reexport,
-  SDKDB,
-  SDKDBVerifier,
-  GenerateAPITests,
 };
 
 /// \brief A list of InstallAPI verification modes.
@@ -59,6 +58,9 @@ enum class ArchiveAction {
 
   /// \brief Specify the architecture to extract from the input file.
   ExtractArchitecture,
+
+  /// \brief Specify the architecture to remove from the input file.
+  RemoveArchitecture,
 
   /// \brief Verify the architecture exists in the input file.
   VerifyArchitecture,
@@ -106,11 +108,8 @@ struct DriverOptions {
   /// \brief Print help.
   bool printHelp = false;
 
-  /// \brief Print hidden options too.
-  bool printHelpHidden = false;
-
   /// \brief List of input paths.
-  std::vector<std::string> inputs;
+  PathSeq inputs;
 
   /// \brief Output path.
   std::string outputPath;
@@ -125,13 +124,13 @@ struct ArchiveOptions {
   /// \brief Specifies the archive action architecture to use (if applicable).
   Architecture arch = Architecture::unknown;
 
+  /// \brief This allows merging of TBD files containing the same architecture.
+  bool allowArchitectureMerges = false;
+
   bool operator==(const ArchiveOptions &other) const;
 };
 
 struct LinkerOptions {
-  /// \brief The set of architectures we need to use for the header scanning.
-  ArchitectureSet architectures;
-
   /// \brief The install name to use for the dynamic library.
   std::string installName;
 
@@ -148,7 +147,16 @@ struct LinkerOptions {
   std::vector<InterfaceFileRef> allowableClients;
 
   /// \brief List of reexported libraries to use for the dynamic library.
-  std::vector<InterfaceFileRef> reexportedLibraries;
+  std::vector<InterfaceFileRef> reexportInstallNames;
+
+  /// \brief List of reexported libraries to use for the dynamic library.
+  std::vector<std::pair<std::string, ArchitectureSet>> reexportedLibraries;
+
+  /// \brief List of reexported libraries to use for the dynamic library.
+  std::vector<std::pair<std::string, ArchitectureSet>> reexportedLibraryPaths;
+
+  /// \brief List of reexported frameworks to use for the dynamic library.
+  std::vector<std::pair<std::string, ArchitectureSet>> reexportedFrameworks;
 
   /// \brief Is application extension safe.
   bool isApplicationExtensionSafe = false;
@@ -157,9 +165,8 @@ struct LinkerOptions {
 };
 
 struct FrontendOptions {
-  /// \brief Deployment target.
-  Platform platform = Platform::Unknown;
-  std::string osVersion;
+  /// \brief Targets to build for.
+  std::vector<llvm::Triple> targets;
 
   /// \brief Specify the language to use for parsing.
   clang::InputKind::Language language = clang::InputKind::ObjC;
@@ -170,20 +177,23 @@ struct FrontendOptions {
   /// \brief The sysroot to search for SDK headers.
   std::string isysroot;
 
+  /// \brief Name of the umbrella framework.
+  std::string umbrella;
+
   /// \brief Additional SYSTEM framework search paths.
-  std::vector<std::string> systemFrameworkPaths;
+  PathSeq systemFrameworkPaths;
 
   /// \brief Additional framework search paths.
-  std::vector<std::string> frameworkPaths;
+  PathSeq frameworkPaths;
 
   /// \brief Additional library search paths.
-  std::vector<std::string> libraryPaths;
+  PathSeq libraryPaths;
 
   /// \brief Additional SYSTEM include paths.
-  std::vector<std::string> systemIncludePaths;
+  PathSeq systemIncludePaths;
 
   /// \brief Additional include paths.
-  std::vector<std::string> includePaths;
+  PathSeq includePaths;
 
   /// \brief Macros to use for for parsing.
   std::vector<Macro> macros;
@@ -241,16 +251,16 @@ struct TAPIOptions {
   std::string privateUmbrellaHeaderPath;
 
   /// \brief List of extra public header files.
-  std::vector<std::string> extraPublicHeaders;
+  PathSeq extraPublicHeaders;
 
   /// \brief List of extra private header files.
-  std::vector<std::string> extraPrivateHeaders;
+  PathSeq extraPrivateHeaders;
 
   /// \brief List of excluded public header files.
-  std::vector<std::string> excludePublicHeaders;
+  PathSeq excludePublicHeaders;
 
   /// \brief List of excluded private header files.
-  std::vector<std::string> excludePrivateHeaders;
+  PathSeq excludePrivateHeaders;
 
   /// \brief Path to dynamic library for verification.
   std::string verifyAgainst;
@@ -260,12 +270,6 @@ struct TAPIOptions {
 
   /// \brief Demangle symbols (C++) when printing.
   bool demangle = false;
-
-  /// \brief Path to configuration file.
-  std::string configurationFile;
-
-  /// \brief Generate API/SPI files.
-  bool generateAPI = false;
 
   /// \brief Scan public headers.
   bool scanPublicHeaders = true;
@@ -288,19 +292,16 @@ struct TAPIOptions {
   /// \brief Set 'installapi' flag.
   bool setInstallAPIFlag = false;
 
+  /// \brief Specify the output file type.
+  FileType fileType = FileType::TBD_V3;
 
-  /// \brief Print SDKDB in human readable format.
-  bool print = false;
+  /// \brief Infer the include paths based on the provided/found header files.
+  bool inferIncludePaths = true;
 
-  /// \bried Scan Bundles and Extensions for SDKDB.
-  bool scanAll = true;
+  /// \brief Print the API/XPI after a certain phase.
+  std::string printAfter;
 
   bool operator==(const TAPIOptions &other) const;
-};
-
-struct VerifyOptions {
-  /// \brief Baseline.
-  std::string baselinePath;
 };
 
 class Options {
@@ -308,6 +309,9 @@ private:
   /// Helper methods for handling the various options.
   bool processSnapshotOptions(DiagnosticsEngine &diag,
                               llvm::opt::InputArgList &args);
+
+  bool processXarchOptions(DiagnosticsEngine &diag,
+                           llvm::opt::InputArgList &args);
 
   bool processDriverOptions(DiagnosticsEngine &diag,
                             llvm::opt::InputArgList &args);
@@ -327,9 +331,6 @@ private:
   bool processTAPIOptions(DiagnosticsEngine &diag,
                           llvm::opt::InputArgList &args);
 
-  bool processVerifyOptions(DiagnosticsEngine &diag,
-                            llvm::opt::InputArgList &args);
-
   void initOptionsFromSnapshot(const Snapshot &snapshot);
 
 public:
@@ -344,7 +345,6 @@ public:
   FrontendOptions frontendOptions;
   DiagnosticsOptions diagnosticsOptions;
   TAPIOptions tapiOptions;
-  VerifyOptions verifyOptions;
 
   Options() = delete;
 
@@ -360,11 +360,12 @@ private:
   std::string programName;
   std::unique_ptr<llvm::opt::OptTable> table;
   IntrusiveRefCntPtr<FileManager> fm;
+  std::map<const llvm::opt::Arg *, Architecture> argToArchMap;
 
   friend class Snapshot;
+  friend class Context;
 };
 
 TAPI_NAMESPACE_INTERNAL_END
 
 #endif // TAPI_DRIVER_OPTIONS_H
-

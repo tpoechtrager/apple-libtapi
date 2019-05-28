@@ -12,14 +12,15 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "API2XPIConverter.h"
 #include "tapi/Core/ExtendedInterfaceFile.h"
 #include "tapi/Core/Registry.h"
 #include "tapi/Defines.h"
-#include "tapi/Driver/Diagnostics.h"
+#include "tapi/Diagnostics/Diagnostics.h"
 #include "tapi/Driver/Driver.h"
 #include "tapi/Driver/Options.h"
 #include "tapi/Driver/Snapshot.h"
-#include "tapi/Scanner/Scanner.h"
+#include "tapi/Frontend/Frontend.h"
 #include "clang/Driver/DriverDiagnostic.h"
 
 using namespace llvm;
@@ -31,23 +32,17 @@ TAPI_NAMESPACE_INTERNAL_BEGIN
 bool Driver::Reexport::run(DiagnosticsEngine &diag, Options &opts) {
   auto &fm = opts.getFileManager();
 
-  // Handle architecture.
-  if (opts.linkerOptions.architectures.empty()) {
-    diag.report(diag::err_no_architecture);
+  // Handle targets.
+  if (opts.frontendOptions.targets.empty()) {
+    diag.report(diag::err_no_target);
     return false;
   }
 
-  // Only allow one architecture.
-  if (opts.linkerOptions.architectures.count() > 1) {
-    diag.report(diag::err_one_architecture) << opts.linkerOptions.architectures;
+  // Only allow one target.
+  if (opts.frontendOptions.targets.size() > 1) {
+    diag.report(diag::err_one_target);
     return false;
   }
-
-  if (opts.frontendOptions.platform == Platform::Unknown) {
-    diag.report(diag::err_no_deployment_target);
-    return false;
-  }
-
 
   // Handle input files.
   if (opts.driverOptions.inputs.empty()) {
@@ -55,54 +50,62 @@ bool Driver::Reexport::run(DiagnosticsEngine &diag, Options &opts) {
     return false;
   }
 
-  std::vector<const FileEntry *> files;
+  HeaderSeq files;
   for (const auto &path : opts.driverOptions.inputs) {
-    if (const auto *file = fm.getFile(path)) {
-      files.emplace_back(file);
-    } else {
+    if (fm.exists(path))
+      files.emplace_back(path, HeaderType::Public);
+    else {
       diag.report(diag::err_cannot_open_file) << path;
       return false;
     }
   }
 
-  auto job = make_unique<ParsingJob>();
-  job->fileManager = &fm;
-  job->architectures = opts.linkerOptions.architectures;
-  job->platform = opts.frontendOptions.platform;
-  job->osVersion = opts.frontendOptions.osVersion;
-  job->language = opts.frontendOptions.language;
-  job->language_std = opts.frontendOptions.language_std;
-  job->useRTTI = opts.frontendOptions.useRTTI;
-  job->visibility = opts.frontendOptions.visibility;
-  job->isysroot = opts.frontendOptions.isysroot;
-  job->macros = opts.frontendOptions.macros;
-  job->systemFrameworkPaths = opts.frontendOptions.systemFrameworkPaths;
-  job->systemIncludePaths = opts.frontendOptions.systemIncludePaths;
-  job->frameworkPaths = opts.frontendOptions.frameworkPaths;
-  job->includePaths = opts.frontendOptions.includePaths;
-  job->clangExtraArgs = opts.frontendOptions.clangExtraArgs;
-  job->publicHeaderFiles = std::move(files);
-  job->clangResourcePath = opts.frontendOptions.clangResourcePath;
-  job->useObjectiveCARC = opts.frontendOptions.useObjectiveCARC;
-  job->useObjectiveCWeakARC = opts.frontendOptions.useObjectiveCWeakARC;
+  FrontendJob job;
+  job.language = opts.frontendOptions.language;
+  job.language_std = opts.frontendOptions.language_std;
+  job.useRTTI = opts.frontendOptions.useRTTI;
+  job.visibility = opts.frontendOptions.visibility;
+  job.isysroot = opts.frontendOptions.isysroot;
+  job.macros = opts.frontendOptions.macros;
+  job.systemFrameworkPaths = opts.frontendOptions.systemFrameworkPaths;
+  job.systemIncludePaths = opts.frontendOptions.systemIncludePaths;
+  job.frameworkPaths = opts.frontendOptions.frameworkPaths;
+  job.includePaths = opts.frontendOptions.includePaths;
+  job.clangExtraArgs = opts.frontendOptions.clangExtraArgs;
+  job.headerFiles = std::move(files);
+  job.clangResourcePath = opts.frontendOptions.clangResourcePath;
+  job.useObjectiveCARC = opts.frontendOptions.useObjectiveCARC;
+  job.useObjectiveCWeakARC = opts.frontendOptions.useObjectiveCWeakARC;
+  job.type = HeaderType::Public;
 
   // Infer additional include paths.
   std::set<std::string> inferredIncludePaths;
-  for (const auto *file : job->publicHeaderFiles)
-    inferredIncludePaths.insert(file->getDir()->getName());
+  for (const auto &header : job.headerFiles)
+    inferredIncludePaths.insert(sys::path::parent_path(header.fullPath));
 
-  job->includePaths.insert(job->includePaths.end(),
-                           inferredIncludePaths.begin(),
-                           inferredIncludePaths.end());
+  job.includePaths.insert(job.includePaths.end(), inferredIncludePaths.begin(),
+                          inferredIncludePaths.end());
 
-  auto headerSymbols = Scanner::run(std::move(job));
-  if (!headerSymbols)
-    return false;
+  std::vector<FrontendContext> frontendResults;
+  for (auto &target : opts.frontendOptions.targets) {
+    job.target = target;
+    auto result = runFrontend(job);
+    if (!result)
+      return false;
+    frontendResults.emplace_back(std::move(result.getValue()));
+  }
+
+  auto headerSymbols = make_unique<XPISet>();
+  for (auto &result : frontendResults) {
+    API2XPIConverter converter(headerSymbols.get(), result.target);
+    result.visit(converter);
+  }
 
   auto scanFile = make_unique<ExtendedInterfaceFile>(std::move(headerSymbols));
   scanFile->setFileType(FileType::ReexportFile);
-  scanFile->setArchitectures(opts.linkerOptions.architectures);
-  scanFile->setPlatform(opts.frontendOptions.platform);
+  scanFile->setArchitectures(
+      mapToArchitectureSet(opts.frontendOptions.targets));
+  scanFile->setPlatform(mapToSinglePlatform(opts.frontendOptions.targets));
 
   SmallString<PATH_MAX> outputPath(opts.driverOptions.outputPath);
   if (outputPath.empty()) {
@@ -124,14 +127,13 @@ bool Driver::Reexport::run(DiagnosticsEngine &diag, Options &opts) {
 
   Registry registry;
   registry.addReexportWriters();
-  scanFile->setPath(outputPath.str());
-  auto result = registry.writeFile(scanFile.get());
+  auto result = registry.writeFile(scanFile.get(), outputPath.str());
   if (result) {
-    diag.report(diag::err_cannot_write_file) << scanFile->getPath()
-                                             << toString(std::move(result));
+    diag.report(diag::err_cannot_write_file)
+        << outputPath.str() << toString(std::move(result));
     return false;
   }
-  globalSnapshot->recordFile(scanFile->getPath());
+  globalSnapshot->recordFile(outputPath.str());
 
   return true;
 }

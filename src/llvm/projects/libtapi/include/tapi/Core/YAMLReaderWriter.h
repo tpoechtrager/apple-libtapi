@@ -39,6 +39,7 @@ struct YAMLContext {
   std::string path;
   std::string errorMessage;
   ReadFlags readFlags;
+  FileType fileType = FileType::Invalid;
 
   YAMLContext(const YAMLBase &base) : base(base) {}
 };

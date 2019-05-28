@@ -24,13 +24,17 @@ TAPI_NAMESPACE_INTERNAL_BEGIN
 
 StringRef Framework::getName() const {
   StringRef path = _baseDirectory;
+  // Returns the framework name extract from path.
   while (!path.empty()) {
     if (path.endswith(".framework"))
       return sys::path::filename(path);
     path = sys::path::parent_path(path);
   }
 
-  return sys::path::filename(_baseDirectory);
+  // Otherwise, return the name of the baseDirectory.
+  // First, remove all the trailing seperator.
+  path = _baseDirectory;
+  return sys::path::filename(path.rtrim("/"));
 }
 
 bool Framework::verify(bool warnAll) const {
@@ -174,6 +178,10 @@ bool Framework::verify(bool warnAll) const {
       continue;
 
     auto *selector = sym.second;
+
+    if (selector->isDerivedFromProtocol())
+      continue;
+
     if (!visitedSymbols.count(selector) && !selector->isUnavailable() &&
         !selector->isDynamic()) {
       outs() << "warning: header exports " << sym.first.containerName
@@ -189,11 +197,8 @@ void Framework::print(raw_ostream &os) const {
   os << "=== Framework " << getName() << " ===\n"
      << "directory: " << _baseDirectory << "\n"
      << "header files:\n";
-  for (auto &file : _headerFiles) {
-    os << "  "
-       << (file.second == HeaderType::Private ? "(private) " : "(public) ")
-       << sys::path::filename(file.first) << "\n";
-  }
+  for (auto &header : _headerFiles)
+    os << "  " << header << "\n";
   os << "dylib files:\n";
   for (auto file : _dynamicLibraryFiles)
     os << "  " << sys::path::filename(file) << "\n";

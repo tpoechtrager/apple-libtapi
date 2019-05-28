@@ -225,8 +225,8 @@ public:
   static AttributeSet get(LLVMContext &C, const AttrBuilder &B);
   static AttributeSet get(LLVMContext &C, ArrayRef<Attribute> Attrs);
 
-  bool operator==(const AttributeSet &O) { return SetNode == O.SetNode; }
-  bool operator!=(const AttributeSet &O) { return !(*this == O); }
+  bool operator==(const AttributeSet &O) const { return SetNode == O.SetNode; }
+  bool operator!=(const AttributeSet &O) const { return !(*this == O); }
 
   /// Add an argument attribute. Returns a new set because attribute sets are
   /// immutable.
@@ -466,12 +466,12 @@ public:
     return removeAttributes(C, ArgNo + FirstArgIndex);
   }
 
-  /// \Brief Add the dereferenceable attribute to the attribute set at the given
+  /// \brief Add the dereferenceable attribute to the attribute set at the given
   /// index. Returns a new list because attribute lists are immutable.
   AttributeList addDereferenceableAttr(LLVMContext &C, unsigned Index,
                                        uint64_t Bytes) const;
 
-  /// \Brief Add the dereferenceable attribute to the attribute set at the given
+  /// \brief Add the dereferenceable attribute to the attribute set at the given
   /// arg index. Returns a new list because attribute lists are immutable.
   AttributeList addDereferenceableParamAttr(LLVMContext &C, unsigned ArgNo,
                                             uint64_t Bytes) const {

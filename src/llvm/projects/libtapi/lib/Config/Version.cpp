@@ -12,15 +12,9 @@
 ///
 //===----------------------------------------------------------------------===//
 
-#include "llvm/Support/raw_ostream.h"
 #include "tapi/Config/Version.h"
 #include "tapi/Version.inc"
-
-/// \brief Helper macro for TAPI_VERSION_STRING.
-#define TAPI_MAKE_STRING2(X) #X
-
-/// \brief A string that describes the TAPI version number, e.g., "1.0.0".
-#define TAPI_MAKE_STRING(X) TAPI_MAKE_STRING2(X)
+#include "llvm/Support/raw_ostream.h"
 
 using namespace llvm;
 

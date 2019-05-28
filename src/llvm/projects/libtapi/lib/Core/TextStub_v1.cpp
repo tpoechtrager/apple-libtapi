@@ -128,11 +128,11 @@ template <> struct MappingTraits<const InterfaceFile *> {
             break;
           }
         }
-        sort(section.symbols);
-        sort(section.classes);
-        sort(section.ivars);
-        sort(section.weakDefSymbols);
-        sort(section.tlvSymbols);
+        TAPI_INTERNAL::sort(section.symbols);
+        TAPI_INTERNAL::sort(section.classes);
+        TAPI_INTERNAL::sort(section.ivars);
+        TAPI_INTERNAL::sort(section.weakDefSymbols);
+        TAPI_INTERNAL::sort(section.tlvSymbols);
         exports.emplace_back(std::move(section));
       }
     }
@@ -144,8 +144,8 @@ template <> struct MappingTraits<const InterfaceFile *> {
       auto *file = new InterfaceFile;
       file->setPath(ctx->path);
       file->setFileType(TAPI_INTERNAL::FileType::TBD_V1);
-      file->setPlatform(platform);
       file->setArchitectures(archs);
+      file->setPlatform(mapToSim(platform, file->getArchitectures().hasX86()));
       file->setInstallName(installName);
       file->setCurrentVersion(currentVersion);
       file->setCompatibilityVersion(compatibilityVersion);
@@ -281,6 +281,9 @@ bool YAMLDocumentHandler::handleDocument(IO &io, const File *&file) const {
   if (!io.outputting() && !io.mapTag("!tapi-tbd-v1") &&
       !io.mapTag("tag:yaml.org,2002:map"))
     return false;
+
+  auto *ctx = reinterpret_cast<YAMLContext *>(io.getContext());
+  ctx->fileType = FileType::TBD_V1;
 
   const auto *interface = dyn_cast_or_null<InterfaceFile>(file);
   MappingTraits<const InterfaceFile *>::mappingTBD1(io, interface);

@@ -1,3 +1,7 @@
+//===- tapi/Core/ArchitectureSet.h - Architecture Set -----------*- C++ -*-===//
+//
+//                     The LLVM Compiler Infrastructure
+//
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
@@ -15,6 +19,7 @@
 #include "tapi/Core/ArchitectureConfig.h"
 #include "tapi/Core/LLVM.h"
 #include "tapi/Defines.h"
+#include "llvm/ADT/Triple.h"
 #include <iterator>
 #include <limits>
 #include <stddef.h>
@@ -43,9 +48,7 @@ public:
     }
   }
 
-  static ArchitectureSet All() {
-    return ArchitectureSet(_endIndexVal);
-  }
+  static ArchitectureSet All() { return ArchitectureSet(_endIndexVal); }
 
   void set(Architecture arch) {
     if (arch == Architecture::unknown)
@@ -180,6 +183,8 @@ public:
   operator std::vector<Architecture>() const;
   void print(raw_ostream &os) const;
 };
+
+ArchitectureSet mapToArchitectureSet(const std::vector<llvm::Triple> &targets);
 
 raw_ostream &operator<<(raw_ostream &os, ArchitectureSet set);
 

@@ -20,6 +20,7 @@
 #include "tapi/Core/Architecture.h"
 #include "tapi/Core/ArchitectureSet.h"
 #include "tapi/Core/File.h"
+#include "tapi/Core/InterfaceFile.h"
 #include "tapi/Core/InterfaceFileBase.h"
 #include "tapi/Core/STLExtras.h"
 #include "tapi/Core/XPI.h"
@@ -76,13 +77,15 @@ public:
 
   const XPISet &getSymbolSet() const { return *_symbols; }
 
-  bool convertTo(FileType fileType, StringRef path = StringRef());
-
   bool contains(XPIKind kind, StringRef name,
                 XPI const **result = nullptr) const;
 
   llvm::Expected<std::unique_ptr<ExtendedInterfaceFile>>
-  merge(const ExtendedInterfaceFile *otherInterface) const;
+  merge(const ExtendedInterfaceFile *otherInterface,
+        bool allowArchitectureMerges = false) const;
+
+  bool removeSymbol(XPIKind kind, StringRef name);
+  bool removeSymbol(SymbolKind kind, StringRef name);
 
   void printSymbols(ArchitectureSet archs) const;
 

@@ -13,8 +13,9 @@
 //===----------------------------------------------------------------------===//
 
 #include "tapi/Core/Registry.h"
+#include "tapi/Core/TapiError.h"
 #include "tapi/Defines.h"
-#include "tapi/Driver/Diagnostics.h"
+#include "tapi/Diagnostics/Diagnostics.h"
 #include "tapi/Driver/Driver.h"
 #include "tapi/Driver/Options.h"
 #include "tapi/Driver/Snapshot.h"
@@ -39,6 +40,7 @@ bool Driver::Archive::run(DiagnosticsEngine &diag, Options &opts) {
     break;
   case ArchiveAction::ShowInfo:
   case ArchiveAction::ExtractArchitecture:
+  case ArchiveAction::RemoveArchitecture:
   case ArchiveAction::VerifyArchitecture:
   case ArchiveAction::ListSymbols:
     if (opts.driverOptions.inputs.size() != 1) {
@@ -52,6 +54,7 @@ bool Driver::Archive::run(DiagnosticsEngine &diag, Options &opts) {
   default:
     break;
   case ArchiveAction::ExtractArchitecture:
+  case ArchiveAction::RemoveArchitecture:
   case ArchiveAction::Merge:
     if (opts.driverOptions.outputPath.empty()) {
       diag.report(diag::err_no_output_file);
@@ -74,8 +77,8 @@ bool Driver::Archive::run(DiagnosticsEngine &diag, Options &opts) {
 
     auto file = registry.readFile(std::move(bufferOr.get()));
     if (!file) {
-      diag.report(diag::err_cannot_read_file) << path
-                                              << toString(file.takeError());
+      diag.report(diag::err_cannot_read_file)
+          << path << toString(file.takeError());
       return false;
     }
 
@@ -85,8 +88,7 @@ bool Driver::Archive::run(DiagnosticsEngine &diag, Options &opts) {
       return false;
     case TBD_V1:
     case TBD_V2:
-    case API_V1:
-    case SPI_V1:
+    case TBD_V3:
       break;
     }
 
@@ -108,8 +110,32 @@ bool Driver::Archive::run(DiagnosticsEngine &diag, Options &opts) {
     assert(inputs.size() == 1 && "expecting exactly one input file");
     auto file = inputs.front()->extract(opts.archiveOptions.arch);
     if (!file) {
-      diag.report(diag::err) << inputs.front()->getPath()
-                             << toString(file.takeError());
+      diag.report(diag::err)
+          << inputs.front()->getPath() << toString(file.takeError());
+      return false;
+    }
+    output = std::move(file.get());
+    break;
+  }
+
+  case ArchiveAction::RemoveArchitecture: {
+    assert(inputs.size() == 1 && "expecting exactly one input file");
+    auto file = inputs.front()->remove(opts.archiveOptions.arch);
+    file = handleExpected(
+        std::move(file), [&]() { return std::move(inputs.front()); },
+        [&](std::unique_ptr<TapiError> error) -> Error {
+          if (error->ec != TapiErrorCode::NoSuchArchitecture)
+            return Error(std::move(error));
+          diag.report(diag::warn)
+              << ("file doesn't have architecture '" +
+                  getArchName(opts.archiveOptions.arch) + "'")
+                     .str();
+          return Error::success();
+        });
+
+    if (!file) {
+      diag.report(diag::err)
+          << inputs.front()->getPath() << toString(file.takeError());
       return false;
     }
     output = std::move(file.get());
@@ -128,10 +154,11 @@ bool Driver::Archive::run(DiagnosticsEngine &diag, Options &opts) {
         continue;
       }
 
-      auto result = output->merge(file.get());
+      auto result = output->merge(file.get(),
+                                  opts.archiveOptions.allowArchitectureMerges);
       if (!result) {
-        diag.report(diag::err) << file->getPath()
-                               << toString(result.takeError());
+        diag.report(diag::err)
+            << file->getPath() << toString(result.takeError());
         return false;
       }
       output = std::move(result.get());
@@ -141,27 +168,27 @@ bool Driver::Archive::run(DiagnosticsEngine &diag, Options &opts) {
   case ArchiveAction::ListSymbols: {
     assert(inputs.size() == 1 && "expecting exactly one input file");
     // Only allow one architecture.
-    if (opts.linkerOptions.architectures.count() > 1) {
-      diag.report(diag::err_one_architecture)
-          << opts.linkerOptions.architectures;
+    if (opts.frontendOptions.targets.size() > 1) {
+      diag.report(diag::err_one_target);
       return false;
     }
-    inputs.front()->printSymbols(opts.linkerOptions.architectures);
+    inputs.front()->printSymbols(
+        mapToArchitectureSet(opts.frontendOptions.targets));
     break;
   }
   }
 
   if (output) {
-    output->setPath(opts.driverOptions.outputPath);
-    auto result = registry.writeFile(output.get());
+    auto result =
+        registry.writeFile(output.get(), opts.driverOptions.outputPath);
     if (result) {
-      diag.report(diag::err_cannot_write_file) << output->getPath()
-                                               << toString(std::move(result));
+      diag.report(diag::err_cannot_write_file)
+          << opts.driverOptions.outputPath << toString(std::move(result));
       return false;
     }
   }
   if (output)
-    globalSnapshot->recordFile(output->getPath());
+    globalSnapshot->recordFile(opts.driverOptions.outputPath);
 
   return true;
 }

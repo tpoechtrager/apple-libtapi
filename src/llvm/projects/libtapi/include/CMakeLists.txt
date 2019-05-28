@@ -18,10 +18,9 @@ install(FILES ${HEADERS}
   )
 
 add_custom_target(tapi-headers)
-add_custom_target(install-tapi-headers
-  COMMAND "${CMAKE_COMMAND}" -DCMAKE_INSTALL_COMPONENT=tapi-headers
-          -P "${CMAKE_BINARY_DIR}/cmake_install.cmake"
-  )
+add_llvm_install_targets(install-tapi-headers
+                         DEPENDS tapi-headers
+                         COMPONENT tapi-headers)
 set_target_properties(tapi-headers PROPERTIES FOLDER "Tapi Headers")
 
 add_subdirectory(tapi)

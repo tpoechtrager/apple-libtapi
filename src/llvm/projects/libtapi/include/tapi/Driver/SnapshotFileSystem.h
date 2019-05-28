@@ -1,4 +1,4 @@
-//===- lib/Scanner/SnapshotFileSystem.h - Snapshot File System --*- C++ -*-===//
+//===- tapi/Driver/SnapshotFileSystem.h - Snapshot File System --*- C++ -*-===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -11,8 +11,9 @@
 /// \brief Defines the Snapshot Virtual File System.
 ///
 //===----------------------------------------------------------------------===//
-#ifndef TAPI_SCANNER_SNAPSHOT_FILE_SYSTEM_H
-#define TAPI_SCANNER_SNAPSHOT_FILE_SYSTEM_H
+#define TAPI_DRIVER_SNAPSHOT_FILE_SYSTEM_H
+#ifndef TAPI_DRIVER_SNAPSHOT_FILE_SYSTEM_H
+#define TAPI_DRIVER_SNAPSHOT_FILE_SYSTEM_H
 
 #include "tapi/Core/LLVM.h"
 #include "tapi/Defines.h"
@@ -25,9 +26,9 @@
 #include "llvm/Support/Path.h"
 #include <string>
 
-using clang::vfs::Status;
-using clang::vfs::File;
 using clang::vfs::directory_iterator;
+using clang::vfs::File;
+using clang::vfs::Status;
 
 TAPI_NAMESPACE_INTERNAL_BEGIN
 
@@ -146,4 +147,4 @@ private:
 
 TAPI_NAMESPACE_INTERNAL_END
 
-#endif // TAPI_SCANNER_SNAPSHOT_FILE_SYSTEM_H
+#endif // TAPI_DRIVER_SNAPSHOT_FILE_SYSTEM_H

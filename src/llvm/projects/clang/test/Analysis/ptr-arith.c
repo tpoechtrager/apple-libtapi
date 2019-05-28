@@ -342,3 +342,14 @@ void negativeIndex(char *str) {
   clang_analyzer_eval(*ptr3 == 'a'); // expected-warning{{UNKNOWN}}
 }
 
+void test_no_crash_on_pointer_to_label() {
+  char *a = &&label;
+  a[0] = 0;
+label:;
+}
+
+typedef __attribute__((__ext_vector_type__(2))) float simd_float2;
+float test_nowarning_on_vector_deref() {
+  simd_float2 x = {0, 1};
+  return x[1]; // no-warning
+}

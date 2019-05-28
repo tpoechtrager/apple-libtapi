@@ -176,8 +176,8 @@ public:
   ObjCSelector *addObjCSelector(ObjCContainer *container, StringRef name,
                                 bool isInstanceMethod, bool isDynamic,
                                 clang::PresumedLoc loc, XPIAccess access,
-                                Architecture arch,
-                                const AvailabilityInfo &info);
+                                Architecture arch, const AvailabilityInfo &info,
+                                bool isDerivedFromProtocol = false);
   ObjCCategory *addObjCCategory(ObjCClass *baseClass, StringRef name,
                                 clang::PresumedLoc loc, XPIAccess access,
                                 Architecture arch,
@@ -205,6 +205,7 @@ public:
 
   const XPI *findSymbol(const XPI &) const;
   const XPI *findSymbol(XPIKind kind, StringRef name) const;
+  bool removeSymbol(XPIKind, StringRef name);
   const ObjCSelector *findSelector(const SelectorsMapKey &) const;
   const ObjCCategory *findCategory(const CategoriesMapKey &) const;
   const ObjCCategory *findCategory(const ObjCCategory *) const;

@@ -138,14 +138,17 @@ public:
                   return arch == avail.first;
                 });
     if (it != _availability.end()) {
-      if (NoOverwrite && !it->second.isDefault()) {
+      if (NoOverwrite && !it->second.isDefault())
         it->second = info;
-        assert(info == it->second && "Availability information is not equal");
+      if (!info._unavailable && info._obsoleted.empty()) {
+        it->second._unavailable = false;
+        _archs.set(arch);
       }
       return;
     }
+
     _availability.emplace_back(arch, info);
-    if (!info._unavailable)
+    if (!info._unavailable && info._obsoleted.empty())
       _archs.set(arch);
   }
 
@@ -173,6 +176,12 @@ public:
 
   bool isAvailable() const { return _archs.count() != 0; }
   bool isUnavailable() const { return _archs.count() == 0; }
+  bool isObsolete() const {
+    for (const auto &avail : _availability)
+      if (avail.second._obsoleted.empty())
+        return false;
+    return true;
+  }
   std::string getPrettyName(bool demangle = false) const;
   std::string getAnnotatedName(bool demangle = false) const;
   void print(raw_ostream &os) const;
@@ -250,19 +259,23 @@ class ObjCSelector : public XPI {
 private:
   bool _isInstanceMethod;
   bool _isDynamic;
+  bool _isDerivedFromProtocol;
 
   ObjCSelector(StringRef name, bool isInstanceMethod, bool isDynamic,
-               XPIAccess access)
+               XPIAccess access, bool isDerivedFromProtocol)
       : XPI(XPIKind::ObjCSelector, name, access),
-        _isInstanceMethod(isInstanceMethod), _isDynamic(isDynamic) {}
+        _isInstanceMethod(isInstanceMethod), _isDynamic(isDynamic),
+        _isDerivedFromProtocol(isDerivedFromProtocol) {}
 
 public:
   static ObjCSelector *create(llvm::BumpPtrAllocator &A, StringRef name,
                               bool isInstanceMethod, bool isDynamic,
-                              XPIAccess access);
+                              XPIAccess access,
+                              bool isDerivedFromProtocol = false);
 
   bool isInstanceMethod() const { return _isInstanceMethod; }
   bool isDynamic() const { return _isDynamic; }
+  bool isDerivedFromProtocol() const { return _isDerivedFromProtocol; }
 
   static bool classof(const XPI *xpi) {
     return xpi->getKind() == XPIKind::ObjCSelector;

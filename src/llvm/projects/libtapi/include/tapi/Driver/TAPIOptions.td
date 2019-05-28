@@ -26,24 +26,11 @@ def ArchiveOption : OptionFlag;
 // StubOption - The option is used by the dynamic library stubifier.
 def StubOption : OptionFlag;
 
-// ScanOption - The option is used by the framework scanner.
-def ScanOption : OptionFlag;
-
 // InstallAPIOption - The option is used by the installapi driver.
 def InstallAPIOption : OptionFlag;
 
 // ReexportOption - The option is used by the reexport driver.
 def ReexportOption : OptionFlag;
-
-// SDKDBOption - The options is used by the SDKDB driver.
-def SDKDBOption : OptionFlag;
-
-// SDKDBVerifyOption - The options is used by the SDKDB driver.
-def SDKDBVerifyOption : OptionFlag;
-
-// GenerateAPITestsOption - The option is used by the API test generation driver.
-def GenerateAPITestsOption : OptionFlag;
-
 
 /////////
 // Options
@@ -74,6 +61,9 @@ def info : Flag<["--"], "info">, Flags<[ArchiveOption]>,
 def extract : Separate<["--"], "extract">, Flags<[ArchiveOption]>,
   HelpText<"Extract the specified <architecture>.">,
   MetaVarName<"<architecture>">;
+def remove : Separate<["--"], "remove">, Flags<[ArchiveOption]>,
+  HelpText<"Remove the specified <architecture>.">,
+  MetaVarName<"<architecture>">;
 def merge : Flag<["--"], "merge">, Flags<[ArchiveOption]>,
   HelpText<"Merge the input files.">;
 def verify_arch : Separate<["--"], "verify-arch">, Flags<[ArchiveOption]>,
@@ -81,143 +71,182 @@ def verify_arch : Separate<["--"], "verify-arch">, Flags<[ArchiveOption]>,
   MetaVarName<"<architecture>">;
 def listSymbols : Flag<["--"], "list-symbols">, Flags<[ArchiveOption]>,
   HelpText<"List the exported symbols.">;
+def allow_arch_merges : Flag<["--"], "allow-arch-merges">,
+  Flags<[ArchiveOption]>, HelpText<"Allow merges of the same architecture.">;
 
 
 //
 // Shared Options
 //
-def arch : Separate<["-"], "arch">, Flags<[InstallAPIOption, ReexportOption, ArchiveOption, GenerateAPITestsOption, SDKDBOption]>,
+def target : Joined<["--"], "target=">,
+  Flags<[InstallAPIOption, ReexportOption]>,
+  HelpText<"Generate code for the given target">;
+def target_legacy_spelling : Separate<["-"], "target">,
+  Flags<[InstallAPIOption, ReexportOption]>,
+  Alias<target>;
+def arch : Separate<["-"], "arch">, Flags<[InstallAPIOption, ReexportOption, ArchiveOption]>,
   HelpText<"Specify the architecture to build for">,
   MetaVarName<"<architecture>">;
+
+def mmacos_version_min_EQ : Joined<["-"], "mmacos-version-min=">,
+  Flags<[InstallAPIOption, ReexportOption]>;
+def mmacosx_version_min_EQ : Joined<["-"], "mmacosx-version-min=">,
+  Flags<[InstallAPIOption, ReexportOption]>,
+  Alias<mmacos_version_min_EQ>;
 def macosx_version_min : Separate<["-"], "macosx_version_min">,
-  Flags<[InstallAPIOption, ReexportOption, GenerateAPITestsOption]>,
-  HelpText<"This is set to indicate the oldest Mac OS X version that the output is to be used on">;
-def macosx_version_min_EQ : Joined<["-"], "mmacosx-version-min=">,
-  Flags<[InstallAPIOption, ReexportOption, GenerateAPITestsOption]>, Alias<macosx_version_min>;
+  Flags<[InstallAPIOption, ReexportOption]>,
+  Alias<mmacos_version_min_EQ>;
+
+def mios_version_min_EQ : Joined<["-"], "mios-version-min=">,
+  Flags<[InstallAPIOption, ReexportOption]>;
+def miphoneos_version_min_EQ : Joined<["-"], "miphoneos-version-min=">,
+  Flags<[InstallAPIOption, ReexportOption]>,
+  Alias<mios_version_min_EQ>;
 def ios_version_min : Separate<["-"], "ios_version_min">,
-  Flags<[InstallAPIOption, ReexportOption, GenerateAPITestsOption]>,
-  HelpText<"This is set to indicate the oldest iOS version that the output is to be used on">;
-def ios_version_min_EQ : Joined<["-"], "miphoneos-version-min=">,
-  Flags<[InstallAPIOption, ReexportOption, GenerateAPITestsOption]>, Alias<ios_version_min>;
+  Flags<[InstallAPIOption, ReexportOption]>,
+  Alias<mios_version_min_EQ>;
+
+def mwatchos_version_min_EQ : Joined<["-"], "mwatchos-version-min=">,
+  Flags<[InstallAPIOption, ReexportOption]>;
 def watchos_version_min : Separate<["-"], "watchos_version_min">,
-  Flags<[InstallAPIOption, ReexportOption, GenerateAPITestsOption]>,
-  HelpText<"This is set to indicate the oldest AppleWatchOS version that the output is to be used on">;
-def watchos_version_min_EQ : Joined<["-"], "mwatchos-version-min=">,
-  Flags<[InstallAPIOption, ReexportOption, GenerateAPITestsOption]>, Alias<watchos_version_min>;
+  Flags<[InstallAPIOption, ReexportOption]>,
+  Alias<mwatchos_version_min_EQ>;
+
+def mtvos_version_min_EQ : Joined<["-"], "mtvos-version-min=">,
+  Flags<[InstallAPIOption, ReexportOption]>;
 def tvos_version_min : Separate<["-"], "tvos_version_min">,
-  Flags<[InstallAPIOption, ReexportOption, GenerateAPITestsOption]>,
-  HelpText<"This is set to indicate the oldest AppleTVOS version that the output is to be used on">;
-def tvos_version_min_EQ : Joined<["-"], "mtvos-version-min=">,
-  Flags<[InstallAPIOption, ReexportOption, GenerateAPITestsOption]>, Alias<tvos_version_min>;
+  Flags<[InstallAPIOption, ReexportOption]>,
+  Alias<mtvos_version_min_EQ>;
+
+def mbridgeos_version_min_EQ : Joined<["-"], "mbridgeos-version-min=">,
+  Flags<[InstallAPIOption, ReexportOption]>;
 def bridgeos_version_min : Separate<["-"], "bridgeos_version_min">,
-  Flags<[InstallAPIOption, ReexportOption, GenerateAPITestsOption]>,
-  HelpText<"This is set to indicate the oldest bridgeOS version that the output is to be used on">;
-def bridgeos_version_min_EQ : Joined<["-"], "mbridgeos-version-min=">,
-  Flags<[InstallAPIOption, ReexportOption, GenerateAPITestsOption]>, Alias<bridgeos_version_min>;
+  Flags<[InstallAPIOption, ReexportOption]>,
+  Alias<mbridgeos_version_min_EQ>;
 
+def mios_simulator_version_min_EQ : Joined<["-"], "mios-simulator-version-min=">,
+  Flags<[InstallAPIOption, ReexportOption]>;
 def ios_simulator_version_min : Separate<["-"], "ios_simulator_version_min">,
-  Flags<[InstallAPIOption, ReexportOption, GenerateAPITestsOption]>, Alias<ios_version_min>;
-def ios_simulator_version_min_EQ : Joined<["-"], "mios-simulator-version-min=">,
-  Flags<[InstallAPIOption, ReexportOption, GenerateAPITestsOption]>, Alias<ios_version_min>;
-def watchos_simulator_version_min : Separate<["-"], "watchos_simulator_version_min">,
-  Flags<[InstallAPIOption, ReexportOption, GenerateAPITestsOption]>, Alias<watchos_version_min>;
-def watchos_simulator_version_min_EQ : Joined<["-"], "mwatchos-simulator-version-min=">,
-  Flags<[InstallAPIOption, ReexportOption, GenerateAPITestsOption]>, Alias<watchos_version_min>;
-def tvos_simulator_version_min : Separate<["-"], "tvos_simulator_version_min">,
-  Flags<[InstallAPIOption, ReexportOption, GenerateAPITestsOption]>, Alias<tvos_version_min>;
-def tvos_simulator_version_min_EQ : Joined<["-"], "mtvos-simulator-version-min=">,
-  Flags<[InstallAPIOption, ReexportOption, GenerateAPITestsOption]>, Alias<tvos_version_min>;
+  Flags<[InstallAPIOption, ReexportOption]>,
+  Alias<mios_simulator_version_min_EQ>;
 
-def x : JoinedOrSeparate<["-"], "x">, Flags<[ScanOption, SDKDBOption, InstallAPIOption, ReexportOption, GenerateAPITestsOption]>,
+def mwatchos_simulator_version_min_EQ : Joined<["-"], "mwatchos-simulator-version-min=">,
+  Flags<[InstallAPIOption, ReexportOption]>;
+def watchos_simulator_version_min : Separate<["-"], "watchos_simulator_version_min">,
+  Flags<[InstallAPIOption, ReexportOption]>,
+  Alias<mwatchos_simulator_version_min_EQ>;
+
+def mtvos_simulator_version_min_EQ : Joined<["-"], "mtvos-simulator-version-min=">,
+  Flags<[InstallAPIOption, ReexportOption]>;
+def tvos_simulator_version_min : Separate<["-"], "tvos_simulator_version_min">,
+  Flags<[InstallAPIOption, ReexportOption]>,
+  Alias<mtvos_simulator_version_min_EQ>;
+
+
+def x : JoinedOrSeparate<["-"], "x">, Flags<[  InstallAPIOption, ReexportOption]>,
   HelpText<"Treat subsequent input files as having type <language>">,
   MetaVarName<"<language>">;
-def std_EQ : Joined<["-", "--"], "std=">, Flags<[ScanOption, SDKDBOption, InstallAPIOption, ReexportOption, GenerateAPITestsOption]>,
+def std_EQ : Joined<["-", "--"], "std=">, Flags<[  InstallAPIOption, ReexportOption]>,
   HelpText<"Language standard to compile for">;
-def ObjC : Flag<["-"], "ObjC">, Flags<[ScanOption, SDKDBOption, InstallAPIOption, ReexportOption, GenerateAPITestsOption]>,
+def ObjC : Flag<["-"], "ObjC">, Flags<[  InstallAPIOption, ReexportOption]>,
   HelpText<"Treat source input files as Objective-C inputs">;
-def ObjCXX : Flag<["-"], "ObjC++">, Flags<[ScanOption, SDKDBOption, InstallAPIOption, ReexportOption, GenerateAPITestsOption]>,
+def ObjCXX : Flag<["-"], "ObjC++">, Flags<[  InstallAPIOption, ReexportOption]>,
   HelpText<"Treat source input files as Objective-C++ inputs">;
 def isysroot : JoinedOrSeparate<["-"], "isysroot">,
-  Flags<[StubOption, ScanOption, SDKDBOption, InstallAPIOption, ReexportOption, GenerateAPITestsOption]>,
+  Flags<[StubOption, InstallAPIOption, ReexportOption]>,
   HelpText<"Set the system root directory (usually /)">, MetaVarName<"<dir>">;
 def iframework : JoinedOrSeparate<["-"], "iframework">,
-  Flags<[StubOption,ScanOption,SDKDBOption,InstallAPIOption,ReexportOption]>,
+  Flags<[StubOption,InstallAPIOption,ReexportOption]>,
   HelpText<"Add directory to SYSTEM framework search path">;
 def isystem : JoinedOrSeparate<["-"], "isystem">,
-  Flags<[ScanOption,SDKDBOption,InstallAPIOption,ReexportOption]>,
+  Flags<[InstallAPIOption,ReexportOption]>,
   HelpText<"Add directory to SYSTEM include search path">, MetaVarName<"<directory>">;
-def D : JoinedOrSeparate<["-"], "D">, Flags<[ScanOption, SDKDBOption, InstallAPIOption, ReexportOption, GenerateAPITestsOption]>,
+def D : JoinedOrSeparate<["-"], "D">, Flags<[  InstallAPIOption, ReexportOption]>,
   HelpText<"Define macro">;
-def U : JoinedOrSeparate<["-"], "U">, Flags<[ScanOption, SDKDBOption, InstallAPIOption, ReexportOption, GenerateAPITestsOption]>,
+def U : JoinedOrSeparate<["-"], "U">, Flags<[  InstallAPIOption, ReexportOption]>,
   HelpText<"Undefine macro">;
-def F : JoinedOrSeparate<["-"], "F">, Flags<[StubOption, ScanOption, SDKDBOption, InstallAPIOption, ReexportOption, GenerateAPITestsOption]>,
+def F : JoinedOrSeparate<["-"], "F">, Flags<[StubOption, InstallAPIOption, ReexportOption]>,
   HelpText<"Add directory to framework include search path">;
 def L : JoinedOrSeparate<["-"], "L">, Flags<[StubOption, InstallAPIOption]>,
   HelpText<"Add directory to the library search path">;
-def I : JoinedOrSeparate<["-"], "I">, Flags<[ScanOption, SDKDBOption, InstallAPIOption, ReexportOption, GenerateAPITestsOption]>,
+def I : JoinedOrSeparate<["-"], "I">, Flags<[  InstallAPIOption, ReexportOption]>,
   HelpText<"Add directory to include search path">;
-def Xparser : Separate<["-"], "Xparser">, Flags<[ScanOption, SDKDBOption, InstallAPIOption, ReexportOption, GenerateAPITestsOption]>,
+def Xparser : Separate<["-"], "Xparser">, Flags<[  InstallAPIOption, ReexportOption]>,
   HelpText<"Pass <arg> to the clang parser">, MetaVarName<"<arg>">;
 def output : Separate<["-"], "o">,
-  Flags<[ArchiveOption, StubOption, InstallAPIOption, ReexportOption, GenerateAPITestsOption]>,
+  Flags<[ArchiveOption, StubOption, InstallAPIOption, ReexportOption]>,
   MetaVarName<"<file>">, HelpText<"Write output to <file>">;
 def extra_public_header : Separate<["-"], "extra-public-header">,
-  Flags<[ScanOption,SDKDBOption,InstallAPIOption]>, MetaVarName<"<path>">,
+  Flags<[InstallAPIOption]>, MetaVarName<"<path>">,
   HelpText<"Add additional public header location for parsing">;
 def extra_public_header_EQ : Joined<["--"], "extra-public-header=">,
-  Flags<[ScanOption,SDKDBOption,InstallAPIOption]>, Alias<extra_public_header>;
+  Flags<[InstallAPIOption]>, Alias<extra_public_header>;
 def extra_private_header : Separate<["-"], "extra-private-header">,
-  Flags<[ScanOption,SDKDBOption,InstallAPIOption]>, MetaVarName<"<path>">,
+  Flags<[InstallAPIOption]>, MetaVarName<"<path>">,
   HelpText<"Add additional private header location for parsing">;
 def extra_private_header_EQ : Joined<["--"], "extra-private-header=">,
-  Flags<[ScanOption,SDKDBOption,InstallAPIOption]>, Alias<extra_private_header>;
+  Flags<[InstallAPIOption]>, Alias<extra_private_header>;
 def exclude_public_header : Separate<["-"], "exclude-public-header">,
-  Flags<[ScanOption,SDKDBOption,InstallAPIOption]>, MetaVarName<"<path>">,
+  Flags<[InstallAPIOption]>, MetaVarName<"<glob>">,
   HelpText<"Exclude public header from parsing">;
 def exclude_public_header_EQ : Joined<["--"], "exclude-public-header=">,
-  Flags<[ScanOption,SDKDBOption,InstallAPIOption]>, Alias<exclude_public_header>;
+  Flags<[InstallAPIOption]>, Alias<exclude_public_header>;
 def exclude_private_header : Separate<["-"], "exclude-private-header">,
-  Flags<[ScanOption,SDKDBOption,InstallAPIOption]>, MetaVarName<"<path>">,
+  Flags<[InstallAPIOption]>, MetaVarName<"<glob>">,
   HelpText<"Exclude private header from parsing">;
 def exclude_private_header_EQ : Joined<["--"], "exclude-private-header=">,
-  Flags<[ScanOption,SDKDBOption,InstallAPIOption]>, Alias<exclude_private_header>;
+  Flags<[InstallAPIOption]>, Alias<exclude_private_header>;
 def public_umbrella_header : Separate<["-"], "public-umbrella-header">,
-  Flags<[ScanOption,SDKDBOption,InstallAPIOption]>, MetaVarName<"<path>">,
+  Flags<[InstallAPIOption]>, MetaVarName<"<path>">,
   HelpText<"Specify the public umbrella header location">;
 def public_umbrella_header_EQ : Joined<["--"], "public-umbrella-header=">,
-  Flags<[ScanOption,SDKDBOption,InstallAPIOption]>, Alias<public_umbrella_header>;
+  Flags<[InstallAPIOption]>, Alias<public_umbrella_header>;
 def private_umbrella_header : Separate<["-"], "private-umbrella-header">,
-  Flags<[ScanOption,SDKDBOption,InstallAPIOption]>, MetaVarName<"<path>">,
+  Flags<[InstallAPIOption]>, MetaVarName<"<path>">,
   HelpText<"Specify the private umbrella header location">;
 def private_umbrella_header_EQ : Joined<["--"], "private-umbrella-header=">,
-  Flags<[ScanOption,SDKDBOption,InstallAPIOption]>, Alias<private_umbrella_header>;
-def frtti : Flag<["-"], "frtti">, Flags<[ScanOption,SDKDBOption,InstallAPIOption,ReexportOption]>;
-def fno_rtti : Flag<["-"], "fno-rtti">, Flags<[ScanOption,SDKDBOption,InstallAPIOption,ReexportOption]>,
+  Flags<[InstallAPIOption]>, Alias<private_umbrella_header>;
+def frtti : Flag<["-"], "frtti">, Flags<[InstallAPIOption,ReexportOption]>;
+def fno_rtti : Flag<["-"], "fno-rtti">, Flags<[InstallAPIOption,ReexportOption]>,
   HelpText<"Disable generation of rtti information">;
 def fvisibility_EQ : Joined<["-"], "fvisibility=">,
-  Flags<[ScanOption,SDKDBOption,InstallAPIOption,ReexportOption]>,
+  Flags<[InstallAPIOption,ReexportOption]>,
   HelpText<"Set the default symbol visibility for all global declarations">;
 def inlinePrivateFrameworks : Flag<["--"], "inline-private-frameworks">,
   Flags<[StubOption,InstallAPIOption]>, HelpText<"Inline private frameworks">;
 
-def fmodules : Flag <["-"], "fmodules">, Flags<[ScanOption,SDKDBOption,InstallAPIOption]>,
+def fmodules : Flag <["-"], "fmodules">, Flags<[InstallAPIOption]>,
   HelpText<"Enable the 'modules' language feature">;
 def fmodules_cache_path : Joined<["-"], "fmodules-cache-path=">,
-  Flags<[ScanOption,SDKDBOption,InstallAPIOption]>, MetaVarName<"<directory>">,
+  Flags<[InstallAPIOption]>, MetaVarName<"<directory>">,
   HelpText<"Specify the module cache path">;
 def fmodules_validate_system_headers : Flag<["-"], "fmodules-validate-system-headers">,
-  Flags<[ScanOption,SDKDBOption,InstallAPIOption]>,
+  Flags<[InstallAPIOption]>,
   HelpText<"Validate the system headers that a module depends on when loading the module">;
 
 def fobjc_arc : Flag<["-"], "fobjc-arc">,
-  Flags<[ScanOption,SDKDBOption,InstallAPIOption,ReexportOption]>,
+  Flags<[InstallAPIOption,ReexportOption]>,
   HelpText<"Synthesize retain and release calls for Objective-C pointers">;
 def fobjc_weak : Flag<["-"], "fobjc-weak">,
-  Flags<[ScanOption,SDKDBOption,InstallAPIOption,ReexportOption]>,
+  Flags<[InstallAPIOption,ReexportOption]>,
   HelpText<"Enable ARC-style weak references in Objective-C">;
 
 def noUUIDs : Flag<["--"], "no-uuids">, Flags<[StubOption,InstallAPIOption]>,
   HelpText<"Don't record the UUIDs from the library in the text-based stub file">;
+
+def filetype : Joined<["--"], "filetype=">, Flags<[StubOption,InstallAPIOption]>,
+  HelpText<"Specify the output file type (tbd-v1, tbd-v2, or tbd-v3)">;
+
+def umbrella : Separate<["-"], "umbrella">,
+  Flags<[InstallAPIOption]>, MetaVarName<"<framework_name>">,
+  HelpText<"Specifies that the dylib being linked is re-exported through an umbrella framework of the specified name.">;
+
+def Xarch__ : Joined<["-"], "Xarch_">, Flags<[InstallAPIOption]>;
+
+def inferIncludePaths : Flag<["--"], "infer-include-paths">, Flags<[InstallAPIOption]>,
+  HelpText<"Infer include paths based on the provided/found header files">;
+def noInferIncludePaths : Flag<["--"], "no-infer-include-paths">, Flags<[InstallAPIOption]>,
+  HelpText<"Don't infer include paths based on the provided/found header files">;
 
 //
 // Stubifier options
@@ -228,20 +257,6 @@ def deletePrivateFrameworks : Flag<["--"], "delete-private-frameworks">,
   Flags<[StubOption]>, HelpText<"Delete private frameworks from the SDK">;
 def setInstallAPI : Flag<["--"], "set-installapi-flag">, Flags<[StubOption]>,
   HelpText<"Set the installapi flag in the text-based stub file">;
-
-//
-// Scanner options
-//
-def gen : Flag<["-"], "gen">, Flags<[ScanOption]>,
-  HelpText<"Generate API Files">;
-def config_file : Joined<["-"], "config-file=">, Flags<[ScanOption, GenerateAPITestsOption, SDKDBOption]>,
-  MetaVarName<"<file>">, HelpText<"Read configuration from <file>">;
-def output_dir : Joined<["-"], "output-dir=">, Flags<[ScanOption,SDKDBOption]>,
-  HelpText<"Specify the output directory">, MetaVarName<"<dir>">;
-def no_public_headers : Flag<["-", "--"], "no-public-headers">, Flags<[ScanOption,SDKDBOption]>,
-  HelpText<"Disable public header scanning">;
-def no_private_headers : Flag<["-", "--"], "no-private-headers">, Flags<[ScanOption,SDKDBOption]>,
-  HelpText<"Disable private header scanning">;
 
 //
 // InstallAPI options
@@ -271,7 +286,7 @@ def verify_against_EQ : Joined<["--"], "verify-against=">,
   Flags<[InstallAPIOption]>, Alias<verify_against>;
 def verify_mode_EQ : Joined<["--"], "verify-mode=">,
   Flags<[InstallAPIOption]>,
-  HelpText<"Specify the severity of warnings">;
+  HelpText<"Specify the severity and extend of the validation. Valid modes are ErrorsOnly, ErrorsAndWarnings, and Pedantic.">;
 def ferror_limit : Separate<["-"], "ferror-limit">, Flags<[InstallAPIOption]>,
   MetaVarName<"<N>">,
   HelpText<"Set the maximum number of errors to emit before stopping (0 = no limit).">;
@@ -287,17 +302,12 @@ def dynamiclib : Flag<["-"], "dynamiclib">, Flags<[InstallAPIOption]>;
 def fprofile_instr_generate : Flag<["-"], "fprofile-instr-generate">,
   Flags<[InstallAPIOption]>,
   HelpText<"Add extra symbols for InstallAPI that are created by code coverage.">;
+def print_after_EQ : Joined<["--"], "print-after=">,
+    Flags<[InstallAPIOption]>;
 
-//
-// SDKDB options
-//
-def print : Flag<["-"], "print">, Flags<[SDKDBOption]>,
-  HelpText<"Print SDKDB info while scanning in human readable format">;
-def dylibs_only : Flag<["-"], "dylibs-only">,
-  Flags<[SDKDBOption]>, HelpText<"Scan only Frameworks and UNIX libs">;
-
-//
-// SDKDB Verifier options
-//
-def baseline : Separate<["-"], "baseline">, Flags<[SDKDBVerifyOption]>,
-  HelpText<"Baseline for verifying SDKDB">, MetaVarName<"<sdkdb>">;
+def reexport_l : Joined<["-"], "reexport-l">,
+  Flags<[InstallAPIOption]>, HelpText<"Re-export the specified library">;
+def reexport_library : Separate<["-"], "reexport_library">, MetaVarName<"<path>">,
+  Flags<[InstallAPIOption]>, HelpText<"Re-export the specified library">;
+def reexport_framework : Separate<["-"], "reexport_framework">,
+  Flags<[InstallAPIOption]>, HelpText<"Re-export the specified framework">;

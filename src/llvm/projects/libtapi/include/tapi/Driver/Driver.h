@@ -16,7 +16,7 @@
 
 #include "tapi/Core/LLVM.h"
 #include "tapi/Defines.h"
-#include "tapi/Driver/Diagnostics.h"
+#include "tapi/Diagnostics/Diagnostics.h"
 #include "llvm/ADT/IntrusiveRefCntPtr.h"
 
 namespace llvm {
@@ -57,14 +57,6 @@ public:
     Stub() = delete;
   };
 
-  class Scan {
-  public:
-    /// \brief Run tapi with the provided arguments.
-    static bool run(DiagnosticsEngine &diag, Options &opts);
-
-    Scan() = delete;
-  };
-
   class InstallAPI {
   public:
     /// \brief Run tapi with the provided arguments.
@@ -79,30 +71,6 @@ public:
     static bool run(DiagnosticsEngine &diag, Options &opts);
 
     Reexport() = delete;
-  };
-
-  class SDKDB {
-  public:
-    /// \brief Run tapi with the provided arguments.
-    static bool run(DiagnosticsEngine &diag, Options &opts);
-
-    SDKDB() = delete;
-  };
-
-  class SDKDBVerifier {
-  public:
-    /// \brief Run tapi with the provided arguments.
-    static bool run(DiagnosticsEngine &diag, Options &opts);
-
-    SDKDBVerifier() = delete;
-  };
-
-  class GenerateAPITests {
-  public:
-    /// \brief Run tapi with the provided arguments.
-    static bool run(DiagnosticsEngine &diag, Options &opts);
-
-    GenerateAPITests() = delete;
   };
 };
 

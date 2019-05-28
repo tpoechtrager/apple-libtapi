@@ -34,9 +34,11 @@ using llvm::opt::ArgStringList;
 struct CrashReportInfo {
   StringRef Filename;
   StringRef VFSPath;
+  StringRef IndexStorePath;
 
-  CrashReportInfo(StringRef Filename, StringRef VFSPath)
-      : Filename(Filename), VFSPath(VFSPath) {}
+  CrashReportInfo(StringRef Filename, StringRef VFSPath,
+                  StringRef IndexStorePath)
+      : Filename(Filename), VFSPath(VFSPath), IndexStorePath(IndexStorePath) {}
 };
 
 /// Command - An executable path/name and argument vector to
@@ -97,8 +99,8 @@ public:
   virtual void Print(llvm::raw_ostream &OS, const char *Terminator, bool Quote,
                      CrashReportInfo *CrashInfo = nullptr) const;
 
-  virtual int Execute(const StringRef **Redirects, std::string *ErrMsg,
-                      bool *ExecutionFailed) const;
+  virtual int Execute(ArrayRef<Optional<StringRef>> Redirects,
+                      std::string *ErrMsg, bool *ExecutionFailed) const;
 
   /// getSource - Return the Action which caused the creation of this job.
   const Action &getSource() const { return Source; }
@@ -141,7 +143,7 @@ public:
   void Print(llvm::raw_ostream &OS, const char *Terminator, bool Quote,
              CrashReportInfo *CrashInfo = nullptr) const override;
 
-  int Execute(const StringRef **Redirects, std::string *ErrMsg,
+  int Execute(ArrayRef<Optional<StringRef>> Redirects, std::string *ErrMsg,
               bool *ExecutionFailed) const override;
 
 private:
@@ -158,7 +160,7 @@ public:
   void Print(llvm::raw_ostream &OS, const char *Terminator, bool Quote,
              CrashReportInfo *CrashInfo = nullptr) const override;
 
-  int Execute(const StringRef **Redirects, std::string *ErrMsg,
+  int Execute(ArrayRef<Optional<StringRef>> Redirects, std::string *ErrMsg,
               bool *ExecutionFailed) const override;
 };
 

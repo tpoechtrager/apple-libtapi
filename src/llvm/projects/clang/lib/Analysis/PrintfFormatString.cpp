@@ -466,7 +466,7 @@ ArgType PrintfSpecifier::getArgType(ASTContext &Ctx,
       case LengthModifier::AsIntMax:
         return ArgType(Ctx.getIntMaxType(), "intmax_t");
       case LengthModifier::AsSizeT:
-        return ArgType(Ctx.getSignedSizeType(), "ssize_t");
+        return ArgType::makeSizeT(ArgType(Ctx.getSignedSizeType(), "ssize_t"));
       case LengthModifier::AsInt3264:
         return Ctx.getTargetInfo().getTriple().isArch64Bit()
                    ? ArgType(Ctx.LongLongTy, "__int64")
@@ -499,15 +499,13 @@ ArgType PrintfSpecifier::getArgType(ASTContext &Ctx,
       case LengthModifier::AsIntMax:
         return ArgType(Ctx.getUIntMaxType(), "uintmax_t");
       case LengthModifier::AsSizeT:
-        return ArgType(Ctx.getSizeType(), "size_t");
+        return ArgType::makeSizeT(ArgType(Ctx.getSizeType(), "size_t"));
       case LengthModifier::AsInt3264:
         return Ctx.getTargetInfo().getTriple().isArch64Bit()
                    ? ArgType(Ctx.UnsignedLongLongTy, "unsigned __int64")
                    : ArgType(Ctx.UnsignedIntTy, "unsigned __int32");
       case LengthModifier::AsPtrDiff:
-        // FIXME: How to get the corresponding unsigned
-        // version of ptrdiff_t?
-        return ArgType();
+        return ArgType(Ctx.getUnsignedPointerDiffType(), "unsigned ptrdiff_t");
       case LengthModifier::AsAllocate:
       case LengthModifier::AsMAllocate:
       case LengthModifier::AsWide:
@@ -654,6 +652,7 @@ bool PrintfSpecifier::fixType(QualType QT, const LangOptions &LangOpt,
   case BuiltinType::UInt128:
   case BuiltinType::Int128:
   case BuiltinType::Half:
+  case BuiltinType::Float16:
   case BuiltinType::Float128:
     // Various types which are non-trivial to correct.
     return false;

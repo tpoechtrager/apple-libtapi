@@ -27,14 +27,15 @@ TAPI_NAMESPACE_INTERNAL_BEGIN
 
 class FileManager;
 
+using PathSeq = std::vector<std::string>;
+
 void replace_extension(SmallVectorImpl<char> &path, const Twine &extension);
 
-llvm::Expected<std::vector<std::string>>
+llvm::Expected<PathSeq>
 enumerateFiles(FileManager &fm, StringRef path,
                const std::function<bool(StringRef)> &func);
 
-llvm::Expected<std::vector<std::string>> enumerateHeaderFiles(FileManager &fm,
-                                                              StringRef path);
+llvm::Expected<PathSeq> enumerateHeaderFiles(FileManager &fm, StringRef path);
 
 TAPI_NAMESPACE_INTERNAL_END
 

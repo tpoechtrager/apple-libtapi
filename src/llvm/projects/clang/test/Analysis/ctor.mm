@@ -1,4 +1,5 @@
 // RUN: %clang_analyze_cc1 -analyzer-checker=core,debug.ExprInspection -fobjc-arc -analyzer-config c++-inlining=constructors -Wno-null-dereference -std=c++11 -verify %s
+// RUN: %clang_analyze_cc1 -analyzer-checker=core,debug.ExprInspection -fobjc-arc -analyzer-config c++-inlining=constructors -Wno-null-dereference -std=c++11 -verify -DTEST_INLINABLE_ALLOCATORS %s
 
 #include "Inputs/system-header-simulator-cxx.h"
 
@@ -199,7 +200,7 @@ namespace PODUninitialized {
     Inner p;
   };
 
-  void testPOD() {
+  void testPOD(const POD &pp) {
     POD p;
     p.x = 1;
     POD p2 = p; // no-warning
@@ -209,6 +210,15 @@ namespace PODUninitialized {
 
     // Use rvalues as well.
     clang_analyzer_eval(POD(p3).x == 1); // expected-warning{{TRUE}}
+
+    // Copy from symbolic references correctly.
+    POD p4 = pp;
+    // Make sure that p4.x contains a symbol after copy.
+    if (p4.x > 0)
+      clang_analyzer_eval(p4.x > 0); // expected-warning{{TRUE}}
+    // FIXME: Element region gets in the way, so these aren't the same symbols
+    // as they should be.
+    clang_analyzer_eval(pp.x == p4.x); // expected-warning{{UNKNOWN}}
 
     PODWrapper w;
     w.p.y = 1;
@@ -563,10 +573,9 @@ namespace ZeroInitialization {
   }
 
   void testNew() {
-    // FIXME: Pending proper implementation of constructors for 'new'.
     raw_pair *pp = new raw_pair();
-    clang_analyzer_eval(pp->p1 == 0); // expected-warning{{UNKNOWN}}
-    clang_analyzer_eval(pp->p2 == 0); // expected-warning{{UNKNOWN}}
+    clang_analyzer_eval(pp->p1 == 0); // expected-warning{{TRUE}}
+    clang_analyzer_eval(pp->p2 == 0); // expected-warning{{TRUE}}
   }
 
   void testArrayNew() {
@@ -670,8 +679,7 @@ namespace InitializerList {
 
   void testDynamic() {
     List *list = new List{1, 2};
-    // FIXME: When we handle constructors with 'new', this will be TRUE.
-    clang_analyzer_eval(list->usedInitializerList); // expected-warning{{UNKNOWN}}
+    clang_analyzer_eval(list->usedInitializerList); // expected-warning{{TRUE}}
   }
 }
 
@@ -720,4 +728,24 @@ namespace NoCrashOnEmptyBaseOptimization {
   void testSCtorNoCrash() {
     S s;
   }
+}
+
+namespace EmptyBaseAssign {
+struct B1 {};
+struct B2 { int x; };
+struct D: public B1, public B2 {
+const D &operator=(const D &d) {
+  *((B2 *)this) = d;
+  *((B1 *)this) = d;
+  return *this;
+}
+};
+
+void test() {
+  D d1;
+  d1.x = 1;
+  D d2;
+  d2 = d1;
+  clang_analyzer_eval(d2.x == 1); // expected-warning{{TRUE}}
+}
 }

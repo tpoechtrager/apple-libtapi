@@ -14,6 +14,7 @@
 #include "CodeGenFunction.h"
 #include "CGObjCRuntime.h"
 #include "CodeGenModule.h"
+#include "ConstantEmitter.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/DeclCXX.h"
 #include "clang/AST/DeclTemplate.h"
@@ -76,8 +77,15 @@ public:
   /// then loads the result into DestPtr.
   void EmitAggLoadOfLValue(const Expr *E);
 
+  enum ExprValueKind {
+    EVK_RValue,
+    EVK_NonRValue
+  };
+
   /// EmitFinalDestCopy - Perform the final copy to DestPtr, if desired.
-  void EmitFinalDestCopy(QualType type, const LValue &src);
+  /// SrcIsRValue is true if source comes from an RValue.
+  void EmitFinalDestCopy(QualType type, const LValue &src,
+                         ExprValueKind SrcValueKind = EVK_NonRValue);
   void EmitFinalDestCopy(QualType type, RValue src);
   void EmitCopy(QualType type, const AggValueSlot &dest,
                 const AggValueSlot &src);
@@ -85,7 +93,7 @@ public:
   void EmitMoveFromReturnSlot(const Expr *E, RValue Src);
 
   void EmitArrayInit(Address DestPtr, llvm::ArrayType *AType,
-                     QualType elementType, InitListExpr *E);
+                     QualType ArrayQTy, InitListExpr *E);
 
   AggValueSlot::NeedsGCBarriers_t needsGC(QualType T) {
     if (CGF.getLangOpts().getGC() && TypeRequiresGCollection(T))
@@ -124,24 +132,7 @@ public:
   }
 
   // l-values.
-  void VisitDeclRefExpr(DeclRefExpr *E) {
-    // For aggregates, we should always be able to emit the variable
-    // as an l-value unless it's a reference.  This is due to the fact
-    // that we can't actually ever see a normal l2r conversion on an
-    // aggregate in C++, and in C there's no language standard
-    // actively preventing us from listing variables in the captures
-    // list of a block.
-    if (E->getDecl()->getType()->isReferenceType()) {
-      if (CodeGenFunction::ConstantEmission result
-            = CGF.tryEmitAsConstant(E)) {
-        EmitFinalDestCopy(E->getType(), result.getReferenceLValue(CGF, E));
-        return;
-      }
-    }
-
-    EmitAggLoadOfLValue(E);
-  }
-
+  void VisitDeclRefExpr(DeclRefExpr *E) { EmitAggLoadOfLValue(E); }
   void VisitMemberExpr(MemberExpr *ME) { EmitAggLoadOfLValue(ME); }
   void VisitUnaryDeref(UnaryOperator *E) { EmitAggLoadOfLValue(E); }
   void VisitStringLiteral(StringLiteral *E) { EmitAggLoadOfLValue(E); }
@@ -262,6 +253,13 @@ bool AggExprEmitter::TypeRequiresGCollection(QualType T) {
 /// directly into the return value slot.  Otherwise, a final move
 /// will be performed.
 void AggExprEmitter::EmitMoveFromReturnSlot(const Expr *E, RValue src) {
+  // Push destructor if the result is ignored and the type is a C struct that
+  // is non-trivial to destroy.
+  QualType Ty = E->getType();
+  if (Dest.isIgnored() &&
+      Ty.isDestructedType() == QualType::DK_nontrivial_c_struct)
+    CGF.pushDestroy(Ty.isDestructedType(), src.getAggregateAddress(), Ty);
+
   if (shouldUseDestForReturnSlot()) {
     // Logically, Dest.getAddr() should equal Src.getAggregateAddr().
     // The possibility of undef rvalues complicates that a lot,
@@ -278,17 +276,40 @@ void AggExprEmitter::EmitMoveFromReturnSlot(const Expr *E, RValue src) {
 void AggExprEmitter::EmitFinalDestCopy(QualType type, RValue src) {
   assert(src.isAggregate() && "value must be aggregate value!");
   LValue srcLV = CGF.MakeAddrLValue(src.getAggregateAddress(), type);
-  EmitFinalDestCopy(type, srcLV);
+  EmitFinalDestCopy(type, srcLV, EVK_RValue);
 }
 
 /// EmitFinalDestCopy - Perform the final copy to DestPtr, if desired.
-void AggExprEmitter::EmitFinalDestCopy(QualType type, const LValue &src) {
+void AggExprEmitter::EmitFinalDestCopy(QualType type, const LValue &src,
+                                       ExprValueKind SrcValueKind) {
   // If Dest is ignored, then we're evaluating an aggregate expression
   // in a context that doesn't care about the result.  Note that loads
   // from volatile l-values force the existence of a non-ignored
   // destination.
   if (Dest.isIgnored())
     return;
+
+  // Copy non-trivial C structs here.
+  LValue DstLV = CGF.MakeAddrLValue(
+      Dest.getAddress(), Dest.isVolatile() ? type.withVolatile() : type);
+
+  if (SrcValueKind == EVK_RValue) {
+    if (type.isNonTrivialToPrimitiveDestructiveMove() == QualType::PCK_Struct) {
+      if (Dest.isPotentiallyAliased())
+        CGF.callCStructMoveAssignmentOperator(DstLV, src);
+      else
+        CGF.callCStructMoveConstructor(DstLV, src);
+      return;
+    }
+  } else {
+    if (type.isNonTrivialToPrimitiveCopy() == QualType::PCK_Struct) {
+      if (Dest.isPotentiallyAliased())
+        CGF.callCStructCopyAssignmentOperator(DstLV, src);
+      else
+        CGF.callCStructCopyConstructor(DstLV, src);
+      return;
+    }
+  }
 
   AggValueSlot srcAgg =
     AggValueSlot::forLValue(src, AggValueSlot::IsDestructed,
@@ -409,11 +430,14 @@ static bool isTrivialFiller(Expr *E) {
 
 /// \brief Emit initialization of an array from an initializer list.
 void AggExprEmitter::EmitArrayInit(Address DestPtr, llvm::ArrayType *AType,
-                                   QualType elementType, InitListExpr *E) {
+                                   QualType ArrayQTy, InitListExpr *E) {
   uint64_t NumInitElements = E->getNumInits();
 
   uint64_t NumArrayElements = AType->getNumElements();
   assert(NumInitElements <= NumArrayElements);
+
+  QualType elementType =
+      CGF.getContext().getAsArrayType(ArrayQTy)->getElementType();
 
   // DestPtr is an array*.  Construct an elementType* by drilling
   // down a level.
@@ -425,6 +449,29 @@ void AggExprEmitter::EmitArrayInit(Address DestPtr, llvm::ArrayType *AType,
   CharUnits elementSize = CGF.getContext().getTypeSizeInChars(elementType);
   CharUnits elementAlign =
     DestPtr.getAlignment().alignmentOfArrayElement(elementSize);
+
+  // Consider initializing the array by copying from a global. For this to be
+  // more efficient than per-element initialization, the size of the elements
+  // with explicit initializers should be large enough.
+  if (NumInitElements * elementSize.getQuantity() > 16 &&
+      elementType.isTriviallyCopyableType(CGF.getContext())) {
+    CodeGen::CodeGenModule &CGM = CGF.CGM;
+    ConstantEmitter Emitter(CGM);
+    LangAS AS = ArrayQTy.getAddressSpace();
+    if (llvm::Constant *C = Emitter.tryEmitForInitializer(E, AS, ArrayQTy)) {
+      auto GV = new llvm::GlobalVariable(
+          CGM.getModule(), C->getType(),
+          CGM.isTypeConstant(ArrayQTy, /* ExcludeCtorDtor= */ true),
+          llvm::GlobalValue::PrivateLinkage, C, "constinit",
+          /* InsertBefore= */ nullptr, llvm::GlobalVariable::NotThreadLocal,
+          CGM.getContext().getTargetAddressSpace(AS));
+      Emitter.finalize(GV);
+      CharUnits Align = CGM.getContext().getTypeAlignInChars(ArrayQTy);
+      GV->setAlignment(Align.getQuantity());
+      EmitFinalDestCopy(ArrayQTy, CGF.MakeAddrLValue(GV, ArrayQTy, Align));
+      return;
+    }
+  }
 
   // Exception safety requires us to destroy all the
   // already-constructed members if an initializer throws.
@@ -557,7 +604,11 @@ void AggExprEmitter::VisitMaterializeTemporaryExpr(MaterializeTemporaryExpr *E){
 }
 
 void AggExprEmitter::VisitOpaqueValueExpr(OpaqueValueExpr *e) {
-  EmitFinalDestCopy(e->getType(), CGF.getOpaqueLValueMapping(e));
+  // If this is a unique OVE, just visit its source expression.
+  if (e->isUnique())
+    Visit(e->getSourceExpr());
+  else
+    EmitFinalDestCopy(e->getType(), CGF.getOrCreateOpaqueLValueMapping(e));
 }
 
 void
@@ -709,7 +760,7 @@ void AggExprEmitter::VisitCastExpr(CastExpr *E) {
       return Visit(E->getSubExpr());
     }
 
-    // fallthrough
+    LLVM_FALLTHROUGH;
 
   case CK_NoOp:
   case CK_UserDefinedConversion:
@@ -1173,11 +1224,8 @@ void AggExprEmitter::VisitInitListExpr(InitListExpr *E) {
 
   // Handle initialization of an array.
   if (E->getType()->isArrayType()) {
-    QualType elementType =
-        CGF.getContext().getAsArrayType(E->getType())->getElementType();
-
     auto AType = cast<llvm::ArrayType>(Dest.getAddress().getElementType());
-    EmitArrayInit(Dest.getAddress(), AType, elementType, E);
+    EmitArrayInit(Dest.getAddress(), AType, E->getType(), E);
     return;
   }
 

@@ -97,7 +97,7 @@ void test7() {
     A = 1,
     B
   } a;
-  switch(a) { //expected-warning{{enumeration value 'B' not handled in switch}}
+  switch(a) { //expected-warning{{enumeration value 'B' not handled in switch}} expected-note {{add missing switch cases}}
     case A:
       break;
   }
@@ -155,7 +155,7 @@ void test8() {
     case C:
       break;
   }
-  switch(a) { //expected-warning{{enumeration value 'B' not handled in switch}}
+  switch(a) { //expected-warning{{enumeration value 'B' not handled in switch}} expected-note {{add missing switch cases}}
     case A:
       break;
   }
@@ -202,13 +202,13 @@ void test11() {
     B,
     C
   } a;
-  switch(a) { //expected-warning{{enumeration value 'A' not handled in switch}}
+  switch(a) { //expected-warning{{enumeration value 'A' not handled in switch}} expected-note {{add missing switch cases}}
     case B:
     case C:
       break;
   }
 
-  switch(a) { //expected-warning{{enumeration value 'A' not explicitly handled in switch}}
+  switch(a) { //expected-warning{{enumeration value 'A' not explicitly handled in switch}} expected-note {{add missing switch cases}}
     case B:
     case C:
       break;
@@ -238,7 +238,7 @@ typedef enum {
 } my_type_t;
 
 int test13(my_type_t t) {
-  switch(t) { // expected-warning{{enumeration value 'val3' not handled in switch}}
+  switch(t) { // expected-warning{{enumeration value 'val3' not handled in switch}} expected-note {{add missing switch cases}}
   case val1:
     return 1;
   case val2:
@@ -372,6 +372,7 @@ void switch_on_ExtendedEnum1(enum ExtendedEnum1 e) {
   case EE1_b: break;
   case EE1_c: break; // no-warning
   case EE1_d: break; // expected-warning {{case value not in enumerated type 'enum ExtendedEnum1'}}
+  // expected-warning@-1 {{comparison of two values with different enumeration types in switch statement ('enum ExtendedEnum1' and 'const enum ExtendedEnum1_unrelated')}}
   }
 }
 

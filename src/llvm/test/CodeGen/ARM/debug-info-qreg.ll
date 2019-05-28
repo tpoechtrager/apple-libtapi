@@ -4,10 +4,12 @@ target triple = "thumbv7-apple-macosx10.6.7"
 
 ;CHECK: sub-register DW_OP_regx
 ;CHECK-NEXT: 256
+;CHECK-NEXT: @
 ;CHECK-NEXT: DW_OP_piece
 ;CHECK-NEXT: 8
 ;CHECK-NEXT: sub-register DW_OP_regx
 ;CHECK-NEXT: 257
+;CHECK-NEXT: @
 ;CHECK-NEXT: DW_OP_piece
 ;CHECK-NEXT: 8
 
@@ -24,7 +26,7 @@ for.body9:                                        ; preds = %for.body9, %entry
   br i1 undef, label %for.end54, label %for.body9, !dbg !44
 
 for.end54:                                        ; preds = %for.body9
-  tail call void @llvm.dbg.value(metadata <4 x float> %add19, i64 0, metadata !27, metadata !DIExpression()), !dbg !39
+  tail call void @llvm.dbg.value(metadata <4 x float> %add19, metadata !27, metadata !DIExpression()), !dbg !39
   %tmp115 = extractelement <4 x float> %add19, i32 1
   %conv6.i75 = fpext float %tmp115 to double, !dbg !45
   %call.i82 = tail call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([13 x i8], [13 x i8]* @.str, i32 0, i32 0), double undef, double %conv6.i75, double undef, double undef) nounwind, !dbg !45
@@ -33,7 +35,7 @@ for.end54:                                        ; preds = %for.body9
 
 declare i32 @printf(i8* nocapture, ...) nounwind
 
-declare void @llvm.dbg.value(metadata, i64, metadata, metadata) nounwind readnone
+declare void @llvm.dbg.value(metadata, metadata, metadata) nounwind readnone
 
 !llvm.dbg.cu = !{!2}
 !llvm.module.flags = !{!56}

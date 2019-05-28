@@ -355,12 +355,11 @@ void IteratorChecker::checkPostStmt(const MaterializeTemporaryExpr *MTE,
                                     CheckerContext &C) const {
   /* Transfer iterator state to temporary objects */
   auto State = C.getState();
-  const auto *LCtx = C.getLocationContext();
   const auto *Pos =
-      getIteratorPosition(State, State->getSVal(MTE->GetTemporaryExpr(), LCtx));
+      getIteratorPosition(State, C.getSVal(MTE->GetTemporaryExpr()));
   if (!Pos)
     return;
-  State = setIteratorPosition(State, State->getSVal(MTE, LCtx), *Pos);
+  State = setIteratorPosition(State, C.getSVal(MTE), *Pos);
   C.addTransition(State);
 }
 
@@ -605,7 +604,7 @@ BinaryOperator::Opcode getOpcode(const SymExpr *SE) {
   if (const auto *BSE = dyn_cast<BinarySymExpr>(SE)) {
     return BSE->getOpcode();
   } else if (const auto *SC = dyn_cast<SymbolConjured>(SE)) {
-    const auto *COE = dyn_cast<CXXOperatorCallExpr>(SC->getStmt());
+    const auto *COE = dyn_cast_or_null<CXXOperatorCallExpr>(SC->getStmt());
     if (!COE)
       return BO_Comma; // Extremal value, neither EQ nor NE
     if (COE->getOperator() == OO_EqualEqual) {

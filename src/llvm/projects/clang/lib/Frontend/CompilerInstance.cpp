@@ -8,6 +8,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "clang/Frontend/CompilerInstance.h"
+#include "clang/APINotes/APINotesReader.h"
 #include "clang/AST/ASTConsumer.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/Decl.h"
@@ -28,6 +29,7 @@
 #include "clang/Frontend/TextDiagnosticPrinter.h"
 #include "clang/Frontend/Utils.h"
 #include "clang/Frontend/VerifyDiagnosticConsumer.h"
+#include "clang/Index/IndexingAction.h"
 #include "clang/Lex/HeaderSearch.h"
 #include "clang/Lex/PTHManager.h"
 #include "clang/Lex/Preprocessor.h"
@@ -300,12 +302,14 @@ CompilerInstance::createDiagnostics(DiagnosticOptions *Opts,
 
 // File Manager
 
-void CompilerInstance::createFileManager() {
+FileManager *CompilerInstance::createFileManager() {
   if (!hasVirtualFileSystem()) {
-    // TODO: choose the virtual file system based on the CompilerInvocation.
-    setVirtualFileSystem(vfs::getRealFileSystem());
+    IntrusiveRefCntPtr<vfs::FileSystem> VFS =
+        createVFSFromCompilerInvocation(getInvocation(), getDiagnostics());
+    setVirtualFileSystem(VFS);
   }
   FileMgr = new FileManager(getFileSystemOpts(), VirtualFileSystem);
+  return FileMgr.get();
 }
 
 // Source Manager
@@ -382,6 +386,7 @@ void CompilerInstance::createPreprocessor(TranslationUnitKind TUKind) {
       Invocation->getPreprocessorOptsPtr(), getDiagnostics(), getLangOpts(),
       getSourceManager(), getPCMCache(), *HeaderInfo, *this, PTHMgr,
       /*OwnsHeaderSearch=*/true, TUKind);
+  getTarget().adjust(getLangOpts());
   PP->Initialize(getTarget(), getAuxTarget());
 
   // Note that this is different then passing PTHMgr to Preprocessor's ctor.
@@ -472,7 +477,7 @@ std::string CompilerInstance::getSpecificModuleCachePath() {
   SmallString<256> SpecificModuleCache(getHeaderSearchOpts().ModuleCachePath);
   if (!SpecificModuleCache.empty() && !getHeaderSearchOpts().DisableModuleHash)
     llvm::sys::path::append(SpecificModuleCache,
-                            getInvocation().getModuleHash());
+                            getInvocation().getModuleHash(getDiagnostics()));
   return SpecificModuleCache.str();
 }
 
@@ -632,6 +637,27 @@ void CompilerInstance::createSema(TranslationUnitKind TUKind,
                                   CodeCompleteConsumer *CompletionConsumer) {
   TheSema.reset(new Sema(getPreprocessor(), getASTContext(), getASTConsumer(),
                          TUKind, CompletionConsumer));
+
+  // Set up API notes.
+  TheSema->APINotes.setSwiftVersion(getAPINotesOpts().SwiftVersion);
+
+  // If we're building a module and are supposed to load API notes,
+  // notify the API notes manager.
+  if (auto currentModule = getPreprocessor().getCurrentModule()) {
+    (void)TheSema->APINotes.loadCurrentModuleAPINotes(
+            currentModule,
+            getLangOpts().APINotesModules,
+            getAPINotesOpts().ModuleSearchPaths);
+    // Check for any attributes we should add to the module
+    for (auto reader : TheSema->APINotes.getCurrentModuleReaders()) {
+      // swift_infer_import_as_member
+      if (reader->getModuleOptions().SwiftInferImportAsMember) {
+        currentModule->IsSwiftInferImportAsMember = true;
+        break;
+      }
+    }
+  }
+
   // Attach the external sema source if there is any.
   if (ExternalSemaSrc) {
     TheSema->addExternalSource(ExternalSemaSrc.get());
@@ -759,9 +785,15 @@ std::unique_ptr<llvm::raw_pwrite_stream> CompilerInstance::createOutputFile(
 
   if (UseTemporary) {
     // Create a temporary file.
-    SmallString<128> TempPath;
-    TempPath = OutFile;
+    // Insert -%%%%%%%% before the extension (if any), and because some tools
+    // (noticeable, clang's own GlobalModuleIndex.cpp) glob for build
+    // artifacts, also append .tmp.
+    StringRef OutputExtension = llvm::sys::path::extension(OutFile);
+    SmallString<128> TempPath =
+        StringRef(OutFile).drop_back(OutputExtension.size());
     TempPath += "-%%%%%%%%";
+    TempPath += OutputExtension;
+    TempPath += ".tmp";
     int fd;
     std::error_code EC =
         llvm::sys::fs::createUniqueFile(TempPath, fd, TempPath);
@@ -832,8 +864,8 @@ bool CompilerInstance::InitializeSourceManager(
           : Input.isSystem() ? SrcMgr::C_System : SrcMgr::C_User;
 
   if (Input.isBuffer()) {
-    SourceMgr.setMainFileID(SourceMgr.createFileID(
-        std::unique_ptr<llvm::MemoryBuffer>(Input.getBuffer()), Kind));
+    SourceMgr.setMainFileID(SourceMgr.createFileID(SourceManager::Unowned,
+                                                   Input.getBuffer(), Kind));
     assert(SourceMgr.getMainFileID().isValid() &&
            "Couldn't establish MainFileID!");
     return true;
@@ -997,8 +1029,17 @@ bool CompilerInstance::ExecuteAction(FrontendAction &Act) {
       OS << " and ";
     if (NumErrors)
       OS << NumErrors << " error" << (NumErrors == 1 ? "" : "s");
-    if (NumWarnings || NumErrors)
-      OS << " generated.\n";
+    if (NumWarnings || NumErrors) {
+      OS << " generated";
+      if (getLangOpts().CUDA) {
+        if (!getLangOpts().CUDAIsDevice) {
+          OS << " when compiling for host";
+        } else {
+          OS << " when compiling for " << getTargetOpts().CPU;
+        }
+      }
+      OS << ".\n";
+    }
   }
 
   if (getFrontendOpts().ShowStats) {
@@ -1070,6 +1111,10 @@ compileModuleImpl(CompilerInstance &ImportingInstance, SourceLocation ImportLoc,
       }),
       PPOpts.Macros.end());
 
+  // If the original compiler invocation had -fmodule-name, pass it through.
+  Invocation->getLangOpts()->ModuleName =
+      ImportingInstance.getInvocation().getLangOpts()->ModuleName;
+
   // Note the name of the module we're building.
   Invocation->getLangOpts()->CurrentModule = ModuleName;
 
@@ -1100,9 +1145,11 @@ compileModuleImpl(CompilerInstance &ImportingInstance, SourceLocation ImportLoc,
   PPOpts.RetainRemappedFileBuffers = true;
     
   Invocation->getDiagnosticOpts().VerifyDiagnostics = 0;
-  assert(ImportingInstance.getInvocation().getModuleHash() ==
-         Invocation->getModuleHash() && "Module hash mismatch!");
-  
+  assert(ImportingInstance.getInvocation().getModuleHash(
+             ImportingInstance.getDiagnostics()) ==
+             Invocation->getModuleHash(ImportingInstance.getDiagnostics()) &&
+         "Module hash mismatch!");
+
   // Construct a compiler instance that will be used to actually create the
   // module.  Since we're sharing a PCMCache,
   // CompilerInstance::CompilerInstance is responsible for finalizing the
@@ -1128,6 +1175,10 @@ compileModuleImpl(CompilerInstance &ImportingInstance, SourceLocation ImportLoc,
   SourceMgr.pushModuleBuildStack(ModuleName,
     FullSourceLoc(ImportLoc, ImportingInstance.getSourceManager()));
 
+  // Pass along the GenModuleActionWrapper callback
+  auto wrapGenModuleAction = ImportingInstance.getGenModuleActionWrapper();
+  Instance.setGenModuleActionWrapper(wrapGenModuleAction);
+
   // If we're collecting module dependencies, we need to share a collector
   // between all of the module CompilerInstances. Other than that, we don't
   // want to produce any dependency output from the module build.
@@ -1146,8 +1197,14 @@ compileModuleImpl(CompilerInstance &ImportingInstance, SourceLocation ImportLoc,
   llvm::CrashRecoveryContext CRC;
   CRC.RunSafelyOnThread(
       [&]() {
-        GenerateModuleFromModuleMapAction Action;
-        Instance.ExecuteAction(Action);
+        // FIXME: I have no idea what the best way to do this is, but it's
+        // probably not this. Interfaces changed upstream.
+        std::unique_ptr<FrontendAction> Action(
+            new GenerateModuleFromModuleMapAction);
+        if (wrapGenModuleAction) {
+          Action = wrapGenModuleAction(FrontendOpts, std::move(Action));
+        }
+        Instance.ExecuteAction(*Action);
       },
       ThreadStackSize);
 
@@ -1166,6 +1223,19 @@ compileModuleImpl(CompilerInstance &ImportingInstance, SourceLocation ImportLoc,
   return !Instance.getDiagnostics().hasErrorOccurred();
 }
 
+static const FileEntry *getPublicModuleMap(const FileEntry *File,
+                                           FileManager &FileMgr) {
+  StringRef Filename = llvm::sys::path::filename(File->getName());
+  SmallString<128> PublicFilename(File->getDir()->getName());
+  if (Filename == "module_private.map")
+    llvm::sys::path::append(PublicFilename, "module.map");
+  else if (Filename == "module.private.modulemap")
+    llvm::sys::path::append(PublicFilename, "module.modulemap");
+  else
+    return nullptr;
+  return FileMgr.getFile(PublicFilename);
+}
+
 /// \brief Compile a module file for the given module, using the options 
 /// provided by the importing compiler instance. Returns true if the module
 /// was built without errors.
@@ -1182,6 +1252,13 @@ static bool compileModuleImpl(CompilerInstance &ImportingInstance,
   bool Result;
   if (const FileEntry *ModuleMapFile =
           ModMap.getContainingModuleMapFile(Module)) {
+    // Canonicalize compilation to start with the public module map. This is
+    // vital for submodules declarations in the private module maps to be
+    // correctly parsed when depending on a top level module in the public one.
+    if (const FileEntry *PublicMMFile = getPublicModuleMap(
+            ModuleMapFile, ImportingInstance.getFileManager()))
+      ModuleMapFile = PublicMMFile;
+
     // Use the module map where this module resides.
     Result = compileModuleImpl(
         ImportingInstance, ImportLoc, Module->getTopLevelModuleName(),
@@ -1595,7 +1672,22 @@ CompilerInstance::loadModule(SourceLocation ImportLoc,
                              Module::NameVisibilityKind Visibility,
                              bool IsInclusionDirective) {
   // Determine what file we're searching from.
-  StringRef ModuleName = Path[0].first->getName();
+  // FIXME: Should we be deciding whether this is a submodule (here and
+  // below) based on -fmodules-ts or should we pass a flag and make the
+  // caller decide?
+  std::string ModuleName;
+  if (getLangOpts().ModulesTS) {
+    // FIXME: Same code as Sema::ActOnModuleDecl() so there is probably a
+    // better place/way to do this.
+    for (auto &Piece : Path) {
+      if (!ModuleName.empty())
+        ModuleName += ".";
+      ModuleName += Piece.first->getName();
+    }
+  }
+  else
+    ModuleName = Path[0].first->getName();
+
   SourceLocation ModuleNameLoc = Path[0].second;
 
   // If we've already handled this import, just return the cached result.
@@ -1620,6 +1712,14 @@ CompilerInstance::loadModule(SourceLocation ImportLoc,
   } else if (ModuleName == getLangOpts().CurrentModule) {
     // This is the module we're building. 
     Module = PP->getHeaderSearchInfo().lookupModule(ModuleName);
+    /// FIXME: perhaps we should (a) look for a module using the module name
+    //  to file map (PrebuiltModuleFiles) and (b) diagnose if still not found?
+    //if (Module == nullptr) {
+    //  getDiagnostics().Report(ModuleNameLoc, diag::err_module_not_found)
+    //    << ModuleName;
+    //  ModuleBuildFailed = true;
+    //  return ModuleLoadResult();
+    //}
     Known = KnownModules.insert(std::make_pair(Path[0].first, Module)).first;
   } else {
     // Search for a module with the given name.
@@ -1641,16 +1741,17 @@ CompilerInstance::loadModule(SourceLocation ImportLoc,
     }
 
     // Try to load the module from the prebuilt module path.
-    if (Source == ModuleNotFound && !HSOpts.PrebuiltModulePaths.empty()) {
-      ModuleFileName = PP->getHeaderSearchInfo().getModuleFileName(
-          ModuleName, "", /*UsePrebuiltPath*/ true);
+    if (Source == ModuleNotFound && (!HSOpts.PrebuiltModuleFiles.empty() ||
+                                     !HSOpts.PrebuiltModulePaths.empty())) {
+      ModuleFileName =
+        PP->getHeaderSearchInfo().getPrebuiltModuleFileName(ModuleName);
       if (!ModuleFileName.empty())
         Source = PrebuiltModulePath;
     }
 
     // Try to load the module from the module cache.
     if (Source == ModuleNotFound && Module) {
-      ModuleFileName = PP->getHeaderSearchInfo().getModuleFileName(Module);
+      ModuleFileName = PP->getHeaderSearchInfo().getCachedModuleFileName(Module);
       Source = ModuleCache;
     }
 
@@ -1810,10 +1911,44 @@ CompilerInstance::loadModule(SourceLocation ImportLoc,
 
   // Verify that the rest of the module path actually corresponds to
   // a submodule.
-  if (Path.size() > 1) {
+  bool MapPrivateSubModToTopLevel = false;
+  if (!getLangOpts().ModulesTS && Path.size() > 1) {
     for (unsigned I = 1, N = Path.size(); I != N; ++I) {
       StringRef Name = Path[I].first->getName();
       clang::Module *Sub = Module->findSubmodule(Name);
+
+      // If the user is requesting Foo.Private and it doesn't exist, try to
+      // match Foo_Private and emit a warning asking for the user to write
+      // @import Foo_Private instead. FIXME: remove this when existing clients
+      // migrate off of Foo.Private syntax.
+      if (!Sub && PP->getLangOpts().ImplicitModules && Name == "Private" &&
+          Module == Module->getTopLevelModule()) {
+        SmallString<128> PrivateModule(Module->Name);
+        PrivateModule.append("_Private");
+
+        SmallVector<std::pair<IdentifierInfo *, SourceLocation>, 2> PrivPath;
+        auto &II = PP->getIdentifierTable().get(
+            PrivateModule, PP->getIdentifierInfo(Module->Name)->getTokenID());
+        PrivPath.push_back(std::make_pair(&II, Path[0].second));
+
+        if (PP->getHeaderSearchInfo().lookupModule(PrivateModule))
+          Sub =
+              loadModule(ImportLoc, PrivPath, Visibility, IsInclusionDirective);
+        if (Sub) {
+          MapPrivateSubModToTopLevel = true;
+          if (!getDiagnostics().isIgnored(
+                  diag::warn_no_priv_submodule_use_toplevel, ImportLoc)) {
+            getDiagnostics().Report(Path[I].second,
+                                    diag::warn_no_priv_submodule_use_toplevel)
+                << Path[I].first << Module->getFullModuleName() << PrivateModule
+                << SourceRange(Path[0].second, Path[I].second)
+                << FixItHint::CreateReplacement(SourceRange(Path[0].second),
+                                                PrivateModule);
+            getDiagnostics().Report(Sub->DefinitionLoc,
+                                    diag::note_private_top_level_defined);
+          }
+        }
+      }
       
       if (!Sub) {
         // Attempt to perform typo correction to find a module name that works.
@@ -1848,7 +1983,7 @@ CompilerInstance::loadModule(SourceLocation ImportLoc,
           Sub = Module->findSubmodule(Best[0]);
         }
       }
-      
+
       if (!Sub) {
         // No submodule by this name. Complain, and don't look for further
         // submodules.
@@ -1865,7 +2000,7 @@ CompilerInstance::loadModule(SourceLocation ImportLoc,
   // Make the named module visible, if it's not already part of the module
   // we are parsing.
   if (ModuleName != getLangOpts().CurrentModule) {
-    if (!Module->IsFromModuleFile) {
+    if (!Module->IsFromModuleFile && !MapPrivateSubModToTopLevel) {
       // We have an umbrella header or directory that doesn't actually include
       // all of the headers within the directory it covers. Complain about
       // this missing submodule and recover by forgetting that we ever saw
@@ -1898,6 +2033,12 @@ CompilerInstance::loadModule(SourceLocation ImportLoc,
     checkConfigMacro(getPreprocessor(), TopModule->ConfigMacros[I],
                      Module, ImportLoc);
   }
+
+  // Resolve any remaining module using export_as for this one.
+  getPreprocessor()
+      .getHeaderSearchInfo()
+      .getModuleMap()
+      .resolveLinkAsDependencies(TopModule);
 
   LastModuleImportLoc = ImportLoc;
   LastModuleImportResult = ModuleLoadResult(Module);

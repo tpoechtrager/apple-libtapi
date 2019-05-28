@@ -19,12 +19,10 @@ declare void @llvm.memset.p0i8.i32(i8* nocapture writeonly, i8, i32, i32, i1)
 ; Test that the long call sequence uses the hazard barrier instruction variant.
 define void @caller() {
 ; O32-LABEL: caller:
-; O32:       # BB#0:
+; O32:       # %bb.0:
 ; O32-NEXT:    addiu $sp, $sp, -24
-; O32-NEXT:  $cfi0:
 ; O32-NEXT:    .cfi_def_cfa_offset 24
 ; O32-NEXT:    sw $ra, 20($sp) # 4-byte Folded Spill
-; O32-NEXT:  $cfi1:
 ; O32-NEXT:    .cfi_offset 31, -4
 ; O32-NEXT:    lui $1, %hi(callee)
 ; O32-NEXT:    addiu $25, $1, %lo(callee)
@@ -44,12 +42,10 @@ define void @caller() {
 ; O32-NEXT:    addiu $sp, $sp, 24
 ;
 ; N32-LABEL: caller:
-; N32:       # BB#0:
+; N32:       # %bb.0:
 ; N32-NEXT:    addiu $sp, $sp, -16
-; N32-NEXT:  .Lcfi0:
 ; N32-NEXT:    .cfi_def_cfa_offset 16
 ; N32-NEXT:    sd $ra, 8($sp) # 8-byte Folded Spill
-; N32-NEXT:  .Lcfi1:
 ; N32-NEXT:    .cfi_offset 31, -8
 ; N32-NEXT:    lui $1, %hi(callee)
 ; N32-NEXT:    addiu $25, $1, %lo(callee)
@@ -75,12 +71,10 @@ define void @caller() {
 ; N32-NEXT:    addiu $sp, $sp, 16
 ;
 ; N64-LABEL: caller:
-; N64:       # BB#0:
+; N64:       # %bb.0:
 ; N64-NEXT:    daddiu $sp, $sp, -16
-; N64-NEXT:  .Lcfi0:
 ; N64-NEXT:    .cfi_def_cfa_offset 16
 ; N64-NEXT:    sd $ra, 8($sp) # 8-byte Folded Spill
-; N64-NEXT:  .Lcfi1:
 ; N64-NEXT:    .cfi_offset 31, -8
 ; N64-NEXT:    lui $1, %highest(callee)
 ; N64-NEXT:    daddiu $1, $1, %higher(callee)

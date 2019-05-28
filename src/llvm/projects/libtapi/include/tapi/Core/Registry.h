@@ -23,9 +23,9 @@
 #include "llvm/Support/Error.h"
 #include "llvm/Support/MemoryBuffer.h"
 
-using llvm::file_magic;
 using llvm::Error;
 using llvm::Expected;
+using llvm::file_magic;
 
 TAPI_NAMESPACE_INTERNAL_BEGIN
 
@@ -34,7 +34,6 @@ class Registry;
 enum class ReadFlags {
   Header,
   Symbols,
-  ObjCMetadata,
   All,
 };
 
@@ -71,7 +70,7 @@ public:
   readFile(std::unique_ptr<MemoryBuffer> memBuffer,
            ReadFlags readFlags = ReadFlags::All,
            ArchitectureSet arches = ArchitectureSet::All()) const;
-  Error writeFile(const File *file) const;
+  Error writeFile(const File *file, const std::string &path) const;
   Error writeFile(raw_ostream &os, const File *file) const;
 
   void add(std::unique_ptr<Reader> reader) {
@@ -85,6 +84,7 @@ public:
   void addBinaryReaders();
   void addYAMLReaders();
   void addYAMLWriters();
+  void addDiagnosticReader();
   void addReexportWriters();
 
 private:

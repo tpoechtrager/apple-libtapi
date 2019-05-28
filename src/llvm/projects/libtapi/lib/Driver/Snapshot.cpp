@@ -25,8 +25,11 @@ using namespace TAPI_INTERNAL;
 using clang::InputKind;
 
 using Mapping = std::pair<std::string, uint64_t>;
+using Reexports = std::pair<std::string, ArchitectureSet>;
 LLVM_YAML_IS_SEQUENCE_VECTOR(InterfaceFileRef)
+LLVM_YAML_IS_SEQUENCE_VECTOR(Reexports)
 LLVM_YAML_IS_FLOW_SEQUENCE_VECTOR(Macro)
+LLVM_YAML_IS_FLOW_SEQUENCE_VECTOR(Triple)
 LLVM_YAML_IS_STRING_MAP(uint64_t)
 
 namespace llvm {
@@ -36,7 +39,6 @@ template <> struct ScalarEnumerationTraits<TAPICommand> {
   static void enumeration(IO &io, TAPICommand &command) {
     io.enumCase(command, "driver", TAPICommand::Driver);
     io.enumCase(command, "archive", TAPICommand::Archive);
-    io.enumCase(command, "scan", TAPICommand::Scan);
     io.enumCase(command, "stubify", TAPICommand::Stubify);
     io.enumCase(command, "installapi", TAPICommand::InstallAPI);
     io.enumCase(command, "reexport", TAPICommand::Reexport);
@@ -49,6 +51,8 @@ template <> struct ScalarEnumerationTraits<ArchiveAction> {
     io.enumCase(action, "show-info", ArchiveAction::ShowInfo);
     io.enumCase(action, "extract-architecture",
                 ArchiveAction::ExtractArchitecture);
+    io.enumCase(action, "remove-architecture",
+                ArchiveAction::RemoveArchitecture);
     io.enumCase(action, "verify-architecture",
                 ArchiveAction::VerifyArchitecture);
     io.enumCase(action, "merge", ArchiveAction::Merge);
@@ -62,12 +66,25 @@ template <> struct MappingTraits<InterfaceFileRef> {
   }
 };
 
-template <> struct ScalarEnumerationTraits<InputKind::Language> {
-  static void enumeration(IO &io, InputKind::Language &kind) {
-    io.enumCase(kind, "c", InputKind::C);
-    io.enumCase(kind, "cxx", InputKind::CXX);
-    io.enumCase(kind, "objc", InputKind::ObjC);
-    io.enumCase(kind, "objcxx", InputKind::ObjCXX);
+template <> struct MappingTraits<Reexports> {
+  static void mapping(IO &io, Reexports &ref) {
+    io.mapRequired("name", ref.first);
+    io.mapOptional("architectures", ref.second);
+  }
+};
+
+template <> struct ScalarTraits<Triple> {
+  static void output(const Triple &value, void * /*unused*/, raw_ostream &os) {
+    os << value.str();
+  }
+
+  static StringRef input(StringRef scalar, void * /*unused*/, Triple &value) {
+    value.setTriple(scalar);
+    return {};
+  }
+
+  static QuotingType mustQuote(StringRef /*unused*/) {
+    return QuotingType::None;
   }
 };
 
@@ -89,7 +106,9 @@ template <> struct ScalarTraits<Macro> {
     return {};
   }
 
-  static bool mustQuote(StringRef /*unused*/) { return true; }
+  static QuotingType mustQuote(StringRef /*unused*/) {
+    return QuotingType::Single;
+  }
 };
 
 template <> struct ScalarEnumerationTraits<VerificationMode> {
@@ -106,7 +125,6 @@ template <> struct MappingTraits<DriverOptions> {
   static void mapping(IO &io, DriverOptions &opts) {
     io.mapOptional("print-version", opts.printVersion, false);
     io.mapOptional("print-help", opts.printHelp, false);
-    io.mapOptional("print-help-hidden", opts.printHelpHidden, false);
     io.mapOptional("inputs", opts.inputs, {});
     io.mapOptional("output-path", opts.outputPath, std::string());
   }
@@ -119,28 +137,38 @@ template <> struct MappingTraits<ArchiveOptions> {
   }
 };
 
-template <> struct MappingTraits<LinkerOptions> {
-  static void mapping(IO &io, LinkerOptions &opts) {
-    io.mapOptional("architectures", opts.architectures);
+template <>
+struct MappingContextTraits<LinkerOptions, Snapshot::MappingContext> {
+  static void mapping(IO &io, LinkerOptions &opts,
+                      Snapshot::MappingContext &ctx) {
+    io.mapOptional("architectures", ctx.architectures, ArchitectureSet());
     io.mapOptional("install-name", opts.installName, std::string());
     io.mapOptional("current-version", opts.currentVersion, PackedVersion());
     io.mapOptional("compatibility-version", opts.compatibilityVersion,
                    PackedVersion());
     io.mapOptional("is-dynamic-library", opts.isDynamicLibrary, false);
     io.mapOptional("allowable-clients", opts.allowableClients, {});
-    io.mapOptional("reexported-libraries", opts.reexportedLibraries, {});
+    io.mapOptional("reexported-libraries", opts.reexportInstallNames, {});
+    io.mapOptional("reexported-libraries2", opts.reexportedLibraries, {});
+    io.mapOptional("reexported-library-paths", opts.reexportedLibraryPaths, {});
+    io.mapOptional("reexported-frameworks", opts.reexportedFrameworks, {});
     io.mapOptional("is-application-extension-safe",
                    opts.isApplicationExtensionSafe, false);
   }
 };
 
-template <> struct MappingTraits<tapi::internal::FrontendOptions> {
-  static void mapping(IO &io, tapi::internal::FrontendOptions &opts) {
-    io.mapOptional("platform", opts.platform, Platform::Unknown);
-    io.mapOptional("os-version", opts.osVersion, std::string());
+template <>
+struct MappingContextTraits<tapi::internal::FrontendOptions,
+                            Snapshot::MappingContext> {
+  static void mapping(IO &io, tapi::internal::FrontendOptions &opts,
+                      Snapshot::MappingContext &ctx) {
+    io.mapOptional("platform", ctx.platform, Platform::unknown);
+    io.mapOptional("os-version", ctx.osVersion, std::string());
+    io.mapOptional("targets", opts.targets, {});
     io.mapOptional("language", opts.language, InputKind::ObjC);
     io.mapOptional("language-std", opts.language_std, std::string());
     io.mapOptional("isysroot", opts.isysroot, std::string());
+    io.mapOptional("umbrella", opts.umbrella, std::string());
     io.mapOptional("system-framework-paths", opts.systemFrameworkPaths, {});
     io.mapOptional("system-include-paths", opts.systemIncludePaths, {});
     io.mapOptional("framework-paths", opts.frameworkPaths, {});
@@ -185,8 +213,6 @@ template <> struct MappingTraits<TAPIOptions> {
     io.mapOptional("verification-mode", opts.verificationMode,
                    VerificationMode::ErrorsOnly);
     io.mapOptional("demangle", opts.demangle, false);
-    io.mapOptional("configuration-file", opts.configurationFile, std::string());
-    io.mapOptional("generate-api", opts.generateAPI, false);
     io.mapOptional("scan-public-headers", opts.scanPublicHeaders, true);
     io.mapOptional("scan-private-headers", opts.scanPrivateHeaders, true);
     io.mapOptional("delete-input-file", opts.deleteInputFile, false);
@@ -196,6 +222,7 @@ template <> struct MappingTraits<TAPIOptions> {
                    false);
     io.mapOptional("record-uuids", opts.recordUUIDs, true);
     io.mapOptional("set-installapi-flag", opts.setInstallAPIFlag, false);
+    io.mapOptional("infer-include-paths", opts.inferIncludePaths, true);
   }
 };
 
@@ -209,9 +236,10 @@ template <> struct MappingTraits<Snapshot> {
     io.mapOptional("driver-options", snapshot.driverOptions, DriverOptions());
     io.mapOptional("archive-options", snapshot.archiveOptions,
                    ArchiveOptions());
-    io.mapOptional("linker-options", snapshot.linkerOptions, LinkerOptions());
-    io.mapOptional("frontend-options", snapshot.frontendOptions,
-                   FrontendOptions());
+    io.mapOptionalWithContext("linker-options", snapshot.linkerOptions,
+                              LinkerOptions(), snapshot.context);
+    io.mapOptionalWithContext("frontend-options", snapshot.frontendOptions,
+                              FrontendOptions(), snapshot.context);
     io.mapOptional("diagnostics-options", snapshot.diagnosticsOptions,
                    DiagnosticsOptions());
     io.mapOptional("tapi-options", snapshot.tapiOptions, TAPIOptions());
@@ -428,6 +456,15 @@ bool Snapshot::loadSnapshot(StringRef path_) {
   if (auto ec = yin.error()) {
     outs() << runScript << ": " << ec.message() << "\n";
     return false;
+  }
+
+  for (auto arch : context.architectures) {
+    Triple target;
+    target.setArchName(getArchName(arch));
+    target.setVendor(Triple::Apple);
+    auto platform = mapToSim(context.platform, context.architectures.hasX86());
+    target.setOSName(getOSAndEnvironmentName(platform, context.osVersion));
+    frontendOptions.targets.push_back(target);
   }
 
   // Create a separate directory for the output files.

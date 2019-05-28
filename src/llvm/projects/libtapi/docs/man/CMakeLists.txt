@@ -13,7 +13,6 @@ install(
   )
 
 add_custom_target(tapi-docs)
-add_custom_target(install-tapi-docs
-  COMMAND "${CMAKE_COMMAND}" -DCMAKE_INSTALL_COMPONENT=tapi-docs
-           -P "${CMAKE_BINARY_DIR}/cmake_install.cmake"
-  )
+add_llvm_install_targets(install-tapi-docs
+                         DEPENDS tapi-docs
+                         COMPONENT tapi-docs)

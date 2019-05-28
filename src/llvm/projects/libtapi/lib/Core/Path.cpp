@@ -12,7 +12,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
-#include "llvm/Support/Path.h"
+#include "tapi/Core/Path.h"
 #include "tapi/Core/FileManager.h"
 #include "tapi/Core/LLVM.h"
 #include "tapi/Core/Utils.h"
@@ -21,6 +21,7 @@
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/Support/Error.h"
+#include "llvm/Support/Path.h"
 
 using namespace llvm;
 
@@ -48,10 +49,10 @@ void replace_extension(SmallVectorImpl<char> &path, const Twine &extension) {
   path.append(ext.begin(), ext.end());
 }
 
-llvm::Expected<std::vector<std::string>>
+llvm::Expected<PathSeq>
 enumerateFiles(FileManager &fm, StringRef path,
                const std::function<bool(StringRef)> &func) {
-  std::vector<std::string> headers;
+  PathSeq files;
   std::error_code ec;
   auto &fs = *fm.getVirtualFileSystem();
   for (clang::vfs::recursive_directory_iterator i(fs, path, ec), ie; i != ie;
@@ -68,14 +69,13 @@ enumerateFiles(FileManager &fm, StringRef path,
 
     auto path = i->getName();
     if (func(path))
-      headers.emplace_back(path);
+      files.emplace_back(path);
   }
 
-  return headers;
+  return files;
 }
 
-Expected<std::vector<std::string>> enumerateHeaderFiles(FileManager &fm,
-                                                        StringRef path) {
+Expected<PathSeq> enumerateHeaderFiles(FileManager &fm, StringRef path) {
   return enumerateFiles(fm, path, isHeaderFile);
 }
 

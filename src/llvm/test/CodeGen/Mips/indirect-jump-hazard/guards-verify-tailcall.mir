@@ -52,7 +52,7 @@ body:             |
     liveins: %a0
 
     %0:gpr32 = COPY %a0
-    %1:gpr32 = ADDiu %zero, 14
+    %1:gpr32 = ADDiu $zero, 14
     %a0 = COPY %1
     TAILCALLREG %0, csr_o32, implicit-def dead %at, implicit %a0
 

@@ -18,7 +18,7 @@
 #include "tapi/Core/Registry.h"
 #include "tapi/Core/Utils.h"
 #include "tapi/Defines.h"
-#include "tapi/Driver/Diagnostics.h"
+#include "tapi/Diagnostics/Diagnostics.h"
 #include "tapi/Driver/Driver.h"
 #include "tapi/Driver/Options.h"
 #include "clang/Basic/Diagnostic.h"
@@ -49,16 +49,16 @@ struct Context {
   bool recordUUIDs = true;
   bool setInstallAPIFlag = false;
 
-
   std::string sysroot;
   std::string inputPath;
   std::string outputPath;
-  std::vector<std::string> searchPaths;
-  std::vector<std::string> librarySearchPaths;
-  std::vector<std::string> frameworkSearchPaths;
+  PathSeq searchPaths;
+  PathSeq librarySearchPaths;
+  PathSeq frameworkSearchPaths;
   Registry registry;
   FileManager &fm;
   DiagnosticsEngine &diag;
+  FileType fileType;
 
   std::map<std::string, std::string> normalizedPathToVarName;
 };
@@ -85,7 +85,7 @@ static bool isPrivatePath(StringRef path, bool isSymlink = false) {
   if (path.startswith("/System/Library/Frameworks/")) {
     StringRef name, rest;
     std::tie(name, rest) =
-    path.drop_front(sizeof("/System/Library/Frameworks")).split('.');
+        path.drop_front(sizeof("/System/Library/Frameworks")).split('.');
 
     // but only top level framework
     // /System/Library/Frameworks/Foo.framework/Foo ==> true
@@ -106,67 +106,20 @@ static bool isPrivatePath(StringRef path, bool isSymlink = false) {
   return false;
 }
 
-static std::string findLibrary(Context &ctx, StringRef installName) {
-  auto filename = sys::path::filename(installName);
-  bool isFramework = sys::path::parent_path(installName)
-                         .endswith((filename + ".framework").str());
-
-  if (isFramework) {
-    for (const auto &path : ctx.frameworkSearchPaths) {
-      SmallString<PATH_MAX> fullPath(path);
-      sys::path::append(fullPath, filename + StringRef(".framework"), filename);
-
-      SmallString<PATH_MAX> tbdPath = fullPath;
-      TAPI_INTERNAL::replace_extension(tbdPath, ".tbd");
-      if (ctx.fm.exists(tbdPath))
-        return tbdPath.str();
-
-      if (ctx.fm.exists(fullPath))
-        return fullPath.str();
-    }
-  } else {
-    for (const auto &path : ctx.librarySearchPaths) {
-      SmallString<PATH_MAX> fullPath(path);
-      sys::path::append(fullPath, filename);
-
-      SmallString<PATH_MAX> tbdPath = fullPath;
-      TAPI_INTERNAL::replace_extension(tbdPath, ".tbd");
-
-      if (ctx.fm.exists(tbdPath))
-        return tbdPath.str();
-
-      if (ctx.fm.exists(fullPath))
-        return fullPath.str();
-    }
-  }
-
-  for (const auto &path : ctx.searchPaths) {
-    SmallString<PATH_MAX> fullPath(path);
-    sys::path::append(fullPath, installName);
-
-    SmallString<PATH_MAX> tbdPath = fullPath;
-    TAPI_INTERNAL::replace_extension(tbdPath, ".tbd");
-
-    if (ctx.fm.exists(tbdPath))
-      return tbdPath.str();
-
-    if (ctx.fm.exists(fullPath))
-      return fullPath.str();
-  }
-
-  return std::string();
-}
-
-
 static bool inlineFrameworks(Context &ctx, InterfaceFile *dylib) {
-  std::vector<std::string> toDelete;
+  PathSeq toDelete;
   std::vector<std::pair<std::string, ArchitectureSet>> toAdd;
   auto &reexports = dylib->reexportedLibraries();
   for (auto &lib : reexports) {
     if (isPublicLocation(lib.getInstallName()))
       continue;
 
-    auto path = findLibrary(ctx, lib.getInstallName());
+    if (lib.getInstallName().startswith("@"))
+      continue;
+
+    auto path =
+        findLibrary(lib.getInstallName(), ctx.fm, ctx.frameworkSearchPaths,
+                    ctx.librarySearchPaths, ctx.searchPaths);
     if (path.empty()) {
       ctx.diag.report(diag::err_cannot_find_reexport) << lib.getInstallName();
       return false;
@@ -181,81 +134,92 @@ static bool inlineFrameworks(Context &ctx, InterfaceFile *dylib) {
     auto file = ctx.registry.readFile(std::move(bufferOrError.get()),
                                       ReadFlags::Symbols);
     if (!file) {
-      ctx.diag.report(diag::err_cannot_read_file) << path
-                                                  << toString(file.takeError());
+      ctx.diag.report(diag::err_cannot_read_file)
+          << path << toString(file.takeError());
       return false;
     }
 
-    std::unique_ptr<InterfaceFile> interface;
+    std::shared_ptr<InterfaceFile> reexportedDylib;
     auto *file2 = file.get().release();
     if (auto *extended = dyn_cast<ExtendedInterfaceFile>(file2))
-      interface = make_unique<InterfaceFile>(std::move(*extended));
+      reexportedDylib = make_unique<InterfaceFile>(std::move(*extended));
     else
-      interface = std::unique_ptr<InterfaceFile>(cast<InterfaceFile>(file2));
+      reexportedDylib =
+          std::unique_ptr<InterfaceFile>(cast<InterfaceFile>(file2));
 
-    auto *reexportedDylib = interface.get();
-
-    if (!inlineFrameworks(ctx, reexportedDylib))
+    if (!inlineFrameworks(ctx, reexportedDylib.get()))
       return false;
 
-    if (dylib->getPlatform() != reexportedDylib->getPlatform()) {
+    if ((dylib->getPlatform() != reexportedDylib->getPlatform())) {
       ctx.diag.report(diag::err_property_mismatch)
           << "platform" << dylib->getPath() << reexportedDylib->getPath();
       return false;
     }
 
-    if (!reexportedDylib->isTwoLevelNamespace()) {
-      ctx.diag.report(diag::err_property_mismatch)
-          << "twolevel namespace" << dylib->getPath()
-          << reexportedDylib->getPath();
-      return false;
-    }
-
-    if (dylib->getSwiftABIVersion() != reexportedDylib->getSwiftABIVersion()) {
-      ctx.diag.report(diag::err_property_mismatch)
-          << "Swift ABI version" << dylib->getPath()
-          << reexportedDylib->getPath();
-      return false;
-    }
-
-    std::map<Architecture, Architecture> overrideMap;
-    for (auto arch : lib.getArchitectures()) {
-      if (reexportedDylib->getArchitectures().has(arch))
-        continue;
-
-      if (reexportedDylib->getArchitectures().hasABICompatibleSlice(arch)) {
-        auto compArch =
-            reexportedDylib->getArchitectures().getABICompatibleSlice(arch);
-        overrideMap[compArch] = arch;
-
-        continue;
+    if (ctx.fileType != FileType::TBD_V3) {
+      if (dylib->getSwiftABIVersion() !=
+          reexportedDylib->getSwiftABIVersion()) {
+        ctx.diag.report(diag::err_property_mismatch)
+            << "Swift ABI version" << dylib->getPath()
+            << reexportedDylib->getPath();
+        return false;
       }
 
-      ctx.diag.report(diag::err_not_all_architectures)
-          << reexportedDylib->getPath();
-      return false;
-    }
-
-    for (const auto &lib : reexportedDylib->reexportedLibraries()) {
-      auto archs = lib.getArchitectures();
-      for (auto arch : lib.getArchitectures())
-        if (overrideMap.count(arch))
-          archs.set(overrideMap[arch]);
-      toAdd.emplace_back(lib.getInstallName(), archs);
-    }
-
-    for (const auto *symbol : reexportedDylib->exports()) {
-      ArchitectureSet newArchs;
-      for (auto arch : symbol->getArchitectures()) {
-        newArchs.set(arch);
-        if (overrideMap.count(arch))
-          newArchs.set(overrideMap[arch]);
+      if (!reexportedDylib->isTwoLevelNamespace()) {
+        ctx.diag.report(diag::err_property_mismatch)
+            << "twolevel namespace" << dylib->getPath()
+            << reexportedDylib->getPath();
+        return false;
       }
-      dylib->addSymbol(symbol->getKind(), symbol->getName(), newArchs,
-                       symbol->getFlags());
-    }
 
-    toDelete.emplace_back(lib.getInstallName());
+      std::map<Architecture, Architecture> overrideMap;
+      for (auto arch : lib.getArchitectures()) {
+        if (reexportedDylib->getArchitectures().has(arch))
+          continue;
+
+        if (reexportedDylib->getArchitectures().hasABICompatibleSlice(arch)) {
+          auto compArch =
+              reexportedDylib->getArchitectures().getABICompatibleSlice(arch);
+          overrideMap[compArch] = arch;
+
+          continue;
+        }
+
+        ctx.diag.report(diag::err_not_all_architectures)
+            << reexportedDylib->getPath();
+        return false;
+      }
+
+      for (const auto &lib : reexportedDylib->reexportedLibraries()) {
+        auto archs = lib.getArchitectures();
+        for (auto arch : lib.getArchitectures())
+          if (overrideMap.count(arch))
+            archs.set(overrideMap[arch]);
+        toAdd.emplace_back(lib.getInstallName(), archs);
+      }
+
+      for (const auto *symbol : reexportedDylib->exports()) {
+        ArchitectureSet newArchs;
+        for (auto arch : symbol->getArchitectures()) {
+          newArchs.set(arch);
+          if (overrideMap.count(arch))
+            newArchs.set(overrideMap[arch]);
+        }
+        dylib->addSymbol(symbol->getKind(), symbol->getName(), newArchs,
+                         symbol->getFlags());
+      }
+
+      toDelete.emplace_back(lib.getInstallName());
+    } else {
+      if (!reexportedDylib->convertTo(ctx.fileType)) {
+        ctx.diag.report(diag::err_cannot_convert_dylib)
+            << reexportedDylib->getPath();
+        return false;
+      }
+      // Clear InstallAPI flag.
+      reexportedDylib->setInstallAPI(false);
+      dylib->inlineFramework(reexportedDylib);
+    }
   }
 
   for (auto &name : toDelete)
@@ -275,15 +239,16 @@ static bool stubifyDynamicLibrary(Context &ctx) {
   }
   auto bufferOrErr = ctx.fm.getBufferForFile(inputFile);
   if (auto ec = bufferOrErr.getError()) {
-    ctx.diag.report(diag::err_cannot_read_file) << inputFile->getName()
-                                                << ec.message();
+    ctx.diag.report(diag::err_cannot_read_file)
+        << inputFile->getName() << ec.message();
     return false;
   }
 
   // Is the input file a dynamic library?
-  if (!ctx.registry.canRead(bufferOrErr.get()->getMemBufferRef(),
-                            FileType::MachO_DynamicLibrary |
-                            FileType::MachO_DynamicLibrary_Stub)) {
+  if (!ctx.registry.canRead(
+          bufferOrErr.get()->getMemBufferRef(),
+          FileType::MachO_DynamicLibrary | FileType::MachO_DynamicLibrary_Stub |
+              FileType::TBD_V1 | FileType::TBD_V2 | FileType::TBD_V3)) {
     ctx.diag.report(diag::err_not_a_dylib) << inputFile->getName();
     return false;
   }
@@ -291,8 +256,8 @@ static bool stubifyDynamicLibrary(Context &ctx) {
   auto file =
       ctx.registry.readFile(std::move(bufferOrErr.get()), ReadFlags::Symbols);
   if (!file) {
-    ctx.diag.report(diag::err_cannot_read_file) << ctx.inputPath
-                                                << toString(file.takeError());
+    ctx.diag.report(diag::err_cannot_read_file)
+        << ctx.inputPath << toString(file.takeError());
     return false;
   }
 
@@ -304,14 +269,14 @@ static bool stubifyDynamicLibrary(Context &ctx) {
     interface = std::unique_ptr<InterfaceFile>(cast<InterfaceFile>(file2));
 
   auto *dylib = interface.get();
+  if (!dylib->convertTo(ctx.fileType)) {
+    ctx.diag.report(diag::err_cannot_convert_dylib) << dylib->getPath();
+    return false;
+  }
+
   if (ctx.inlinePrivateFrameworks) {
     if (!inlineFrameworks(ctx, dylib))
       return false;
-  }
-
-  if (!dylib->convertTo(FileType::TBD_V2, ctx.outputPath)) {
-    ctx.diag.report(diag::err_cannot_convert_dylib) << dylib->getPath();
-    return false;
   }
 
   if (!ctx.recordUUIDs)
@@ -319,9 +284,9 @@ static bool stubifyDynamicLibrary(Context &ctx) {
 
   dylib->setInstallAPI(ctx.setInstallAPIFlag);
 
-  if (auto result = ctx.registry.writeFile(dylib)) {
-    ctx.diag.report(diag::err_cannot_write_file) << dylib->getPath()
-                                                 << toString(std::move(result));
+  if (auto result = ctx.registry.writeFile(dylib, ctx.outputPath)) {
+    ctx.diag.report(diag::err_cannot_write_file)
+        << ctx.outputPath << toString(std::move(result));
     return false;
   }
 
@@ -352,6 +317,11 @@ static bool stubifyDirectory(Context &ctx) {
   std::error_code ec;
   for (sys::fs::recursive_directory_iterator i(ctx.inputPath, ec), ie; i != ie;
        i.increment(ec)) {
+
+    if (ec == std::errc::no_such_file_or_directory) {
+      ctx.diag.report(diag::err) << i->path() << ec.message();
+      continue;
+    }
 
     if (ec) {
       ctx.diag.report(diag::err) << i->path() << ec.message();
@@ -470,7 +440,11 @@ static bool stubifyDirectory(Context &ctx) {
     }
 
     // Check for dynamic libs and text-based stub files.
-    if (!ctx.registry.canRead(bufferOrErr.get()->getMemBufferRef()))
+    if (!ctx.registry.canRead(bufferOrErr.get()->getMemBufferRef(),
+                              FileType::MachO_DynamicLibrary |
+                                  FileType::MachO_DynamicLibrary_Stub |
+                                  FileType::TBD_V1 | FileType::TBD_V2 |
+                                  FileType::TBD_V3))
       continue;
 
     auto file2 =
@@ -518,15 +492,14 @@ static bool stubifyDirectory(Context &ctx) {
     SmallString<PATH_MAX> output = input;
     TAPI_INTERNAL::replace_extension(output, ".tbd");
 
+    if (!dylib->convertTo(ctx.fileType)) {
+      ctx.diag.report(diag::err_cannot_convert_dylib) << dylib->getPath();
+      return false;
+    }
 
     if (ctx.inlinePrivateFrameworks) {
       if (!inlineFrameworks(ctx, dylib.get()))
         return false;
-    }
-
-    if (!dylib->convertTo(FileType::TBD_V2, output)) {
-      ctx.diag.report(diag::err_cannot_convert_dylib) << dylib->getPath();
-      return false;
     }
 
     if (!ctx.recordUUIDs)
@@ -534,10 +507,10 @@ static bool stubifyDirectory(Context &ctx) {
 
     dylib->setInstallAPI(ctx.setInstallAPIFlag);
 
-    auto result = ctx.registry.writeFile(dylib.get());
+    auto result = ctx.registry.writeFile(dylib.get(), output.str());
     if (result) {
       ctx.diag.report(diag::err_cannot_write_file)
-          << dylib->getPath() << toString(std::move(result));
+          << output << toString(std::move(result));
       return false;
     }
 
@@ -609,7 +582,6 @@ static bool stubifyDirectory(Context &ctx) {
   return true;
 }
 
-
 /// \brief Generate text-based stub files from dynamic libraries.
 bool Driver::Stub::run(DiagnosticsEngine &diag, Options &opts) {
   if (opts.driverOptions.inputs.empty()) {
@@ -632,6 +604,7 @@ bool Driver::Stub::run(DiagnosticsEngine &diag, Options &opts) {
                                   opts.frontendOptions.frameworkPaths.begin(),
                                   opts.frontendOptions.frameworkPaths.end());
   ctx.librarySearchPaths = opts.frontendOptions.libraryPaths;
+  ctx.fileType = opts.tapiOptions.fileType;
 
   // Only expect one input.
   SmallString<PATH_MAX> input;
@@ -686,7 +659,6 @@ bool Driver::Stub::run(DiagnosticsEngine &diag, Options &opts) {
 
   if (!ctx.sysroot.empty())
     ctx.searchPaths.emplace_back(ctx.sysroot);
-
 
   if (isFile)
     return stubifyDynamicLibrary(ctx);

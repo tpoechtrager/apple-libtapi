@@ -161,6 +161,7 @@ class DFGImpl : public PPCallbacks {
   bool AddMissingHeaderDeps;
   bool SeenMissingHeader;
   bool IncludeModuleFiles;
+  bool SkipUnusedModuleMaps;
   DependencyOutputFormat OutputFormat;
 
 private:
@@ -176,6 +177,7 @@ public:
       AddMissingHeaderDeps(Opts.AddMissingHeaderDeps),
       SeenMissingHeader(false),
       IncludeModuleFiles(Opts.IncludeModuleFiles),
+      SkipUnusedModuleMaps(Opts.SkipUnusedModuleMaps),
       OutputFormat(Opts.OutputFormat) {
     for (const auto &ExtraDep : Opts.ExtraDeps) {
       AddFilename(ExtraDep);
@@ -185,6 +187,10 @@ public:
   void FileChanged(SourceLocation Loc, FileChangeReason Reason,
                    SrcMgr::CharacteristicKind FileType,
                    FileID PrevFID) override;
+
+  void FileSkipped(const FileEntry &SkippedFile, const Token &FilenameTok,
+                   SrcMgr::CharacteristicKind FileType) override;
+
   void InclusionDirective(SourceLocation HashLoc, const Token &IncludeTok,
                           StringRef FileName, bool IsAngled,
                           CharSourceRange FilenameRange, const FileEntry *File,
@@ -198,6 +204,7 @@ public:
   void AddFilename(StringRef Filename);
   bool includeSystemHeaders() const { return IncludeSystemHeaders; }
   bool includeModuleFiles() const { return IncludeModuleFiles; }
+  bool skipUnusedModuleMaps() const { return SkipUnusedModuleMaps; }
 };
 
 class DFGMMCallback : public ModuleMapCallbacks {
@@ -206,7 +213,15 @@ public:
   DFGMMCallback(DFGImpl &Parent) : Parent(Parent) {}
   void moduleMapFileRead(SourceLocation Loc, const FileEntry &Entry,
                          bool IsSystem) override {
+    if (Parent.skipUnusedModuleMaps())
+      return;
     if (!IsSystem || Parent.includeSystemHeaders())
+      Parent.AddFilename(Entry.getName());
+  }
+  void moduleMapFoundForModule(const FileEntry &Entry, const Module *M,
+                               bool IsSystem) override {
+    if (Parent.skipUnusedModuleMaps() &&
+        (!IsSystem || Parent.includeSystemHeaders()))
       Parent.AddFilename(Entry.getName());
   }
 };
@@ -285,6 +300,16 @@ void DFGImpl::FileChanged(SourceLocation Loc,
   if (!FE) return;
 
   StringRef Filename = FE->getName();
+  if (!FileMatchesDepCriteria(Filename.data(), FileType))
+    return;
+
+  AddFilename(llvm::sys::path::remove_leading_dotslash(Filename));
+}
+
+void DFGImpl::FileSkipped(const FileEntry &SkippedFile,
+                          const Token &FilenameTok,
+                          SrcMgr::CharacteristicKind FileType) {
+  StringRef Filename = SkippedFile.getName();
   if (!FileMatchesDepCriteria(Filename.data(), FileType))
     return;
 

@@ -128,21 +128,24 @@ class FrontendInputFile {
   /// \brief The file name, or "-" to read from standard input.
   std::string File;
 
-  llvm::MemoryBuffer *Buffer;
+  /// The input, if it comes from a buffer rather than a file. This object
+  /// does not own the buffer, and the caller is responsible for ensuring
+  /// that it outlives any users.
+  llvm::MemoryBuffer *Buffer = nullptr;
 
   /// \brief The kind of input, e.g., C source, AST file, LLVM IR.
   InputKind Kind;
 
   /// \brief Whether we're dealing with a 'system' input (vs. a 'user' input).
-  bool IsSystem;
+  bool IsSystem = false;
 
 public:
-  FrontendInputFile() : Buffer(nullptr), Kind(), IsSystem(false) { }
+  FrontendInputFile() { }
   FrontendInputFile(StringRef File, InputKind Kind, bool IsSystem = false)
-    : File(File.str()), Buffer(nullptr), Kind(Kind), IsSystem(IsSystem) { }
-  FrontendInputFile(llvm::MemoryBuffer *buffer, InputKind Kind,
+    : File(File.str()), Kind(Kind), IsSystem(IsSystem) { }
+  FrontendInputFile(llvm::MemoryBuffer *Buffer, InputKind Kind,
                     bool IsSystem = false)
-    : Buffer(buffer), Kind(Kind), IsSystem(IsSystem) { }
+    : Buffer(Buffer), Kind(Kind), IsSystem(IsSystem) { }
 
   InputKind getKind() const { return Kind; }
   bool isSystem() const { return IsSystem; }
@@ -256,6 +259,10 @@ public:
   std::string MTMigrateDir;
   std::string ARCMTMigrateReportOut;
 
+  std::string IndexStorePath;
+  unsigned IndexIgnoreSystemSymbols : 1;
+  unsigned IndexRecordCodegenName : 1;
+
   /// The input files and their types.
   std::vector<FrontendInputFile> Inputs;
 
@@ -333,8 +340,9 @@ public:
     SkipFunctionBodies(false), UseGlobalModuleIndex(true),
     GenerateGlobalModuleIndex(true), ASTDumpDecls(false), ASTDumpLookups(false),
     BuildingImplicitModule(false), ModulesEmbedAllFiles(false),
-    IncludeTimestamps(true), ARCMTAction(ARCMT_None),
-    ObjCMTAction(ObjCMT_None), ProgramAction(frontend::ParseSyntaxOnly)
+    IncludeTimestamps(true), ARCMTAction(ARCMT_None), ObjCMTAction(ObjCMT_None),
+    IndexIgnoreSystemSymbols(false), IndexRecordCodegenName(false),
+    ProgramAction(frontend::ParseSyntaxOnly)
   {}
 
   /// getInputKindForExtension - Return the appropriate input kind for a file

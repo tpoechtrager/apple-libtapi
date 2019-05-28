@@ -56,8 +56,9 @@ InterfaceFileManager::readFile(const std::string &path) {
   return interface;
 }
 
-Error InterfaceFileManager::writeFile(const InterfaceFileBase *file) const {
-  return _registry.writeFile(file);
+Error InterfaceFileManager::writeFile(const InterfaceFileBase *file,
+                                      const std::string &path) const {
+  return _registry.writeFile(file, path);
 }
 
 TAPI_NAMESPACE_INTERNAL_END

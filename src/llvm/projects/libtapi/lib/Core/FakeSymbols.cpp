@@ -37,12 +37,12 @@ WindowsResource::createWindowsResource(MemoryBufferRef Source) {
   llvm_unreachable("not supported");
 }
 
-ErrorOr<std::unique_ptr<COFFObjectFile>>
+Expected<std::unique_ptr<COFFObjectFile>>
 ObjectFile::createCOFFObjectFile(MemoryBufferRef Object) {
   llvm_unreachable("not supported");
 }
 
-ErrorOr<std::unique_ptr<ObjectFile>>
+Expected<std::unique_ptr<ObjectFile>>
 ObjectFile::createELFObjectFile(MemoryBufferRef Obj) {
   llvm_unreachable("not supported");
 }
@@ -52,7 +52,7 @@ ObjectFile::createWasmObjectFile(MemoryBufferRef Object) {
   llvm_unreachable("not supported");
 }
 
-ErrorOr<MemoryBufferRef>
+Expected<MemoryBufferRef>
 IRObjectFile::findBitcodeInObject(const ObjectFile &Obj) {
   llvm_unreachable("not supported");
 }

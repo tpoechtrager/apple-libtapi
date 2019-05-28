@@ -12,21 +12,31 @@
 ///
 //===----------------------------------------------------------------------===//
 
-#if 0
-
 #include "tapi/Core/MachODylibReader.h"
 #include "tapi/Core/ExtendedInterfaceFile.h"
 #include "tapi/Core/LLVM.h"
 #include "tapi/Core/XPI.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/BinaryFormat/Magic.h"
-#include "llvm/ObjCMetadata/ObjCMachOBinary.h"
 #include "llvm/Object/MachO.h"
 #include "llvm/Object/MachOUniversal.h"
 #include <tuple>
 
 using namespace llvm;
 using namespace llvm::object;
+
+// Define missing platform enums.
+namespace llvm {
+namespace MachO {
+// clang-format off
+  enum MissingPlatformType {
+    PLATFORM_IOSSIMULATOR     = 7,
+    PLATFORM_TVOSSIMULATOR    = 8,
+    PLATFORM_WATCHOSSIMULATOR = 9,
+  };
+// clang-format on
+} // end namespace MachO.
+} // end namespace llvm.
 
 TAPI_NAMESPACE_INTERNAL_BEGIN
 
@@ -36,7 +46,8 @@ MachODylibReader::getFileType(file_magic magic,
   switch (magic) {
   default:
     return FileType::Invalid;
-  case file_magic::macho_bundle: // Assume dylib for now.
+  case file_magic::macho_bundle:
+    return FileType::MachO_Bundle;
   case file_magic::macho_dynamically_linked_shared_lib:
     return FileType::MachO_DynamicLibrary;
   case file_magic::macho_dynamically_linked_shared_lib_stub:
@@ -68,7 +79,12 @@ MachODylibReader::getFileType(file_magic magic,
     switch (obj.getHeader().filetype) {
     default:
       continue;
-    case MachO::MH_BUNDLE: // Assume dylib for now.
+    case MachO::MH_BUNDLE:
+      if (fileType == FileType::Invalid)
+        fileType = FileType::MachO_Bundle;
+      else if (fileType != FileType::MachO_Bundle)
+        return FileType::Invalid;
+      break;
     case MachO::MH_DYLIB:
       if (fileType == FileType::Invalid)
         fileType = FileType::MachO_DynamicLibrary;
@@ -90,14 +106,17 @@ MachODylibReader::getFileType(file_magic magic,
 bool MachODylibReader::canRead(file_magic magic, MemoryBufferRef bufferRef,
                                FileType types) const {
   if (!(types & FileType::MachO_DynamicLibrary) &&
-      !(types & FileType::MachO_DynamicLibrary_Stub))
+      !(types & FileType::MachO_DynamicLibrary_Stub) &&
+      !(types & FileType::MachO_Bundle))
     return false;
+
   auto fileType = getFileType(magic, bufferRef);
   if (!fileType) {
     consumeError(fileType.takeError());
     return false;
   }
-  return fileType.get() != FileType::Invalid;
+
+  return types & fileType.get();
 }
 
 static std::tuple<StringRef, XPIKind> parseSymbol(StringRef symbolName) {
@@ -134,9 +153,21 @@ static Error readMachOHeaderData(MachOObjectFile *object,
         "unknown/unsupported architecture",
         std::make_error_code(std::errc::not_supported));
   file->setArch(arch);
-  auto fileType = H.filetype == MachO::MH_DYLIB
-                      ? FileType::MachO_DynamicLibrary
-                      : FileType::MachO_DynamicLibrary_Stub;
+  FileType fileType = FileType::Invalid;
+  switch (H.filetype) {
+  default:
+    llvm_unreachable("unsupported binary type");
+  case MachO::MH_DYLIB:
+    fileType = FileType::MachO_DynamicLibrary;
+    break;
+  case MachO::MH_DYLIB_STUB:
+    fileType = FileType::MachO_DynamicLibrary_Stub;
+    break;
+  case MachO::MH_BUNDLE:
+    fileType = FileType::MachO_Bundle;
+    break;
+  }
+
   file->setFileType(fileType);
 
   if (H.flags & MachO::MH_TWOLEVEL)
@@ -175,16 +206,25 @@ static Error readMachOHeaderData(MachOObjectFile *object,
       break;
     }
     case MachO::LC_VERSION_MIN_MACOSX:
-      file->setPlatform(Platform::OSX);
+      file->setPlatform(Platform::macOS);
       break;
     case MachO::LC_VERSION_MIN_IPHONEOS:
-      file->setPlatform(Platform::iOS);
+      if (arch == Architecture::i386 || arch == Architecture::x86_64)
+        file->setPlatform(Platform::iOSSimulator);
+      else
+        file->setPlatform(Platform::iOS);
       break;
     case MachO::LC_VERSION_MIN_WATCHOS:
-      file->setPlatform(Platform::watchOS);
+      if (arch == Architecture::i386 || arch == Architecture::x86_64)
+        file->setPlatform(Platform::watchOSSimulator);
+      else
+        file->setPlatform(Platform::watchOS);
       break;
     case MachO::LC_VERSION_MIN_TVOS:
-      file->setPlatform(Platform::tvOS);
+      if (arch == Architecture::i386 || arch == Architecture::x86_64)
+        file->setPlatform(Platform::tvOSSimulator);
+      else
+        file->setPlatform(Platform::tvOS);
       break;
     case MachO::LC_BUILD_VERSION: {
       auto BVC = object->getBuildVersionLoadCommand(LCI);
@@ -194,7 +234,7 @@ static Error readMachOHeaderData(MachOObjectFile *object,
             "unknown/unsupported platform",
             std::make_error_code(std::errc::not_supported));
       case MachO::PLATFORM_MACOS:
-        file->setPlatform(Platform::OSX);
+        file->setPlatform(Platform::macOS);
         break;
       case MachO::PLATFORM_IOS:
         file->setPlatform(Platform::iOS);
@@ -207,6 +247,15 @@ static Error readMachOHeaderData(MachOObjectFile *object,
         break;
       case MachO::PLATFORM_BRIDGEOS:
         file->setPlatform(Platform::bridgeOS);
+        break;
+      case MachO::PLATFORM_IOSSIMULATOR:
+        file->setPlatform(Platform::iOSSimulator);
+        break;
+      case MachO::PLATFORM_TVOSSIMULATOR:
+        file->setPlatform(Platform::tvOSSimulator);
+        break;
+      case MachO::PLATFORM_WATCHOSSIMULATOR:
+        file->setPlatform(Platform::watchOSSimulator);
         break;
       }
       break;
@@ -306,282 +355,6 @@ static Error readUndefinedSymbols(MachOObjectFile *object,
   return Error::success();
 }
 
-static Error readObjectiveCMetadata(MachOObjectFile *object,
-                                    ExtendedInterfaceFile *file) {
-  auto H = object->getHeader();
-  auto arch = getArchType(H.cputype, H.cpusubtype);
-
-  auto error = Error::success();
-  MachOMetadata metadata(object, error);
-  if (error)
-    return std::move(error);
-
-  ///
-  /// Classes
-  ///
-  auto classes = metadata.classes();
-  if (!classes)
-    return classes.takeError();
-
-  for (const auto &classRef : *classes) {
-    auto objcClassMeta = classRef.getObjCClass();
-    if (!objcClassMeta)
-      return objcClassMeta.takeError();
-
-    auto superClassName = objcClassMeta->getSuperClassName();
-    if (!superClassName)
-      return superClassName.takeError();
-
-    auto className = objcClassMeta->getName();
-    if (!className)
-      return className.takeError();
-
-    ObjCClass *objcSuperClass = nullptr;
-    if (!superClassName->empty())
-      objcSuperClass =
-          file->addObjCClass(superClassName->str(), arch, XPIAccess::Unknown);
-
-    auto *objcClass = file->addObjCClass(className->str(), arch,
-                                         XPIAccess::Unknown, objcSuperClass);
-
-    auto access = objcClass->getAccess();
-    auto properties = objcClassMeta->properties();
-    if (!properties)
-      return properties.takeError();
-
-    for (const auto &property : *properties) {
-      auto name = property.getName();
-      if (!name)
-        return name.takeError();
-
-      auto isDynamic = property.isDynamic();
-      if (!isDynamic)
-        return isDynamic.takeError();
-
-      auto setter = property.getSetter();
-      if (!setter)
-        return setter.takeError();
-      if (!setter->empty())
-        file->addObjCSelector(objcClass, *setter, arch,
-                              /*isInstanceMethod=*/true, *isDynamic, access);
-
-      auto getter = property.getGetter();
-      if (!getter)
-        return getter.takeError();
-      file->addObjCSelector(objcClass, *getter, arch, /*isInstanceMethod=*/true,
-                            *isDynamic, access);
-    }
-
-    auto classMethods = objcClassMeta->classMethods();
-    if (!classMethods)
-      return classMethods.takeError();
-
-    for (const auto &method : *classMethods) {
-      auto name = method.getName();
-      if (!name)
-        return name.takeError();
-
-      file->addObjCSelector(objcClass, *name, arch, /*isInstanceMethod=*/false,
-                            /*isDynamic=*/false, access);
-    }
-
-    auto instanceMethods = objcClassMeta->instanceMethods();
-    if (!instanceMethods)
-      return instanceMethods.takeError();
-
-    for (const auto &method : *instanceMethods) {
-      auto name = method.getName();
-      if (!name)
-        return name.takeError();
-
-      file->addObjCSelector(objcClass, *name, arch, /*isInstanceMethod=*/true,
-                            /*isDynamic=*/false, access);
-    }
-  }
-
-  ///
-  /// Categories
-  ///
-  auto categories = metadata.categories();
-  if (!categories)
-    return categories.takeError();
-
-  for (const auto &categoryRef : *categories) {
-    auto category = categoryRef.getObjCCategory();
-    if (!category)
-      return category.takeError();
-
-    auto categoryName = category->getName();
-    if (!categoryName)
-      return categoryName.takeError();
-
-    auto baseClassName = category->getBaseClassName();
-    if (!baseClassName)
-      return baseClassName.takeError();
-
-    auto *objcBaseClass =
-        file->addObjCClass(baseClassName->str(), arch, XPIAccess::Unknown);
-    auto access = objcBaseClass->getAccess();
-    auto *objcCategory =
-        file->addObjCCategory(objcBaseClass, *categoryName, arch, access);
-
-    auto properties = category->properties();
-    if (!properties)
-      return properties.takeError();
-
-    for (const auto &property : *properties) {
-      auto name = property.getName();
-      if (!name)
-        return name.takeError();
-
-      auto isDynamic = property.isDynamic();
-      if (!isDynamic)
-        return isDynamic.takeError();
-
-      auto setter = property.getSetter();
-      if (!setter)
-        return setter.takeError();
-      if (!setter->empty())
-        file->addObjCSelector(objcCategory, *setter, arch,
-                              /*isInstanceMethod=*/true, *isDynamic, access);
-
-      auto getter = property.getGetter();
-      if (!getter)
-        return getter.takeError();
-      file->addObjCSelector(objcCategory, *getter, arch,
-                            /*isInstanceMethod=*/true, *isDynamic, access);
-    }
-
-    auto classMethods = category->classMethods();
-    if (!classMethods)
-      return classMethods.takeError();
-
-    for (const auto &method : *classMethods) {
-      auto name = method.getName();
-      if (!name)
-        return name.takeError();
-
-      file->addObjCSelector(objcCategory, *name, arch,
-                            /*isInstanceMethod=*/false, /*isDynamic=*/false,
-                            access);
-    }
-
-    auto instanceMethods = category->instanceMethods();
-    if (!instanceMethods)
-      return instanceMethods.takeError();
-
-    for (const auto &method : *instanceMethods) {
-      auto name = method.getName();
-      if (!name)
-        return name.takeError();
-
-      file->addObjCSelector(objcCategory, *name, arch,
-                            /*isInstanceMethod=*/true, /*isDynamic=*/false,
-                            access);
-    }
-  }
-
-  ///
-  /// Protocols
-  ///
-  auto protocols = metadata.protocols();
-  if (!protocols)
-    return protocols.takeError();
-
-  for (const auto &protocolRef : *protocols) {
-    auto protocol = protocolRef.getObjCProtocol();
-    if (!protocol)
-      return protocol.takeError();
-
-    auto protocolName = protocol->getName();
-    if (!protocolName)
-      return protocolName.takeError();
-
-    auto *objcProtocol = file->addObjCProtocol(*protocolName, arch);
-
-    auto properties = protocol->properties();
-    if (!properties)
-      return properties.takeError();
-
-    for (const auto &property : *properties) {
-      auto name = property.getName();
-      if (!name)
-        return name.takeError();
-
-      auto isDynamic = property.isDynamic();
-      if (!isDynamic)
-        return isDynamic.takeError();
-
-      auto setter = property.getSetter();
-      if (!setter)
-        return setter.takeError();
-      if (!setter->empty())
-        file->addObjCSelector(objcProtocol, *setter, arch,
-                              /*isInstanceMethod=*/true, *isDynamic);
-
-      auto getter = property.getGetter();
-      if (!getter)
-        return getter.takeError();
-      file->addObjCSelector(objcProtocol, *getter, arch,
-                            /*isInstanceMethod=*/true, *isDynamic);
-    }
-
-    auto classMethods = protocol->classMethods();
-    if (!classMethods)
-      return classMethods.takeError();
-
-    for (const auto &method : *classMethods) {
-      auto name = method.getName();
-      if (!name)
-        return name.takeError();
-
-      file->addObjCSelector(objcProtocol, *name, arch,
-                            /*isInstanceMethod=*/false, /*isDynamic=*/false);
-    }
-
-    classMethods = protocol->optionalClassMethods();
-    if (!classMethods)
-      return classMethods.takeError();
-
-    for (const auto &method : *classMethods) {
-      auto name = method.getName();
-      if (!name)
-        return name.takeError();
-
-      file->addObjCSelector(objcProtocol, *name, arch,
-                            /*isInstanceMethod=*/false, /*isDynamic=*/false);
-    }
-
-    auto instanceMethods = protocol->instanceMethods();
-    if (!instanceMethods)
-      return instanceMethods.takeError();
-
-    for (const auto &method : *instanceMethods) {
-      auto name = method.getName();
-      if (!name)
-        return name.takeError();
-
-      file->addObjCSelector(objcProtocol, *name, arch,
-                            /*isInstanceMethod=*/true, /*isDynamic=*/false);
-    }
-
-    instanceMethods = protocol->optionalInstanceMethods();
-    if (!instanceMethods)
-      return instanceMethods.takeError();
-
-    for (const auto &method : *instanceMethods) {
-      auto name = method.getName();
-      if (!name)
-        return name.takeError();
-
-      file->addObjCSelector(objcProtocol, *name, arch,
-                            /*isInstanceMethod=*/true, /*isDynamic=*/false);
-    }
-  }
-
-  return Error::success();
-}
-
 static Error load(MachOObjectFile *object, ExtendedInterfaceFile *file,
                   ReadFlags readFlags) {
   if (readFlags >= ReadFlags::Header) {
@@ -592,12 +365,6 @@ static Error load(MachOObjectFile *object, ExtendedInterfaceFile *file,
 
   if (readFlags >= ReadFlags::Symbols) {
     auto error = readExportedSymbols(object, file);
-    if (error)
-      return error;
-  }
-
-  if (readFlags >= ReadFlags::ObjCMetadata) {
-    auto error = readObjectiveCMetadata(object, file);
     if (error)
       return error;
   }
@@ -650,6 +417,10 @@ MachODylibReader::readFile(std::unique_ptr<MemoryBuffer> memBuffer,
     if (!arches.has(arch))
       continue;
 
+    // Skip unknown architectures.
+    if (arch == Architecture::unknown)
+      continue;
+
     foundArch = true;
     // This can fail if the object is an archive.
     auto objOrErr = OI->getAsObjectFile();
@@ -664,6 +435,7 @@ MachODylibReader::readFile(std::unique_ptr<MemoryBuffer> memBuffer,
     switch (object.getHeader().filetype) {
     default:
       break;
+    case MachO::MH_BUNDLE:
     case MachO::MH_DYLIB:
     case MachO::MH_DYLIB_STUB:
       auto error = load(&object, file.get(), readFlags);
@@ -682,5 +454,3 @@ MachODylibReader::readFile(std::unique_ptr<MemoryBuffer> memBuffer,
 }
 
 TAPI_NAMESPACE_INTERNAL_END
-
-#endif

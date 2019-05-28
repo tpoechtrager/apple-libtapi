@@ -1,4 +1,4 @@
-//===-- ExprEngine.h - Path-Sensitive Expression-Level Dataflow ---*- C++ -*-=//
+//===- ExprEngine.h - Path-Sensitive Expression-Level Dataflow --*- C++ -*-===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -18,32 +18,68 @@
 
 #include "clang/AST/Expr.h"
 #include "clang/AST/Type.h"
+#include "clang/Analysis/CFG.h"
 #include "clang/Analysis/DomainSpecific/ObjCNoReturn.h"
+#include "clang/Analysis/ProgramPoint.h"
+#include "clang/Basic/LLVM.h"
 #include "clang/StaticAnalyzer/Core/BugReporter/BugReporter.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/AnalysisManager.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/CoreEngine.h"
+#include "clang/StaticAnalyzer/Core/PathSensitive/FunctionSummary.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/ProgramState.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/ProgramStateTrait.h"
+#include "clang/StaticAnalyzer/Core/PathSensitive/ProgramState_Fwd.h"
+#include "clang/StaticAnalyzer/Core/PathSensitive/SValBuilder.h"
+#include "clang/StaticAnalyzer/Core/PathSensitive/SVals.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/SubEngine.h"
+#include "clang/StaticAnalyzer/Core/PathSensitive/WorkList.h"
+#include "llvm/ADT/ArrayRef.h"
+#include <cassert>
+#include <utility>
 
 namespace clang {
 
 class AnalysisDeclContextManager;
+class AnalyzerOptions;
+class ASTContext;
+class ConstructionContext;
+class CXXBindTemporaryExpr;
 class CXXCatchStmt;
 class CXXConstructExpr;
 class CXXDeleteExpr;
 class CXXNewExpr;
-class CXXTemporaryObjectExpr;
 class CXXThisExpr;
+class Decl;
+class DeclStmt;
+class GCCAsmStmt;
+class LambdaExpr;
+class LocationContext;
 class MaterializeTemporaryExpr;
+class MSAsmStmt;
+class NamedDecl;
 class ObjCAtSynchronizedStmt;
 class ObjCForCollectionStmt;
+class ObjCIvarRefExpr;
+class ObjCMessageExpr;
+class ReturnStmt;
+class Stmt;
+
+namespace cross_tu {
+
+class CrossTranslationUnitContext;
+
+} // namespace cross_tu
   
 namespace ento {
 
-class AnalysisManager;
+class BasicValueFactory;
 class CallEvent;
-class CXXConstructorCall;
+class CheckerManager;
+class ConstraintManager;
+class CXXTempObjectRegion;
+class MemRegion;
+class RegionAndSymbolInvalidationTraits;
+class SymbolManager;
 
 class ExprEngine : public SubEngine {
 public:
@@ -51,11 +87,40 @@ public:
   enum InliningModes {
     /// Follow the default settings for inlining callees.
     Inline_Regular = 0,
+
     /// Do minimal inlining of callees.
     Inline_Minimal = 0x1
   };
 
+  /// Hints for figuring out of a call should be inlined during evalCall().
+  struct EvalCallOptions {
+    /// This call is a constructor or a destructor for which we do not currently
+    /// compute the this-region correctly.
+    bool IsCtorOrDtorWithImproperlyModeledTargetRegion = false;
+
+    /// This call is a constructor or a destructor for a single element within
+    /// an array, a part of array construction or destruction.
+    bool IsArrayCtorOrDtor = false;
+
+    /// This call is a constructor or a destructor of a temporary value.
+    bool IsTemporaryCtorOrDtor = false;
+
+    /// This call is a constructor for a temporary that is lifetime-extended
+    /// by binding a smaller object within it to a reference, for example
+    /// 'const int &x = C().x;'.
+    bool IsTemporaryLifetimeExtendedViaSubobject = false;
+
+    /// This call is a constructor for a temporary that is lifetime-extended
+    /// by binding it to a reference-type field within an aggregate,
+    /// for example 'A { const C &c; }; A a = { C() };'
+    bool IsTemporaryLifetimeExtendedViaAggregate = false;
+
+    EvalCallOptions() {}
+  };
+
 private:
+  cross_tu::CrossTranslationUnitContext &CTU;
+
   AnalysisManager &AMgr;
   
   AnalysisDeclContextManager &AnalysisDeclContexts;
@@ -63,19 +128,19 @@ private:
   CoreEngine Engine;
 
   /// G - the simulation graph.
-  ExplodedGraph& G;
+  ExplodedGraph &G;
 
   /// StateMgr - Object that manages the data for all created states.
   ProgramStateManager StateMgr;
 
   /// SymMgr - Object that manages the symbol information.
-  SymbolManager& SymMgr;
+  SymbolManager &SymMgr;
 
   /// svalBuilder - SValBuilder object that creates SVals from expressions.
   SValBuilder &svalBuilder;
 
-  unsigned int currStmtIdx;
-  const NodeBuilderContext *currBldrCtx;
+  unsigned int currStmtIdx = 0;
+  const NodeBuilderContext *currBldrCtx = nullptr;
   
   /// Helper object to determine if an Objective-C message expression
   /// implicitly never returns.
@@ -97,10 +162,9 @@ private:
   InliningModes HowToInline;
 
 public:
-  ExprEngine(AnalysisManager &mgr, bool gcEnabled,
-             SetOfConstDecls *VisitedCalleesIn,
-             FunctionSummariesTy *FS,
-             InliningModes HowToInlineIn);
+  ExprEngine(cross_tu::CrossTranslationUnitContext &CTU, AnalysisManager &mgr,
+             bool gcEnabled, SetOfConstDecls *VisitedCalleesIn,
+             FunctionSummariesTy *FS, InliningModes HowToInlineIn);
 
   ~ExprEngine() override;
 
@@ -130,7 +194,12 @@ public:
 
   SValBuilder &getSValBuilder() { return svalBuilder; }
 
-  BugReporter& getBugReporter() { return BR; }
+  BugReporter &getBugReporter() { return BR; }
+
+  cross_tu::CrossTranslationUnitContext *
+  getCrossTranslationUnitContext() override {
+    return &CTU;
+  }
 
   const NodeBuilderContext &getBuilderContext() {
     assert(currBldrCtx);
@@ -150,14 +219,14 @@ public:
 
   /// Visualize a trimmed ExplodedGraph that only contains paths to the given
   /// nodes.
-  void ViewGraph(ArrayRef<const ExplodedNode*> Nodes);
+  void ViewGraph(ArrayRef<const ExplodedNode *> Nodes);
 
   /// getInitialState - Return the initial state used for the root vertex
   ///  in the ExplodedGraph.
   ProgramStateRef getInitialState(const LocationContext *InitLoc) override;
 
-  ExplodedGraph& getGraph() { return G; }
-  const ExplodedGraph& getGraph() const { return G; }
+  ExplodedGraph &getGraph() { return G; }
+  const ExplodedGraph &getGraph() const { return G; }
 
   /// \brief Run the analyzer's garbage collection - remove dead symbols and
   /// bindings from the state.
@@ -194,7 +263,9 @@ public:
   void processCFGElement(const CFGElement E, ExplodedNode *Pred,
                          unsigned StmtIdx, NodeBuilderContext *Ctx) override;
 
-  void ProcessStmt(const CFGStmt S, ExplodedNode *Pred);
+  void ProcessStmt(const Stmt *S, ExplodedNode *Pred);
+
+  void ProcessLoopExit(const Stmt* S, ExplodedNode *Pred);
 
   void ProcessInitializer(const CFGInitializer I, ExplodedNode *Pred);
 
@@ -297,25 +368,26 @@ public:
                        const CallEvent *Call) override;
 
   /// printState - Called by ProgramStateManager to print checker-specific data.
-  void printState(raw_ostream &Out, ProgramStateRef State,
-                  const char *NL, const char *Sep) override;
+  void printState(raw_ostream &Out, ProgramStateRef State, const char *NL,
+                  const char *Sep,
+                  const LocationContext *LCtx = nullptr) override;
 
-  ProgramStateManager& getStateManager() override { return StateMgr; }
+  ProgramStateManager &getStateManager() override { return StateMgr; }
 
-  StoreManager& getStoreManager() { return StateMgr.getStoreManager(); }
+  StoreManager &getStoreManager() { return StateMgr.getStoreManager(); }
 
-  ConstraintManager& getConstraintManager() {
+  ConstraintManager &getConstraintManager() {
     return StateMgr.getConstraintManager();
   }
 
   // FIXME: Remove when we migrate over to just using SValBuilder.
-  BasicValueFactory& getBasicVals() {
+  BasicValueFactory &getBasicVals() {
     return StateMgr.getBasicVals();
   }
 
   // FIXME: Remove when we migrate over to just using ValueManager.
-  SymbolManager& getSymbolManager() { return SymMgr; }
-  const SymbolManager& getSymbolManager() const { return SymMgr; }
+  SymbolManager &getSymbolManager() { return SymMgr; }
+  const SymbolManager &getSymbolManager() const { return SymMgr; }
 
   // Functions for external checking of whether we have unfinished work
   bool wasBlocksExhausted() const { return Engine.wasBlocksExhausted(); }
@@ -330,9 +402,9 @@ public:
   void Visit(const Stmt *S, ExplodedNode *Pred, ExplodedNodeSet &Dst);
 
   /// VisitArraySubscriptExpr - Transfer function for array accesses.
-  void VisitLvalArraySubscriptExpr(const ArraySubscriptExpr *Ex,
-                                   ExplodedNode *Pred,
-                                   ExplodedNodeSet &Dst);
+  void VisitArraySubscriptExpr(const ArraySubscriptExpr *Ex,
+                               ExplodedNode *Pred,
+                               ExplodedNodeSet &Dst);
 
   /// VisitGCCAsmStmt - Transfer function logic for inline asm.
   void VisitGCCAsmStmt(const GCCAsmStmt *A, ExplodedNode *Pred,
@@ -361,7 +433,7 @@ public:
 
   /// VisitCast - Transfer function logic for all casts (implicit and explicit).
   void VisitCast(const CastExpr *CastE, const Expr *Ex, ExplodedNode *Pred,
-                ExplodedNodeSet &Dst);
+                 ExplodedNodeSet &Dst);
 
   /// VisitCompoundLiteralExpr - Transfer function logic for compound literals.
   void VisitCompoundLiteralExpr(const CompoundLiteralExpr *CL, 
@@ -388,9 +460,9 @@ public:
 
   /// VisitMemberExpr - Transfer function for member expressions.
   void VisitMemberExpr(const MemberExpr *M, ExplodedNode *Pred, 
-                           ExplodedNodeSet &Dst);
+                       ExplodedNodeSet &Dst);
 
-  /// VisitMemberExpr - Transfer function for builtin atomic expressions
+  /// VisitAtomicExpr - Transfer function for builtin atomic expressions
   void VisitAtomicExpr(const AtomicExpr *E, ExplodedNode *Pred,
                        ExplodedNodeSet &Dst);
 
@@ -420,7 +492,7 @@ public:
 
   /// VisitUnaryExprOrTypeTraitExpr - Transfer function for sizeof.
   void VisitUnaryExprOrTypeTraitExpr(const UnaryExprOrTypeTraitExpr *Ex,
-                              ExplodedNode *Pred, ExplodedNodeSet &Dst);
+                                     ExplodedNode *Pred, ExplodedNodeSet &Dst);
 
   /// VisitUnaryOperator - Transfer function logic for unary operators.
   void VisitUnaryOperator(const UnaryOperator* B, ExplodedNode *Pred, 
@@ -446,7 +518,8 @@ public:
 
   void VisitCXXDestructor(QualType ObjectType, const MemRegion *Dest,
                           const Stmt *S, bool IsBaseDtor,
-                          ExplodedNode *Pred, ExplodedNodeSet &Dst);
+                          ExplodedNode *Pred, ExplodedNodeSet &Dst,
+                          const EvalCallOptions &Options);
 
   void VisitCXXNewAllocatorCall(const CXXNewExpr *CNE,
                                 ExplodedNode *Pred,
@@ -469,7 +542,7 @@ public:
   void evalEagerlyAssumeBinOpBifurcation(ExplodedNodeSet &Dst, ExplodedNodeSet &Src, 
                          const Expr *Ex);
   
-  std::pair<const ProgramPointTag *, const ProgramPointTag*>
+  std::pair<const ProgramPointTag *, const ProgramPointTag *>
     geteagerlyAssumeBinOpBifurcationTags();
 
   SVal evalMinus(SVal X) {
@@ -497,7 +570,6 @@ public:
                          StmtNodeBuilder &Bldr);
 
 public:
-
   SVal evalBinOp(ProgramStateRef state, BinaryOperator::Opcode op,
                  NonLoc L, NonLoc R, QualType T) {
     return svalBuilder.evalBinOpNN(state, op, L, R, T);
@@ -537,6 +609,11 @@ protected:
                            const CallEvent *Call,
                            RegionAndSymbolInvalidationTraits &ITraits) override;
 
+  /// A simple wrapper when you only need to notify checkers of pointer-escape
+  /// of a single value.
+  ProgramStateRef escapeValue(ProgramStateRef State, SVal V,
+                              PointerEscapeKind K) const;
+
 public:
   // FIXME: 'tag' should be removed, and a LocationContext should be used
   // instead.
@@ -559,6 +636,12 @@ public:
                  ExplodedNode *Pred, ProgramStateRef St, SVal TargetLV, SVal Val,
                  const ProgramPointTag *tag = nullptr);
 
+  /// Return the CFG element corresponding to the worklist element
+  /// that is currently being processed by ExprEngine.
+  CFGElement getCurrentCFGElement() {
+    return (*currBldrCtx->getBlock())[currStmtIdx];
+  }
+
   /// \brief Create a new state in which the call return value is binded to the
   /// call origin expression.
   ProgramStateRef bindReturnValue(const CallEvent &Call,
@@ -572,7 +655,9 @@ public:
 
   /// \brief Default implementation of call evaluation.
   void defaultEvalCall(NodeBuilder &B, ExplodedNode *Pred,
-                       const CallEvent &Call);
+                       const CallEvent &Call,
+                       const EvalCallOptions &CallOpts = {});
+
 private:
   void evalLoadCommon(ExplodedNodeSet &Dst,
                       const Expr *NodeEx,  /* Eventually will be a CFGStmt */
@@ -596,9 +681,23 @@ private:
   void examineStackFrames(const Decl *D, const LocationContext *LCtx,
                           bool &IsRecursive, unsigned &StackDepth);
 
+  enum CallInlinePolicy {
+    CIP_Allowed,
+    CIP_DisallowedOnce,
+    CIP_DisallowedAlways
+  };
+
+  /// \brief See if a particular call should be inlined, by only looking
+  /// at the call event and the current state of analysis.
+  CallInlinePolicy mayInlineCallKind(const CallEvent &Call,
+                                     const ExplodedNode *Pred,
+                                     AnalyzerOptions &Opts,
+                                     const EvalCallOptions &CallOpts);
+
   /// Checks our policies and decides weither the given call should be inlined.
   bool shouldInlineCall(const CallEvent &Call, const Decl *D,
-                        const ExplodedNode *Pred);
+                        const ExplodedNode *Pred,
+                        const EvalCallOptions &CallOpts = {});
 
   bool inlineCall(const CallEvent &Call, const Decl *D, NodeBuilder &Bldr,
                   ExplodedNode *Pred, ProgramStateRef State);
@@ -632,6 +731,17 @@ private:
                                                 const Expr *InitWithAdjustments,
                                                 const Expr *Result = nullptr);
 
+  /// Returns a region representing the first element of a (possibly
+  /// multi-dimensional) array, for the purposes of element construction or
+  /// destruction.
+  ///
+  /// On return, \p Ty will be set to the base type of the array.
+  ///
+  /// If the type is not an array type at all, the original value is returned.
+  /// Otherwise the "IsArray" flag is set.
+  static SVal makeZeroElementRegion(ProgramStateRef State, SVal LValue,
+                                    QualType &Ty, bool &IsArray);
+
   /// For a DeclStmt or CXXInitCtorInitializer, walk backward in the current CFG
   /// block to find the constructor expression that directly constructed into
   /// the storage for this statement. Returns null if the constructor for this
@@ -639,20 +749,72 @@ private:
   /// constructing into an existing region.
   const CXXConstructExpr *findDirectConstructorForCurrentCFGElement();
 
-  /// For a CXXConstructExpr, walk forward in the current CFG block to find the
-  /// CFGElement for the DeclStmt or CXXInitCtorInitializer for which is
-  /// directly constructed by this constructor. Returns None if the current
-  /// constructor expression did not directly construct into an existing
-  /// region.
-  Optional<CFGElement> findElementDirectlyInitializedByCurrentConstructor();
-
   /// For a given constructor, look forward in the current CFG block to
   /// determine the region into which an object will be constructed by \p CE.
-  /// Returns either a field or local variable region if the object will be
-  /// directly constructed in an existing region or a temporary object region
-  /// if not.
+  /// When the lookahead fails, a temporary region is returned, and the
+  /// IsConstructorWithImproperlyModeledTargetRegion flag is set in \p CallOpts.
   const MemRegion *getRegionForConstructedObject(const CXXConstructExpr *CE,
-                                                 ExplodedNode *Pred);
+                                                 ExplodedNode *Pred,
+                                                 const ConstructionContext *CC,
+                                                 EvalCallOptions &CallOpts);
+
+  /// Store the region of a C++ temporary object corresponding to a
+  /// CXXBindTemporaryExpr for later destruction.
+  static ProgramStateRef addInitializedTemporary(
+      ProgramStateRef State, const CXXBindTemporaryExpr *BTE,
+      const LocationContext *LC, const CXXTempObjectRegion *R);
+
+  /// Check if all initialized temporary regions are clear for the given
+  /// context range (including FromLC, not including ToLC).
+  /// This is useful for assertions.
+  static bool areInitializedTemporariesClear(ProgramStateRef State,
+                                             const LocationContext *FromLC,
+                                             const LocationContext *ToLC);
+
+  /// Store the region of a C++ temporary object corresponding to a
+  /// CXXBindTemporaryExpr for later destruction.
+  static ProgramStateRef addTemporaryMaterialization(
+      ProgramStateRef State, const MaterializeTemporaryExpr *MTE,
+      const LocationContext *LC, const CXXTempObjectRegion *R);
+
+  /// Check if all temporary materialization regions are clear for the given
+  /// context range (including FromLC, not including ToLC).
+  /// This is useful for assertions.
+  static bool areTemporaryMaterializationsClear(ProgramStateRef State,
+                                                const LocationContext *FromLC,
+                                                const LocationContext *ToLC);
+
+  /// Adds an initialized temporary and/or a materialization, whichever is
+  /// necessary, by looking at the whole construction context. Handles
+  /// function return values, which need the construction context of the parent
+  /// stack frame, automagically.
+  ProgramStateRef addAllNecessaryTemporaryInfo(
+      ProgramStateRef State, const ConstructionContext *CC,
+      const LocationContext *LC, const MemRegion *R);
+
+  /// Store the region returned by operator new() so that the constructor
+  /// that follows it knew what location to initialize. The value should be
+  /// cleared once the respective CXXNewExpr CFGStmt element is processed.
+  static ProgramStateRef
+  setCXXNewAllocatorValue(ProgramStateRef State, const CXXNewExpr *CNE,
+                          const LocationContext *CallerLC, SVal V);
+
+  /// Retrieve the location returned by the current operator new().
+  static SVal
+  getCXXNewAllocatorValue(ProgramStateRef State, const CXXNewExpr *CNE,
+                          const LocationContext *CallerLC);
+
+  /// Clear the location returned by the respective operator new(). This needs
+  /// to be done as soon as CXXNewExpr CFG block is evaluated.
+  static ProgramStateRef
+  clearCXXNewAllocatorValue(ProgramStateRef State, const CXXNewExpr *CNE,
+                            const LocationContext *CallerLC);
+
+  /// Check if all allocator values are clear for the given context range
+  /// (including FromLC, not including ToLC). This is useful for assertions.
+  static bool areCXXNewAllocatorValuesClear(ProgramStateRef State,
+                                            const LocationContext *FromLC,
+                                            const LocationContext *ToLC);
 };
 
 /// Traits for storing the call processing policy inside GDM.
@@ -666,8 +828,8 @@ struct ProgramStateTrait<ReplayWithoutInlining> :
   static void *GDMIndex() { static int index = 0; return &index; }
 };
 
-} // end ento namespace
+} // namespace ento
 
-} // end clang namespace
+} // namespace clang
 
-#endif
+#endif // LLVM_CLANG_STATICANALYZER_CORE_PATHSENSITIVE_EXPRENGINE_H

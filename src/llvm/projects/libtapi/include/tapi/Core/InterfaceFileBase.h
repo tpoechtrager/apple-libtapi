@@ -19,9 +19,9 @@
 #include "tapi/Core/ArchitectureSet.h"
 #include "tapi/Core/ArchitectureSupport.h"
 #include "tapi/Core/File.h"
+#include "tapi/Core/Platform.h"
 #include "tapi/Core/STLExtras.h"
 #include "tapi/Defines.h"
-#include "tapi/LinkerInterfaceFile.h"
 #include "llvm/ADT/StringRef.h"
 
 namespace llvm {
@@ -54,6 +54,11 @@ public:
            std::tie(o._installName, o._architectures);
   }
 
+  bool operator!=(const InterfaceFileRef &o) const {
+    return std::tie(_installName, _architectures) !=
+           std::tie(o._installName, o._architectures);
+  }
+
   bool operator<(const InterfaceFileRef &o) const {
     return std::tie(_installName, _architectures) <
            std::tie(o._installName, o._architectures);
@@ -65,6 +70,11 @@ private:
 
   template <typename T> friend struct llvm::yaml::MappingTraits;
 };
+
+raw_ostream &operator<<(raw_ostream &os, const InterfaceFileRef &ref);
+
+const DiagnosticBuilder &operator<<(const DiagnosticBuilder &db,
+                                    const InterfaceFileRef &ref);
 
 class InterfaceFileBase : public File {
 public:
@@ -133,11 +143,15 @@ public:
   }
   void clearUUIDs() { _uuids.clear(); }
 
+  bool convertTo(FileType fileType);
+
+  void inlineFramework(std::shared_ptr<InterfaceFileBase> framework);
+
 protected:
   InterfaceFileBase(File::Kind kind) : File(kind) {}
   InterfaceFileBase(InterfaceFileBase &&) = default;
 
-  Platform _platform = Platform::Unknown;
+  Platform _platform = Platform::unknown;
   ArchitectureSet _architectures;
   std::string _installName;
   PackedVersion _currentVersion;

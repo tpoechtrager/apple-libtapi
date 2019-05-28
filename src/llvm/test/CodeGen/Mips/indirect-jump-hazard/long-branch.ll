@@ -26,12 +26,12 @@
 
 define void @test1(i32 signext %s) {
 ; O32-PIC-LABEL: test1:
-; O32-PIC:       # BB#0: # %entry
+; O32-PIC:       # %bb.0: # %entry
 ; O32-PIC-NEXT:    lui $2, %hi(_gp_disp)
 ; O32-PIC-NEXT:    addiu $2, $2, %lo(_gp_disp)
 ; O32-PIC-NEXT:    bnez $4, $BB0_3
 ; O32-PIC-NEXT:    addu $2, $2, $25
-; O32-PIC-NEXT:  # BB#1: # %entry
+; O32-PIC-NEXT:  # %bb.1: # %entry
 ; O32-PIC-NEXT:    addiu $sp, $sp, -8
 ; O32-PIC-NEXT:    sw $ra, 0($sp)
 ; O32-PIC-NEXT:    lui $1, %hi(($BB0_4)-($BB0_2))
@@ -51,17 +51,17 @@ define void @test1(i32 signext %s) {
 ; O32-PIC-NEXT:    nop
 ;
 ; O32-R6-PIC-LABEL: test1:
-; O32-R6-PIC:       # BB#0: # %entry
+; O32-R6-PIC:       # %bb.0: # %entry
 ; O32-R6-PIC-NEXT:    lui $2, %hi(_gp_disp)
 ; O32-R6-PIC-NEXT:    addiu $2, $2, %lo(_gp_disp)
 ; O32-R6-PIC-NEXT:    bnez $4, $BB0_3
 ; O32-R6-PIC-NEXT:    addu $2, $2, $25
-; O32-R6-PIC-NEXT:  # BB#1: # %entry
+; O32-R6-PIC-NEXT:  # %bb.1: # %entry
 ; O32-R6-PIC-NEXT:    addiu $sp, $sp, -8
 ; O32-R6-PIC-NEXT:    sw $ra, 0($sp)
 ; O32-R6-PIC-NEXT:    lui $1, %hi(($BB0_4)-($BB0_2))
-; O32-R6-PIC-NEXT:    bal $BB0_2
 ; O32-R6-PIC-NEXT:    addiu $1, $1, %lo(($BB0_4)-($BB0_2))
+; O32-R6-PIC-NEXT:    balc $BB0_2
 ; O32-R6-PIC-NEXT:  $BB0_2: # %entry
 ; O32-R6-PIC-NEXT:    addu $1, $ra, $1
 ; O32-R6-PIC-NEXT:    lw $ra, 0($sp)
@@ -75,11 +75,11 @@ define void @test1(i32 signext %s) {
 ; O32-R6-PIC-NEXT:    jrc $ra
 ;
 ; MIPS64-LABEL: test1:
-; MIPS64:       # BB#0: # %entry
+; MIPS64:       # %bb.0: # %entry
 ; MIPS64-NEXT:    lui $1, %hi(%neg(%gp_rel(test1)))
 ; MIPS64-NEXT:    bnez $4, .LBB0_3
 ; MIPS64-NEXT:    daddu $2, $1, $25
-; MIPS64-NEXT:  # BB#1: # %entry
+; MIPS64-NEXT:  # %bb.1: # %entry
 ; MIPS64-NEXT:    daddiu $sp, $sp, -16
 ; MIPS64-NEXT:    sd $ra, 0($sp)
 ; MIPS64-NEXT:    daddiu $1, $zero, %hi(.LBB0_4-.LBB0_2)
@@ -101,17 +101,17 @@ define void @test1(i32 signext %s) {
 ; MIPS64-NEXT:    nop
 ;
 ; N64-R6-LABEL: test1:
-; N64-R6:       # BB#0: # %entry
+; N64-R6:       # %bb.0: # %entry
 ; N64-R6-NEXT:    lui $1, %hi(%neg(%gp_rel(test1)))
 ; N64-R6-NEXT:    bnez $4, .LBB0_3
 ; N64-R6-NEXT:    daddu $2, $1, $25
-; N64-R6-NEXT:  # BB#1: # %entry
+; N64-R6-NEXT:  # %bb.1: # %entry
 ; N64-R6-NEXT:    daddiu $sp, $sp, -16
 ; N64-R6-NEXT:    sd $ra, 0($sp)
 ; N64-R6-NEXT:    daddiu $1, $zero, %hi(.LBB0_4-.LBB0_2)
 ; N64-R6-NEXT:    dsll $1, $1, 16
-; N64-R6-NEXT:    bal .LBB0_2
 ; N64-R6-NEXT:    daddiu $1, $1, %lo(.LBB0_4-.LBB0_2)
+; N64-R6-NEXT:    balc .LBB0_2
 ; N64-R6-NEXT:  .LBB0_2: # %entry
 ; N64-R6-NEXT:    daddu $1, $ra, $1
 ; N64-R6-NEXT:    ld $ra, 0($sp)

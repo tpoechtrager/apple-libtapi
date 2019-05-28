@@ -18,11 +18,11 @@
 #include "clang/AST/ASTMutationListener.h"
 #include "clang/AST/DeclTemplate.h"
 #include "clang/AST/Expr.h"
+#include "clang/AST/PrettyDeclStackTrace.h"
 #include "clang/Basic/LangOptions.h"
 #include "clang/Sema/DeclSpec.h"
 #include "clang/Sema/Initialization.h"
 #include "clang/Sema/Lookup.h"
-#include "clang/Sema/PrettyDeclStackTrace.h"
 #include "clang/Sema/Template.h"
 #include "clang/Sema/TemplateDeduction.h"
 
@@ -496,8 +496,8 @@ void Sema::PrintInstantiationStack() {
       SmallVector<char, 128> TemplateArgsStr;
       llvm::raw_svector_ostream OS(TemplateArgsStr);
       Template->printName(OS);
-      TemplateSpecializationType::PrintTemplateArgumentList(
-          OS, Active->template_arguments(), getPrintingPolicy());
+      printTemplateArgumentList(OS, Active->template_arguments(),
+                                getPrintingPolicy());
       Diags.Report(Active->PointOfInstantiation,
                    diag::note_default_arg_instantiation_here)
         << OS.str()
@@ -562,8 +562,8 @@ void Sema::PrintInstantiationStack() {
       SmallVector<char, 128> TemplateArgsStr;
       llvm::raw_svector_ostream OS(TemplateArgsStr);
       FD->printName(OS);
-      TemplateSpecializationType::PrintTemplateArgumentList(
-          OS, Active->template_arguments(), getPrintingPolicy());
+      printTemplateArgumentList(OS, Active->template_arguments(),
+                                getPrintingPolicy());
       Diags.Report(Active->PointOfInstantiation,
                    diag::note_default_function_arg_instantiation_here)
         << OS.str()
@@ -975,7 +975,7 @@ Decl *TemplateInstantiator::TransformDecl(SourceLocation Loc, Decl *D) {
         Arg = getPackSubstitutedTemplateArgument(getSema(), Arg);
       }
 
-      TemplateName Template = Arg.getAsTemplate();
+      TemplateName Template = Arg.getAsTemplate().getNameToSubstitute();
       assert(!Template.isNull() && Template.getAsTemplateDecl() &&
              "Wrong kind of template template argument");
       return Template.getAsTemplateDecl();
@@ -1122,14 +1122,10 @@ TemplateName TemplateInstantiator::TransformTemplateName(
         Arg = getPackSubstitutedTemplateArgument(getSema(), Arg);
       }
       
-      TemplateName Template = Arg.getAsTemplate();
+      TemplateName Template = Arg.getAsTemplate().getNameToSubstitute();
       assert(!Template.isNull() && "Null template template argument");
-
-      // We don't ever want to substitute for a qualified template name, since
-      // the qualifier is handled separately. So, look through the qualified
-      // template name to its underlying declaration.
-      if (QualifiedTemplateName *QTN = Template.getAsQualifiedTemplateName())
-        Template = TemplateName(QTN->getTemplateDecl());
+      assert(!Template.getAsQualifiedTemplateName() &&
+             "template decl to substitute is qualified?");
 
       Template = getSema().Context.getSubstTemplateTemplateParm(TTP, Template);
       return Template;
@@ -1143,7 +1139,7 @@ TemplateName TemplateInstantiator::TransformTemplateName(
     
     TemplateArgument Arg = SubstPack->getArgumentPack();
     Arg = getPackSubstitutedTemplateArgument(getSema(), Arg);
-    return Arg.getAsTemplate();
+    return Arg.getAsTemplate().getNameToSubstitute();
   }
 
   return inherited::TransformTemplateName(SS, Name, NameLoc, ObjectType,
@@ -2015,7 +2011,7 @@ Sema::InstantiateClass(SourceLocation PointOfInstantiation,
   if (Inst.isInvalid())
     return true;
   assert(!Inst.isAlreadyInstantiating() && "should have been caught by caller");
-  PrettyDeclStackTraceEntry CrashInfo(*this, Instantiation, SourceLocation(),
+  PrettyDeclStackTraceEntry CrashInfo(Context, Instantiation, SourceLocation(),
                                       "instantiating class definition");
 
   // Enter the scope of this instantiation. We don't use
@@ -2030,12 +2026,11 @@ Sema::InstantiateClass(SourceLocation PointOfInstantiation,
   bool MergeWithParentScope = !Instantiation->isDefinedOutsideFunctionOrMethod();
   LocalInstantiationScope Scope(*this, MergeWithParentScope);
 
-  // All dllexported classes created during instantiation should be fully
-  // emitted after instantiation completes. We may not be ready to emit any
-  // delayed classes already on the stack, so save them away and put them back
-  // later.
-  decltype(DelayedDllExportClasses) ExportedClasses;
-  std::swap(ExportedClasses, DelayedDllExportClasses);
+  // Some class state isn't processed immediately but delayed till class
+  // instantiation completes. We may not be ready to handle any delayed state
+  // already on the stack as it might correspond to a different class, so save
+  // it now and put it back later.
+  SavePendingParsedClassStateRAII SavedPendingParsedClassState(*this);
 
   // Pull attributes from the pattern onto the instantiation.
   InstantiateAttrs(TemplateArgs, Pattern, Instantiation);
@@ -2121,9 +2116,6 @@ Sema::InstantiateClass(SourceLocation PointOfInstantiation,
   // Default arguments are parsed, if not instantiated. We can go instantiate
   // default arg exprs for default constructors if necessary now.
   ActOnFinishCXXNonNestedClass(Instantiation);
-
-  // Put back the delayed exported classes that we moved out of the way.
-  std::swap(ExportedClasses, DelayedDllExportClasses);
 
   // Instantiate late parsed attributes, and attach them to their decls.
   // See Sema::InstantiateAttrs
@@ -2242,7 +2234,7 @@ bool Sema::InstantiateEnum(SourceLocation PointOfInstantiation,
     return true;
   if (Inst.isAlreadyInstantiating())
     return false;
-  PrettyDeclStackTraceEntry CrashInfo(*this, Instantiation, SourceLocation(),
+  PrettyDeclStackTraceEntry CrashInfo(Context, Instantiation, SourceLocation(),
                                       "instantiating enum definition");
 
   // The instantiation is visible here, even if it was first declared in an
@@ -2318,7 +2310,7 @@ bool Sema::InstantiateInClassInitializer(
       << Instantiation;
     return true;
   }
-  PrettyDeclStackTraceEntry CrashInfo(*this, Instantiation, SourceLocation(),
+  PrettyDeclStackTraceEntry CrashInfo(Context, Instantiation, SourceLocation(),
                                       "instantiating default member init");
 
   // Enter the scope of this instantiation. We don't use PushDeclContext because
@@ -2387,127 +2379,137 @@ getPatternForClassTemplateSpecialization(
   if (Inst.isInvalid() || Inst.isAlreadyInstantiating())
     return nullptr;
 
-  ClassTemplateDecl *Template = ClassTemplateSpec->getSpecializedTemplate();
-  CXXRecordDecl *Pattern = nullptr;
+  llvm::PointerUnion<ClassTemplateDecl *,
+                     ClassTemplatePartialSpecializationDecl *>
+      Specialized = ClassTemplateSpec->getSpecializedTemplateOrPartial();
+  if (!Specialized.is<ClassTemplatePartialSpecializationDecl *>()) {
+    // Find best matching specialization.
+    ClassTemplateDecl *Template = ClassTemplateSpec->getSpecializedTemplate();
 
-  // C++ [temp.class.spec.match]p1:
-  //   When a class template is used in a context that requires an
-  //   instantiation of the class, it is necessary to determine
-  //   whether the instantiation is to be generated using the primary
-  //   template or one of the partial specializations. This is done by
-  //   matching the template arguments of the class template
-  //   specialization with the template argument lists of the partial
-  //   specializations.
-  typedef PartialSpecMatchResult MatchResult;
-  SmallVector<MatchResult, 4> Matched;
-  SmallVector<ClassTemplatePartialSpecializationDecl *, 4> PartialSpecs;
-  Template->getPartialSpecializations(PartialSpecs);
-  TemplateSpecCandidateSet FailedCandidates(PointOfInstantiation);
-  for (unsigned I = 0, N = PartialSpecs.size(); I != N; ++I) {
-    ClassTemplatePartialSpecializationDecl *Partial = PartialSpecs[I];
-    TemplateDeductionInfo Info(FailedCandidates.getLocation());
-    if (Sema::TemplateDeductionResult Result = S.DeduceTemplateArguments(
-            Partial, ClassTemplateSpec->getTemplateArgs(), Info)) {
-      // Store the failed-deduction information for use in diagnostics, later.
-      // TODO: Actually use the failed-deduction info?
-      FailedCandidates.addCandidate().set(
-          DeclAccessPair::make(Template, AS_public), Partial,
-          MakeDeductionFailureInfo(S.Context, Result, Info));
-      (void)Result;
+    // C++ [temp.class.spec.match]p1:
+    //   When a class template is used in a context that requires an
+    //   instantiation of the class, it is necessary to determine
+    //   whether the instantiation is to be generated using the primary
+    //   template or one of the partial specializations. This is done by
+    //   matching the template arguments of the class template
+    //   specialization with the template argument lists of the partial
+    //   specializations.
+    typedef PartialSpecMatchResult MatchResult;
+    SmallVector<MatchResult, 4> Matched;
+    SmallVector<ClassTemplatePartialSpecializationDecl *, 4> PartialSpecs;
+    Template->getPartialSpecializations(PartialSpecs);
+    TemplateSpecCandidateSet FailedCandidates(PointOfInstantiation);
+    for (unsigned I = 0, N = PartialSpecs.size(); I != N; ++I) {
+      ClassTemplatePartialSpecializationDecl *Partial = PartialSpecs[I];
+      TemplateDeductionInfo Info(FailedCandidates.getLocation());
+      if (Sema::TemplateDeductionResult Result = S.DeduceTemplateArguments(
+              Partial, ClassTemplateSpec->getTemplateArgs(), Info)) {
+        // Store the failed-deduction information for use in diagnostics, later.
+        // TODO: Actually use the failed-deduction info?
+        FailedCandidates.addCandidate().set(
+            DeclAccessPair::make(Template, AS_public), Partial,
+            MakeDeductionFailureInfo(S.Context, Result, Info));
+        (void)Result;
+      } else {
+        Matched.push_back(PartialSpecMatchResult());
+        Matched.back().Partial = Partial;
+        Matched.back().Args = Info.take();
+      }
+    }
+
+    // If we're dealing with a member template where the template parameters
+    // have been instantiated, this provides the original template parameters
+    // from which the member template's parameters were instantiated.
+
+    if (Matched.size() >= 1) {
+      SmallVectorImpl<MatchResult>::iterator Best = Matched.begin();
+      if (Matched.size() == 1) {
+        //   -- If exactly one matching specialization is found, the
+        //      instantiation is generated from that specialization.
+        // We don't need to do anything for this.
+      } else {
+        //   -- If more than one matching specialization is found, the
+        //      partial order rules (14.5.4.2) are used to determine
+        //      whether one of the specializations is more specialized
+        //      than the others. If none of the specializations is more
+        //      specialized than all of the other matching
+        //      specializations, then the use of the class template is
+        //      ambiguous and the program is ill-formed.
+        for (SmallVectorImpl<MatchResult>::iterator P = Best + 1,
+                                                 PEnd = Matched.end();
+             P != PEnd; ++P) {
+          if (S.getMoreSpecializedPartialSpecialization(
+                  P->Partial, Best->Partial, PointOfInstantiation) ==
+              P->Partial)
+            Best = P;
+        }
+
+        // Determine if the best partial specialization is more specialized than
+        // the others.
+        bool Ambiguous = false;
+        for (SmallVectorImpl<MatchResult>::iterator P = Matched.begin(),
+                                                 PEnd = Matched.end();
+             P != PEnd; ++P) {
+          if (P != Best && S.getMoreSpecializedPartialSpecialization(
+                               P->Partial, Best->Partial,
+                               PointOfInstantiation) != Best->Partial) {
+            Ambiguous = true;
+            break;
+          }
+        }
+
+        if (Ambiguous) {
+          // Partial ordering did not produce a clear winner. Complain.
+          Inst.Clear();
+          ClassTemplateSpec->setInvalidDecl();
+          S.Diag(PointOfInstantiation,
+                 diag::err_partial_spec_ordering_ambiguous)
+              << ClassTemplateSpec;
+
+          // Print the matching partial specializations.
+          for (SmallVectorImpl<MatchResult>::iterator P = Matched.begin(),
+                                                   PEnd = Matched.end();
+               P != PEnd; ++P)
+            S.Diag(P->Partial->getLocation(), diag::note_partial_spec_match)
+                << S.getTemplateArgumentBindingsText(
+                       P->Partial->getTemplateParameters(), *P->Args);
+
+          return nullptr;
+        }
+      }
+
+      ClassTemplateSpec->setInstantiationOf(Best->Partial, Best->Args);
     } else {
-      Matched.push_back(PartialSpecMatchResult());
-      Matched.back().Partial = Partial;
-      Matched.back().Args = Info.take();
+      //   -- If no matches are found, the instantiation is generated
+      //      from the primary template.
     }
   }
 
-  // If we're dealing with a member template where the template parameters
-  // have been instantiated, this provides the original template parameters
-  // from which the member template's parameters were instantiated.
-
-  if (Matched.size() >= 1) {
-    SmallVectorImpl<MatchResult>::iterator Best = Matched.begin();
-    if (Matched.size() == 1) {
-      //   -- If exactly one matching specialization is found, the
-      //      instantiation is generated from that specialization.
-      // We don't need to do anything for this.
-    } else {
-      //   -- If more than one matching specialization is found, the
-      //      partial order rules (14.5.4.2) are used to determine
-      //      whether one of the specializations is more specialized
-      //      than the others. If none of the specializations is more
-      //      specialized than all of the other matching
-      //      specializations, then the use of the class template is
-      //      ambiguous and the program is ill-formed.
-      for (SmallVectorImpl<MatchResult>::iterator P = Best + 1,
-                                               PEnd = Matched.end();
-           P != PEnd; ++P) {
-        if (S.getMoreSpecializedPartialSpecialization(
-                P->Partial, Best->Partial, PointOfInstantiation) == P->Partial)
-          Best = P;
-      }
-      
-      // Determine if the best partial specialization is more specialized than
-      // the others.
-      bool Ambiguous = false;
-      for (SmallVectorImpl<MatchResult>::iterator P = Matched.begin(),
-                                               PEnd = Matched.end();
-           P != PEnd; ++P) {
-        if (P != Best &&
-            S.getMoreSpecializedPartialSpecialization(P->Partial, Best->Partial,
-                                                      PointOfInstantiation) !=
-                Best->Partial) {
-          Ambiguous = true;
-          break;
-        }
-      }
-       
-      if (Ambiguous) {
-        // Partial ordering did not produce a clear winner. Complain.
-        Inst.Clear();
-        ClassTemplateSpec->setInvalidDecl();
-        S.Diag(PointOfInstantiation, diag::err_partial_spec_ordering_ambiguous)
-          << ClassTemplateSpec;
-        
-        // Print the matching partial specializations.
-        for (SmallVectorImpl<MatchResult>::iterator P = Matched.begin(),
-                                                 PEnd = Matched.end();
-             P != PEnd; ++P)
-          S.Diag(P->Partial->getLocation(), diag::note_partial_spec_match)
-            << S.getTemplateArgumentBindingsText(
-                   P->Partial->getTemplateParameters(), *P->Args);
-
-        return nullptr;
-      }
-    }
-    
+  CXXRecordDecl *Pattern = nullptr;
+  Specialized = ClassTemplateSpec->getSpecializedTemplateOrPartial();
+  if (auto *PartialSpec =
+          Specialized.dyn_cast<ClassTemplatePartialSpecializationDecl *>()) {
     // Instantiate using the best class template partial specialization.
-    ClassTemplatePartialSpecializationDecl *OrigPartialSpec = Best->Partial;
-    while (OrigPartialSpec->getInstantiatedFromMember()) {
+    while (PartialSpec->getInstantiatedFromMember()) {
       // If we've found an explicit specialization of this class template,
       // stop here and use that as the pattern.
-      if (OrigPartialSpec->isMemberSpecialization())
+      if (PartialSpec->isMemberSpecialization())
         break;
-      
-      OrigPartialSpec = OrigPartialSpec->getInstantiatedFromMember();
+
+      PartialSpec = PartialSpec->getInstantiatedFromMember();
     }
-    
-    Pattern = OrigPartialSpec;
-    ClassTemplateSpec->setInstantiationOf(Best->Partial, Best->Args);
+    Pattern = PartialSpec;
   } else {
-    //   -- If no matches are found, the instantiation is generated
-    //      from the primary template.
-    ClassTemplateDecl *OrigTemplate = Template;
-    while (OrigTemplate->getInstantiatedFromMemberTemplate()) {
+    ClassTemplateDecl *Template = ClassTemplateSpec->getSpecializedTemplate();
+    while (Template->getInstantiatedFromMemberTemplate()) {
       // If we've found an explicit specialization of this class template,
       // stop here and use that as the pattern.
-      if (OrigTemplate->isMemberSpecialization())
+      if (Template->isMemberSpecialization())
         break;
-      
-      OrigTemplate = OrigTemplate->getInstantiatedFromMemberTemplate();
+
+      Template = Template->getInstantiatedFromMemberTemplate();
     }
-    
-    Pattern = OrigTemplate->getTemplatedDecl();
+    Pattern = Template->getTemplatedDecl();
   }
 
   return Pattern;
@@ -2621,7 +2623,7 @@ Sema::InstantiateClassMembers(SourceLocation PointOfInstantiation,
             continue;
           
           Var->setTemplateSpecializationKind(TSK, PointOfInstantiation);
-          InstantiateStaticDataMemberDefinition(PointOfInstantiation, Var);
+          InstantiateVariableDefinition(PointOfInstantiation, Var);
         } else {
           Var->setTemplateSpecializationKind(TSK, PointOfInstantiation);
         }

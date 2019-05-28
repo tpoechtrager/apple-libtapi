@@ -1184,6 +1184,10 @@ TEST(TypeMatching, MatchesAutoTypes) {
   EXPECT_TRUE(matches("int v[] = { 2, 3 }; void f() { for (int i : v) {} }",
                       autoType()));
 
+  EXPECT_TRUE(matches("auto i = 2;", varDecl(hasType(isInteger()))));
+  EXPECT_TRUE(matches("struct X{}; auto x = X{};",
+                      varDecl(hasType(recordDecl(hasName("X"))))));
+
   // FIXME: Matching against the type-as-written can't work here, because the
   //        type as written was not deduced.
   //EXPECT_TRUE(matches("auto a = 1;",
@@ -1561,9 +1565,20 @@ TEST(ObjCMessageExprMatcher, SimpleExprs) {
   EXPECT_TRUE(matchesObjC(
     Objc1String,
     objcMessageExpr(anything())));
+  EXPECT_TRUE(matchesObjC(Objc1String,
+                          objcMessageExpr(hasAnySelector({
+                                          "contents", "meth:"}))
+
+                         ));
   EXPECT_TRUE(matchesObjC(
     Objc1String,
     objcMessageExpr(hasSelector("contents"))));
+  EXPECT_TRUE(matchesObjC(
+    Objc1String,
+    objcMessageExpr(hasAnySelector("contents", "contentsA"))));
+  EXPECT_FALSE(matchesObjC(
+    Objc1String,
+    objcMessageExpr(hasAnySelector("contentsB", "contentsC"))));
   EXPECT_TRUE(matchesObjC(
     Objc1String,
     objcMessageExpr(matchesSelector("cont*"))));
@@ -1586,7 +1601,7 @@ TEST(ObjCMessageExprMatcher, SimpleExprs) {
     )));
 }
 
-TEST(ObjCDeclMacher, CoreDecls) {
+TEST(ObjCDeclMatcher, CoreDecls) {
   std::string ObjCString =
     "@protocol Proto "
     "- (void)protoDidThing; "
@@ -1601,6 +1616,9 @@ TEST(ObjCDeclMacher, CoreDecls) {
     "{ id _ivar; } "
     "- (void)anything {} "
     "@end "
+    "@implementation Thing (ABC) "
+    "- (void)abc_doThing {} "
+    "@end "
     ;
 
   EXPECT_TRUE(matchesObjC(
@@ -1608,7 +1626,13 @@ TEST(ObjCDeclMacher, CoreDecls) {
     objcProtocolDecl(hasName("Proto"))));
   EXPECT_TRUE(matchesObjC(
     ObjCString,
+    objcImplementationDecl(hasName("Thing"))));
+  EXPECT_TRUE(matchesObjC(
+    ObjCString,
     objcCategoryDecl(hasName("ABC"))));
+  EXPECT_TRUE(matchesObjC(
+    ObjCString,
+    objcCategoryImplDecl(hasName("ABC"))));
   EXPECT_TRUE(matchesObjC(
     ObjCString,
     objcMethodDecl(hasName("protoDidThing"))));
@@ -1624,6 +1648,29 @@ TEST(ObjCDeclMacher, CoreDecls) {
   EXPECT_TRUE(matchesObjC(
     ObjCString,
     objcPropertyDecl(hasName("enabled"))));
+}
+
+TEST(ObjCStmtMatcher, ExceptionStmts) {
+  std::string ObjCString =
+    "void f(id obj) {"
+    "  @try {"
+    "    @throw obj;"
+    "  } @catch (...) {"
+    "  } @finally {}"
+    "}";
+
+  EXPECT_TRUE(matchesObjC(
+    ObjCString,
+    objcTryStmt()));
+  EXPECT_TRUE(matchesObjC(
+    ObjCString,
+    objcThrowStmt()));
+  EXPECT_TRUE(matchesObjC(
+    ObjCString,
+    objcCatchStmt()));
+  EXPECT_TRUE(matchesObjC(
+    ObjCString,
+    objcFinallyStmt()));
 }
 
 } // namespace ast_matchers

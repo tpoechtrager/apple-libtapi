@@ -22,7 +22,6 @@
 
 using namespace llvm;
 
-
 TAPI_NAMESPACE_INTERNAL_BEGIN
 
 Architecture getArchType(uint32_t CPUType, uint32_t CPUSubType) {

@@ -28,7 +28,7 @@ class InterfaceFileManager {
 public:
   InterfaceFileManager(FileManager &fm);
   Expected<InterfaceFileBase *> readFile(const std::string &path);
-  Error writeFile(const InterfaceFileBase *file) const;
+  Error writeFile(const InterfaceFileBase *file, const std::string &path) const;
 
 private:
   FileManager &_fm;

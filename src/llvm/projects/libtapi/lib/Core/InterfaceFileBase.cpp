@@ -14,12 +14,26 @@
 
 #include "tapi/Core/InterfaceFileBase.h"
 #include "tapi/Core/STLExtras.h"
+#include "clang/Basic/Diagnostic.h"
 #include <iomanip>
 #include <sstream>
 
 using namespace llvm;
 
 TAPI_NAMESPACE_INTERNAL_BEGIN
+
+raw_ostream &operator<<(raw_ostream &os, const InterfaceFileRef &ref) {
+  os << ref.getInstallName() << ref.getArchitectures();
+  return os;
+}
+
+const DiagnosticBuilder &operator<<(const DiagnosticBuilder &db,
+                                    const InterfaceFileRef &ref) {
+  auto str = ref.getInstallName().str() + " [ " +
+             std::string(ref.getArchitectures()) + " ]";
+  db.AddString(str);
+  return db;
+}
 
 namespace {
 template <typename C>
@@ -84,6 +98,49 @@ void InterfaceFileBase::addUUID(uint8_t uuid[16], Architecture arch) {
            << static_cast<int>(uuid[i]);
   }
   addUUID(arch, stream.str());
+}
+
+bool InterfaceFileBase::convertTo(FileType fileType) {
+  switch (fileType) {
+  default:
+    return false;
+  case FileType::TBD_V1:
+  case FileType::TBD_V2:
+  case FileType::TBD_V3:
+    break;
+  }
+
+  if ((fileType == FileType::TBD_V1) &&
+      (!isTwoLevelNamespace() || !isApplicationExtensionSafe()))
+    return false;
+
+  setFileType(fileType);
+
+  return true;
+}
+
+void InterfaceFileBase::inlineFramework(
+    std::shared_ptr<InterfaceFileBase> framework) {
+  auto addFramework = [&](std::shared_ptr<InterfaceFileBase> &&framework) {
+    auto it =
+        lower_bound(_documents, framework->getInstallName(),
+                    [](std::shared_ptr<File> &lhs, const std::string &rhs) {
+                      return std::static_pointer_cast<InterfaceFileBase>(lhs)
+                                 ->getInstallName() < rhs;
+                    });
+
+    if ((it != _documents.end()) &&
+        !(framework->getInstallName() <
+          std::static_pointer_cast<InterfaceFileBase>(*it)->getInstallName()))
+      return;
+
+    _documents.emplace(it, std::move(framework));
+  };
+  for (auto &doc : framework->_documents)
+    addFramework(std::static_pointer_cast<InterfaceFileBase>(doc));
+
+  framework->_documents.clear();
+  addFramework(std::move(framework));
 }
 
 TAPI_NAMESPACE_INTERNAL_END

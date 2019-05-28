@@ -223,7 +223,7 @@ struct LandingPadInfo {
 };
 
 class MachineFunction {
-  const Function *Fn;
+  const Function &F;
   const TargetMachine &Target;
   const TargetSubtargetInfo *STI;
   MCContext &Ctx;
@@ -314,6 +314,9 @@ class MachineFunction {
   /// Map of invoke call site index values to associated begin EH_LABEL.
   DenseMap<MCSymbol*, unsigned> CallSiteMap;
 
+  /// CodeView label annotations.
+  std::vector<std::pair<MCSymbol *, MDNode *>> CodeViewAnnotations;
+
   bool CallsEHReturn = false;
   bool CallsUnwindInit = false;
   bool HasEHFunclets = false;
@@ -346,18 +349,20 @@ public:
   struct VariableDbgInfo {
     const DILocalVariable *Var;
     const DIExpression *Expr;
-    unsigned Slot;
+    // The Slot can be negative for fixed stack objects.
+    int Slot;
     const DILocation *Loc;
 
     VariableDbgInfo(const DILocalVariable *Var, const DIExpression *Expr,
-                    unsigned Slot, const DILocation *Loc)
+                    int Slot, const DILocation *Loc)
         : Var(Var), Expr(Expr), Slot(Slot), Loc(Loc) {}
   };
   using VariableDbgInfoMapTy = SmallVector<VariableDbgInfo, 4>;
   VariableDbgInfoMapTy VariableDbgInfos;
 
-  MachineFunction(const Function *Fn, const TargetMachine &TM,
-                  unsigned FunctionNum, MachineModuleInfo &MMI);
+  MachineFunction(const Function &F, const TargetMachine &TM,
+                  const TargetSubtargetInfo &STI, unsigned FunctionNum,
+                  MachineModuleInfo &MMI);
   MachineFunction(const MachineFunction &) = delete;
   MachineFunction &operator=(const MachineFunction &) = delete;
   ~MachineFunction();
@@ -376,8 +381,8 @@ public:
   /// Return the DataLayout attached to the Module associated to this MF.
   const DataLayout &getDataLayout() const;
 
-  /// getFunction - Return the LLVM function that this machine code represents
-  const Function *getFunction() const { return Fn; }
+  /// Return the LLVM function that this machine code represents
+  const Function &getFunction() const { return F; }
 
   /// getName - Return the name of the corresponding LLVM function.
   StringRef getName() const;
@@ -625,13 +630,22 @@ public:
   MachineInstr *CreateMachineInstr(const MCInstrDesc &MCID, const DebugLoc &DL,
                                    bool NoImp = false);
 
-  /// CloneMachineInstr - Create a new MachineInstr which is a copy of the
-  /// 'Orig' instruction, identical in all ways except the instruction
-  /// has no parent, prev, or next.
+  /// Create a new MachineInstr which is a copy of \p Orig, identical in all
+  /// ways except the instruction has no parent, prev, or next. Bundling flags
+  /// are reset.
   ///
-  /// See also TargetInstrInfo::duplicate() for target-specific fixes to cloned
-  /// instructions.
+  /// Note: Clones a single instruction, not whole instruction bundles.
+  /// Does not perform target specific adjustments; consider using
+  /// TargetInstrInfo::duplicate() instead.
   MachineInstr *CloneMachineInstr(const MachineInstr *Orig);
+
+  /// Clones instruction or the whole instruction bundle \p Orig and insert
+  /// into \p MBB before \p InsertBefore.
+  ///
+  /// Note: Does not perform target specific adjustments; consider using
+  /// TargetInstrInfo::duplicate() intead.
+  MachineInstr &CloneMachineInstrBundle(MachineBasicBlock &MBB,
+      MachineBasicBlock::iterator InsertBefore, const MachineInstr &Orig);
 
   /// DeleteMachineInstr - Delete the given MachineInstr.
   void DeleteMachineInstr(MachineInstr *MI);
@@ -823,6 +837,15 @@ public:
     return CallSiteMap.count(BeginLabel);
   }
 
+  /// Record annotations associated with a particular label.
+  void addCodeViewAnnotation(MCSymbol *Label, MDNode *MD) {
+    CodeViewAnnotations.push_back({Label, MD});
+  }
+
+  ArrayRef<std::pair<MCSymbol *, MDNode *>> getCodeViewAnnotations() const {
+    return CodeViewAnnotations;
+  }
+
   /// Return a reference to the C++ typeinfo for the current function.
   const std::vector<const GlobalValue *> &getTypeInfos() const {
     return TypeInfos;
@@ -838,7 +861,7 @@ public:
 
   /// Collect information used to emit debugging information of a variable.
   void setVariableDbgInfo(const DILocalVariable *Var, const DIExpression *Expr,
-                          unsigned Slot, const DILocation *Loc) {
+                          int Slot, const DILocation *Loc) {
     VariableDbgInfos.emplace_back(Var, Expr, Slot, Loc);
   }
 

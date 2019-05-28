@@ -1,0 +1,11 @@
+--- !tapi-spi-v1
+exports:         
+  - availability:    
+      - install-name:    /System/Library/Frameworks/Simple.framework/Versions/A/Simple
+        current-version: 1.2.3
+        arch:            [ x86_64 ]
+    symbols:         [ _extraGlobalAPI1, _extraGlobalAPI2, _privateGlobalVariable ]
+    objc-classes:    [ SimpleInternalAPI, SimpleInternalSPI ]
+    objc-eh-types:   [ SimpleInternalAPI, SimpleInternalSPI ]
+    weak-def-symbols: [ _weakPrivateGlobalVariable ]
+...

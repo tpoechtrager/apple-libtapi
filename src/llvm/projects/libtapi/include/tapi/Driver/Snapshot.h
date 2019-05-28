@@ -6,11 +6,12 @@
 // License. See LICENSE.TXT for details.
 //
 //===----------------------------------------------------------------------===//
-
+#define TAPI_DRIVER_SNAPSHOT_H
 #ifndef TAPI_DRIVER_SNAPSHOT_H
 #define TAPI_DRIVER_SNAPSHOT_H
 
 #include "tapi/Core/LLVM.h"
+#include "tapi/Core/Path.h"
 #include "tapi/Defines.h"
 #include "tapi/Driver/Options.h"
 #include "tapi/Driver/SnapshotFileSystem.h"
@@ -25,7 +26,7 @@ namespace llvm {
 namespace yaml {
 template <typename T> struct MappingTraits;
 }
-}
+} // namespace llvm
 
 TAPI_NAMESPACE_INTERNAL_BEGIN
 
@@ -95,6 +96,12 @@ public:
 
   StringRef getWorkingDirectory() { return workingDirectory; }
 
+  struct MappingContext {
+    ArchitectureSet architectures;
+    Platform platform = Platform::unknown;
+    std::string osVersion;
+  };
+
 private:
   // Options we need to preserve.
   TAPICommand command;
@@ -109,9 +116,9 @@ private:
   IntrusiveRefCntPtr<SnapshotFileSystem> fs;
 
   FileMapping pathToHash;
-  std::vector<std::string> files;
-  std::vector<std::string> directories;
-  std::vector<std::string> normalizedDirectories;
+  PathSeq files;
+  PathSeq directories;
+  PathSeq normalizedDirectories;
   std::vector<std::string> rawArgs;
   std::string rootPath = "/tmp/tapi-snapshot";
   std::string name = "tapi";
@@ -119,6 +126,7 @@ private:
   std::string tapiVersion;
   bool wantSnapshot = false;
   bool snapshotWritten = false;
+  MappingContext context;
 
   template <typename T> friend struct llvm::yaml::MappingTraits;
   friend class Options;

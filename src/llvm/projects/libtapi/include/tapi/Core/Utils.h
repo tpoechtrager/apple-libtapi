@@ -17,12 +17,19 @@
 
 #include "tapi/Core/LLVM.h"
 #include "tapi/Defines.h"
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/StringRef.h"
 
 TAPI_NAMESPACE_INTERNAL_BEGIN
 
+class FileManager;
+
 bool isPublicLocation(StringRef path);
 bool isHeaderFile(StringRef path);
+std::string findLibrary(StringRef installName, FileManager &fm,
+                        ArrayRef<std::string> frameworkSearchPaths,
+                        ArrayRef<std::string> librarySearchPaths,
+                        ArrayRef<std::string> searchPaths);
 
 TAPI_NAMESPACE_INTERNAL_END
 

@@ -1096,7 +1096,7 @@ void CodeGenFunction::EmitBranchThroughCleanup(JumpDest Dest) {
         break;
       }
 
-      // Otherwise, tell the scope that there's a jump propoagating
+      // Otherwise, tell the scope that there's a jump propagating
       // through it.  If this isn't new information, all the rest of
       // the work has been done before.
       if (!Scope.addBranchThrough(Dest.getBlock()))
@@ -1233,8 +1233,10 @@ void CodeGenFunction::DeactivateCleanupBlock(EHScopeStack::stable_iterator C,
   EHCleanupScope &Scope = cast<EHCleanupScope>(*EHStack.find(C));
   assert(Scope.isActive() && "double deactivation");
 
-  // If it's the top of the stack, just pop it.
-  if (C == EHStack.stable_begin()) {
+  // If it's the top of the stack, just pop it, but do so only if it belongs
+  // to the current RunCleanupsScope.
+  if (C == EHStack.stable_begin() &&
+      CurrentCleanupScopeDepth.strictlyEncloses(C)) {
     // If it's a normal cleanup, we need to pretend that the
     // fallthrough is unreachable.
     CGBuilderTy::InsertPoint SavedIP = Builder.saveAndClearIP();
