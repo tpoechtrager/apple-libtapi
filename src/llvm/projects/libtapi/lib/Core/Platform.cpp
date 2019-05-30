@@ -93,6 +93,10 @@ StringRef getPlatformName(Platform platform) {
     return "tvOSSimulator";
   case Platform::bridgeOS:
     return "bridgeOS";
+  case Platform::iOSMac:
+    return "iOSMac";
+  case Platform::zippered:
+    return "zippered";
   }
 }
 
@@ -116,6 +120,10 @@ std::string getOSAndEnvironmentName(Platform platform, std::string version) {
     return "tvos" + version + "-simulator";
   case Platform::bridgeOS:
     return "bridgeos" + version;
+  case Platform::iOSMac:
+    return "iOSMac" + version;
+  case Platform::zippered:
+    return "zippered" + version;
   }
 }
 

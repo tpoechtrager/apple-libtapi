@@ -64,6 +64,8 @@ enum class Platform : unsigned {
   /// \since 1.2
   bridgeOS = 5,
 
+  iOSMac = 6,
+  zippered = 10
 };
 
 ///

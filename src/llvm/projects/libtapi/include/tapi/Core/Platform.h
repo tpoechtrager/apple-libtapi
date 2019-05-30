@@ -34,6 +34,8 @@ enum class Platform : uint8_t {
   watchOS,
   watchOSSimulator,
   bridgeOS,
+  iOSMac,
+  zippered
 };
 
 Platform mapToSim(Platform platform, bool wantSim);
