@@ -51,16 +51,28 @@ fi
 echo -n $INSTALLPREFIX > INSTALLPREFIX
 
 # TODO: Fix this in a better way.
-rm -rf ../src/llvm/projects/libtapi/include/clang
-cp -r ../src/llvm/projects/clang/include/clang ../src/llvm/projects/libtapi/include
+INCLUDE_FIX="-I $PWD/../src/llvm/projects/clang/include "
+INCLUDE_FIX+="-I $PWD/projects/clang/include "
 
 cmake ../src/llvm \
+ -DCMAKE_CXX_FLAGS="$INCLUDE_FIX" \
  -DLLVM_INCLUDE_TESTS=OFF \
  -DCMAKE_BUILD_TYPE=RELEASE \
  -DCMAKE_INSTALL_PREFIX=$INSTALLPREFIX \
  -DTAPI_REPOSITORY_STRING=$TAPI_REPOSITORY \
  -DTAPI_FULL_VERSION=$TAPI_VERSION \
  $CMAKE_EXTRA_ARGS
+
+echo ""
+echo "## Building clangBasic ##"
+echo ""
+
+$MAKE clangBasic -j $JOBS
+
+echo ""
+echo "## Building libtapi ##"
+echo ""
+
 $MAKE libtapi -j $JOBS
 
 popd &>/dev/null
