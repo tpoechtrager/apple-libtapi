@@ -6,9 +6,7 @@ pushd "${0%/*}" &>/dev/null
 source tools/tools.sh
 pushd build &>/dev/null
 
-INSTALLPREFIX=\
-\ $(cat CMakeCache.txt | grep CMAKE_INSTALL_PREFIX:PATH |\
-  head -n1 | tr '=' '\n' | tail -n1)
+INSTALLPREFIX=$(cat INSTALLPREFIX)
 
 mkdir -p $INSTALLPREFIX
 mkdir -p $INSTALLPREFIX/include
