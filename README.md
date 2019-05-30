@@ -1,4 +1,4 @@
-# Apple TAPI library - Version 2.0.0; API: 1.4.0 # 
+# Apple TAPI library - Version 1000.10.8; API: 1.4.0 #
 
 Sources taken from: 
 
@@ -27,4 +27,4 @@ those files and provides this functionality to the linker as a dynamic library.
 
 ## Travis CI ##
 
-[![Build Status](https://travis-ci.org/tpoechtrager/apple-libtapi.svg?branch=2.0.0)](https://travis-ci.org/tpoechtrager/apple-libtapi)
+[![Build Status](https://travis-ci.org/tpoechtrager/apple-libtapi.svg?branch=1000.10.8)](https://travis-ci.org/tpoechtrager/apple-libtapi)

@@ -2,6 +2,9 @@
 
 set -e
 
+TAPI_REPOSITORY=tapi-1000.10.8
+TAPI_VERSION=10.0.0
+
 pushd "${0%/*}" &>/dev/null
 source tools/tools.sh
 
@@ -47,10 +50,16 @@ fi
 
 echo -n $INSTALLPREFIX > INSTALLPREFIX
 
+# TODO: Fix this in a better way.
+rm -rf ../src/llvm/projects/libtapi/include/clang
+cp -r ../src/llvm/projects/clang/include/clang ../src/llvm/projects/libtapi/include
+
 cmake ../src/llvm \
  -DLLVM_INCLUDE_TESTS=OFF \
  -DCMAKE_BUILD_TYPE=RELEASE \
  -DCMAKE_INSTALL_PREFIX=$INSTALLPREFIX \
+ -DTAPI_REPOSITORY_STRING=$TAPI_REPOSITORY \
+ -DTAPI_FULL_VERSION=$TAPI_VERSION \
  $CMAKE_EXTRA_ARGS
 $MAKE libtapi -j $JOBS
 
