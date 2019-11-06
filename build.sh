@@ -15,6 +15,11 @@ pushd build &>/dev/null
 
 CMAKE_EXTRA_ARGS=""
 
+if [ $OPERATING_SYSTEM == "Android" ]; then
+  export CC="$CC -D__ANDROID_API__=26"
+  export CXX="$CXX -D__ANDROID_API__=26"
+fi
+
 if [ "$TARGET" == "Darwin" ]; then
   export MACOSX_DEPLOYMENT_TARGET=10.9
   CMAKE_EXTRA_ARGS+="-DCMAKE_SYSTEM_NAME=Darwin "

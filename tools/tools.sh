@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 
 PLATFORM=$(uname -s)
+OPERATING_SYSTEM=$(uname -o 2>/dev/null || echo "-")
 
 if [ -z "$INSTALLPREFIX" ]; then
   INSTALLPREFIX=/usr/local
