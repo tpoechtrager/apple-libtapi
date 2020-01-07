@@ -38,11 +38,11 @@ endif()
 if(DEFINED ENV{RC_SUPPORTED_ARCHS})
   string(REPLACE " " ";" TAPI_SUPPORTED_ARCHS $ENV{RC_SUPPORTED_ARCHS})
 elseif(NOT DEFINED TAPI_SUPPORTED_ARCHS)
-  set(TAPI_SUPPORTED_ARCHS i386 x86_64 x86_64h armv4t armv6 armv5 armv7 armv7s armv7k armv6m armv7m armv7em arm64)
+  set(TAPI_SUPPORTED_ARCHS i386 x86_64 x86_64h armv4t armv6 armv5 armv7 armv7s armv7k armv6m armv7m armv7em arm64 arm64e)
 endif()
 message(STATUS "Supported Architectures: ${TAPI_SUPPORTED_ARCHS}")
 
-set(KNOWN_ARCHS i386 x86_64 x86_64h armv4t armv6 armv5 armv7 armv7s armv7k armv6m armv7m armv7em arm64)
+set(KNOWN_ARCHS i386 x86_64 x86_64h armv4t armv6 armv5 armv7 armv7s armv7k armv6m armv7m armv7em arm64 arm64e)
 
 set (CONFIG_FILE ${CMAKE_CURRENT_BINARY_DIR}/include/tapi/Core/ArchitectureConfig.h)
 file(WRITE ${CONFIG_FILE} "#ifndef TAPI_CORE_ARCHITECTURE_CONFIG_H\n")
