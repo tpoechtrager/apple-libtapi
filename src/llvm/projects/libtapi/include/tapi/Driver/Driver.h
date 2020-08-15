@@ -72,6 +72,15 @@ public:
 
     Reexport() = delete;
   };
+
+
+  class GenerateAPITests {
+  public:
+    /// \brief Run tapi with the provided arguments.
+    static bool run(DiagnosticsEngine &diag, Options &opts);
+
+    GenerateAPITests() = delete;
+  };
 };
 
 TAPI_NAMESPACE_INTERNAL_END

@@ -11,11 +11,9 @@
 /// \brief Implements the C++ linker interface file API.
 ///
 //===----------------------------------------------------------------------===//
-#include "tapi/Core/ExtendedInterfaceFile.h"
 #include "tapi/Core/InterfaceFile.h"
 #include "tapi/Core/LLVM.h"
 #include "tapi/Core/Registry.h"
-#include "tapi/Core/STLExtras.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Object/MachO.h"
 #include <string>
@@ -72,14 +70,13 @@ static PackedVersion32 parseVersion32(StringRef str) {
 class LLVM_LIBRARY_VISIBILITY LinkerInterfaceFile::Impl {
 public:
   FileType _fileType{FileType::Unsupported};
-  Platform _platform{Platform::Unknown};
+  std::vector<uint32_t> _platforms;
   std::string _installName;
   std::string _parentFrameworkName;
 
   PackedVersion32 _currentVersion;
   PackedVersion32 _compatibilityVersion;
   unsigned _swiftABIVersion;
-  ObjCConstraint _objcConstraint;
   bool _hasTwoLevelNamespace{false};
   bool _isAppExtensionSafe{false};
   bool _hasWeakDefExports{false};
@@ -100,9 +97,10 @@ public:
             cpu_type_t cpuType, cpu_subtype_t cpuSubType, ParsingFlags flags,
             PackedVersion32 minOSVersion, std::string &errorMessage) noexcept;
 
-  template <typename T> void addSymbol(T &&name, SymbolFlags flags) {
+  template <typename T> void addSymbol(T &&name, APIFlags flags) {
     if (find(_ignoreExports, name) == _ignoreExports.end())
-      _exports.emplace_back(std::forward<T>(name), flags);
+      _exports.emplace_back(std::forward<T>(name),
+                            static_cast<SymbolFlags>(flags));
   }
 
   void processSymbol(StringRef name, PackedVersion32 minOSVersion,
@@ -168,7 +166,7 @@ static Architecture getArchForCPU(cpu_type_t cpuType, cpu_subtype_t cpuSubType,
     return arch;
 
   if (enforceCpuSubType)
-    return Architecture::unknown;
+    return AK_unknown;
 
   // Find ABI compatible slice instead.
   return archs.getABICompatibleSlice(arch);
@@ -179,8 +177,8 @@ LinkerInterfaceFile::LinkerInterfaceFile() noexcept
 LinkerInterfaceFile::~LinkerInterfaceFile() noexcept = default;
 LinkerInterfaceFile::LinkerInterfaceFile(LinkerInterfaceFile &&) noexcept =
     default;
-LinkerInterfaceFile &
-LinkerInterfaceFile::operator=(LinkerInterfaceFile &&) noexcept = default;
+LinkerInterfaceFile &LinkerInterfaceFile::
+operator=(LinkerInterfaceFile &&) noexcept = default;
 
 std::vector<std::string>
 LinkerInterfaceFile::getSupportedFileExtensions() noexcept {
@@ -261,18 +259,17 @@ bool LinkerInterfaceFile::areEquivalent(const std::string &tbdPath,
     return false;
   }
 
-  auto *dylibFile = cast<InterfaceFileBase>(machoFile.get().get());
   for (const auto &uuid1 : textFile.get()->uuids()) {
     // Ignore unknown architectures.
-    if (uuid1.first == Architecture::unknown)
+    if (uuid1.first == AK_unknown)
       continue;
 
-    auto it = find_if(dylibFile->uuids(),
-                      [&](const std::pair<Architecture, std::string> &uuid2) {
+    auto it = find_if(machoFile.get()->uuids(),
+                      [&](const std::pair<Target, std::string> &uuid2) {
                         return uuid1.first == uuid2.first;
                       });
 
-    if (it == dylibFile->uuids().end())
+    if (it == machoFile.get()->uuids().end())
       continue;
 
     if (uuid1 != *it)
@@ -281,29 +278,80 @@ bool LinkerInterfaceFile::areEquivalent(const std::string &tbdPath,
   return true;
 }
 
-static tapi::Platform mapPlatform(tapi::internal::Platform platform) {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+static tapi::Platform
+mapRawValuesToPlatform(const std::vector<uint32_t> &platforms) {
+  Platform platform = Platform::Unknown;
+
+  for (auto p : platforms) {
+    switch (p) {
+    default:
+      // skip
+      break;
+    case MachO::PLATFORM_MACOS:
+      if (platform == Platform::iOSMac)
+        platform = Platform::zippered;
+      else
+        platform = Platform::OSX;
+      break;
+    case MachO::PLATFORM_IOS:
+    case MachO::PLATFORM_IOSSIMULATOR:
+      platform = Platform::iOS;
+      break;
+    case MachO::PLATFORM_MACCATALYST:
+      if (platform == Platform::OSX)
+        platform = Platform::zippered;
+      else
+        platform = Platform::iOSMac;
+      break;
+    case MachO::PLATFORM_WATCHOS:
+    case MachO::PLATFORM_WATCHOSSIMULATOR:
+      platform = Platform::watchOS;
+      break;
+    case MachO::PLATFORM_TVOS:
+    case MachO::PLATFORM_TVOSSIMULATOR:
+      platform = Platform::tvOS;
+      break;
+    case MachO::PLATFORM_BRIDGEOS:
+      platform = Platform::bridgeOS;
+      break;
+    //case MachO::PLATFORM_DRIVERKIT:
+    //  platform = Platform::DriverKit;
+    //  break;
+    }
+  }
+
+  return platform;
+}
+
+static uint32_t mapPlatformToRawValue(tapi::internal::Platform platform) {
   switch (platform) {
-  case tapi::internal::Platform::unknown:
-    return Platform::Unknown;
+  default:
+    return 0;
   case tapi::internal::Platform::macOS:
-    return Platform::OSX;
+    return MachO::PLATFORM_MACOS;
   case tapi::internal::Platform::iOS:
+    return MachO::PLATFORM_IOS;
   case tapi::internal::Platform::iOSSimulator:
-    return Platform::iOS;
+    return MachO::PLATFORM_IOSSIMULATOR;
+  case tapi::internal::Platform::macCatalyst:
+    return MachO::PLATFORM_MACCATALYST;
   case tapi::internal::Platform::watchOS:
+    return MachO::PLATFORM_WATCHOS;
   case tapi::internal::Platform::watchOSSimulator:
-    return Platform::watchOS;
+    return MachO::PLATFORM_WATCHOSSIMULATOR;
   case tapi::internal::Platform::tvOS:
+    return MachO::PLATFORM_TVOS;
   case tapi::internal::Platform::tvOSSimulator:
-    return Platform::tvOS;
+    return MachO::PLATFORM_TVOSSIMULATOR;
   case tapi::internal::Platform::bridgeOS:
-    return Platform::bridgeOS;
-  case tapi::internal::Platform::iOSMac:
-    return Platform::iOSMac;
-  case tapi::internal::Platform::zippered:
-    return Platform::zippered;
+    return MachO::PLATFORM_BRIDGEOS;
+  //case tapi::internal::Platform::DriverKit:
+  //  return MachO::PLATFORM_DRIVERKIT;
   }
 }
+#pragma clang diagnostic pop
 
 bool LinkerInterfaceFile::Impl::init(
     const std::shared_ptr<const InterfaceFile> &interface, cpu_type_t cpuType,
@@ -313,7 +361,7 @@ bool LinkerInterfaceFile::Impl::init(
   bool enforceCpuSubType = flags & ParsingFlags::ExactCpuSubType;
   auto arch = getArchForCPU(cpuType, cpuSubType, enforceCpuSubType,
                             interface->getArchitectures());
-  if (arch == Architecture::unknown) {
+  if (arch == AK_unknown) {
     auto arch = getArchType(cpuType, cpuSubType);
     auto count = interface->getArchitectures().count();
     if (count > 1)
@@ -332,37 +380,47 @@ bool LinkerInterfaceFile::Impl::init(
   minOSVersion =
       PackedVersion32(minOSVersion.getMajor(), minOSVersion.getMinor(), 0);
 
-  _platform = mapPlatform(interface->getPlatform());
+  for (auto platform : interface->getPlatforms()) {
+    auto value = mapPlatformToRawValue(platform);
+    if (value == 0)
+      continue;
+    _platforms.emplace_back(value);
+  }
+  llvm::sort(_platforms);
   _installName = interface->getInstallName();
   _currentVersion = interface->getCurrentVersion();
   _compatibilityVersion = interface->getCompatibilityVersion();
   _hasTwoLevelNamespace = interface->isTwoLevelNamespace();
   _isAppExtensionSafe = interface->isApplicationExtensionSafe();
-  _objcConstraint = interface->getObjCConstraint();
   _swiftABIVersion = interface->getSwiftABIVersion();
-  _parentFrameworkName = interface->getParentUmbrella();
+  for (const auto &it : interface->umbrellas()) {
+    if (it.first.architecture != arch)
+      continue;
+    _parentFrameworkName = it.second;
+    break;
+  }
 
-  switch (interface->getFileType()) {
+  switch (interface->getFileType().version) {
   default:
     _fileType = FileType::Unsupported;
     break;
-  case TAPI_INTERNAL::FileType::TBD_V1:
+  case 1:
     _fileType = FileType::TBD_V1;
     break;
-  case TAPI_INTERNAL::FileType::TBD_V2:
+  case 2:
     _fileType = FileType::TBD_V2;
     break;
-  case TAPI_INTERNAL::FileType::TBD_V3:
+  case 3:
     _fileType = FileType::TBD_V3;
     break;
   }
 
   // Pre-scan for special linker symbols.
   for (const auto *symbol : interface->exports()) {
-    if (symbol->getKind() != SymbolKind::GlobalSymbol)
+    if (symbol->getKind() != XPIKind::GlobalSymbol)
       continue;
 
-    if (!symbol->getArchitectures().has(arch))
+    if (!symbol->hasArchitecture(arch))
       continue;
 
     processSymbol(symbol->getName(), minOSVersion,
@@ -373,18 +431,19 @@ bool LinkerInterfaceFile::Impl::init(
   _ignoreExports.erase(last, _ignoreExports.end());
 
   bool useObjC1ABI =
-      (_platform == Platform::OSX) && (arch == Architecture::i386);
+      interface->getPlatforms().count(tapi::internal::Platform::macOS) &&
+      (arch == AK_i386);
   for (const auto *symbol : interface->exports()) {
-    if (!symbol->getArchitectures().has(arch))
+    if (!symbol->hasArchitecture(arch))
       continue;
 
     switch (symbol->getKind()) {
-    case SymbolKind::GlobalSymbol:
+    case XPIKind::GlobalSymbol:
       if (symbol->getName().startswith("$ld$"))
         continue;
       addSymbol(symbol->getName(), symbol->getFlags());
       break;
-    case SymbolKind::ObjectiveCClass:
+    case XPIKind::ObjectiveCClass:
       if (useObjC1ABI) {
         addSymbol(".objc_class_name_" + symbol->getName().str(),
                   symbol->getFlags());
@@ -395,11 +454,11 @@ bool LinkerInterfaceFile::Impl::init(
                   symbol->getFlags());
       }
       break;
-    case SymbolKind::ObjectiveCClassEHType:
+    case XPIKind::ObjectiveCClassEHType:
       addSymbol("_OBJC_EHTYPE_$_" + symbol->getName().str(),
                 symbol->getFlags());
       break;
-    case SymbolKind::ObjectiveCInstanceVariable:
+    case XPIKind::ObjectiveCInstanceVariable:
       addSymbol("_OBJC_IVAR_$_" + symbol->getName().str(), symbol->getFlags());
       break;
     }
@@ -409,42 +468,45 @@ bool LinkerInterfaceFile::Impl::init(
   }
 
   for (const auto *symbol : interface->undefineds()) {
-    if (!symbol->getArchitectures().has(arch))
+    if (!symbol->hasArchitecture(arch))
       continue;
 
     switch (symbol->getKind()) {
-    case SymbolKind::GlobalSymbol:
-      _undefineds.emplace_back(symbol->getName(), symbol->getFlags());
+    case XPIKind::GlobalSymbol:
+      _undefineds.emplace_back(symbol->getName(),
+                               static_cast<SymbolFlags>(symbol->getFlags()));
       break;
-    case SymbolKind::ObjectiveCClass:
+    case XPIKind::ObjectiveCClass:
       if (useObjC1ABI) {
         _undefineds.emplace_back(".objc_class_name_" + symbol->getName().str(),
-                                 symbol->getFlags());
+                                 static_cast<SymbolFlags>(symbol->getFlags()));
       } else {
         _undefineds.emplace_back("_OBJC_CLASS_$_" + symbol->getName().str(),
-                                 symbol->getFlags());
+                                 static_cast<SymbolFlags>(symbol->getFlags()));
         _undefineds.emplace_back("_OBJC_METACLASS_$_" + symbol->getName().str(),
-                                 symbol->getFlags());
+                                 static_cast<SymbolFlags>(symbol->getFlags()));
       }
       break;
-    case SymbolKind::ObjectiveCClassEHType:
+    case XPIKind::ObjectiveCClassEHType:
       _undefineds.emplace_back("_OBJC_EHTYPE_$_" + symbol->getName().str(),
-                               symbol->getFlags());
+                               static_cast<SymbolFlags>(symbol->getFlags()));
       break;
-    case SymbolKind::ObjectiveCInstanceVariable:
+    case XPIKind::ObjectiveCInstanceVariable:
       _undefineds.emplace_back("_OBJC_IVAR_$_" + symbol->getName().str(),
-                               symbol->getFlags());
+                               static_cast<SymbolFlags>(symbol->getFlags()));
       break;
     }
   }
 
-  for (const auto &client : interface->allowableClients())
-    if (client.hasArchitecture(arch))
-      _allowableClients.emplace_back(client.getInstallName());
+  for (const auto &lib : interface->allowableClients())
+    for (const auto &target : lib.targets())
+      if (target.architecture == arch)
+        _allowableClients.emplace_back(lib.getInstallName());
 
-  for (const auto &reexport : interface->reexportedLibraries())
-    if (reexport.hasArchitecture(arch))
-      _reexportedLibraries.emplace_back(reexport.getInstallName());
+  for (const auto &lib : interface->reexportedLibraries())
+    for (const auto &target : lib.targets())
+      if (target.architecture == arch)
+        _reexportedLibraries.emplace_back(lib.getInstallName());
 
   for (auto &file : interface->_documents) {
     auto framework = std::static_pointer_cast<const InterfaceFile>(file);
@@ -553,8 +615,16 @@ FileType LinkerInterfaceFile::getFileType() const noexcept {
   return _pImpl->_fileType;
 }
 
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
 Platform LinkerInterfaceFile::getPlatform() const noexcept {
-  return _pImpl->_platform;
+  return mapRawValuesToPlatform(_pImpl->_platforms);
+}
+#pragma clang diagnostic pop
+
+const std::vector<uint32_t> &LinkerInterfaceFile::getPlatformSet() const
+    noexcept {
+  return _pImpl->_platforms;
 }
 
 const std::string &LinkerInterfaceFile::getInstallName() const noexcept {
@@ -578,7 +648,7 @@ unsigned LinkerInterfaceFile::getSwiftVersion() const noexcept {
 }
 
 ObjCConstraint LinkerInterfaceFile::getObjCConstraint() const noexcept {
-  return _pImpl->_objcConstraint;
+  return ObjCConstraint::None;
 }
 
 bool LinkerInterfaceFile::hasTwoLevelNamespace() const noexcept {

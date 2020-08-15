@@ -27,21 +27,24 @@
 TAPI_NAMESPACE_INTERNAL_BEGIN
 
 struct FrontendContext {
-  llvm::Triple target;
+  const llvm::Triple target;
   API api;
   std::unique_ptr<clang::CompilerInstance> compiler;
   llvm::IntrusiveRefCntPtr<clang::ASTContext> ast;
   llvm::IntrusiveRefCntPtr<clang::SourceManager> sourceMgr;
   std::shared_ptr<clang::Preprocessor> pp;
   llvm::IntrusiveRefCntPtr<FileManager> fileManager;
-  std::map<const FileEntry *, HeaderType> files;
+
+  using HeaderMap = std::map<const FileEntry *, HeaderType>;
+  HeaderMap files;
 
   FrontendContext(
-      StringRef workingDirectory = StringRef(),
+      const llvm::Triple &triple, StringRef workingDirectory = StringRef(),
       IntrusiveRefCntPtr<FileSystemStatCacheFactory> cacheFactory = nullptr,
-      IntrusiveRefCntPtr<clang::vfs::FileSystem> vfs = nullptr);
+      IntrusiveRefCntPtr<llvm::vfs::FileSystem> vfs = nullptr);
 
-  void visit(APIVisitor &visitor) { api.visit(visitor); }
+  void visit(APIVisitor &visitor) const { api.visit(visitor); }
+  void visit(APIMutator &visitor) { api.visit(visitor); }
 };
 
 TAPI_NAMESPACE_INTERNAL_END

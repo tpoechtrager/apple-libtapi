@@ -82,18 +82,11 @@ bool Driver::Archive::run(DiagnosticsEngine &diag, Options &opts) {
       return false;
     }
 
-    switch (file.get()->getFileType()) {
-    default:
+    if (file.get()->getFileType() != FileType::TBD) {
       diag.report(diag::err_unsupported_file_type);
       return false;
-    case TBD_V1:
-    case TBD_V2:
-    case TBD_V3:
-      break;
     }
-
-    assert(isa<InterfaceFile>(file.get().get()) && "unexpected file type");
-    inputs.emplace_back(cast<InterfaceFile>(file.get().release()));
+    inputs.emplace_back(std::move(file.get()));
   }
 
   std::unique_ptr<InterfaceFile> output;
@@ -121,17 +114,17 @@ bool Driver::Archive::run(DiagnosticsEngine &diag, Options &opts) {
   case ArchiveAction::RemoveArchitecture: {
     assert(inputs.size() == 1 && "expecting exactly one input file");
     auto file = inputs.front()->remove(opts.archiveOptions.arch);
-    file = handleExpected(
-        std::move(file), [&]() { return std::move(inputs.front()); },
-        [&](std::unique_ptr<TapiError> error) -> Error {
-          if (error->ec != TapiErrorCode::NoSuchArchitecture)
-            return Error(std::move(error));
-          diag.report(diag::warn)
-              << ("file doesn't have architecture '" +
-                  getArchName(opts.archiveOptions.arch) + "'")
-                     .str();
-          return Error::success();
-        });
+    file = handleExpected(std::move(file),
+                          [&]() { return std::move(inputs.front()); },
+                          [&](std::unique_ptr<TapiError> error) -> Error {
+                            if (error->ec != TapiErrorCode::NoSuchArchitecture)
+                              return Error(std::move(error));
+                            diag.report(diag::warn)
+                                << ("file doesn't have architecture '" +
+                                    getArchName(opts.archiveOptions.arch) + "'")
+                                       .str();
+                            return Error::success();
+                          });
 
     if (!file) {
       diag.report(diag::err)
@@ -154,8 +147,7 @@ bool Driver::Archive::run(DiagnosticsEngine &diag, Options &opts) {
         continue;
       }
 
-      auto result = output->merge(file.get(),
-                                  opts.archiveOptions.allowArchitectureMerges);
+      auto result = output->merge(file.get());
       if (!result) {
         diag.report(diag::err)
             << file->getPath() << toString(result.takeError());
@@ -179,8 +171,8 @@ bool Driver::Archive::run(DiagnosticsEngine &diag, Options &opts) {
   }
 
   if (output) {
-    auto result =
-        registry.writeFile(output.get(), opts.driverOptions.outputPath);
+    auto result = registry.writeFile(opts.driverOptions.outputPath,
+                                     output.get(), output.get()->getFileType());
     if (result) {
       diag.report(diag::err_cannot_write_file)
           << opts.driverOptions.outputPath << toString(std::move(result));

@@ -15,7 +15,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "ClangSACheckers.h"
+#include "clang/StaticAnalyzer/Checkers/BuiltinCheckerRegistration.h"
 #include "clang/AST/Attr.h"
 #include "clang/StaticAnalyzer/Core/BugReporter/BugType.h"
 #include "clang/StaticAnalyzer/Core/Checker.h"
@@ -54,10 +54,11 @@ static llvm::SmallBitVector getNonNullAttrs(const CallEvent &Call) {
       AttrNonNull.set(0, NumArgs);
       break;
     }
-    for (unsigned Val : NonNull->args()) {
-      if (Val >= NumArgs)
+    for (const ParamIdx &Idx : NonNull->args()) {
+      unsigned IdxAST = Idx.getASTIndex();
+      if (IdxAST >= NumArgs)
         continue;
-      AttrNonNull.set(Val);
+      AttrNonNull.set(IdxAST);
     }
   }
   return AttrNonNull;
@@ -191,7 +192,7 @@ NonNullParamChecker::genReportNullAttrNonNull(const ExplodedNode *ErrorNode,
       *BTAttrNonNull,
       "Null pointer passed as an argument to a 'nonnull' parameter", ErrorNode);
   if (ArgE)
-    bugreporter::trackNullOrUndefValue(ErrorNode, ArgE, *R);
+    bugreporter::trackExpressionValue(ErrorNode, ArgE, *R);
 
   return R;
 }
@@ -207,9 +208,7 @@ std::unique_ptr<BugReport> NonNullParamChecker::genReportReferenceToNullPointer(
     const Expr *ArgEDeref = bugreporter::getDerefExpr(ArgE);
     if (!ArgEDeref)
       ArgEDeref = ArgE;
-    bugreporter::trackNullOrUndefValue(ErrorNode,
-                                       ArgEDeref,
-                                       *R);
+    bugreporter::trackExpressionValue(ErrorNode, ArgEDeref, *R);
   }
   return R;
 
@@ -217,4 +216,8 @@ std::unique_ptr<BugReport> NonNullParamChecker::genReportReferenceToNullPointer(
 
 void ento::registerNonNullParamChecker(CheckerManager &mgr) {
   mgr.registerChecker<NonNullParamChecker>();
+}
+
+bool ento::shouldRegisterNonNullParamChecker(const LangOptions &LO) {
+  return true;
 }

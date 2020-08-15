@@ -23,21 +23,27 @@ public:
   APIPrinter(raw_ostream &os, bool useColor = true);
   ~APIPrinter() override;
 
-  void visitGlobalVariable(const API::GlobalRecord &) override;
-  void visitFunction(const API::FunctionRecord &) override;
-  void visitEnumConstant(const API::EnumConstantRecord &) override;
-  void visitObjCInterface(const API::ObjCInterfaceRecord &) override;
-  void visitObjCCategory(const API::ObjCCategoryRecord &) override;
-  void visitObjCProtocol(const API::ObjCProtocolRecord &) override;
-  void visitTypeDef(const API::GlobalRecord &) override;
+  void visitGlobal(const GlobalRecord &) override;
+  void visitEnumConstant(const EnumConstantRecord &) override;
+  void visitObjCInterface(const ObjCInterfaceRecord &) override;
+  void visitObjCCategory(const ObjCCategoryRecord &) override;
+  void visitObjCProtocol(const ObjCProtocolRecord &) override;
+  void visitTypeDef(const APIRecord &) override;
 
 private:
-  void printMethod(const API::ObjCMethodRecord *method);
-  void printProperty(const API::ObjCPropertyRecord *property);
-  void printInstanceVariable(const API::ObjCInstanceVariableRecord *ivar);
+  void printMethod(const ObjCMethodRecord *method);
+  void printProperty(const ObjCPropertyRecord *property);
+  void printInstanceVariable(const ObjCInstanceVariableRecord *ivar);
 
   raw_ostream &os;
   bool hasColors = false;
+
+  bool emittedHeaderGlobal = false;
+  bool emittedHeaderEnum = false;
+  bool emittedHeaderInterface = false;
+  bool emittedHeaderCategory = false;
+  bool emittedHeaderProtocol = false;
+  bool emittedHeaderTypedef = false;
 };
 
 TAPI_NAMESPACE_INTERNAL_END

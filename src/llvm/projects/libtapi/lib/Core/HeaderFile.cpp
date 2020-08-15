@@ -39,6 +39,8 @@ void HeaderFile::print(raw_ostream &os) const {
     os << " (extra header)";
   if (isExcluded)
     os << " (excluded header)";
+  if (isPreInclude)
+    os << " (pre-include header)";
 }
 
 TAPI_NAMESPACE_INTERNAL_END

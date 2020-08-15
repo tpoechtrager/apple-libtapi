@@ -15,117 +15,188 @@ using namespace clang;
 
 TAPI_NAMESPACE_INTERNAL_BEGIN
 
-API::GlobalRecord *
-API::GlobalRecord::create(BumpPtrAllocator &allocator, StringRef name,
-                          APILoc loc, const AvailabilityInfo &availability,
-                          APIAccess access, const Decl *decl,
-                          bool isWeakDefined) {
+APILoc::APILoc(StringRef file, unsigned line, unsigned col)
+    : file(file), line(line), col(col) {}
+
+bool APILoc::isInvalid() const {
+  if (loc)
+    return loc->isInvalid();
+  else if (file.empty())
+    return true;
+
+  return false;
+}
+
+StringRef APILoc::getFilename() const {
+  if (loc)
+    return loc->getFilename();
+  return file;
+}
+
+unsigned APILoc::getLine() const {
+  if (loc)
+    return loc->getLine();
+  return line;
+}
+
+unsigned APILoc::getColumn() const {
+  if (loc)
+    return loc->getColumn();
+  return col;
+}
+
+clang::PresumedLoc APILoc::getPresumedLoc() const {
+  assert(loc && "must have an underlying PresumedLoc");
+  return *loc;
+}
+
+APIRecord *APIRecord::create(BumpPtrAllocator &allocator, StringRef name,
+                             APILinkage linkage, APIFlags flags, APILoc loc,
+                             const AvailabilityInfo &availability,
+                             APIAccess access, const Decl *decl) {
   return new (allocator)
-      GlobalRecord{name, loc, availability, access, decl, isWeakDefined};
+      APIRecord{name, loc, decl, availability, linkage, flags, access};
 }
 
-API::FunctionRecord *
-API::FunctionRecord::create(BumpPtrAllocator &allocator, StringRef name,
-                            APILoc loc, const AvailabilityInfo &availability,
-                            APIAccess access, const Decl *decl,
-                            bool isWeakDefined, bool isInlined) {
-  return new (allocator) FunctionRecord{
-      name, loc, availability, access, decl, isWeakDefined, isInlined};
+GlobalRecord *GlobalRecord::create(BumpPtrAllocator &allocator, StringRef name,
+                                   APILinkage linkage, APIFlags flags,
+                                   APILoc loc,
+                                   const AvailabilityInfo &availability,
+                                   APIAccess access, const Decl *decl,
+                                   GVKind kind) {
+
+  return new (allocator)
+      GlobalRecord{name, flags, loc, availability, access, decl, kind, linkage};
 }
 
-API::EnumConstantRecord *API::EnumConstantRecord::create(
-    BumpPtrAllocator &allocator, StringRef name, APILoc loc,
-    const AvailabilityInfo &availability, APIAccess access, const Decl *decl) {
+EnumConstantRecord *
+EnumConstantRecord::create(BumpPtrAllocator &allocator, StringRef name,
+                           APILoc loc, const AvailabilityInfo &availability,
+                           APIAccess access, const Decl *decl) {
   return new (allocator)
       EnumConstantRecord{name, loc, availability, access, decl};
 }
 
-API::ObjCMethodRecord *API::ObjCMethodRecord::create(
-    BumpPtrAllocator &allocator, StringRef name, APILoc loc,
-    const AvailabilityInfo &availability, APIAccess access,
-    bool isInstanceMethod, bool isOptional, bool isDynamic, const Decl *decl) {
+ObjCMethodRecord *
+ObjCMethodRecord::create(BumpPtrAllocator &allocator, StringRef name,
+                         APILoc loc, const AvailabilityInfo &availability,
+                         APIAccess access, bool isInstanceMethod,
+                         bool isOptional, bool isDynamic, const Decl *decl) {
   return new (allocator) ObjCMethodRecord{
       name,       loc,       availability, access, isInstanceMethod,
       isOptional, isDynamic, decl};
 }
 
-API::ObjCPropertyRecord *API::ObjCPropertyRecord::create(
-    BumpPtrAllocator &allocator, StringRef name, StringRef getterName,
-    StringRef setterName, APILoc loc, const AvailabilityInfo &availability,
-    APIAccess access, PropertyAttributeKind attributes, bool isOptional,
-    const Decl *decl) {
+ObjCPropertyRecord *
+ObjCPropertyRecord::create(BumpPtrAllocator &allocator, StringRef name,
+                           StringRef getterName, StringRef setterName,
+                           APILoc loc, const AvailabilityInfo &availability,
+                           APIAccess access, AttributeKind attributes,
+                           bool isOptional, const Decl *decl) {
   return new (allocator)
       ObjCPropertyRecord{name,   getterName, setterName, loc, availability,
                          access, attributes, isOptional, decl};
 }
 
-API::ObjCInstanceVariableRecord *API::ObjCInstanceVariableRecord::create(
-    BumpPtrAllocator &allocator, StringRef name, APILoc loc,
+ObjCInstanceVariableRecord *ObjCInstanceVariableRecord::create(
+    BumpPtrAllocator &allocator, StringRef name, APILinkage linkage, APILoc loc,
     const AvailabilityInfo &availability, APIAccess access,
-    AccessControl accessControl, bool isFragile, const Decl *decl) {
+    AccessControl accessControl, const Decl *decl) {
   return new (allocator) ObjCInstanceVariableRecord{
-      name, loc, availability, access, accessControl, isFragile, decl};
+      name, linkage, loc, availability, access, accessControl, decl};
 }
 
-API::ObjCInterfaceRecord *API::ObjCInterfaceRecord::create(
-    BumpPtrAllocator &allocator, StringRef name, APILoc loc,
-    const AvailabilityInfo &availability, APIAccess access, bool isExported,
+ObjCInterfaceRecord *ObjCInterfaceRecord::create(
+    BumpPtrAllocator &allocator, StringRef name, APILinkage linkage, APILoc loc,
+    const AvailabilityInfo &availability, APIAccess access,
     StringRef superClassName, const Decl *decl) {
   return new (allocator) ObjCInterfaceRecord{
-      name, loc, availability, access, isExported, superClassName, decl};
+      name, linkage, loc, availability, access, superClassName, decl};
 }
 
-API::ObjCCategoryRecord *API::ObjCCategoryRecord::create(
-    BumpPtrAllocator &allocator, StringRef interfaceName, StringRef name,
-    APILoc loc, const AvailabilityInfo &availability, APIAccess access,
-    const Decl *decl) {
+ObjCCategoryRecord *
+ObjCCategoryRecord::create(BumpPtrAllocator &allocator, StringRef interfaceName,
+                           StringRef name, APILoc loc,
+                           const AvailabilityInfo &availability,
+                           APIAccess access, const Decl *decl) {
   return new (allocator)
       ObjCCategoryRecord{interfaceName, name, loc, availability, access, decl};
 }
 
-API::ObjCProtocolRecord *API::ObjCProtocolRecord::create(
-    BumpPtrAllocator &allocator, StringRef name, APILoc loc,
-    const AvailabilityInfo &availability, APIAccess access, const Decl *decl) {
+ObjCProtocolRecord *
+ObjCProtocolRecord::create(BumpPtrAllocator &allocator, StringRef name,
+                           APILoc loc, const AvailabilityInfo &availability,
+                           APIAccess access, const Decl *decl) {
   return new (allocator)
       ObjCProtocolRecord{name, loc, availability, access, decl};
 }
 
-API::GlobalRecord *API::addGlobalVariable(StringRef name, APILoc loc,
-                                          const AvailabilityInfo &availability,
-                                          APIAccess access, const Decl *decl,
-                                          bool isWeakDefined) {
+bool API::updateAPIAccess(APIRecord *record, APIAccess access) {
+  if (record->access <= access)
+    return false;
+
+  record->access = access;
+  return true;
+}
+
+bool API::updateAPILinkage(APIRecord *record, APILinkage linkage) {
+  if (record->linkage >= linkage)
+    return false;
+
+  record->linkage = linkage;
+  return true;
+}
+
+GlobalRecord *API::addGlobal(StringRef name, APILoc loc,
+                             const AvailabilityInfo &availability,
+                             APIAccess access, const Decl *decl, GVKind kind,
+                             APILinkage linkage, bool isWeakDefined,
+                             bool isThreadLocal) {
+  auto flags = APIFlags::None;
+  if (isWeakDefined)
+    flags |= APIFlags::WeakDefined;
+  if (isThreadLocal)
+    flags |= APIFlags::ThreadLocalValue;
+  return addGlobal(name, flags, loc, availability, access, decl, kind, linkage);
+}
+
+GlobalRecord *API::addGlobal(StringRef name, APIFlags flags, APILoc loc,
+                             const AvailabilityInfo &availability,
+                             APIAccess access, const Decl *decl, GVKind kind,
+                             APILinkage linkage) {
   name = copyString(name);
-  auto result = globalVariables.insert({name, nullptr});
+  auto result = globals.insert({name, nullptr});
   if (result.second) {
-    auto *record = GlobalRecord::create(allocator, name, loc, availability,
-                                        access, decl, isWeakDefined);
+    auto *record = GlobalRecord::create(allocator, name, linkage, flags, loc,
+                                        availability, access, decl, kind);
     result.first->second = record;
   }
+  API::updateAPIAccess(result.first->second, access);
+  API::updateAPILinkage(result.first->second, linkage);
+  // TODO: diagnose kind difference.
   return result.first->second;
 }
 
-API::FunctionRecord *API::addFunction(StringRef name, APILoc loc,
-                                      const AvailabilityInfo &availability,
-                                      APIAccess access, const Decl *decl,
-                                      bool isWeakDefined, bool isInlined) {
-  name = copyString(name);
-  auto result = functions.insert({name, nullptr});
-  if (result.second) {
-    auto *record =
-        FunctionRecord::create(allocator, name, loc, availability, access, decl,
-                               isWeakDefined, isInlined);
-    result.first->second = record;
-  } else {
-    if (!isInlined)
-      result.first->second->isInlined = false;
-  }
-  return result.first->second;
+GlobalRecord *API::addGlobalVariable(StringRef name, APILoc loc,
+                                     const AvailabilityInfo &availability,
+                                     APIAccess access, const Decl *decl,
+                                     APILinkage linkage, bool isWeakDefined,
+                                     bool isThreadLocal) {
+  return addGlobal(name, loc, availability, access, decl, GVKind::Variable,
+                   linkage, isWeakDefined, isThreadLocal);
 }
 
-API::EnumConstantRecord *
-API::addEnumConstant(StringRef name, APILoc loc,
-                     const AvailabilityInfo &availability, APIAccess access,
-                     const Decl *decl) {
+GlobalRecord *API::addFunction(StringRef name, APILoc loc,
+                               const AvailabilityInfo &availability,
+                               APIAccess access, const Decl *decl,
+                               APILinkage linkage, bool isWeakDefined) {
+  return addGlobal(name, loc, availability, access, decl, GVKind::Function,
+                   linkage, isWeakDefined);
+}
+
+EnumConstantRecord *API::addEnumConstant(StringRef name, APILoc loc,
+                                         const AvailabilityInfo &availability,
+                                         APIAccess access, const Decl *decl) {
   name = copyString(name);
   auto result = enumConstants.insert({name, nullptr});
   if (result.second) {
@@ -136,27 +207,27 @@ API::addEnumConstant(StringRef name, APILoc loc,
   return result.first->second;
 }
 
-API::ObjCInterfaceRecord *
-API::addObjCInterface(StringRef name, APILoc loc,
-                      const AvailabilityInfo &availability, APIAccess access,
-                      bool isExported, StringRef superClassName,
-                      const Decl *decl) {
+ObjCInterfaceRecord *API::addObjCInterface(StringRef name, APILoc loc,
+                                           const AvailabilityInfo &availability,
+                                           APIAccess access, APILinkage linkage,
+                                           StringRef superClassName,
+                                           const Decl *decl) {
   name = copyString(name);
   auto result = interfaces.insert({name, nullptr});
   if (result.second) {
     superClassName = copyString(superClassName);
     auto *record =
-        ObjCInterfaceRecord::create(allocator, name, loc, availability, access,
-                                    isExported, superClassName, decl);
+        ObjCInterfaceRecord::create(allocator, name, linkage, loc, availability,
+                                    access, superClassName, decl);
     result.first->second = record;
   }
   return result.first->second;
 }
 
-API::ObjCCategoryRecord *
-API::addObjCCategory(StringRef interfaceName, StringRef name, APILoc loc,
-                     const AvailabilityInfo &availability, APIAccess access,
-                     const Decl *decl) {
+ObjCCategoryRecord *API::addObjCCategory(StringRef interfaceName,
+                                         StringRef name, APILoc loc,
+                                         const AvailabilityInfo &availability,
+                                         APIAccess access, const Decl *decl) {
   interfaceName = copyString(interfaceName);
   name = copyString(name);
   auto result =
@@ -174,10 +245,9 @@ API::addObjCCategory(StringRef interfaceName, StringRef name, APILoc loc,
   return result.first->second;
 }
 
-API::ObjCProtocolRecord *
-API::addObjCProtocol(StringRef name, APILoc loc,
-                     const AvailabilityInfo &availability, APIAccess access,
-                     const Decl *decl) {
+ObjCProtocolRecord *API::addObjCProtocol(StringRef name, APILoc loc,
+                                         const AvailabilityInfo &availability,
+                                         APIAccess access, const Decl *decl) {
   name = copyString(name);
   auto result = protocols.insert({name, nullptr});
   if (result.second) {
@@ -189,11 +259,12 @@ API::addObjCProtocol(StringRef name, APILoc loc,
   return result.first->second;
 }
 
-API::ObjCMethodRecord *
-API::addObjCMethod(API::ObjCContainerRecord *record, StringRef name, APILoc loc,
-                   const AvailabilityInfo &availability, APIAccess access,
-                   bool isInstanceMethod, bool isOptional, bool isDynamic,
-                   const Decl *decl) {
+ObjCMethodRecord *API::addObjCMethod(ObjCContainerRecord *record,
+                                     StringRef name, APILoc loc,
+                                     const AvailabilityInfo &availability,
+                                     APIAccess access, bool isInstanceMethod,
+                                     bool isOptional, bool isDynamic,
+                                     const Decl *decl) {
   name = copyString(name);
   auto *method =
       ObjCMethodRecord::create(allocator, name, loc, availability, access,
@@ -202,11 +273,11 @@ API::addObjCMethod(API::ObjCContainerRecord *record, StringRef name, APILoc loc,
   return method;
 }
 
-API::ObjCPropertyRecord *
-API::addObjCProperty(API::ObjCContainerRecord *record, StringRef name,
+ObjCPropertyRecord *
+API::addObjCProperty(ObjCContainerRecord *record, StringRef name,
                      StringRef getterName, StringRef setterName, APILoc loc,
                      const AvailabilityInfo &availability, APIAccess access,
-                     ObjCPropertyRecord::PropertyAttributeKind attributes,
+                     ObjCPropertyRecord::AttributeKind attributes,
                      bool isOptional, const Decl *decl) {
   name = copyString(name);
   getterName = copyString(getterName);
@@ -218,76 +289,76 @@ API::addObjCProperty(API::ObjCContainerRecord *record, StringRef name,
   return property;
 }
 
-API::ObjCInstanceVariableRecord *API::addObjCInstanceVariable(
-    API::ObjCContainerRecord *record, StringRef name, APILoc loc,
+ObjCInstanceVariableRecord *API::addObjCInstanceVariable(
+    ObjCContainerRecord *record, StringRef name, APILoc loc,
     const AvailabilityInfo &availability, APIAccess access,
-    ObjCInstanceVariableRecord::AccessControl accessControl, bool isFragile,
+    ObjCInstanceVariableRecord::AccessControl accessControl, APILinkage linkage,
     const Decl *decl) {
   name = copyString(name);
   auto *ivar = ObjCInstanceVariableRecord::create(
-      allocator, name, loc, availability, access, accessControl, isFragile,
-      decl);
+      allocator, name, linkage, loc, availability, access, accessControl, decl);
   record->ivars.push_back(ivar);
   return ivar;
 }
 
-API::GlobalRecord *API::addTypeDef(StringRef name, APILoc loc,
-                                   const AvailabilityInfo &availability,
-                                   APIAccess access, const Decl *decl) {
+APIRecord *API::addTypeDef(StringRef name, APILoc loc,
+                           const AvailabilityInfo &availability,
+                           APIAccess access, const Decl *decl) {
   name = copyString(name);
   auto result = typeDefs.insert({name, nullptr});
   if (result.second) {
-    auto *record = GlobalRecord::create(allocator, name, loc, availability,
-                                        access, decl, /*isWeakDefined=*/false);
+    auto *record =
+        APIRecord::create(allocator, name, APILinkage::Unknown, APIFlags::None,
+                          loc, availability, access, decl);
     result.first->second = record;
   }
   return result.first->second;
 }
 
-const API::GlobalRecord *API::findGlobalVariable(StringRef name) const {
-  auto it = globalVariables.find(name);
-  if (it != globalVariables.end())
+const GlobalRecord *API::findGlobalVariable(StringRef name) const {
+  auto it = globals.find(name);
+  if (it != globals.end() && it->second->kind == GVKind::Variable)
     return it->second;
   return nullptr;
 }
 
-const API::FunctionRecord *API::findFunction(StringRef name) const {
-  auto it = functions.find(name);
-  if (it != functions.end())
+const GlobalRecord *API::findFunction(StringRef name) const {
+  auto it = globals.find(name);
+  if (it != globals.end() && it->second->kind == GVKind::Function)
     return it->second;
   return nullptr;
 }
 
-const API::GlobalRecord *API::findTypeDef(StringRef name) const {
+const APIRecord *API::findTypeDef(StringRef name) const {
   auto it = typeDefs.find(name);
   if (it != typeDefs.end())
     return it->second;
   return nullptr;
 }
 
-const API::EnumConstantRecord *API::findEnumConstant(StringRef name) const {
+const EnumConstantRecord *API::findEnumConstant(StringRef name) const {
   auto it = enumConstants.find(name);
   if (it != enumConstants.end())
     return it->second;
   return nullptr;
 }
 
-const API::ObjCInterfaceRecord *API::findObjCInterface(StringRef name) const {
+const ObjCInterfaceRecord *API::findObjCInterface(StringRef name) const {
   auto it = interfaces.find(name);
   if (it != interfaces.end())
     return it->second;
   return nullptr;
 }
 
-const API::ObjCProtocolRecord *API::findObjCProtocol(StringRef name) const {
+const ObjCProtocolRecord *API::findObjCProtocol(StringRef name) const {
   auto it = protocols.find(name);
   if (it != protocols.end())
     return it->second;
   return nullptr;
 }
 
-const API::ObjCCategoryRecord *API::findObjCCategory(StringRef interfaceName,
-                                                     StringRef name) const {
+const ObjCCategoryRecord *API::findObjCCategory(StringRef interfaceName,
+                                                StringRef name) const {
   auto it = categories.find({interfaceName, name});
   if (it != categories.end())
     return it->second;
@@ -297,10 +368,23 @@ const API::ObjCCategoryRecord *API::findObjCCategory(StringRef interfaceName,
 void API::visit(APIVisitor &visitor) const {
   for (auto &it : typeDefs)
     visitor.visitTypeDef(*it.second);
-  for (auto &it : globalVariables)
-    visitor.visitGlobalVariable(*it.second);
-  for (auto &it : functions)
-    visitor.visitFunction(*it.second);
+  for (auto &it : globals)
+    visitor.visitGlobal(*it.second);
+  for (auto &it : enumConstants)
+    visitor.visitEnumConstant(*it.second);
+  for (auto &it : protocols)
+    visitor.visitObjCProtocol(*it.second);
+  for (auto &it : interfaces)
+    visitor.visitObjCInterface(*it.second);
+  for (auto &it : categories)
+    visitor.visitObjCCategory(*it.second);
+}
+
+void API::visit(APIMutator &visitor) {
+  for (auto &it : typeDefs)
+    visitor.visitTypeDef(*it.second);
+  for (auto &it : globals)
+    visitor.visitGlobal(*it.second);
   for (auto &it : enumConstants)
     visitor.visitEnumConstant(*it.second);
   for (auto &it : protocols)
@@ -318,6 +402,13 @@ StringRef API::copyString(StringRef string) {
   void *ptr = allocator.Allocate(string.size(), 1);
   memcpy(ptr, string.data(), string.size());
   return StringRef(reinterpret_cast<const char *>(ptr), string.size());
+}
+
+BinaryInfo &API::getBinaryInfo() {
+  if (hasBinaryInfo())
+    return *binaryInfo;
+  binaryInfo.emplace();
+  return *binaryInfo;
 }
 
 TAPI_NAMESPACE_INTERNAL_END

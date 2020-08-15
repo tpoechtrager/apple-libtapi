@@ -24,6 +24,7 @@
 #include "clang/Driver/Tool.h"
 #include "clang/Frontend/FrontendDiagnostic.h"
 #include "clang/Frontend/TextDiagnosticPrinter.h"
+#include "clang/Lex/HeaderMap.h"
 #include "clang/Lex/PreprocessorOptions.h"
 #include "llvm/ADT/Triple.h"
 #include "llvm/Option/ArgList.h"
@@ -190,10 +191,33 @@ static bool runClang(FrontendContext &context, ArrayRef<std::string> options,
   return context.compiler->ExecuteAction(*action);
 }
 
+static std::string getClangExecutablePath() {
+  static int staticSymbol;
+  static std::string clangExecutablePath;
+
+  if (!clangExecutablePath.empty())
+    return clangExecutablePath;
+
+  // Try to find clang first in the toolchain. If that fails, then fall-back to
+  // the default search PATH.
+  auto mainExecutable = sys::fs::getMainExecutable("tapi", &staticSymbol);
+  StringRef toolchainBinDir = sys::path::parent_path(mainExecutable);
+  auto clangBinary =
+      sys::findProgramByName("clang", makeArrayRef(toolchainBinDir));
+  if (clangBinary.getError())
+    clangBinary = sys::findProgramByName("clang");
+  if (auto ec = clangBinary.getError())
+    clangExecutablePath = "clang";
+  else
+    clangExecutablePath = clangBinary.get();
+
+  return clangExecutablePath;
+}
+
 extern Optional<FrontendContext> runFrontend(const FrontendJob &job,
                                              StringRef inputFilename) {
-  FrontendContext context(job.workingDirectory, job.cacheFactory, job.vfs);
-  context.target = job.target;
+  FrontendContext context(job.target, job.workingDirectory, job.cacheFactory,
+                          job.vfs);
 
   std::unique_ptr<llvm::MemoryBuffer> input;
   std::string inputFilePath;
@@ -206,9 +230,13 @@ extern Optional<FrontendContext> runFrontend(const FrontendJob &job,
       if (header.type != job.type)
         continue;
 
-      addHeaderInclude(header.includeName.empty() ? header.fullPath
-                                                  : header.includeName,
-                       job.language, headerContents);
+      if (!job.useUmbrellaHeaderOnly || header.isUmbrellaHeader)
+        addHeaderInclude(header.includeName.empty() ? header.fullPath
+                                                    : header.includeName,
+                         job.language, headerContents);
+
+      if (header.isPreInclude)
+        continue; // Do not add extra header into files.
 
       const auto *file = context.fileManager->getFile(header.fullPath);
       context.files.emplace(file, header.type);
@@ -223,8 +251,17 @@ extern Optional<FrontendContext> runFrontend(const FrontendJob &job,
     context.files.emplace(file, HeaderType::Public);
   }
 
+  if (job.verbose && input)
+    outs() << "\nHeaders:\n" << input->getBuffer() << "\n";
+
+  std::string clangExecutablePath;
+  if (job.clangExecutablePath)
+    clangExecutablePath = job.clangExecutablePath.getValue();
+  else
+    clangExecutablePath = getClangExecutablePath();
+
   std::vector<std::string> args;
-  args.emplace_back("tapi");
+  args.emplace_back(clangExecutablePath);
   args.emplace_back("-fsyntax-only");
   args.emplace_back(getLanguageOptions(job.language));
   args.emplace_back("-target");
@@ -259,6 +296,9 @@ extern Optional<FrontendContext> runFrontend(const FrontendJob &job,
   if (job.useObjectiveCWeakARC)
     args.emplace_back("-fobjc-weak");
 
+  if (job.verbose)
+    args.emplace_back("-v");
+
   // Add a default macro for TAPI.
   args.emplace_back("-D__clang_tapi__=1");
 
@@ -285,8 +325,19 @@ extern Optional<FrontendContext> runFrontend(const FrontendJob &job,
     args.emplace_back("-F" + path);
 
   // Add the header search paths.
-  for (const auto &path : job.includePaths)
+  for (const auto &path : job.includePaths) {
+    // Only add header maps for project headers.
+    if (job.type == HeaderType::Project) {
+      args.emplace_back("-I" + path);
+      continue;
+    }
+
+    if (const auto *file = context.fileManager->getFile(path))
+      if (HeaderMap::Create(file, *context.fileManager))
+        continue;
+
     args.emplace_back("-I" + path);
+  }
 
   // Also add the private framework path, since it is not added by default.
   if (job.isysroot.empty())

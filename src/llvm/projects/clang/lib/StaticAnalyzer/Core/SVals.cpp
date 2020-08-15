@@ -75,7 +75,7 @@ const FunctionDecl *SVal::getAsFunctionDecl() const {
   return nullptr;
 }
 
-/// \brief If this SVal is a location (subclasses Loc) and wraps a symbol,
+/// If this SVal is a location (subclasses Loc) and wraps a symbol,
 /// return that SymbolRef.  Otherwise return 0.
 ///
 /// Implicit casts (ex: void* -> char*) can turn Symbolic region into Element
@@ -85,7 +85,7 @@ const FunctionDecl *SVal::getAsFunctionDecl() const {
 SymbolRef SVal::getAsLocSymbol(bool IncludeBaseRegions) const {
   // FIXME: should we consider SymbolRef wrapped in CodeTextRegion?
   if (Optional<nonloc::LocAsInteger> X = getAs<nonloc::LocAsInteger>())
-    return X->getLoc().getAsLocSymbol();
+    return X->getLoc().getAsLocSymbol(IncludeBaseRegions);
 
   if (Optional<loc::MemRegionVal> X = getAs<loc::MemRegionVal>()) {
     const MemRegion *R = X->getRegion();
@@ -118,7 +118,7 @@ SymbolRef SVal::getLocSymbolInBase() const {
 
 // TODO: The next 3 functions have to be simplified.
 
-/// \brief If this SVal wraps a symbol return that SymbolRef.
+/// If this SVal wraps a symbol return that SymbolRef.
 /// Otherwise, return 0.
 ///
 /// Casts are ignored during lookup.
@@ -169,6 +169,10 @@ const void *nonloc::LazyCompoundVal::getStore() const {
 
 const TypedValueRegion *nonloc::LazyCompoundVal::getRegion() const {
   return static_cast<const LazyCompoundValData*>(Data)->getRegion();
+}
+
+bool nonloc::PointerToMember::isNullMemberPointer() const {
+  return getPTMData().isNull();
 }
 
 const DeclaratorDecl *nonloc::PointerToMember::getDecl() const {
@@ -300,13 +304,9 @@ void SVal::dumpToStream(raw_ostream &os) const {
 void NonLoc::dumpToStream(raw_ostream &os) const {
   switch (getSubKind()) {
     case nonloc::ConcreteIntKind: {
-      const nonloc::ConcreteInt& C = castAs<nonloc::ConcreteInt>();
-      if (C.getValue().isUnsigned())
-        os << C.getValue().getZExtValue();
-      else
-        os << C.getValue().getSExtValue();
-      os << ' ' << (C.getValue().isUnsigned() ? 'U' : 'S')
-         << C.getValue().getBitWidth() << 'b';
+      const auto &Value = castAs<nonloc::ConcreteInt>().getValue();
+      os << Value << ' ' << (Value.isSigned() ? 'S' : 'U')
+         << Value.getBitWidth() << 'b';
       break;
     }
     case nonloc::SymbolValKind:

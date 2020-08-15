@@ -87,6 +87,7 @@ static const EnumEntry<codeview::SourceLanguage> SourceLanguages[] = {
     CV_ENUM_ENT(SourceLanguage, ILAsm),   CV_ENUM_ENT(SourceLanguage, Java),
     CV_ENUM_ENT(SourceLanguage, JScript), CV_ENUM_ENT(SourceLanguage, MSIL),
     CV_ENUM_ENT(SourceLanguage, HLSL),    CV_ENUM_ENT(SourceLanguage, D),
+    CV_ENUM_ENT(SourceLanguage, Swift),
 };
 
 static const EnumEntry<uint32_t> CompileSym2FlagNames[] = {
@@ -200,6 +201,8 @@ static const EnumEntry<uint32_t> FrameProcSymFlagNames[] = {
     CV_ENUM_CLASS_ENT(FrameProcedureOptions, Inlined),
     CV_ENUM_CLASS_ENT(FrameProcedureOptions, StrictSecurityChecks),
     CV_ENUM_CLASS_ENT(FrameProcedureOptions, SafeBuffers),
+    CV_ENUM_CLASS_ENT(FrameProcedureOptions, EncodedLocalBasePointerMask),
+    CV_ENUM_CLASS_ENT(FrameProcedureOptions, EncodedParamBasePointerMask),
     CV_ENUM_CLASS_ENT(FrameProcedureOptions, ProfileGuidedOptimization),
     CV_ENUM_CLASS_ENT(FrameProcedureOptions, ValidProfileCounts),
     CV_ENUM_CLASS_ENT(FrameProcedureOptions, OptimizedForSpeed),

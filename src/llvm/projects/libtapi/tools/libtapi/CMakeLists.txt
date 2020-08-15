@@ -6,13 +6,15 @@ set(LLVM_LINK_COMPONENTS
 add_tapi_library(libtapi
   SHARED
   APIVersion.cpp
-  libtapi.cpp
   LinkerInterfaceFile.cpp
   Version.cpp
   ${TAPI_CXX_API_HEADERS}
 
   LINK_LIBS
   tapiCore
+  tapiNoInits
+
+  NO_INSTALL_RPATH
   )
 
 set_target_properties(libtapi

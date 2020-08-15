@@ -9,16 +9,17 @@
 
 #include "tapi/Driver/Snapshot.h"
 #include "tapi/Config/Version.h"
+#include "tapi/Core/FileSystem.h"
 #include "tapi/Core/LLVM.h"
-#include "tapi/Core/YAML.h"
+#include "tapi/Core/TextStubCommon.h"
 #include "tapi/Defines.h"
 #include "clang/Frontend/FrontendOptions.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/Config/config.h"
 #include "llvm/Support/FileSystem.h"
+#include "llvm/Support/Format.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/xxhash.h"
-#include <sstream>
 
 using namespace llvm;
 using namespace TAPI_INTERNAL;
@@ -28,6 +29,7 @@ using Mapping = std::pair<std::string, uint64_t>;
 using Reexports = std::pair<std::string, ArchitectureSet>;
 LLVM_YAML_IS_SEQUENCE_VECTOR(InterfaceFileRef)
 LLVM_YAML_IS_SEQUENCE_VECTOR(Reexports)
+LLVM_YAML_IS_SEQUENCE_VECTOR(LibraryRef)
 LLVM_YAML_IS_FLOW_SEQUENCE_VECTOR(Macro)
 LLVM_YAML_IS_FLOW_SEQUENCE_VECTOR(Triple)
 LLVM_YAML_IS_STRING_MAP(uint64_t)
@@ -59,17 +61,17 @@ template <> struct ScalarEnumerationTraits<ArchiveAction> {
   }
 };
 
-template <> struct MappingTraits<InterfaceFileRef> {
-  static void mapping(IO &io, InterfaceFileRef &ref) {
-    io.mapRequired("install-name", ref._installName);
-    io.mapOptional("architectures", ref._architectures);
-  }
-};
-
 template <> struct MappingTraits<Reexports> {
   static void mapping(IO &io, Reexports &ref) {
     io.mapRequired("name", ref.first);
-    io.mapOptional("architectures", ref.second);
+    io.mapRequired("architectures", ref.second);
+  }
+};
+
+template <> struct MappingTraits<LibraryRef> {
+  static void mapping(IO &io, LibraryRef &ref) {
+    io.mapRequired("install-name", ref.installName);
+    io.mapRequired("architectures", ref.architectures);
   }
 };
 
@@ -125,15 +127,19 @@ template <> struct MappingTraits<DriverOptions> {
   static void mapping(IO &io, DriverOptions &opts) {
     io.mapOptional("print-version", opts.printVersion, false);
     io.mapOptional("print-help", opts.printHelp, false);
-    io.mapOptional("inputs", opts.inputs, {});
+    io.mapOptional("print-help-hidden", opts.printHelpHidden, false);
+    io.mapOptional("inputs", opts.inputs, PathSeq{});
     io.mapOptional("output-path", opts.outputPath, std::string());
+    io.mapOptional("vfs-overlay-paths", opts.vfsOverlayPaths, PathSeq{});
+    io.mapOptional("clang-executable-path", opts.clangExecutablePath,
+                   std::string{});
   }
 };
 
 template <> struct MappingTraits<ArchiveOptions> {
   static void mapping(IO &io, ArchiveOptions &opts) {
     io.mapOptional("action", opts.action, ArchiveAction::Unknown);
-    io.mapOptional("architecture", opts.arch, Architecture::unknown);
+    io.mapOptional("architecture", opts.arch, AK_unknown);
   }
 };
 
@@ -147,13 +153,20 @@ struct MappingContextTraits<LinkerOptions, Snapshot::MappingContext> {
     io.mapOptional("compatibility-version", opts.compatibilityVersion,
                    PackedVersion());
     io.mapOptional("is-dynamic-library", opts.isDynamicLibrary, false);
-    io.mapOptional("allowable-clients", opts.allowableClients, {});
-    io.mapOptional("reexported-libraries", opts.reexportInstallNames, {});
-    io.mapOptional("reexported-libraries2", opts.reexportedLibraries, {});
-    io.mapOptional("reexported-library-paths", opts.reexportedLibraryPaths, {});
-    io.mapOptional("reexported-frameworks", opts.reexportedFrameworks, {});
+    io.mapOptional("allowable-clients", opts.allowableClients,
+                   std::vector<LibraryRef>{});
+    io.mapOptional("reexported-libraries", opts.reexportInstallNames,
+                   std::vector<LibraryRef>{});
+    io.mapOptional("reexported-libraries2", opts.reexportedLibraries,
+                   std::vector<std::pair<std::string, ArchitectureSet>>{});
+    io.mapOptional("reexported-library-paths", opts.reexportedLibraryPaths,
+                   std::vector<std::pair<std::string, ArchitectureSet>>{});
+    io.mapOptional("reexported-frameworks", opts.reexportedFrameworks,
+                   std::vector<std::pair<std::string, ArchitectureSet>>{});
     io.mapOptional("is-application-extension-safe",
                    opts.isApplicationExtensionSafe, false);
+    io.mapOptional("alias-list", opts.aliasLists,
+                   std::vector<std::pair<std::string, ArchitectureSet>>{});
   }
 };
 
@@ -164,17 +177,20 @@ struct MappingContextTraits<tapi::internal::FrontendOptions,
                       Snapshot::MappingContext &ctx) {
     io.mapOptional("platform", ctx.platform, Platform::unknown);
     io.mapOptional("os-version", ctx.osVersion, std::string());
-    io.mapOptional("targets", opts.targets, {});
+    io.mapOptional("targets", opts.targets, std::vector<llvm::Triple>{});
+    io.mapOptional("target-variants", opts.targetVariants,
+                   std::vector<llvm::Triple>{});
     io.mapOptional("language", opts.language, InputKind::ObjC);
     io.mapOptional("language-std", opts.language_std, std::string());
     io.mapOptional("isysroot", opts.isysroot, std::string());
     io.mapOptional("umbrella", opts.umbrella, std::string());
-    io.mapOptional("system-framework-paths", opts.systemFrameworkPaths, {});
-    io.mapOptional("system-include-paths", opts.systemIncludePaths, {});
-    io.mapOptional("framework-paths", opts.frameworkPaths, {});
-    io.mapOptional("library-paths", opts.libraryPaths, {});
-    io.mapOptional("include-paths", opts.includePaths, {});
-    io.mapOptional("macros", opts.macros, {});
+    io.mapOptional("system-framework-paths", opts.systemFrameworkPaths,
+                   PathSeq{});
+    io.mapOptional("system-include-paths", opts.systemIncludePaths, PathSeq{});
+    io.mapOptional("framework-paths", opts.frameworkPaths, PathSeq{});
+    io.mapOptional("library-paths", opts.libraryPaths, PathSeq{});
+    io.mapOptional("include-paths", opts.includePaths, PathSeq{});
+    io.mapOptional("macros", opts.macros, std::vector<Macro>{});
     io.mapOptional("use-rtti", opts.useRTTI, true);
     io.mapOptional("visibility", opts.visibility, std::string());
     io.mapOptional("enable-modules", opts.enableModules, false);
@@ -183,7 +199,8 @@ struct MappingContextTraits<tapi::internal::FrontendOptions,
                    false);
     io.mapOptional("use-objc-arc", opts.useObjectiveCARC, false);
     io.mapOptional("use-objc-weak", opts.useObjectiveCWeakARC, false);
-    io.mapOptional("clang-extra-args", opts.clangExtraArgs, {});
+    io.mapOptional("clang-extra-args", opts.clangExtraArgs,
+                   std::vector<std::string>{});
     io.mapOptional("clang-resource-path", opts.clangResourcePath,
                    std::string());
   }
@@ -199,22 +216,29 @@ template <> struct MappingTraits<DiagnosticsOptions> {
 
 template <> struct MappingTraits<TAPIOptions> {
   static void mapping(IO &io, TAPIOptions &opts) {
-    io.mapOptional("generate-code-coverage-symbols",
-                   opts.generateCodeCoverageSymbols, false);
+    io.mapOptional("file-list", opts.fileList, std::string());
     io.mapOptional("public-umbrella-header-path", opts.publicUmbrellaHeaderPath,
                    std::string());
     io.mapOptional("private-umbrella-header-path",
                    opts.privateUmbrellaHeaderPath, std::string());
-    io.mapOptional("extra-public-headers", opts.extraPublicHeaders, {});
-    io.mapOptional("extra-private-headers", opts.extraPrivateHeaders, {});
-    io.mapOptional("exclude-public-headers", opts.excludePublicHeaders, {});
-    io.mapOptional("exclude-private-headers", opts.excludePrivateHeaders, {});
+    io.mapOptional("extra-public-headers", opts.extraPublicHeaders, PathSeq{});
+    io.mapOptional("extra-private-headers", opts.extraPrivateHeaders,
+                   PathSeq{});
+    io.mapOptional("extra-project-headers", opts.extraProjectHeaders,
+                   PathSeq{});
+    io.mapOptional("exclude-public-headers", opts.excludePublicHeaders,
+                   PathSeq{});
+    io.mapOptional("exclude-private-headers", opts.excludePrivateHeaders,
+                   PathSeq{});
+    io.mapOptional("exclude-project-headers", opts.excludeProjectHeaders,
+                   PathSeq{});
     io.mapOptional("verify-against", opts.verifyAgainst, std::string());
     io.mapOptional("verification-mode", opts.verificationMode,
                    VerificationMode::ErrorsOnly);
+    io.mapOptional("generate-code-coverage-symbols",
+                   opts.generateCodeCoverageSymbols, false);
     io.mapOptional("demangle", opts.demangle, false);
-    io.mapOptional("scan-public-headers", opts.scanPublicHeaders, true);
-    io.mapOptional("scan-private-headers", opts.scanPrivateHeaders, true);
+
     io.mapOptional("delete-input-file", opts.deleteInputFile, false);
     io.mapOptional("inline-private-frameworks", opts.inlinePrivateFrameworks,
                    false);
@@ -223,6 +247,22 @@ template <> struct MappingTraits<TAPIOptions> {
     io.mapOptional("record-uuids", opts.recordUUIDs, true);
     io.mapOptional("set-installapi-flag", opts.setInstallAPIFlag, false);
     io.mapOptional("infer-include-paths", opts.inferIncludePaths, true);
+    io.mapOptional("verify-api", opts.verifyAPI, true);
+    io.mapOptional("verify-api-skip-external-headers",
+                   opts.verifyAPISkipExternalHeaders, false);
+    io.mapOptional("verify-api-error-as-warning", opts.verifyAPIErrorAsWarning,
+                   false);
+  }
+};
+
+template <> struct CustomMappingTraits<FileMapping> {
+  static void inputOne(IO &io, StringRef key, FileMapping &v) {
+    io.mapRequired(key.str().c_str(), v[key]);
+  }
+
+  static void output(IO &io, FileMapping &v) {
+    for (auto &p : v)
+      io.mapRequired(p.first.c_str(), p.second);
   }
 };
 
@@ -232,19 +272,18 @@ template <> struct MappingTraits<Snapshot> {
     io.mapRequired("name", snapshot.name);
     io.mapRequired("command", snapshot.command);
     io.mapRequired("working-directory", snapshot.workingDirectory);
-    io.mapOptional("raw-args", snapshot.rawArgs);
-    io.mapOptional("driver-options", snapshot.driverOptions, DriverOptions());
-    io.mapOptional("archive-options", snapshot.archiveOptions,
-                   ArchiveOptions());
+    io.mapOptional("raw-args", snapshot.rawArgs, std::vector<std::string>{});
+    io.mapOptional("driver-options", snapshot.driverOptions);
+    io.mapOptional("archive-options", snapshot.archiveOptions);
     io.mapOptionalWithContext("linker-options", snapshot.linkerOptions,
-                              LinkerOptions(), snapshot.context);
+                              snapshot.context);
     io.mapOptionalWithContext("frontend-options", snapshot.frontendOptions,
-                              FrontendOptions(), snapshot.context);
-    io.mapOptional("diagnostics-options", snapshot.diagnosticsOptions,
-                   DiagnosticsOptions());
-    io.mapOptional("tapi-options", snapshot.tapiOptions, TAPIOptions());
+                              snapshot.context);
+    io.mapOptional("diagnostics-options", snapshot.diagnosticsOptions);
+    io.mapOptional("tapi-options", snapshot.tapiOptions);
     io.mapOptional("directories", snapshot.normalizedDirectories);
     io.mapOptional("file-mapping", snapshot.pathToHash);
+    io.mapOptional("symlink-mapping", snapshot.symlinkToPath);
   }
 };
 
@@ -265,6 +304,59 @@ Snapshot::~Snapshot() {
     return;
 
   writeSnapshot(/*isCrash=*/false);
+}
+
+void Snapshot::findAndRecordSymlinks(SmallVectorImpl<char> &path,
+                                     int level = 0) {
+  if (level > 20) {
+    outs() << path << ": Too many levels of symbolic links\n";
+    return;
+  }
+  StringRef p(path.begin(), path.size());
+  SmallString<PATH_MAX> currentPath;
+  for (auto dir = sys::path::begin(p), e = sys::path::end(p); dir != e; ++dir) {
+    sys::path::append(currentPath, *dir);
+    if (directorySet.count(currentPath.str()))
+      continue;
+
+    auto fileType = sys::fs::get_file_type(currentPath, /*follow=*/false);
+    switch (fileType) {
+    case sys::fs::file_type::symlink_file: {
+      SmallString<PATH_MAX> linkPath;
+      if (auto ec = read_link(currentPath, linkPath)) {
+        outs() << currentPath << ": " << ec.message() << "\n";
+        return;
+      }
+      SmallString<PATH_MAX> newPath;
+      if (sys::path::is_absolute(linkPath))
+        newPath = linkPath;
+      else {
+        newPath = currentPath;
+        sys::path::remove_filename(newPath);
+        sys::path::append(newPath, linkPath);
+      }
+
+      if (auto ec = sys::fs::make_absolute(newPath)) {
+        outs() << currentPath << ": " << ec.message() << "\n";
+        return;
+      }
+      sys::path::remove_dots(newPath, /*remove_dot_dot=*/true);
+      symlinkToPath[currentPath.str()] = newPath.str();
+
+      for (auto itr = std::next(dir); itr != e; ++itr)
+        sys::path::append(newPath, *itr);
+      findAndRecordSymlinks(newPath, ++level);
+      path = newPath;
+      return;
+    }
+    case sys::fs::file_type::directory_file:
+      directorySet.emplace(currentPath.str());
+      break;
+    default:
+      return;
+    }
+  }
+  return;
 }
 
 void Snapshot::writeSnapshot(bool isCrash) {
@@ -316,6 +408,8 @@ void Snapshot::writeSnapshot(bool isCrash) {
     }
 
     sys::path::remove_dots(normalizedPathStorage, /*remove_dot_dot=*/true);
+
+    findAndRecordSymlinks(normalizedPathStorage);
     auto normalizedPath = normalizedPathStorage.str();
 
     // Skip the file if we have it already hashed and copied.
@@ -330,37 +424,43 @@ void Snapshot::writeSnapshot(bool isCrash) {
     if (auto ec = bufferOrErr.getError())
       continue;
 
+    // Making the file path part of the hash will reduce some of the possible
+    // space savings for files with the same content, but those are rare to
+    // begin with. The reason we need to include the path is to make sure that
+    // the FileManager - when using the snapshot file system - recognizes
+    // different files with the same content still as distinct files.
     auto &buffer = bufferOrErr.get();
-    auto hash = xxHash64(buffer->getBuffer());
+    auto contentHash = xxHash64(buffer->getBuffer());
+    auto filenameHash = xxHash64(normalizedPath);
+    auto hash = hash_combine(filenameHash, contentHash);
 
-    std::stringstream stream;
-    stream << std::hex << hash;
-    std::string fileName(stream.str());
+    std::string hashString;
+    llvm::raw_string_ostream(hashString) << format_hex(hash, 18);
 
     SmallString<PATH_MAX> filePath = root;
-    sys::path::append(filePath, filesDirectory, fileName);
+    sys::path::append(filePath, filesDirectory,
+                      StringRef(hashString).drop_front(2));
     if (auto ec = sys::fs::copy_file(normalizedPath, filePath))
       continue;
 
-    pathToHash[normalizedPath] = hash;
+    // Store the hex string, so we know if we are loading an old or new
+    // snapshot.
+    pathToHash[normalizedPath] = hashString;
   }
 
   for (auto &path : directories) {
     // Normalize all paths.
-    SmallString<PATH_MAX> normalizedPathStorage(path);
-    if (auto ec = sys::fs::make_absolute(normalizedPathStorage)) {
-      outs() << normalizedPathStorage << ": " << ec.message() << "\n";
+    SmallString<PATH_MAX> normalizedPath(path);
+    if (auto ec = sys::fs::make_absolute(normalizedPath)) {
+      outs() << normalizedPath << ": " << ec.message() << "\n";
       continue;
     }
+    sys::path::remove_dots(normalizedPath, /*remove_dot_dot=*/true);
 
-    sys::path::remove_dots(normalizedPathStorage, /*remove_dot_dot=*/true);
-    auto normalizedPath = normalizedPathStorage.str();
-
-    if (!sys::fs::exists(normalizedPath))
-      continue;
-
-    normalizedDirectories.emplace_back(normalizedPath);
+    findAndRecordSymlinks(normalizedPath);
   }
+  normalizedDirectories.insert(normalizedDirectories.end(),
+                               directorySet.begin(), directorySet.end());
   sort(normalizedDirectories);
   auto last =
       std::unique(normalizedDirectories.begin(), normalizedDirectories.end());
@@ -467,6 +567,25 @@ bool Snapshot::loadSnapshot(StringRef path_) {
     frontendOptions.targets.push_back(target);
   }
 
+  // Try to infer the clang executable path for old snapshot files.
+  if (driverOptions.clangExecutablePath.empty()) {
+    SmallString<PATH_MAX> clangExecutablePath;
+    if (!rawArgs.empty()) {
+      clangExecutablePath = sys::path::parent_path(rawArgs[0]);
+      sys::path::append(clangExecutablePath, "clang");
+    } else if (!frontendOptions.clangResourcePath.empty()) {
+      StringRef path = frontendOptions.clangResourcePath;
+      while (!path.empty() && !path.endswith("bin"))
+        path = sys::path::parent_path(path);
+      if (!path.empty()) {
+        clangExecutablePath = path;
+        sys::path::append(clangExecutablePath, "clang");
+      }
+    }
+    if (!clangExecutablePath.empty())
+      driverOptions.clangExecutablePath = clangExecutablePath.str();
+  }
+
   // Create a separate directory for the output files.
   SmallString<PATH_MAX> root(rootPath);
   if (auto ec = sys::fs::make_absolute(root)) {
@@ -492,13 +611,25 @@ bool Snapshot::loadSnapshot(StringRef path_) {
   for (const auto &mapping : pathToHash) {
     SmallString<PATH_MAX> filePath = inputPath;
 
-    std::stringstream stream;
-    stream << std::hex << mapping.second;
-    std::string hash(stream.str());
+    std::string fileName;
+    if (StringRef(mapping.second).startswith("0x"))
+      // This is the new snapshot format that uses hex numbers.
+      fileName = StringRef(mapping.second).drop_front(2);
+    else {
+      // Support old snapshot files.
+      uint64_t intValue = 0;
+      StringRef(mapping.second).getAsInteger(10, intValue);
+      llvm::raw_string_ostream(fileName) << format_hex_no_prefix(intValue, 0);
+    }
 
-    sys::path::append(filePath, hash);
+    sys::path::append(filePath, fileName);
+    assert(sys::fs::exists(filePath) && "cannot find file in snapshot");
 
     fs->addFile(mapping.first, filePath);
+  }
+
+  for (const auto &mapping : symlinkToPath) {
+    fs->addSymlink(mapping.first, mapping.second);
   }
 
   for (const auto &path : normalizedDirectories)

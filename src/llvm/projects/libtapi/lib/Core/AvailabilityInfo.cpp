@@ -14,6 +14,14 @@ using namespace llvm;
 
 TAPI_NAMESPACE_INTERNAL_BEGIN
 
+std::string AvailabilityInfo::str() const {
+  std::string str;
+  raw_string_ostream os(str);
+  print(os);
+  os.flush();
+  return str;
+}
+
 void AvailabilityInfo::print(raw_ostream &os) const {
   os << "i:" << _introduced << " o:" << _obsoleted
      << " u:" << static_cast<int>((bool)_unavailable);

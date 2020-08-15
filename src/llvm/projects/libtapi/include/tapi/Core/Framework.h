@@ -16,13 +16,13 @@
 #ifndef TAPI_CORE_FRAMEWORK_H
 #define TAPI_CORE_FRAMEWORK_H
 
-#include "tapi/Core/ExtendedInterfaceFile.h"
 #include "tapi/Core/HeaderFile.h"
 #include "tapi/Core/InterfaceFile.h"
 #include "tapi/Core/LLVM.h"
 #include "tapi/Core/Path.h"
 #include "tapi/Core/XPI.h"
 #include "tapi/Defines.h"
+#include "tapi/Frontend/FrontendContext.h"
 #include "llvm/ADT/StringRef.h"
 #include <map>
 #include <string>
@@ -39,9 +39,11 @@ struct Framework {
   PathSeq _dynamicLibraryFiles;
   std::vector<Framework> _subFrameworks;
   std::vector<Framework> _versions;
-  std::vector<std::unique_ptr<ExtendedInterfaceFile>> _interfaceFiles;
+  std::vector<std::unique_ptr<InterfaceFile>> _interfaceFiles;
   std::unique_ptr<XPISet> _headerSymbols;
+  std::vector<FrontendContext> _frontendResults;
   bool isDynamicLibrary{false};
+  bool isSysRoot{false};
 
   Framework(StringRef directory) : _baseDirectory(directory) {}
 
@@ -59,16 +61,7 @@ struct Framework {
   void addDynamicLibraryFile(StringRef path) {
     _dynamicLibraryFiles.emplace_back(path);
   }
-
-  bool verify(bool warnAll = true) const;
-
-  void print(raw_ostream &os) const;
 };
-
-inline raw_ostream &operator<<(raw_ostream &os, const Framework &framework) {
-  framework.print(os);
-  return os;
-}
 
 TAPI_NAMESPACE_INTERNAL_END
 

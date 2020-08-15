@@ -1,3 +1,5 @@
+set(LLVM_EXPORTED_SYMBOL_FILE ${CMAKE_CURRENT_SOURCE_DIR}/tapi-run.exports)
+
 add_tapi_executable(tapi-run
   tapi-run.cpp
   )
@@ -19,4 +21,3 @@ install(TARGETS tapi-run
 add_llvm_install_targets(install-tapi-run
                          DEPENDS tapi-run
                          COMPONENT tapi-run)
-

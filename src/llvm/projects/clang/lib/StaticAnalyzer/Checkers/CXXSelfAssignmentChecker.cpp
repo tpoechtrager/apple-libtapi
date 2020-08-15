@@ -18,7 +18,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "ClangSACheckers.h"
+#include "clang/StaticAnalyzer/Checkers/BuiltinCheckerRegistration.h"
 #include "clang/StaticAnalyzer/Core/Checker.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/CheckerContext.h"
 
@@ -48,7 +48,7 @@ void CXXSelfAssignmentChecker::checkBeginFunction(CheckerContext &C) const {
   auto &State = C.getState();
   auto &SVB = C.getSValBuilder();
   auto ThisVal =
-      State->getSVal(SVB.getCXXThis(MD, LCtx->getCurrentStackFrame()));
+      State->getSVal(SVB.getCXXThis(MD, LCtx->getStackFrame()));
   auto Param = SVB.makeLoc(State->getRegion(MD->getParamDecl(0), LCtx));
   auto ParamVal = State->getSVal(Param);
   ProgramStateRef SelfAssignState = State->bindLoc(Param, ThisVal, LCtx);
@@ -59,4 +59,8 @@ void CXXSelfAssignmentChecker::checkBeginFunction(CheckerContext &C) const {
 
 void ento::registerCXXSelfAssignmentChecker(CheckerManager &Mgr) {
   Mgr.registerChecker<CXXSelfAssignmentChecker>();
+}
+
+bool ento::shouldRegisterCXXSelfAssignmentChecker(const LangOptions &LO) {
+  return true;
 }

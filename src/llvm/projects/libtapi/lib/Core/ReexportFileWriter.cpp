@@ -13,67 +13,72 @@
 //===----------------------------------------------------------------------===//
 
 #include "tapi/Core/ReexportFileWriter.h"
-#include "tapi/Core/ExtendedInterfaceFile.h"
 #include "tapi/Core/LLVM.h"
 #include "llvm/Support/ErrorHandling.h"
 #include <system_error>
 
 using namespace llvm;
+using namespace clang;
 
 TAPI_NAMESPACE_INTERNAL_BEGIN
 
-bool ReexportFileWriter::canWrite(const File *file) const {
-  auto *interface = dyn_cast<ExtendedInterfaceFile>(file);
-  if (interface == nullptr)
-    return false;
+class ReexportFileWriter::Implementation {
+public:
+  std::vector<std::string> symbols;
+  bool isFragileABI;
+};
 
-  if (interface->getFileType() != FileType::ReexportFile)
-    return false;
-
-  if (interface->getArchitectures().count() != 1)
-    return false;
-
-  return true;
+ReexportFileWriter::ReexportFileWriter(const Triple &target)
+    : impl(*new ReexportFileWriter::Implementation()) {
+  impl.isFragileABI =
+      target.getOS() == Triple::MacOSX && target.getArch() == Triple::x86;
 }
 
-Error ReexportFileWriter::writeFile(raw_ostream &os, const File *file) const {
-  assert(canWrite(file) && "Cannot write provided file type");
+ReexportFileWriter::~ReexportFileWriter() { delete &impl; }
 
-  if (file == nullptr)
-    return errorCodeToError(std::make_error_code(std::errc::invalid_argument));
+void ReexportFileWriter::writeToStream(raw_ostream &os) {
+  for (const auto &symbol : impl.symbols)
+    os << symbol << "\n";
+}
 
-  const auto *interface = cast<ExtendedInterfaceFile>(file);
+void ReexportFileWriter::visitGlobal(const GlobalRecord &record) {
+  // Skip non exported symbol.
+  if (!record.isExported())
+    return;
 
-  auto platform = interface->getPlatform();
-  auto arch = *(interface->getArchitectures().begin());
-  for (const auto *symbol : interface->exports()) {
-    assert(symbol->hasArch(arch) &&
-           "Symbol is not defined for expected architecture");
+  impl.symbols.emplace_back(record.name);
+}
 
-    switch (symbol->getKind()) {
-    case XPIKind::GlobalSymbol:
-      os << symbol->getName() << "\n";
-      break;
-    case XPIKind::ObjectiveCClass:
-      if (platform == Platform::macOS && arch == Architecture::i386)
-        os << ".objc_class_name_" << symbol->getName() << "\n";
-      else {
-        os << "_OBJC_CLASS_$_" << symbol->getName() << "\n";
-        os << "_OBJC_METACLASS_$_" << symbol->getName() << "\n";
-      }
-      break;
-    case XPIKind::ObjectiveCClassEHType:
-      os << "_OBJC_EHTYPE_$_" << symbol->getName() << "\n";
-      break;
-    case XPIKind::ObjectiveCInstanceVariable:
-      os << "_OBJC_IVAR_$_" + symbol->getName() << "\n";
-      break;
-    default:
-      llvm_unreachable("Unexpected symbol kind for exported symbols");
-    }
+void ReexportFileWriter::visitObjCInterface(const ObjCInterfaceRecord &record) {
+  if (!record.isExported())
+    return;
+
+  if (impl.isFragileABI)
+    impl.symbols.emplace_back((".objc_class_name_" + record.name).str());
+  else {
+    impl.symbols.emplace_back(("_OBJC_CLASS_$_" + record.name).str());
+    impl.symbols.emplace_back(("_OBJC_METACLASS_$_" + record.name).str());
   }
 
-  return Error::success();
+  if (record.hasExceptionAttribute)
+    impl.symbols.emplace_back(("_OBJC_EHTYPE_$_" + record.name).str());
+
+  auto addIvars = [&](ArrayRef<const ObjCInstanceVariableRecord *> ivars) {
+    for (const auto *ivar : ivars) {
+      if (!ivar->isExported())
+        continue;
+
+      // ObjC has an additional mechanism to specify if an ivar is exported or
+      // not.
+      if (ivar->accessControl == ObjCIvarDecl::Private ||
+          ivar->accessControl == ObjCIvarDecl::Package)
+        continue;
+
+      impl.symbols.emplace_back(
+          ("_OBJC_IVAR_$_" + record.name + "." + ivar->name).str());
+    }
+  };
+  addIvars(record.ivars);
 }
 
 TAPI_NAMESPACE_INTERNAL_END

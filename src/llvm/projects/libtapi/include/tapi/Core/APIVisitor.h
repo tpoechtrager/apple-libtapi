@@ -24,13 +24,24 @@ class APIVisitor {
 public:
   virtual ~APIVisitor();
 
-  virtual void visitGlobalVariable(const API::GlobalRecord &);
-  virtual void visitFunction(const API::FunctionRecord &);
-  virtual void visitEnumConstant(const API::EnumConstantRecord &);
-  virtual void visitObjCInterface(const API::ObjCInterfaceRecord &);
-  virtual void visitObjCCategory(const API::ObjCCategoryRecord &);
-  virtual void visitObjCProtocol(const API::ObjCProtocolRecord &);
-  virtual void visitTypeDef(const API::GlobalRecord &);
+  virtual void visitGlobal(const GlobalRecord &);
+  virtual void visitEnumConstant(const EnumConstantRecord &);
+  virtual void visitObjCInterface(const ObjCInterfaceRecord &);
+  virtual void visitObjCCategory(const ObjCCategoryRecord &);
+  virtual void visitObjCProtocol(const ObjCProtocolRecord &);
+  virtual void visitTypeDef(const APIRecord &);
+};
+
+class APIMutator {
+public:
+  virtual ~APIMutator();
+
+  virtual void visitGlobal(GlobalRecord &);
+  virtual void visitEnumConstant(EnumConstantRecord &);
+  virtual void visitObjCInterface(ObjCInterfaceRecord &);
+  virtual void visitObjCCategory(ObjCCategoryRecord &);
+  virtual void visitObjCProtocol(ObjCProtocolRecord &);
+  virtual void visitTypeDef(APIRecord &);
 };
 
 TAPI_NAMESPACE_INTERNAL_END

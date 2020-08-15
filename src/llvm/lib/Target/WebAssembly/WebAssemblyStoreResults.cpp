@@ -8,7 +8,7 @@
 //===----------------------------------------------------------------------===//
 ///
 /// \file
-/// \brief This file implements an optimization pass using store result values.
+/// This file implements an optimization pass using store result values.
 ///
 /// WebAssembly's store instructions return the stored value. This is to enable
 /// an optimization wherein uses of the stored value can be replaced by uses of
@@ -68,6 +68,9 @@ private:
 } // end anonymous namespace
 
 char WebAssemblyStoreResults::ID = 0;
+INITIALIZE_PASS(WebAssemblyStoreResults, DEBUG_TYPE,
+                "Optimize store result values for WebAssembly", false, false)
+
 FunctionPass *llvm::createWebAssemblyStoreResults() {
   return new WebAssemblyStoreResults();
 }
@@ -88,7 +91,8 @@ static bool ReplaceDominatedUses(MachineBasicBlock &MBB, MachineInstr &MI,
 
   SmallVector<SlotIndex, 4> Indices;
 
-  for (auto I = MRI.use_nodbg_begin(FromReg), E = MRI.use_nodbg_end(); I != E;) {
+  for (auto I = MRI.use_nodbg_begin(FromReg), E = MRI.use_nodbg_end();
+       I != E;) {
     MachineOperand &O = *I++;
     MachineInstr *Where = O.getParent();
 
@@ -108,8 +112,8 @@ static bool ReplaceDominatedUses(MachineBasicBlock &MBB, MachineInstr &MI,
       continue;
 
     Changed = true;
-    DEBUG(dbgs() << "Setting operand " << O << " in " << *Where << " from "
-                 << MI << "\n");
+    LLVM_DEBUG(dbgs() << "Setting operand " << O << " in " << *Where << " from "
+                      << MI << "\n");
     O.setReg(ToReg);
 
     // If the store's def was previously dead, it is no longer.
@@ -129,9 +133,9 @@ static bool ReplaceDominatedUses(MachineBasicBlock &MBB, MachineInstr &MI,
 
     // If we replaced all dominated uses, FromReg is now killed at MI.
     if (!FromLI->liveAt(FromIdx.getDeadSlot()))
-      MI.addRegisterKilled(FromReg,
-                           MBB.getParent()->getSubtarget<WebAssemblySubtarget>()
-                                 .getRegisterInfo());
+      MI.addRegisterKilled(FromReg, MBB.getParent()
+                                        ->getSubtarget<WebAssemblySubtarget>()
+                                        .getRegisterInfo());
   }
 
   return Changed;
@@ -139,8 +143,7 @@ static bool ReplaceDominatedUses(MachineBasicBlock &MBB, MachineInstr &MI,
 
 static bool optimizeCall(MachineBasicBlock &MBB, MachineInstr &MI,
                          const MachineRegisterInfo &MRI,
-                         MachineDominatorTree &MDT,
-                         LiveIntervals &LIS,
+                         MachineDominatorTree &MDT, LiveIntervals &LIS,
                          const WebAssemblyTargetLowering &TLI,
                          const TargetLibraryInfo &LibInfo) {
   MachineOperand &Op1 = MI.getOperand(1);
@@ -167,7 +170,7 @@ static bool optimizeCall(MachineBasicBlock &MBB, MachineInstr &MI,
 }
 
 bool WebAssemblyStoreResults::runOnMachineFunction(MachineFunction &MF) {
-  DEBUG({
+  LLVM_DEBUG({
     dbgs() << "********** Store Results **********\n"
            << "********** Function: " << MF.getName() << '\n';
   });
@@ -186,7 +189,7 @@ bool WebAssemblyStoreResults::runOnMachineFunction(MachineFunction &MF) {
   assert(MRI.tracksLiveness() && "StoreResults expects liveness tracking");
 
   for (auto &MBB : MF) {
-    DEBUG(dbgs() << "Basic Block: " << MBB.getName() << '\n');
+    LLVM_DEBUG(dbgs() << "Basic Block: " << MBB.getName() << '\n');
     for (auto &MI : MBB)
       switch (MI.getOpcode()) {
       default:

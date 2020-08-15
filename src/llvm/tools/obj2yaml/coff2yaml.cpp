@@ -147,7 +147,7 @@ void COFFDumper::dumpSections(unsigned NumSections) {
     COFFYAML::Section NewYAMLSection;
     ObjSection.getName(NewYAMLSection.Name);
     NewYAMLSection.Header.Characteristics = COFFSection->Characteristics;
-    NewYAMLSection.Header.VirtualAddress = ObjSection.getAddress();
+    NewYAMLSection.Header.VirtualAddress = COFFSection->VirtualAddress;
     NewYAMLSection.Header.VirtualSize = COFFSection->VirtualSize;
     NewYAMLSection.Header.NumberOfLineNumbers =
         COFFSection->NumberOfLinenumbers;
@@ -159,7 +159,8 @@ void COFFDumper::dumpSections(unsigned NumSections) {
     NewYAMLSection.Header.PointerToRelocations =
         COFFSection->PointerToRelocations;
     NewYAMLSection.Header.SizeOfRawData = COFFSection->SizeOfRawData;
-    NewYAMLSection.Alignment = ObjSection.getAlignment();
+    uint32_t Shift = (COFFSection->Characteristics >> 20) & 0xF;
+    NewYAMLSection.Alignment = (1U << Shift) >> 1;
     assert(NewYAMLSection.Alignment <= 8192);
 
     ArrayRef<uint8_t> sectionData;
@@ -170,7 +171,11 @@ void COFFDumper::dumpSections(unsigned NumSections) {
     if (NewYAMLSection.Name == ".debug$S")
       NewYAMLSection.DebugS = CodeViewYAML::fromDebugS(sectionData, SC);
     else if (NewYAMLSection.Name == ".debug$T")
-      NewYAMLSection.DebugT = CodeViewYAML::fromDebugT(sectionData);
+      NewYAMLSection.DebugT = CodeViewYAML::fromDebugT(sectionData,
+                                                       NewYAMLSection.Name);
+    else if (NewYAMLSection.Name == ".debug$P")
+      NewYAMLSection.DebugP = CodeViewYAML::fromDebugT(sectionData,
+                                                       NewYAMLSection.Name);
     else if (NewYAMLSection.Name == ".debug$H")
       NewYAMLSection.DebugH = CodeViewYAML::fromDebugH(sectionData);
 
@@ -183,7 +188,7 @@ void COFFDumper::dumpSections(unsigned NumSections) {
       if (!SymbolNameOrErr) {
        std::string Buf;
        raw_string_ostream OS(Buf);
-       logAllUnhandledErrors(SymbolNameOrErr.takeError(), OS, "");
+       logAllUnhandledErrors(SymbolNameOrErr.takeError(), OS);
        OS.flush();
        report_fatal_error(Buf);
       }

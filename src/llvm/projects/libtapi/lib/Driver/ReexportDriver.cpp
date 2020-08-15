@@ -12,9 +12,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
-#include "API2XPIConverter.h"
-#include "tapi/Core/ExtendedInterfaceFile.h"
-#include "tapi/Core/Registry.h"
+#include "tapi/Core/ReexportFileWriter.h"
 #include "tapi/Defines.h"
 #include "tapi/Diagnostics/Diagnostics.h"
 #include "tapi/Driver/Driver.h"
@@ -38,11 +36,16 @@ bool Driver::Reexport::run(DiagnosticsEngine &diag, Options &opts) {
     return false;
   }
 
+  // Set default language option.
+  if (opts.frontendOptions.language == clang::InputKind::Unknown)
+    opts.frontendOptions.language = clang::InputKind::ObjC;
+
   // Only allow one target.
   if (opts.frontendOptions.targets.size() > 1) {
     diag.report(diag::err_one_target);
     return false;
   }
+  const auto &target = opts.frontendOptions.targets.front();
 
   // Handle input files.
   if (opts.driverOptions.inputs.empty()) {
@@ -61,6 +64,7 @@ bool Driver::Reexport::run(DiagnosticsEngine &diag, Options &opts) {
   }
 
   FrontendJob job;
+  job.target = target;
   job.language = opts.frontendOptions.language;
   job.language_std = opts.frontendOptions.language_std;
   job.useRTTI = opts.frontendOptions.useRTTI;
@@ -86,26 +90,12 @@ bool Driver::Reexport::run(DiagnosticsEngine &diag, Options &opts) {
   job.includePaths.insert(job.includePaths.end(), inferredIncludePaths.begin(),
                           inferredIncludePaths.end());
 
-  std::vector<FrontendContext> frontendResults;
-  for (auto &target : opts.frontendOptions.targets) {
-    job.target = target;
-    auto result = runFrontend(job);
-    if (!result)
-      return false;
-    frontendResults.emplace_back(std::move(result.getValue()));
-  }
+  auto frontendResult = runFrontend(job);
+  if (!frontendResult)
+    return false;
 
-  auto headerSymbols = make_unique<XPISet>();
-  for (auto &result : frontendResults) {
-    API2XPIConverter converter(headerSymbols.get(), result.target);
-    result.visit(converter);
-  }
-
-  auto scanFile = make_unique<ExtendedInterfaceFile>(std::move(headerSymbols));
-  scanFile->setFileType(FileType::ReexportFile);
-  scanFile->setArchitectures(
-      mapToArchitectureSet(opts.frontendOptions.targets));
-  scanFile->setPlatform(mapToSinglePlatform(opts.frontendOptions.targets));
+  ReexportFileWriter writer(target);
+  frontendResult->visit(writer);
 
   SmallString<PATH_MAX> outputPath(opts.driverOptions.outputPath);
   if (outputPath.empty()) {
@@ -125,14 +115,23 @@ bool Driver::Reexport::run(DiagnosticsEngine &diag, Options &opts) {
     return false;
   }
 
-  Registry registry;
-  registry.addReexportWriters();
-  auto result = registry.writeFile(scanFile.get(), outputPath.str());
-  if (result) {
+  std::error_code err;
+  raw_fd_ostream os(outputPath, err);
+  if (err) {
     diag.report(diag::err_cannot_write_file)
-        << outputPath.str() << toString(std::move(result));
+        << outputPath.str() << err.message();
     return false;
   }
+
+  writer.writeToStream(os);
+
+  os.close();
+  if (err) {
+    diag.report(diag::err_cannot_write_file)
+        << outputPath.str() << err.message();
+    return false;
+  }
+
   globalSnapshot->recordFile(outputPath.str());
 
   return true;

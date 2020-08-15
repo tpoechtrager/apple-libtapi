@@ -329,7 +329,7 @@ public:
 // Translate clang::Expr to til::SExpr.
 class SExprBuilder {
 public:
-  /// \brief Encapsulates the lexical context of a function call.  The lexical
+  /// Encapsulates the lexical context of a function call.  The lexical
   /// context includes the arguments to the call, including the implicit object
   /// argument.  When an attribute containing a mutex expression is attached to
   /// a method, the expression may refer to formal parameters of the method.
@@ -397,6 +397,8 @@ private:
                                    CallingContext *Ctx) ;
   til::SExpr *translateCXXThisExpr(const CXXThisExpr *TE, CallingContext *Ctx);
   til::SExpr *translateMemberExpr(const MemberExpr *ME, CallingContext *Ctx);
+  til::SExpr *translateObjCIVarRefExpr(const ObjCIvarRefExpr *IVRE,
+                                       CallingContext *Ctx);
   til::SExpr *translateCallExpr(const CallExpr *CE, CallingContext *Ctx,
                                 const Expr *SelfE = nullptr);
   til::SExpr *translateCXXMemberCallExpr(const CXXMemberCallExpr *ME,
@@ -500,7 +502,7 @@ private:
   std::vector<til::BasicBlock *> BlockMap;
 
   // Extra information per BB. Indexed by clang BlockID.
-  std::vector<BlockInfo> BBInfo;           
+  std::vector<BlockInfo> BBInfo;
 
   LVarDefinitionMap CurrentLVarMap;
   std::vector<til::Phi *> CurrentArguments;

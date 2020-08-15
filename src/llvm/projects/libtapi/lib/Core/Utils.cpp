@@ -26,10 +26,23 @@ using namespace llvm;
 TAPI_NAMESPACE_INTERNAL_BEGIN
 
 bool isPublicLocation(StringRef path) {
+  // Remove the iOSSupport/DriverKit prefix to identify public locations inside
+  // the iOSSupport/DriverKit directory.
+  path.consume_front("/System/iOSSupport");
+  path.consume_front("/System/DriverKit");
+
+  // Everything in /usr/lib/swift (including sub-directories) is now considered
+  // public.
+  if (path.consume_front("/usr/lib/swift/"))
+    return true;
+
   // Only libraries directly in /usr/lib are public. All other libraries in
   // sub-directories (such as /usr/lib/system) are considered private.
-  if (path.consume_front("/usr/lib/") && !path.contains('/'))
+  if (path.consume_front("/usr/lib/")) {
+    if (path.contains('/'))
+      return false;
     return true;
+  }
 
   // /System/Library/Frameworks/ is a public location
   if (path.consume_front("/System/Library/Frameworks/")) {

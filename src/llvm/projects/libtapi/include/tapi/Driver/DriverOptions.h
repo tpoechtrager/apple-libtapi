@@ -16,19 +16,23 @@ namespace llvm {
 namespace opt {
 class OptTable;
 }
-} // namespace llvm
+}
 
 TAPI_NAMESPACE_INTERNAL_BEGIN
 
 /// Flags specifically for tapi options. Must not overlap with
 /// llvm::opt::DriverFlag.
+// clang-format off
 enum TapiFlags {
   DriverOption           = 1U <<  4,
   ArchiveOption          = 1U <<  5,
   StubOption             = 1U <<  6,
   InstallAPIOption       = 1U <<  7,
   ReexportOption         = 1U <<  8,
+  SDKDBOption            = 1U <<  9,
+  GenerateAPITestsOption = 1U << 10,
 };
+// clang-format on
 
 // Create enum with OPT_xxx values for each option in TAPIOptions.td.
 enum ID {
@@ -36,7 +40,7 @@ enum ID {
 #define OPTION(PREFIX, NAME, ID, KIND, GROUP, ALIAS, ALIASARGS, FLAGS, PARAM,  \
                HELPTEXT, METAVAR, VALUES)                                      \
   OPT_##ID,
-//#include "tapi/Driver/TAPIOptions.inc"
+#include "tapi/Driver/TAPIOptions.inc"
   LastOption
 #undef OPTION
 };

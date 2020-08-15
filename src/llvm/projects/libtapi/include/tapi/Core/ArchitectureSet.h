@@ -42,20 +42,25 @@ public:
   ArchitectureSet(Architecture arch) : ArchitectureSet() { set(arch); }
   ArchitectureSet(const std::vector<Architecture> &archs) : ArchitectureSet() {
     for (auto arch : archs) {
-      if (arch == Architecture::unknown)
+      if (arch == AK_unknown)
         continue;
       set(arch);
     }
   }
 
-  static ArchitectureSet All() { return ArchitectureSet(_endIndexVal); }
-
-  void set(Architecture arch) {
-    if (arch == Architecture::unknown)
-      return;
-    _archSet |= 1U << static_cast<int>(arch);
+  static ArchitectureSet All() {
+    return ArchitectureSet(_endIndexVal);
   }
-  void clear(Architecture arch) { _archSet &= ~(1U << static_cast<int>(arch)); }
+
+  ArchitectureSet set(Architecture arch) {
+    if (arch != AK_unknown)
+      _archSet |= 1U << static_cast<int>(arch);
+    return _archSet;
+  }
+  ArchitectureSet clear(Architecture arch) {
+    _archSet &= ~(1U << static_cast<int>(arch));
+    return _archSet;
+  }
   bool has(Architecture arch) const {
     return _archSet & (1U << static_cast<int>(arch));
   }
@@ -78,17 +83,17 @@ public:
 
   bool hasX86() const {
 #ifdef SUPPORT_ARCH_I386
-    if (has(Architecture::i386))
+    if (has(AK_i386))
       return true;
 #endif
 
 #ifdef SUPPORT_ARCH_X86_64
-    if (has(Architecture::x86_64))
+    if (has(AK_x86_64))
       return true;
 #endif
 
 #ifdef SUPPORT_ARCH_X86_64H
-    if (has(Architecture::x86_64h))
+    if (has(AK_x86_64h))
       return true;
 #endif
 
@@ -110,10 +115,10 @@ public:
       if (_index == _endIndexVal)
         return;
 
-      do {
-        if (*_archSet & (1UL << ++_index))
+      while (++_index < sizeof(Ty) * 8) {
+        if (*_archSet & (1UL << _index))
           return;
-      } while (_index < sizeof(Ty) * 8);
+      }
 
       _index = _endIndexVal;
     }
@@ -184,7 +189,7 @@ public:
   void print(raw_ostream &os) const;
 };
 
-ArchitectureSet mapToArchitectureSet(const std::vector<llvm::Triple> &targets);
+ArchitectureSet mapToArchitectureSet(ArrayRef<llvm::Triple> targets);
 
 raw_ostream &operator<<(raw_ostream &os, ArchitectureSet set);
 

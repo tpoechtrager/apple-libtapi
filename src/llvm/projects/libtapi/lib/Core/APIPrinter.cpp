@@ -19,8 +19,58 @@ APIPrinter::APIPrinter(raw_ostream &os, bool useColor)
 
 APIPrinter::~APIPrinter() {}
 
-static void printGlobalRecord(raw_ostream &os, const API::GlobalRecord &var,
+static void printLocation(raw_ostream &os, const APILoc &loc, bool hasColors) {
+  // skip invalid location.
+  if (loc.isInvalid())
+    return;
+
+  if (hasColors)
+    os.changeColor(raw_ostream::BLUE);
+  os << "  loc: ";
+  if (hasColors)
+    os.resetColor();
+  os << loc.getFilename() << ":" << loc.getLine() << ":" << loc.getColumn()
+     << "\n";
+}
+
+static void printAvailability(raw_ostream &os, const AvailabilityInfo &avail,
                               bool hasColors) {
+  if (hasColors)
+    os.changeColor(raw_ostream::BLUE);
+  os << "  availability: ";
+  if (hasColors)
+    os.resetColor();
+  os << avail << "\n";
+}
+
+static void printLinkage(raw_ostream &os, APILinkage linkage, bool hasColors) {
+  if (hasColors)
+    os.changeColor(raw_ostream::BLUE);
+  os << "  linkage: ";
+  if (hasColors)
+    os.resetColor();
+  switch (linkage) {
+  case APILinkage::Exported:
+    os << "exported";
+    break;
+  case APILinkage::Reexported:
+    os << "re-exported";
+    break;
+  case APILinkage::Internal:
+    os << "internal";
+    break;
+  case APILinkage::External:
+    os << "external";
+    break;
+  case APILinkage::Unknown:
+    os << "unknown";
+    break;
+  }
+  os << "\n";
+}
+
+static void printAPIRecord(raw_ostream &os, const APIRecord &var,
+                           bool hasColors) {
   if (hasColors)
     os.changeColor(raw_ostream::BLUE);
   os << "- name: ";
@@ -28,70 +78,90 @@ static void printGlobalRecord(raw_ostream &os, const API::GlobalRecord &var,
     os.resetColor();
   os << var.name << "\n";
 
-  if (hasColors)
-    os.changeColor(raw_ostream::BLUE);
-  os << "  loc: ";
-  if (hasColors)
-    os.resetColor();
-  os << var.loc.getFilename() << ":" << var.loc.getLine() << ":"
-     << var.loc.getColumn() << "\n";
+  printLocation(os, var.loc, hasColors);
+  printAvailability(os, var.availability, hasColors);
 
   if (hasColors)
     os.changeColor(raw_ostream::BLUE);
-  os << "  availability: ";
+  os << "  access: ";
   if (hasColors)
     os.resetColor();
-  os << var.availability << "\n";
+  switch (var.access) {
+  case APIAccess::Public:
+    os << "public";
+    break;
+  case APIAccess::Private:
+    os << "private";
+    break;
+  case APIAccess::Project:
+    os << "project";
+    break;
+  case APIAccess::Unknown:
+    os << "unknown";
+    break;
+  }
+  os << "\n";
+}
+
+static void printGlobalRecord(raw_ostream &os, const GlobalRecord &var,
+                              bool hasColors) {
+  printAPIRecord(os, var, hasColors);
 
   if (hasColors)
     os.changeColor(raw_ostream::BLUE);
   os << "  isWeakDefined: ";
   if (hasColors)
     os.resetColor();
-  os << (var.isWeakDefined ? "true" : "false") << "\n";
+  os << (var.isWeakDefined() ? "true" : "false") << "\n";
+
+  if (hasColors)
+    os.changeColor(raw_ostream::BLUE);
+  os << "  isThreadLocalValue: ";
+  if (hasColors)
+    os.resetColor();
+  os << (var.isThreadLocalValue() ? "true" : "false") << "\n";
+
+  if (hasColors)
+    os.changeColor(raw_ostream::BLUE);
+  os << "  kind: ";
+  if (hasColors)
+    os.resetColor();
+  switch (var.kind) {
+  case GVKind::Function:
+    os << "function";
+    break;
+  case GVKind::Variable:
+    os << "variable";
+    break;
+  case GVKind::Unknown:
+    os << "unknown";
+    break;
+  }
+  os << "\n";
+
+  printLinkage(os, var.linkage, hasColors);
 }
 
-void APIPrinter::visitGlobalVariable(const API::GlobalRecord &var) {
-  static bool emittedHeader = false;
-  if (!emittedHeader) {
+void APIPrinter::visitGlobal(const GlobalRecord &var) {
+  if (!emittedHeaderGlobal) {
     if (hasColors)
       os.changeColor(raw_ostream::GREEN);
-    os << "global variables:\n";
+    os << "globals:\n";
     if (hasColors)
       os.resetColor();
-    emittedHeader = true;
+    emittedHeaderGlobal = true;
   }
   printGlobalRecord(os, var, hasColors);
 }
 
-void APIPrinter::visitFunction(const API::FunctionRecord &func) {
-  static bool emittedHeader = false;
-  if (!emittedHeader) {
-    if (hasColors)
-      os.changeColor(raw_ostream::GREEN);
-    os << "functions:\n";
-    if (hasColors)
-      os.resetColor();
-    emittedHeader = true;
-  }
-  printGlobalRecord(os, func, hasColors);
-  if (hasColors)
-    os.changeColor(raw_ostream::BLUE);
-  os << "  inlined: ";
-  if (hasColors)
-    os.resetColor();
-  os << (func.isInlined ? "true" : "false") << "\n";
-}
-
-void APIPrinter::visitEnumConstant(const API::EnumConstantRecord &var) {
-  static bool emittedHeader = false;
-  if (!emittedHeader) {
+void APIPrinter::visitEnumConstant(const EnumConstantRecord &var) {
+  if (!emittedHeaderEnum) {
     if (hasColors)
       os.changeColor(raw_ostream::GREEN);
     os << "enum constants:\n";
     if (hasColors)
       os.resetColor();
-    emittedHeader = true;
+    emittedHeaderEnum = true;
   }
 
   if (hasColors)
@@ -101,23 +171,11 @@ void APIPrinter::visitEnumConstant(const API::EnumConstantRecord &var) {
     os.resetColor();
   os << var.name << "\n";
 
-  if (hasColors)
-    os.changeColor(raw_ostream::BLUE);
-  os << "  loc: ";
-  if (hasColors)
-    os.resetColor();
-  os << var.loc.getFilename() << ":" << var.loc.getLine() << ":"
-     << var.loc.getColumn() << "\n";
-
-  if (hasColors)
-    os.changeColor(raw_ostream::BLUE);
-  os << "  availability: ";
-  if (hasColors)
-    os.resetColor();
-  os << var.availability << "\n";
+  printLocation(os, var.loc, hasColors);
+  printAvailability(os, var.availability, hasColors);
 }
 
-void APIPrinter::printMethod(const API::ObjCMethodRecord *method) {
+void APIPrinter::printMethod(const ObjCMethodRecord *method) {
   if (hasColors)
     os.changeColor(raw_ostream::BLUE);
   os << "  - name: ";
@@ -146,23 +204,11 @@ void APIPrinter::printMethod(const API::ObjCMethodRecord *method) {
     os.resetColor();
   os << (method->isDynamic ? "true" : "false") << "\n";
 
-  if (hasColors)
-    os.changeColor(raw_ostream::BLUE);
-  os << "    loc: ";
-  if (hasColors)
-    os.resetColor();
-  os << method->loc.getFilename() << ":" << method->loc.getLine() << ":"
-     << method->loc.getColumn() << "\n";
-
-  if (hasColors)
-    os.changeColor(raw_ostream::BLUE);
-  os << "    availability: ";
-  if (hasColors)
-    os.resetColor();
-  os << method->availability << "\n";
+  printLocation(os, method->loc, hasColors);
+  printAvailability(os, method->availability, hasColors);
 }
 
-void APIPrinter::printProperty(const API::ObjCPropertyRecord *property) {
+void APIPrinter::printProperty(const ObjCPropertyRecord *property) {
   if (hasColors)
     os.changeColor(raw_ostream::BLUE);
   os << "  - name: ";
@@ -175,31 +221,12 @@ void APIPrinter::printProperty(const API::ObjCPropertyRecord *property) {
   os << "    attributes:";
   if (hasColors)
     os.resetColor();
-  auto attrs = property->attributes;
-  if (attrs != ObjCPropertyDecl::OBJC_PR_noattr) {
-    if (attrs & ObjCPropertyDecl::OBJC_PR_readonly)
-      os << " readonly";
-    if (attrs & ObjCPropertyDecl::OBJC_PR_assign)
-      os << " assign";
-    if (attrs & ObjCPropertyDecl::OBJC_PR_readwrite)
-      os << " readwrite";
-    if (attrs & ObjCPropertyDecl::OBJC_PR_retain)
-      os << " retain";
-    if (attrs & ObjCPropertyDecl::OBJC_PR_copy)
-      os << " copy";
-    if (attrs & ObjCPropertyDecl::OBJC_PR_nonatomic)
-      os << " nonatomic";
-    if (attrs & ObjCPropertyDecl::OBJC_PR_atomic)
-      os << " atomic";
-    if (attrs & ObjCPropertyDecl::OBJC_PR_weak)
-      os << " weak";
-    if (attrs & ObjCPropertyDecl::OBJC_PR_strong)
-      os << " strong";
-    if (attrs & ObjCPropertyDecl::OBJC_PR_unsafe_unretained)
-      os << " unsafe_unretained";
-    if (attrs & ObjCPropertyDecl::OBJC_PR_class)
-      os << " class";
-  }
+  if (property->isReadOnly())
+    os << " readonly";
+  if (property->isDynamic())
+    os << " dynamic";
+  if (property->isClassProperty())
+    os << " class";
   os << "\n";
 
   if (hasColors)
@@ -216,7 +243,7 @@ void APIPrinter::printProperty(const API::ObjCPropertyRecord *property) {
     os.resetColor();
   os << property->getterName << "\n";
 
-  if (!(attrs & ObjCPropertyDecl::OBJC_PR_readonly)) {
+  if (!property->isReadOnly()) {
     if (hasColors)
       os.changeColor(raw_ostream::BLUE);
     os << "    setter name: ";
@@ -225,24 +252,11 @@ void APIPrinter::printProperty(const API::ObjCPropertyRecord *property) {
     os << property->setterName << "\n";
   }
 
-  if (hasColors)
-    os.changeColor(raw_ostream::BLUE);
-  os << "    loc: ";
-  if (hasColors)
-    os.resetColor();
-  os << property->loc.getFilename() << ":" << property->loc.getLine() << ":"
-     << property->loc.getColumn() << "\n";
-
-  if (hasColors)
-    os.changeColor(raw_ostream::BLUE);
-  os << "    availability: ";
-  if (hasColors)
-    os.resetColor();
-  os << property->availability << "\n";
+  printLocation(os, property->loc, hasColors);
+  printAvailability(os, property->availability, hasColors);
 }
 
-void APIPrinter::printInstanceVariable(
-    const API::ObjCInstanceVariableRecord *ivar) {
+void APIPrinter::printInstanceVariable(const ObjCInstanceVariableRecord *ivar) {
   if (hasColors)
     os.changeColor(raw_ostream::BLUE);
   os << "  - name: ";
@@ -250,13 +264,7 @@ void APIPrinter::printInstanceVariable(
     os.resetColor();
   os << ivar->name << "\n";
 
-  if (hasColors)
-    os.changeColor(raw_ostream::BLUE);
-  os << "    loc: ";
-  if (hasColors)
-    os.resetColor();
-  os << ivar->loc.getFilename() << ":" << ivar->loc.getLine() << ":"
-     << ivar->loc.getColumn() << "\n";
+  printLocation(os, ivar->loc, hasColors);
 
   if (hasColors)
     os.changeColor(raw_ostream::BLUE);
@@ -264,39 +272,32 @@ void APIPrinter::printInstanceVariable(
   if (hasColors)
     os.resetColor();
   switch (ivar->accessControl) {
-  case API::ObjCInstanceVariableRecord::AccessControl::Private:
+  case ObjCInstanceVariableRecord::AccessControl::Private:
     os << "private\n";
     break;
-  case API::ObjCInstanceVariableRecord::AccessControl::Protected:
+  case ObjCInstanceVariableRecord::AccessControl::Protected:
     os << "protected\n";
     break;
-  case API::ObjCInstanceVariableRecord::AccessControl::Public:
+  case ObjCInstanceVariableRecord::AccessControl::Public:
     os << "public\n";
     break;
-  case API::ObjCInstanceVariableRecord::AccessControl::Package:
+  case ObjCInstanceVariableRecord::AccessControl::Package:
     os << "package\n";
     break;
-  case API::ObjCInstanceVariableRecord::AccessControl::None:
+  case ObjCInstanceVariableRecord::AccessControl::None:
     llvm_unreachable("cannonical acccess doesn't have None");
   }
-
-  if (hasColors)
-    os.changeColor(raw_ostream::BLUE);
-  os << "    fragile: ";
-  if (hasColors)
-    os.resetColor();
-  os << (ivar->isFragile ? "true" : "false") << "\n";
+  printLinkage(os, ivar->linkage, hasColors);
 }
 
-void APIPrinter::visitObjCInterface(const API::ObjCInterfaceRecord &interface) {
-  static bool emittedHeader = false;
-  if (!emittedHeader) {
+void APIPrinter::visitObjCInterface(const ObjCInterfaceRecord &interface) {
+  if (!emittedHeaderInterface) {
     if (hasColors)
       os.changeColor(raw_ostream::GREEN);
     os << "objective-c interfaces:\n";
     if (hasColors)
       os.resetColor();
-    emittedHeader = true;
+    emittedHeaderInterface = true;
   }
 
   if (hasColors)
@@ -320,20 +321,8 @@ void APIPrinter::visitObjCInterface(const API::ObjCInterfaceRecord &interface) {
     os.resetColor();
   os << (interface.hasExceptionAttribute ? "true" : "false") << "\n";
 
-  if (hasColors)
-    os.changeColor(raw_ostream::BLUE);
-  os << "  loc: ";
-  if (hasColors)
-    os.resetColor();
-  os << interface.loc.getFilename() << ":" << interface.loc.getLine() << ":"
-     << interface.loc.getColumn() << "\n";
-
-  if (hasColors)
-    os.changeColor(raw_ostream::BLUE);
-  os << "  availability: ";
-  if (hasColors)
-    os.resetColor();
-  os << interface.availability << "\n";
+  printLocation(os, interface.loc, hasColors);
+  printAvailability(os, interface.availability, hasColors);
 
   if (hasColors)
     os.changeColor(raw_ostream::BLUE);
@@ -377,17 +366,18 @@ void APIPrinter::visitObjCInterface(const API::ObjCInterfaceRecord &interface) {
     os.resetColor();
   for (const auto *ivar : interface.ivars)
     printInstanceVariable(ivar);
+
+  printLinkage(os, interface.linkage, hasColors);
 }
 
-void APIPrinter::visitObjCCategory(const API::ObjCCategoryRecord &category) {
-  static bool emittedHeader = false;
-  if (!emittedHeader) {
+void APIPrinter::visitObjCCategory(const ObjCCategoryRecord &category) {
+  if (!emittedHeaderCategory) {
     if (hasColors)
       os.changeColor(raw_ostream::GREEN);
     os << "objective-c categories:\n";
     if (hasColors)
       os.resetColor();
-    emittedHeader = true;
+    emittedHeaderCategory = true;
   }
 
   if (hasColors)
@@ -404,20 +394,8 @@ void APIPrinter::visitObjCCategory(const API::ObjCCategoryRecord &category) {
     os.resetColor();
   os << category.interfaceName << "\n";
 
-  if (hasColors)
-    os.changeColor(raw_ostream::BLUE);
-  os << "  loc: ";
-  if (hasColors)
-    os.resetColor();
-  os << category.loc.getFilename() << ":" << category.loc.getLine() << ":"
-     << category.loc.getColumn() << "\n";
-
-  if (hasColors)
-    os.changeColor(raw_ostream::BLUE);
-  os << "  availability: ";
-  if (hasColors)
-    os.resetColor();
-  os << category.availability << "\n";
+  printLocation(os, category.loc, hasColors);
+  printAvailability(os, category.availability, hasColors);
 
   if (hasColors)
     os.changeColor(raw_ostream::BLUE);
@@ -453,15 +431,14 @@ void APIPrinter::visitObjCCategory(const API::ObjCCategoryRecord &category) {
     printInstanceVariable(ivar);
 }
 
-void APIPrinter::visitObjCProtocol(const API::ObjCProtocolRecord &protocol) {
-  static bool emittedHeader = false;
-  if (!emittedHeader) {
+void APIPrinter::visitObjCProtocol(const ObjCProtocolRecord &protocol) {
+  if (!emittedHeaderProtocol) {
     if (hasColors)
       os.changeColor(raw_ostream::GREEN);
     os << "objective-c protocols:\n";
     if (hasColors)
       os.resetColor();
-    emittedHeader = true;
+    emittedHeaderProtocol = true;
   }
 
   if (hasColors)
@@ -471,20 +448,8 @@ void APIPrinter::visitObjCProtocol(const API::ObjCProtocolRecord &protocol) {
     os.resetColor();
   os << protocol.name << "\n";
 
-  if (hasColors)
-    os.changeColor(raw_ostream::BLUE);
-  os << "  loc: ";
-  if (hasColors)
-    os.resetColor();
-  os << protocol.loc.getFilename() << ":" << protocol.loc.getLine() << ":"
-     << protocol.loc.getColumn() << "\n";
-
-  if (hasColors)
-    os.changeColor(raw_ostream::BLUE);
-  os << "  availability: ";
-  if (hasColors)
-    os.resetColor();
-  os << protocol.availability << "\n";
+  printLocation(os, protocol.loc, hasColors);
+  printAvailability(os, protocol.availability, hasColors);
 
   if (hasColors)
     os.changeColor(raw_ostream::BLUE);
@@ -512,17 +477,16 @@ void APIPrinter::visitObjCProtocol(const API::ObjCProtocolRecord &protocol) {
     printProperty(property);
 }
 
-void APIPrinter::visitTypeDef(const API::GlobalRecord &type) {
-  static bool emittedHeader = false;
-  if (!emittedHeader) {
+void APIPrinter::visitTypeDef(const APIRecord &type) {
+  if (!emittedHeaderTypedef) {
     if (hasColors)
       os.changeColor(raw_ostream::GREEN);
     os << "type defs:\n";
     if (hasColors)
       os.resetColor();
-    emittedHeader = true;
+    emittedHeaderTypedef = true;
   }
-  printGlobalRecord(os, type, hasColors);
+  printAPIRecord(os, type, hasColors);
 }
 
 TAPI_NAMESPACE_INTERNAL_END

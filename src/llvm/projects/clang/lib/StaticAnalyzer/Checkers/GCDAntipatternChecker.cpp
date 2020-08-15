@@ -29,7 +29,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "ClangSACheckers.h"
+#include "clang/StaticAnalyzer/Checkers/BuiltinCheckerRegistration.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
 #include "clang/StaticAnalyzer/Core/BugReporter/BugReporter.h"
 #include "clang/StaticAnalyzer/Core/BugReporter/BugType.h"
@@ -93,7 +93,9 @@ static bool isTest(const Decl *D) {
 static auto findGCDAntiPatternWithSemaphore() -> decltype(compoundStmt()) {
 
   const char *SemaphoreBinding = "semaphore_name";
-  auto SemaphoreCreateM = callExpr(callsName("dispatch_semaphore_create"));
+  auto SemaphoreCreateM = callExpr(allOf(
+      callsName("dispatch_semaphore_create"),
+      hasArgument(0, ignoringParenCasts(integerLiteral(equals(0))))));
 
   auto SemaphoreBindingM = anyOf(
       forEachDescendant(
@@ -220,8 +222,12 @@ void GCDAntipatternChecker::checkASTCodeBody(const Decl *D,
     emitDiagnostics(Match, "group", BR, ADC, this);
 }
 
-}
+} // end of anonymous namespace
 
 void ento::registerGCDAntipattern(CheckerManager &Mgr) {
   Mgr.registerChecker<GCDAntipatternChecker>();
+}
+
+bool ento::shouldRegisterGCDAntipattern(const LangOptions &LO) {
+  return true;
 }

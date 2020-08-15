@@ -1,6 +1,6 @@
 //=- tools/dsymutil/DebugMap.h - Generic debug map representation -*- C++ -*-=//
 //
-//                             The LLVM Linker
+//                     The LLVM Compiler Infrastructure
 //
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
@@ -48,10 +48,9 @@ namespace dsymutil {
 
 class DebugMapObject;
 
-/// \brief The DebugMap object stores the list of object files to
-/// query for debug information along with the mapping between the
-/// symbols' addresses in the object file to their linked address in
-/// the linked binary.
+/// The DebugMap object stores the list of object files to query for debug
+/// information along with the mapping between the symbols' addresses in the
+/// object file to their linked address in the linked binary.
 ///
 /// A DebugMap producer could look like this:
 /// DebugMap *DM = new DebugMap();
@@ -76,7 +75,7 @@ class DebugMapObject;
 class DebugMap {
   Triple BinaryTriple;
   std::string BinaryPath;
-
+  std::vector<uint8_t> BinaryUUID;
   using ObjectContainer = std::vector<std::unique_ptr<DebugMapObject>>;
 
   ObjectContainer Objects;
@@ -90,8 +89,10 @@ class DebugMap {
   ///@}
 
 public:
-  DebugMap(const Triple &BinaryTriple, StringRef BinaryPath)
-      : BinaryTriple(BinaryTriple), BinaryPath(BinaryPath) {}
+  DebugMap(const Triple &BinaryTriple, StringRef BinaryPath,
+           ArrayRef<uint8_t> BinaryUUID = ArrayRef<uint8_t>())
+      : BinaryTriple(BinaryTriple), BinaryPath(BinaryPath),
+        BinaryUUID(BinaryUUID.begin(), BinaryUUID.end()) {}
 
   using const_iterator = ObjectContainer::const_iterator;
 
@@ -114,6 +115,10 @@ public:
 
   const Triple &getTriple() const { return BinaryTriple; }
 
+  const ArrayRef<uint8_t> getUUID() const {
+    return ArrayRef<uint8_t>(BinaryUUID);
+  }
+
   StringRef getBinaryPath() const { return BinaryPath; }
 
   void print(raw_ostream &OS) const;
@@ -127,10 +132,9 @@ public:
   parseYAMLDebugMap(StringRef InputFile, StringRef PrependPath, bool Verbose);
 };
 
-/// \brief The DebugMapObject represents one object file described by
-/// the DebugMap. It contains a list of mappings between addresses in
-/// the object file and in the linked binary for all the linked atoms
-/// in this object file.
+/// The DebugMapObject represents one object file described by the DebugMap. It
+/// contains a list of mappings between addresses in the object file and in the
+/// linked binary for all the linked atoms in this object file.
 class DebugMapObject {
 public:
   struct SymbolMapping {
@@ -152,17 +156,17 @@ public:
   using YAMLSymbolMapping = std::pair<std::string, SymbolMapping>;
   using DebugMapEntry = StringMapEntry<SymbolMapping>;
 
-  /// \brief Adds a symbol mapping to this DebugMapObject.
+  /// Adds a symbol mapping to this DebugMapObject.
   /// \returns false if the symbol was already registered. The request
   /// is discarded in this case.
   bool addSymbol(StringRef SymName, Optional<uint64_t> ObjectAddress,
                  uint64_t LinkedAddress, uint32_t Size);
 
-  /// \brief Lookup a symbol mapping.
+  /// Lookup a symbol mapping.
   /// \returns null if the symbol isn't found.
   const DebugMapEntry *lookupSymbol(StringRef SymbolName) const;
 
-  /// \brief Lookup an objectfile address.
+  /// Lookup an object file address.
   /// \returns null if the address isn't found.
   const DebugMapEntry *lookupObjectAddress(uint64_t Address) const;
 

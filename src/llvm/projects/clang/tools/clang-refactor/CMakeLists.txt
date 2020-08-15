@@ -16,10 +16,9 @@ target_link_libraries(clang-refactor
   clangFrontend
   clangLex
   clangRewrite
+  clangSerialization
   clangTooling
   clangToolingCore
   clangToolingRefactor
   clangToolingRefactoring
   )
-
-install(TARGETS clang-refactor RUNTIME DESTINATION bin)

@@ -15,6 +15,7 @@
 #define LLVM_CLANG_STATICANALYZER_CORE_CHECKER_H
 
 #include "clang/Analysis/ProgramPoint.h"
+#include "clang/Basic/LangOptions.h"
 #include "clang/StaticAnalyzer/Core/CheckerManager.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/SVals.h"
 #include "llvm/Support/Casting.h"
@@ -63,7 +64,7 @@ public:
 class EndOfTranslationUnit {
   template <typename CHECKER>
   static void _checkEndOfTranslationUnit(void *checker,
-                                         const TranslationUnitDecl *TU, 
+                                         const TranslationUnitDecl *TU,
                                          AnalysisManager& mgr,
                                          BugReporter &BR) {
     ((const CHECKER *)checker)->checkEndOfTranslationUnit(TU, mgr, BR);
@@ -254,9 +255,9 @@ public:
 
 class EndFunction {
   template <typename CHECKER>
-  static void _checkEndFunction(void *checker,
+  static void _checkEndFunction(void *checker, const ReturnStmt *RS,
                                 CheckerContext &C) {
-    ((const CHECKER *)checker)->checkEndFunction(C);
+    ((const CHECKER *)checker)->checkEndFunction(RS, C);
   }
 
 public:
@@ -331,7 +332,7 @@ public:
 
 class RegionChanges {
   template <typename CHECKER>
-  static ProgramStateRef 
+  static ProgramStateRef
   _checkRegionChanges(void *checker,
                       ProgramStateRef state,
                       const InvalidatedSymbols *invalidated,
@@ -370,7 +371,7 @@ class PointerEscape {
                                                             Kind);
 
     InvalidatedSymbols RegularEscape;
-    for (InvalidatedSymbols::const_iterator I = Escaped.begin(), 
+    for (InvalidatedSymbols::const_iterator I = Escaped.begin(),
                                             E = Escaped.end(); I != E; ++I)
       if (!ETraits->hasTrait(*I,
               RegionAndSymbolInvalidationTraits::TK_PreserveContents) &&
@@ -410,7 +411,7 @@ class ConstPointerEscape {
       return State;
 
     InvalidatedSymbols ConstEscape;
-    for (InvalidatedSymbols::const_iterator I = Escaped.begin(), 
+    for (InvalidatedSymbols::const_iterator I = Escaped.begin(),
                                             E = Escaped.end(); I != E; ++I)
       if (ETraits->hasTrait(*I,
               RegionAndSymbolInvalidationTraits::TK_PreserveContents) &&
@@ -436,7 +437,7 @@ public:
   }
 };
 
-  
+
 template <typename EVENT>
 class Event {
   template <typename CHECKER>
@@ -504,7 +505,7 @@ public:
 /// Dump checker name to stream.
 raw_ostream& operator<<(raw_ostream &Out, const CheckerBase &Checker);
 
-/// Tag that can use a checker name as a message provider 
+/// Tag that can use a checker name as a message provider
 /// (see SimpleProgramPointTag).
 class CheckerProgramPointTag : public SimpleProgramPointTag {
 public:
@@ -548,7 +549,7 @@ public:
   }
 };
 
-/// \brief We dereferenced a location that may be null.
+/// We dereferenced a location that may be null.
 struct ImplicitNullDerefEvent {
   SVal Location;
   bool IsLoad;
@@ -558,9 +559,11 @@ struct ImplicitNullDerefEvent {
   // dereference might happen later (for example pointer passed to a parameter
   // that is marked with nonnull attribute.)
   bool IsDirectDereference;
+
+  static int Tag;
 };
 
-/// \brief A helper class which wraps a boolean value set to false by default.
+/// A helper class which wraps a boolean value set to false by default.
 ///
 /// This class should behave exactly like 'bool' except that it doesn't need to
 /// be explicitly initialized.

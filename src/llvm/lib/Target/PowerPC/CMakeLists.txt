@@ -1,15 +1,17 @@
 set(LLVM_TARGET_DEFINITIONS PPC.td)
 
-tablegen(LLVM PPCGenAsmWriter.inc -gen-asm-writer)
 tablegen(LLVM PPCGenAsmMatcher.inc -gen-asm-matcher)
+tablegen(LLVM PPCGenAsmWriter.inc -gen-asm-writer)
+tablegen(LLVM PPCGenCallingConv.inc -gen-callingconv)
+tablegen(LLVM PPCGenDAGISel.inc -gen-dag-isel)
 tablegen(LLVM PPCGenDisassemblerTables.inc -gen-disassembler)
+tablegen(LLVM PPCGenFastISel.inc -gen-fast-isel)
+tablegen(LLVM PPCGenInstrInfo.inc -gen-instr-info)
 tablegen(LLVM PPCGenMCCodeEmitter.inc -gen-emitter)
 tablegen(LLVM PPCGenRegisterInfo.inc -gen-register-info)
-tablegen(LLVM PPCGenInstrInfo.inc -gen-instr-info)
-tablegen(LLVM PPCGenDAGISel.inc -gen-dag-isel)
-tablegen(LLVM PPCGenFastISel.inc -gen-fast-isel)
-tablegen(LLVM PPCGenCallingConv.inc -gen-callingconv)
 tablegen(LLVM PPCGenSubtargetInfo.inc -gen-subtarget)
+tablegen(LLVM PPCGenExegesis.inc -gen-exegesis)
+
 add_public_tablegen_target(PowerPCCommonTableGen)
 
 add_llvm_target(PowerPCCodeGen
@@ -49,5 +51,5 @@ add_llvm_target(PowerPCCodeGen
 add_subdirectory(AsmParser)
 add_subdirectory(Disassembler)
 add_subdirectory(InstPrinter)
-add_subdirectory(TargetInfo)
 add_subdirectory(MCTargetDesc)
+add_subdirectory(TargetInfo)

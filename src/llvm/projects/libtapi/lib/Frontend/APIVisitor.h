@@ -32,8 +32,10 @@
 
 using llvm::DataLayout;
 using TAPI_INTERNAL::API;
+using TAPI_INTERNAL::APIAccess;
 using TAPI_INTERNAL::AvailabilityInfo;
 using TAPI_INTERNAL::FrontendContext;
+using TAPI_INTERNAL::ObjCContainerRecord;
 
 namespace clang {
 
@@ -53,22 +55,22 @@ public:
   bool VisitTypedefNameDecl(const TypedefNameDecl *decl);
 
 private:
-  void recordObjCMethods(API::ObjCContainerRecord *record,
+  void recordObjCMethods(ObjCContainerRecord *record,
                          const ObjCContainerDecl::method_range methods,
                          bool isDynamic = false);
-  void recordObjCProperties(API::ObjCContainerRecord *record,
+  void recordObjCProperties(ObjCContainerRecord *record,
                             const ObjCContainerDecl::prop_range properties);
   void recordObjCInstanceVariables(
-      API::ObjCContainerRecord *record,
+      ObjCContainerRecord *record,
       const llvm::iterator_range<
           DeclContext::specific_decl_iterator<ObjCIvarDecl>>
           ivars);
-  void recordObjCProtocols(API::ObjCContainerRecord *record,
+  void recordObjCProtocols(ObjCContainerRecord *record,
                            ObjCInterfaceDecl::protocol_range protocols);
   void emitVTableSymbols(const CXXRecordDecl *decl, PresumedLoc loc,
-                         AvailabilityInfo avail, API::APIAccess access,
+                         AvailabilityInfo avail, APIAccess access,
                          bool emittedVTable = false);
-  llvm::Optional<std::pair<API::APIAccess, PresumedLoc>>
+  llvm::Optional<std::pair<APIAccess, PresumedLoc>>
   getFileAttributesForDecl(const NamedDecl *decl) const;
   std::string getMangledName(const NamedDecl *decl) const;
   std::string getBackendMangledName(Twine name) const;

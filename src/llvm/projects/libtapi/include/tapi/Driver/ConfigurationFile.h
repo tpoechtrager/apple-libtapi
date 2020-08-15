@@ -15,25 +15,16 @@
 #ifndef TAPI_CORE_CONFIGURATION_FILE_H
 #define TAPI_CORE_CONFIGURATION_FILE_H
 
-#include "tapi/Core/ArchitectureSupport.h"
-#include "tapi/Core/File.h"
 #include "tapi/Core/LLVM.h"
+#include "tapi/Core/PackedVersion.h"
 #include "tapi/Core/Path.h"
 #include "tapi/Core/Platform.h"
-#include "tapi/Core/Registry.h"
-#include "tapi/Core/YAMLReaderWriter.h"
 #include "tapi/Defines.h"
 #include "clang/Frontend/FrontendOptions.h"
-#include "llvm/Support/MemoryBuffer.h"
 #include <string>
 #include <utility>
 #include <vector>
 
-namespace llvm {
-namespace yaml {
-class IO;
-}
-} // namespace llvm
 
 TAPI_NAMESPACE_INTERNAL_BEGIN
 
@@ -45,6 +36,7 @@ namespace configuration {
 namespace v1 {
 
 struct HeaderConfiguration {
+  std::string umbrellaHeader;
   PathSeq preIncludes;
   PathSeq includes;
   PathSeq excludes;
@@ -62,58 +54,35 @@ struct FrameworkConfiguration {
   HeaderConfiguration privateHeaderConfiguration;
 };
 
-struct DylibConfiguration {
+struct ProjectConfiguration {
   std::string name;
-  std::string installName;
   clang::InputKind::Language language;
   PathSeq includePaths;
-  PathSeq binaries;
+  PathSeq frameworkPaths;
   std::vector<Macro> macros;
+  bool isiOSMac = false;
+  bool useOverlay = false;
+  bool useUmbrellaOnly = false;
   HeaderConfiguration publicHeaderConfiguration;
   HeaderConfiguration privateHeaderConfiguration;
 };
 
-struct Configuration {
-  Platform platform;
-  PackedVersion version;
-  std::string isysroot;
-  clang::InputKind::Language language;
-  PathSeq includePaths;
-  PathSeq frameworkPaths;
-  std::vector<Macro> macros;
-  std::vector<FrameworkConfiguration> frameworkConfigurations;
-  std::vector<DylibConfiguration> dylibConfigurations;
-};
+}
+} // end namespace configuration::v1.
 
-class YAMLDocumentHandler : public DocumentHandler {
-  bool canRead(MemoryBufferRef memBufferRef,
-               FileType types = FileType::All) const override;
-  FileType getFileType(MemoryBufferRef memBufferRef) const override;
-  bool canWrite(const File *file) const override;
-  bool handleDocument(llvm::yaml::IO &io, const File *&file) const override;
-};
-} // namespace v1
-} // namespace configuration
-
-class ConfigurationFile : public File {
+class ConfigurationFile {
 public:
-  static bool classof(const File *file) {
-    return file->kind() == File::Kind::Configuration;
-  }
-
-  ConfigurationFile()
-      : File(File::Kind::Configuration), language(defaultLanguage) {}
-
   Platform platform;
   PackedVersion version;
   std::string isysroot;
-  clang::InputKind::Language language;
+  clang::InputKind::Language language{defaultLanguage};
   PathSeq includePaths;
   PathSeq frameworkPaths;
   std::vector<Macro> macros;
+  std::vector<std::string> publicDylibs;
   std::vector<configuration::v1::FrameworkConfiguration>
       frameworkConfigurations;
-  std::vector<configuration::v1::DylibConfiguration> dylibConfigurations;
+  std::vector<configuration::v1::ProjectConfiguration> projectConfigurations;
 };
 
 TAPI_NAMESPACE_INTERNAL_END

@@ -42,13 +42,16 @@ public:
     bool RelativeAddresses : 1;
     std::string DefaultArch;
     std::vector<std::string> DsymHints;
+    std::string FallbackDebugPath;
 
     Options(FunctionNameKind PrintFunctions = FunctionNameKind::LinkageName,
             bool UseSymbolTable = true, bool Demangle = true,
-            bool RelativeAddresses = false, std::string DefaultArch = "")
+            bool RelativeAddresses = false, std::string DefaultArch = "",
+            std::string FallbackDebugPath = "")
         : PrintFunctions(PrintFunctions), UseSymbolTable(UseSymbolTable),
           Demangle(Demangle), RelativeAddresses(RelativeAddresses),
-          DefaultArch(std::move(DefaultArch)) {}
+          DefaultArch(std::move(DefaultArch)),
+          FallbackDebugPath(std::move(FallbackDebugPath)) {}
   };
 
   LLVMSymbolizer(const Options &Opts = Options()) : Opts(Opts) {}
@@ -90,11 +93,11 @@ private:
                                     const ObjectFile *Obj,
                                     const std::string &ArchName);
 
-  /// \brief Returns pair of pointers to object and debug object.
+  /// Returns pair of pointers to object and debug object.
   Expected<ObjectPair> getOrCreateObjectPair(const std::string &Path,
                                             const std::string &ArchName);
 
-  /// \brief Return a pointer to object file at specified path, for a specified
+  /// Return a pointer to object file at specified path, for a specified
   /// architecture (e.g. if path refers to a Mach-O universal binary, only one
   /// object file from it will be returned).
   Expected<ObjectFile *> getOrCreateObject(const std::string &Path,
@@ -102,14 +105,14 @@ private:
 
   std::map<std::string, std::unique_ptr<SymbolizableModule>> Modules;
 
-  /// \brief Contains cached results of getOrCreateObjectPair().
+  /// Contains cached results of getOrCreateObjectPair().
   std::map<std::pair<std::string, std::string>, ObjectPair>
       ObjectPairForPathArch;
 
-  /// \brief Contains parsed binary for each path, or parsing error.
+  /// Contains parsed binary for each path, or parsing error.
   std::map<std::string, OwningBinary<Binary>> BinaryForPath;
 
-  /// \brief Parsed object file for path/architecture pair, where "path" refers
+  /// Parsed object file for path/architecture pair, where "path" refers
   /// to Mach-O universal binary.
   std::map<std::pair<std::string, std::string>, std::unique_ptr<ObjectFile>>
       ObjectForUBPathAndArch;

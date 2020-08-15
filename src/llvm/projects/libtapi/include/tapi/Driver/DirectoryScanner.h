@@ -23,6 +23,7 @@
 #include "llvm/Support/Error.h"
 #include <vector>
 
+
 TAPI_NAMESPACE_INTERNAL_BEGIN
 
 class DiagnosticsEngine;
@@ -30,52 +31,76 @@ class FileManager;
 struct Framework;
 enum class HeaderType;
 
-class DirectoryScanner {
+/// Directory Scanner mode.
+class ScannerMode {
 public:
-  DirectoryScanner(FileManager &fm, DiagnosticsEngine &diag);
-  bool scan(StringRef directory, std::vector<Framework> &frameworks,
-            Configuration *config = nullptr) const;
+  enum Mode {
+    ScanFrameworks,  /// Scanning Framework directory (-F)
+    ScanDylibs,      /// Scanning Dylib directory.
+    ScanRuntimeRoot, /// Scanning for all binaries in the runtime root.
+    ScanPublicSDK,   /// Scanning for all public headers in public SDK.
+    ScanInternalSDK, /// Scanning for all headers in internal SDK.
+  };
 
-  void setScanSDKContent(bool isSDK) { scanSDK = isSDK; }
-  void setScanAllLocations(bool all) { scanAllLocations = all; }
-  void setScanDylibLocations(bool dylib) { scanDylibLocations = dylib; }
-  void setAllowBundle(bool bundle) { allowBundles = bundle; }
+  ScannerMode(const Mode mode) : mode(mode) {}
+  Mode getMode() const { return mode; }
+
+  bool scanBinaries() const;
+  bool scanBundles() const;
+  bool scanHeaders() const;
+  bool scanPrivateHeaders() const;
+  bool isRootLayout() const;
 
 private:
+  Mode mode;
+};
+
+class DirectoryScanner {
+public:
+  DirectoryScanner(FileManager &fm, DiagnosticsEngine &diag,
+                   ScannerMode mode = ScannerMode::ScanFrameworks);
+
+  bool scan(StringRef directory);
+
+  // Access scanner internal.
+  void setMode(ScannerMode scanMode) { mode = scanMode; }
+  void setConfiguration(Configuration *conf) { config = conf; }
+
+  // Get scanner output.
+  std::vector<Framework> takeResult();
+
+private:
+  // Private helper functions.
+  Expected<bool> isDynamicLibrary(StringRef path) const;
+
+  Framework &getOrCreateFramework(StringRef path,
+                                  std::vector<Framework> &frameworks) const;
+
   bool scanDylibDirectory(StringRef directory,
                           std::vector<Framework> &frameworks) const;
   bool scanFrameworksDirectory(std::vector<Framework> &frameworks,
                                StringRef directory) const;
   bool scanSubFrameworksDirectory(std::vector<Framework> &frameworks,
                                   StringRef path) const;
-  bool scanFrameworkDirectory(Framework &framework) const;
+  bool scanFrameworkDirectory(Framework &framework, StringRef path) const;
   bool scanHeaders(Framework &framework, StringRef path, HeaderType type) const;
   bool scanModules(Framework &framework, StringRef path) const;
   bool scanFrameworkVersionsDirectory(Framework &framework,
                                       StringRef path) const;
   bool scanLibraryDirectory(Framework &framework, StringRef path) const;
-  Expected<bool> isDynamicLibrary(StringRef path) const;
 
-  bool addDylibsAsFramework(StringRef name, StringRef path,
-                            const PathSeq &dylibs,
-                            std::vector<Framework> &frameworks) const;
-
-  bool scanDirectory(StringRef directory,
-                     std::vector<Framework> &frameworks) const;
-
-  bool scanSDKContent(StringRef directory, std::vector<Framework> &frameworks,
-                      Configuration *config) const;
+  bool scanDirectory(StringRef directory);
+  bool scanSDKContent(StringRef directory);
 
 private:
   Registry _registry;
   FileManager &_fm;
   DiagnosticsEngine &diag;
+  StringRef rootPath;
 
-  // Scanner options.
-  bool scanSDK = false;
-  bool scanAllLocations = false;
-  bool scanDylibLocations = false;
-  bool allowBundles = false;
+  ScannerMode mode;
+  Configuration *config;
+  std::vector<Framework> frameworks;
 };
 
 TAPI_NAMESPACE_INTERNAL_END

@@ -23,20 +23,15 @@ TAPI_NAMESPACE_INTERNAL_BEGIN
 
 class API2XPIConverter : public APIVisitor {
 public:
-  API2XPIConverter(XPISet *xpiSet, const llvm::Triple &target,
-                   bool visitAllObjC = false)
-      : xpiSet(xpiSet), architecture(getArchType(target.getArchName())),
-        visitAllObjC(visitAllObjC) {}
-  void visitGlobalVariable(const API::GlobalRecord &) override;
-  void visitFunction(const API::FunctionRecord &) override;
-  void visitObjCInterface(const API::ObjCInterfaceRecord &) override;
-  void visitObjCCategory(const API::ObjCCategoryRecord &) override;
-  void visitObjCProtocol(const API::ObjCProtocolRecord &) override;
+  API2XPIConverter(XPISet *xpiSet, const llvm::Triple &triple)
+      : xpiSet(xpiSet), target(triple) {}
+  void visitGlobal(const GlobalRecord &) override;
+  void visitObjCInterface(const ObjCInterfaceRecord &) override;
+  void visitObjCCategory(const ObjCCategoryRecord &) override;
 
 private:
   XPISet *xpiSet;
-  Architecture architecture;
-  const bool visitAllObjC;
+  const Target target;
 };
 
 TAPI_NAMESPACE_INTERNAL_END

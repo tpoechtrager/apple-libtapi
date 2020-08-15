@@ -30,9 +30,12 @@ using a 'dot' format viewer (such as Graphviz on OS X) instead.
 - debug.DumpLiveVars: Show the results of live variable analysis for each
   top-level function being analyzed.
 
+- debug.DumpLiveStmts: Show the results of live statement analysis for each
+  top-level function being analyzed.
+
 - debug.ViewExplodedGraph: Show the Exploded Graphs generated for the
   analysis of different functions in the input translation unit. When there
-  are several functions analyzed, display one graph per function. Beware 
+  are several functions analyzed, display one graph per function. Beware
   that these graphs may grow very large, even for small functions.
 
 Path Tracking
@@ -255,6 +258,23 @@ ExprInspection checks
       clang_analyzer_hashDump(x); // expected-warning{{hashed string for x}}
     }
 
+- ``void clang_analyzer_denote(int, const char *);``
+
+  Denotes symbols with strings. A subsequent call to clang_analyzer_express()
+  will expresses another symbol in terms of these string. Useful for testing
+  relationships between different symbols.
+
+  Example usage::
+
+    void foo(int x) {
+      clang_analyzer_denote(x, "$x");
+      clang_analyzer_express(x + 1); // expected-warning{{$x + 1}}
+    }
+
+- ``void clang_analyzer_express(int);``
+
+  See clang_analyzer_denote().
+
 Statistics
 ==========
 
@@ -265,3 +285,10 @@ There is also an additional -analyzer-stats flag, which enables various
 statistics within the analyzer engine. Note the Stats checker (which produces at
 least one bug report per function) may actually change the values reported by
 -analyzer-stats.
+
+Output testing checkers
+=======================
+
+- debug.ReportStmts reports a warning at **every** statement, making it a very
+  useful tool for testing thoroughly bug report construction and output
+  emission.

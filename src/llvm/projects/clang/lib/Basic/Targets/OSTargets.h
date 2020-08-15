@@ -133,6 +133,46 @@ public:
   /// is very similar to ELF's "protected";  Darwin requires a "weak"
   /// attribute on declarations that can be dynamically replaced.
   bool hasProtectedVisibility() const override { return false; }
+
+  unsigned getExnObjectAlignment() const override {
+    // Older versions of libc++abi guarantee an alignment of only 8-bytes for
+    // exception objects because of a bug in __cxa_exception that was
+    // eventually fixed in r319123.
+    llvm::VersionTuple MinVersion;
+    const llvm::Triple &T = this->getTriple();
+
+    // Compute the earliest OS versions that have the fix to libc++abi.
+    switch (T.getOS()) {
+    case llvm::Triple::Darwin:
+    case llvm::Triple::MacOSX: // Earliest supporting version is 10.14.
+      MinVersion = llvm::VersionTuple(10U, 14U);
+      break;
+    case llvm::Triple::IOS:
+    case llvm::Triple::TvOS: // Earliest supporting version is 12.0.0.
+      MinVersion = llvm::VersionTuple(12U);
+      break;
+    case llvm::Triple::WatchOS: // Earliest supporting version is 5.0.0.
+      MinVersion = llvm::VersionTuple(5U);
+      break;
+    default:
+      llvm_unreachable("Unexpected OS");
+    }
+
+    unsigned Major, Minor, Micro;
+    T.getOSVersion(Major, Minor, Micro);
+    if (llvm::VersionTuple(Major, Minor, Micro) < MinVersion)
+      return 64;
+    return OSTargetInfo<Target>::getExnObjectAlignment();
+  }
+
+  TargetInfo::IntType getLeastIntTypeByWidth(unsigned BitWidth,
+                                             bool IsSigned) const final {
+    // Darwin uses `long long` for `int_least64_t` and `int_fast64_t`.
+    return BitWidth == 64
+               ? (IsSigned ? TargetInfo::SignedLongLong
+                           : TargetInfo::UnsignedLongLong)
+               : TargetInfo::getLeastIntTypeByWidth(BitWidth, IsSigned);
+  }
 };
 
 // DragonFlyBSD Target
@@ -257,6 +297,8 @@ protected:
     Builder.defineMacro("__HAIKU__");
     Builder.defineMacro("__ELF__");
     DefineStd(Builder, "unix", Opts);
+    if (this->HasFloat128) 
+      Builder.defineMacro("__FLOAT128__");
   }
 
 public:
@@ -267,7 +309,38 @@ public:
     this->PtrDiffType = TargetInfo::SignedLong;
     this->ProcessIDType = TargetInfo::SignedLong;
     this->TLSSupported = false;
+    switch (Triple.getArch()) {
+    default:
+      break;
+    case llvm::Triple::x86:
+    case llvm::Triple::x86_64:
+      this->HasFloat128 = true;
+      break;
+    }
   }
+};
+
+// Hurd target
+template <typename Target>
+class LLVM_LIBRARY_VISIBILITY HurdTargetInfo : public OSTargetInfo<Target> {
+protected:
+  void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
+                    MacroBuilder &Builder) const override {
+    // Hurd defines; list based off of gcc output.
+    DefineStd(Builder, "unix", Opts);
+    Builder.defineMacro("__GNU__");
+    Builder.defineMacro("__gnu_hurd__");
+    Builder.defineMacro("__MACH__");
+    Builder.defineMacro("__GLIBC__");
+    Builder.defineMacro("__ELF__");
+    if (Opts.POSIXThreads)
+      Builder.defineMacro("_REENTRANT");
+    if (Opts.CPlusPlus)
+      Builder.defineMacro("_GNU_SOURCE");
+  }
+public:
+  HurdTargetInfo(const llvm::Triple &Triple, const TargetOptions &Opts)
+      : OSTargetInfo<Target>(Triple, Opts) {}
 };
 
 // Minix Target
@@ -341,7 +414,6 @@ public:
       break;
     case llvm::Triple::x86:
     case llvm::Triple::x86_64:
-    case llvm::Triple::systemz:
       this->HasFloat128 = true;
       break;
     }
@@ -369,7 +441,7 @@ protected:
 public:
   NetBSDTargetInfo(const llvm::Triple &Triple, const TargetOptions &Opts)
       : OSTargetInfo<Target>(Triple, Opts) {
-    this->MCountName = "_mcount";
+    this->MCountName = "__mcount";
   }
 };
 
@@ -397,7 +469,7 @@ public:
     case llvm::Triple::x86:
     case llvm::Triple::x86_64:
       this->HasFloat128 = true;
-      // FALLTHROUGH
+      LLVM_FALLTHROUGH;
     default:
       this->MCountName = "__mcount";
       break;
@@ -485,6 +557,7 @@ public:
     default:
     case llvm::Triple::x86_64:
       this->MCountName = ".mcount";
+      this->NewAlign = 256;
       break;
     }
   }
@@ -550,13 +623,24 @@ protected:
     Builder.defineMacro("_LARGEFILE_SOURCE");
     Builder.defineMacro("_LARGEFILE64_SOURCE");
     Builder.defineMacro("__EXTENSIONS__");
-    Builder.defineMacro("_REENTRANT");
+    if (Opts.POSIXThreads)
+      Builder.defineMacro("_REENTRANT");
+    if (this->HasFloat128)
+      Builder.defineMacro("__FLOAT128__");
   }
 
 public:
   SolarisTargetInfo(const llvm::Triple &Triple, const TargetOptions &Opts)
       : OSTargetInfo<Target>(Triple, Opts) {
     // FIXME: WIntType should be SignedLong
+    switch (Triple.getArch()) {
+    default:
+      break;
+    case llvm::Triple::x86:
+    case llvm::Triple::x86_64:
+      this->HasFloat128 = true;
+      break;
+    }
   }
 };
 
@@ -605,8 +689,10 @@ protected:
         Builder.defineMacro("_HAS_CHAR16_T_LANGUAGE_SUPPORT", Twine(1));
 
       if (Opts.isCompatibleWithMSVC(LangOptions::MSVC2015)) {
-        if (Opts.CPlusPlus17)
-          Builder.defineMacro("_MSVC_LANG", "201403L");
+        if (Opts.CPlusPlus2a)
+          Builder.defineMacro("_MSVC_LANG", "201704L");
+        else if (Opts.CPlusPlus17)
+          Builder.defineMacro("_MSVC_LANG", "201703L");
         else if (Opts.CPlusPlus14)
           Builder.defineMacro("_MSVC_LANG", "201402L");
       }
@@ -629,6 +715,7 @@ public:
   WindowsTargetInfo(const llvm::Triple &Triple, const TargetOptions &Opts)
       : OSTargetInfo<Target>(Triple, Opts) {
     this->WCharType = TargetInfo::UnsignedShort;
+    this->WIntType = TargetInfo::UnsignedShort;
   }
 };
 

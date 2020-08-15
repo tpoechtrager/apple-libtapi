@@ -11,6 +11,7 @@
 #define LLVM_CFI_VERIFY_FILE_ANALYSIS_H
 
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/SmallSet.h"
 #include "llvm/BinaryFormat/ELF.h"
 #include "llvm/DebugInfo/Symbolize/Symbolize.h"
 #include "llvm/MC/MCAsmInfo.h"
@@ -110,6 +111,10 @@ public:
   // Returns whether this instruction is used by CFI to trap the program.
   bool isCFITrap(const Instr &InstrMeta) const;
 
+  // Returns whether this instruction is a call to a function that will trap on
+  // CFI violations (i.e., it serves as a trap in this instance).
+  bool willTrapOnCFIViolation(const Instr &InstrMeta) const;
+
   // Returns whether this function can fall through to the next instruction.
   // Undefined (and bad) instructions cannot fall through, and instruction that
   // modify the control flow can only fall through if they are conditional
@@ -149,10 +154,13 @@ public:
   CFIProtectionStatus validateCFIProtection(const GraphResult &Graph) const;
 
   // Returns the first place the operand register is clobbered between the CFI-
-  // check and the indirect CF instruction execution. If the register is not
-  // modified, returns the address of the indirect CF instruction. The result is
-  // undefined if the provided graph does not fall under either the
-  // FAIL_REGISTER_CLOBBERED or PROTECTED status (see CFIProtectionStatus).
+  // check and the indirect CF instruction execution. We do this by walking
+  // backwards from the indirect CF and ensuring there is at most one load
+  // involving the operand register (which is the indirect CF itself on x86).
+  // If the register is not modified, returns the address of the indirect CF
+  // instruction. The result is undefined if the provided graph does not fall
+  // under either the FAIL_REGISTER_CLOBBERED or PROTECTED status (see
+  // CFIProtectionStatus).
   uint64_t indirectCFOperandClobber(const GraphResult& Graph) const;
 
   // Prints an instruction to the provided stream using this object's pretty-
@@ -179,6 +187,10 @@ protected:
   // Parses code sections from the internal object file. Saves them into the
   // internal members. Should only be called once by Create().
   Error parseCodeSections();
+
+  // Parses the symbol table to look for the addresses of functions that will
+  // trap on CFI violations.
+  Error parseSymbolTable();
 
 private:
   // Members that describe the input file.
@@ -215,6 +227,9 @@ private:
 
   // A list of addresses of indirect control flow instructions.
   std::set<uint64_t> IndirectInstructions;
+
+  // The addresses of functions that will trap on CFI violations.
+  SmallSet<uint64_t, 4> TrapOnFailFunctionAddresses;
 };
 
 class UnsupportedDisassembly : public ErrorInfo<UnsupportedDisassembly> {

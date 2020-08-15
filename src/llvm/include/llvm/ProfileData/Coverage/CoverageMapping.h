@@ -207,7 +207,7 @@ struct CounterMappingRegion {
     /// A CodeRegion associates some code with a counter
     CodeRegion,
 
-    /// An ExpansionRegion represents a file expansion region that associates 
+    /// An ExpansionRegion represents a file expansion region that associates
     /// a source range with the expansion of a virtual source file, such as
     /// for a macro instantiation or #include file.
     ExpansionRegion,
@@ -629,8 +629,6 @@ public:
         Line(Line), Segments(), Stats() {
     this->operator++();
   }
-
-  LineCoverageIterator &operator=(const LineCoverageIterator &R) = default;
 
   bool operator==(const LineCoverageIterator &R) const {
     return &CD == &R.CD && Next == R.Next && Ended == R.Ended;

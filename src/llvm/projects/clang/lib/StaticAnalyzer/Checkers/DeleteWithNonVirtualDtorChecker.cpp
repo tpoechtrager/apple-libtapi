@@ -21,7 +21,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "ClangSACheckers.h"
+#include "clang/StaticAnalyzer/Checkers/BuiltinCheckerRegistration.h"
 #include "clang/StaticAnalyzer/Core/BugReporter/BugReporter.h"
 #include "clang/StaticAnalyzer/Core/BugReporter/BugType.h"
 #include "clang/StaticAnalyzer/Core/Checker.h"
@@ -39,7 +39,7 @@ class DeleteWithNonVirtualDtorChecker
     : public Checker<check::PreStmt<CXXDeleteExpr>> {
   mutable std::unique_ptr<BugType> BT;
 
-  class DeleteBugVisitor : public BugReporterVisitorImpl<DeleteBugVisitor> {
+  class DeleteBugVisitor : public BugReporterVisitor {
   public:
     DeleteBugVisitor() : Satisfied(false) {}
     void Profile(llvm::FoldingSetNodeID &ID) const override {
@@ -47,7 +47,6 @@ class DeleteWithNonVirtualDtorChecker
       ID.AddPointer(&X);
     }
     std::shared_ptr<PathDiagnosticPiece> VisitNode(const ExplodedNode *N,
-                                                   const ExplodedNode *PrevN,
                                                    BugReporterContext &BRC,
                                                    BugReport &BR) override;
 
@@ -104,7 +103,7 @@ void DeleteWithNonVirtualDtorChecker::checkPreStmt(const CXXDeleteExpr *DE,
 
 std::shared_ptr<PathDiagnosticPiece>
 DeleteWithNonVirtualDtorChecker::DeleteBugVisitor::VisitNode(
-    const ExplodedNode *N, const ExplodedNode *PrevN, BugReporterContext &BRC,
+    const ExplodedNode *N, BugReporterContext &BRC,
     BugReport &BR) {
   // Stop traversal after the first conversion was found on a path.
   if (Satisfied)
@@ -148,4 +147,9 @@ DeleteWithNonVirtualDtorChecker::DeleteBugVisitor::VisitNode(
 
 void ento::registerDeleteWithNonVirtualDtorChecker(CheckerManager &mgr) {
   mgr.registerChecker<DeleteWithNonVirtualDtorChecker>();
+}
+
+bool ento::shouldRegisterDeleteWithNonVirtualDtorChecker(
+                                                        const LangOptions &LO) {
+  return true;
 }

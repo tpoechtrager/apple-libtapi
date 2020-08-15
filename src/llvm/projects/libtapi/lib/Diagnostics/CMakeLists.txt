@@ -1,4 +1,3 @@
-#[[
 add_tapi_library(tapiDiagnostics
   Diagnostics.cpp
 
@@ -8,4 +7,3 @@ add_tapi_library(tapiDiagnostics
   LINK_LIBS
   tapiCore
   )
-]]

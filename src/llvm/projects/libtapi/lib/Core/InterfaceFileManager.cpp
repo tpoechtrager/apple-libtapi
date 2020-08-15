@@ -28,7 +28,7 @@ InterfaceFileManager::InterfaceFileManager(FileManager &fm) : _fm(fm) {
   _registry.addBinaryReaders();
 }
 
-Expected<InterfaceFileBase *>
+Expected<InterfaceFile *>
 InterfaceFileManager::readFile(const std::string &path) {
   auto *file = _fm.getFile(path);
   if (file == nullptr)
@@ -39,26 +39,24 @@ InterfaceFileManager::readFile(const std::string &path) {
   if (!bufferOrErr)
     return errorCodeToError(bufferOrErr.getError());
 
-  auto file2 =
+  auto interface =
       _registry.readFile(std::move(bufferOrErr.get()), ReadFlags::Symbols);
-  if (!file2)
-    return file2.takeError();
+  if (!interface)
+    return interface.takeError();
 
-  auto *interface = cast<InterfaceFileBase>(file2.get().get());
-  auto it = _libraries.find(interface->getInstallName());
+  auto it = _libraries.find(interface.get()->getInstallName());
   if (it != _libraries.end())
     return it->second.get();
 
-  file2.get().release();
-  _libraries.emplace(interface->getInstallName(),
-                     std::unique_ptr<InterfaceFileBase>(interface));
-
-  return interface;
+  auto result = _libraries.emplace(interface.get()->getInstallName(),
+                                   std::move(interface.get()));
+  return result.first->second.get();
 }
 
-Error InterfaceFileManager::writeFile(const InterfaceFileBase *file,
-                                      const std::string &path) const {
-  return _registry.writeFile(file, path);
+Error InterfaceFileManager::writeFile(const std::string &path,
+                                      const InterfaceFile *file,
+                                      VersionedFileType fileType) const {
+  return _registry.writeFile(path, file, fileType);
 }
 
 TAPI_NAMESPACE_INTERNAL_END

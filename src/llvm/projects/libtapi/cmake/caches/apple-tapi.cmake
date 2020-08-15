@@ -15,4 +15,6 @@ set(LLVM_DISTRIBUTION_COMPONENTS
   tapi-clang-headers
   tapi
   tapi-docs
+  tapi-configs
+  tapi-api-verifier
   CACHE STRING "" FORCE)

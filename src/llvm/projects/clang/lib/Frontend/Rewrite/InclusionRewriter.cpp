@@ -77,7 +77,8 @@ private:
                           StringRef FileName, bool IsAngled,
                           CharSourceRange FilenameRange, const FileEntry *File,
                           StringRef SearchPath, StringRef RelativePath,
-                          const Module *Imported) override;
+                          const Module *Imported,
+                          SrcMgr::CharacteristicKind FileType) override;
   void WriteLineInfo(StringRef Filename, int Line,
                      SrcMgr::CharacteristicKind FileType,
                      StringRef Extra = StringRef());
@@ -192,7 +193,8 @@ void InclusionRewriter::InclusionDirective(SourceLocation HashLoc,
                                            const FileEntry * /*File*/,
                                            StringRef /*SearchPath*/,
                                            StringRef /*RelativePath*/,
-                                           const Module *Imported) {
+                                           const Module *Imported,
+                                           SrcMgr::CharacteristicKind FileType){
   if (Imported) {
     auto P = ModuleIncludes.insert(
         std::make_pair(HashLoc.getRawEncoding(), Imported));
@@ -413,7 +415,7 @@ bool InclusionRewriter::HandleHasInclude(
   // FIXME: Why don't we call PP.LookupFile here?
   const FileEntry *File = PP.getHeaderSearchInfo().LookupFile(
       Filename, SourceLocation(), isAngled, Lookup, CurDir, Includers, nullptr,
-      nullptr, nullptr, nullptr, nullptr);
+      nullptr, nullptr, nullptr, nullptr, nullptr);
 
   FileExists = File != nullptr;
   return true;
@@ -584,6 +586,7 @@ void InclusionRewriter::Process(FileID FileId,
                               LocalEOL, Line, /*EnsureNewline=*/ true);
             WriteLineInfo(FileName, Line, FileType);
             RawLex.SetKeepWhitespaceMode(false);
+            break;
           }
           default:
             break;

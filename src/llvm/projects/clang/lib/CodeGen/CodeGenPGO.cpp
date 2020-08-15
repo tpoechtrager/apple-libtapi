@@ -58,7 +58,7 @@ enum PGOHashVersion : unsigned {
 };
 
 namespace {
-/// \brief Stable hasher for PGO region counters.
+/// Stable hasher for PGO region counters.
 ///
 /// PGOHash produces a stable hash of a given function's control flow.
 ///
@@ -79,7 +79,7 @@ class PGOHash {
   static const unsigned TooBig = 1u << NumBitsPerType;
 
 public:
-  /// \brief Hash values for AST nodes.
+  /// Hash values for AST nodes.
   ///
   /// Distinct values for AST nodes that have region counters attached.
   ///
@@ -544,6 +544,8 @@ struct ComputeRegionCounts : public ConstStmtVisitor<ComputeRegionCounts> {
 
   void VisitCXXForRangeStmt(const CXXForRangeStmt *S) {
     RecordStmtCount(S);
+    if (S->getInit())
+      Visit(S->getInit());
     Visit(S->getLoopVarStmt());
     Visit(S->getRangeStmt());
     Visit(S->getBeginStmt());
@@ -815,7 +817,7 @@ bool CodeGenPGO::skipRegionMappingForDecl(const Decl *D) {
 
   // Don't map the functions in system headers.
   const auto &SM = CGM.getContext().getSourceManager();
-  auto Loc = D->getBody()->getLocStart();
+  auto Loc = D->getBody()->getBeginLoc();
   return SM.isInSystemHeader(Loc);
 }
 
@@ -978,7 +980,7 @@ void CodeGenPGO::loadRegionCounts(llvm::IndexedInstrProfReader *PGOReader,
   RegionCounts = ProfRecord->Counts;
 }
 
-/// \brief Calculate what to divide by to scale weights.
+/// Calculate what to divide by to scale weights.
 ///
 /// Given the maximum weight, calculate a divisor that will scale all the
 /// weights to strictly less than UINT32_MAX.
@@ -986,7 +988,7 @@ static uint64_t calculateWeightScale(uint64_t MaxWeight) {
   return MaxWeight < UINT32_MAX ? 1 : MaxWeight / UINT32_MAX + 1;
 }
 
-/// \brief Scale an individual branch weight (and add 1).
+/// Scale an individual branch weight (and add 1).
 ///
 /// Scale a 64-bit weight down to 32-bits using \c Scale.
 ///

@@ -32,7 +32,7 @@ namespace til {
 
 // Defines an interface used to traverse SExprs.  Traversals have been made as
 // generic as possible, and are intended to handle any kind of pass over the
-// AST, e.g. visiters, copying, non-destructive rewriting, destructive
+// AST, e.g. visitors, copying, non-destructive rewriting, destructive
 // (in-place) rewriting, hashing, typing, etc.
 //
 // Traversals implement the functional notion of a "fold" operation on SExprs.
@@ -785,7 +785,26 @@ protected:
   void printCast(const Cast *E, StreamType &SS) {
     if (!CStyle) {
       SS << "cast[";
-      SS << E->castOpcode();
+      switch (E->castOpcode()) {
+      case CAST_none:
+        SS << "none";
+        break;
+      case CAST_extendNum:
+        SS << "extendNum";
+        break;
+      case CAST_truncNum:
+        SS << "truncNum";
+        break;
+      case CAST_toFloat:
+        SS << "toFloat";
+        break;
+      case CAST_toInt:
+        SS << "toInt";
+        break;
+      case CAST_objToPtr:
+        SS << "objToPtr";
+        break;
+      }
       SS << "](";
       self()->printSExpr(E->expr(), SS, Prec_Unary);
       SS << ")";

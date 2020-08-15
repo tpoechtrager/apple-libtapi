@@ -22,35 +22,36 @@
 
 using namespace llvm;
 
+
 TAPI_NAMESPACE_INTERNAL_BEGIN
 
 Architecture getArchType(uint32_t CPUType, uint32_t CPUSubType) {
 #define ARCHINFO(arch, type, subtype)                                          \
   if (CPUType == (type) &&                                                     \
       (CPUSubType & ~MachO::CPU_SUBTYPE_MASK) == (subtype))                    \
-    return Architecture::arch;
+    return AK_##arch;
 #include "tapi/Core/Architecture.def"
 #undef ARCHINFO
 
-  return Architecture::unknown;
+  return AK_unknown;
 }
 
 Architecture getArchType(StringRef name) {
   return StringSwitch<Architecture>(name)
-#define ARCHINFO(arch, type, subtype) .Case(#arch, Architecture::arch)
+#define ARCHINFO(arch, type, subtype) .Case(#arch, AK_##arch)
 #include "tapi/Core/Architecture.def"
 #undef ARCHINFO
-      .Default(Architecture::unknown);
+      .Default(AK_unknown);
 }
 
 StringRef getArchName(Architecture arch) {
   switch (arch) {
 #define ARCHINFO(arch, type, subtype)                                          \
-  case Architecture::arch:                                                     \
+  case AK_##arch:                                                              \
     return #arch;
 #include "tapi/Core/Architecture.def"
 #undef ARCHINFO
-  case Architecture::unknown:
+  case AK_unknown:
     return "unknown";
   }
 }
@@ -58,13 +59,17 @@ StringRef getArchName(Architecture arch) {
 std::pair<uint32_t, uint32_t> getCPUType(Architecture arch) {
   switch (arch) {
 #define ARCHINFO(arch, type, subtype)                                          \
-  case Architecture::arch:                                                     \
+  case AK_##arch:                                                              \
     return std::make_pair(type, subtype);
 #include "tapi/Core/Architecture.def"
 #undef ARCHINFO
-  case Architecture::unknown:
+  case AK_unknown:
     return std::make_pair(0, 0);
   }
+}
+
+Architecture mapToArchitecture(const Triple &target) {
+  return getArchType(target.getArchName());
 }
 
 raw_ostream &operator<<(raw_ostream &os, Architecture arch) {

@@ -2,8 +2,8 @@
 
 set -e
 
-TAPI_REPOSITORY=tapi-1000.10.8
-TAPI_VERSION=10.0.0
+TAPI_REPOSITORY=1100.0.11
+TAPI_VERSION=11.0.0 # ?!
 
 pushd "${0%/*}" &>/dev/null
 source tools/tools.sh
@@ -21,7 +21,7 @@ if [ $OPERATING_SYSTEM == "Android" ]; then
 fi
 
 if [ "$TARGET" == "Darwin" ]; then
-  export MACOSX_DEPLOYMENT_TARGET=10.9
+  #export MACOSX_DEPLOYMENT_TARGET=10.9
   CMAKE_EXTRA_ARGS+="-DCMAKE_SYSTEM_NAME=Darwin "
   export CC="$(xcrun -f clang) -stdlib=libc++"
   export CXX="$(xcrun -f clang++) -stdlib=libc++"
@@ -37,8 +37,8 @@ elif [ "$TARGET" == "iOS-ARMV7" ]; then
   export CXX="arm-apple-darwin11-clang++ -arch armv7 -stdlib=libc++"
 elif [ "$TARGET" == "FreeBSD" ]; then
   CMAKE_EXTRA_ARGS+="-DCMAKE_SYSTEM_NAME=FreeBSD "
-  export CC=amd64-pc-freebsd10.1-clang
-  export CXX=amd64-pc-freebsd10.1-clang++
+  export CC=amd64-pc-freebsd13.0-clang
+  export CXX=amd64-pc-freebsd13.0-clang++
 elif [ "$TARGET" == "MINGW64" ]; then
   CMAKE_EXTRA_ARGS+="-DCMAKE_SYSTEM_NAME=Windows "
   export CC=x86_64-w64-mingw32-gcc
@@ -53,11 +53,11 @@ if [ -z "$INSTALLPREFIX" ]; then
   INSTALLPREFIX="/usr/local"
 fi
 
-echo -n $INSTALLPREFIX > INSTALLPREFIX
-
 # TODO: Fix this in a better way.
 INCLUDE_FIX="-I $PWD/../src/llvm/projects/clang/include "
 INCLUDE_FIX+="-I $PWD/projects/clang/include "
+
+echo -n $INSTALLPREFIX > INSTALLPREFIX
 
 cmake ../src/llvm \
  -DCMAKE_CXX_FLAGS="$INCLUDE_FIX" \

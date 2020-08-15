@@ -12,9 +12,9 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "llvm/Support/raw_ostream.h"
 #include "tapi/Config/Version.h"
 #include "tapi/Version.inc"
-#include "llvm/Support/raw_ostream.h"
 
 using namespace llvm;
 

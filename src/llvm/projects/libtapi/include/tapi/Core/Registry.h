@@ -16,16 +16,16 @@
 #define TAPI_CORE_REGISTRY_H
 
 #include "tapi/Core/ArchitectureSet.h"
-#include "tapi/Core/File.h"
+#include "tapi/Core/InterfaceFile.h"
 #include "tapi/Core/LLVM.h"
 #include "tapi/Defines.h"
 #include "llvm/BinaryFormat/Magic.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/MemoryBuffer.h"
 
+using llvm::file_magic;
 using llvm::Error;
 using llvm::Expected;
-using llvm::file_magic;
 
 TAPI_NAMESPACE_INTERNAL_BEGIN
 
@@ -34,6 +34,7 @@ class Registry;
 enum class ReadFlags {
   Header,
   Symbols,
+  ObjCMetadata,
   All,
 };
 
@@ -46,7 +47,7 @@ public:
                        FileType types = FileType::All) const = 0;
   virtual Expected<FileType> getFileType(file_magic magic,
                                          MemoryBufferRef bufferRef) const = 0;
-  virtual Expected<std::unique_ptr<File>>
+  virtual Expected<std::unique_ptr<InterfaceFile>>
   readFile(std::unique_ptr<MemoryBuffer> memBuffer, ReadFlags readFlags,
            ArchitectureSet arches) const = 0;
 };
@@ -56,22 +57,26 @@ public:
 class Writer {
 public:
   virtual ~Writer() = default;
-  virtual bool canWrite(const File *file) const = 0;
-  virtual Error writeFile(raw_ostream &os, const File *file) const = 0;
+  virtual bool canWrite(const InterfaceFile *file,
+                        VersionedFileType fileType) const = 0;
+  virtual Error writeFile(raw_ostream &os, const InterfaceFile *file,
+                          VersionedFileType fileType) const = 0;
 };
 
 class Registry {
 public:
   bool canRead(MemoryBufferRef memBuffer, FileType types = FileType::All) const;
   Expected<FileType> getFileType(MemoryBufferRef memBuffer) const;
-  bool canWrite(const File *file) const;
+  bool canWrite(const InterfaceFile *file, VersionedFileType fileType) const;
 
-  Expected<std::unique_ptr<File>>
+  Expected<std::unique_ptr<InterfaceFile>>
   readFile(std::unique_ptr<MemoryBuffer> memBuffer,
            ReadFlags readFlags = ReadFlags::All,
            ArchitectureSet arches = ArchitectureSet::All()) const;
-  Error writeFile(const File *file, const std::string &path) const;
-  Error writeFile(raw_ostream &os, const File *file) const;
+  Error writeFile(const std::string &path, const InterfaceFile *file,
+                  VersionedFileType fileType) const;
+  Error writeFile(raw_ostream &os, const InterfaceFile *file,
+                  VersionedFileType fileType) const;
 
   void add(std::unique_ptr<Reader> reader) {
     _readers.emplace_back(std::move(reader));
@@ -85,7 +90,6 @@ public:
   void addYAMLReaders();
   void addYAMLWriters();
   void addDiagnosticReader();
-  void addReexportWriters();
 
 private:
   std::vector<std::unique_ptr<Reader>> _readers;

@@ -122,7 +122,7 @@ public:
   /// Returns the start sourcelocation of the first statement in this sequence.
   ///
   /// This method should only be called on a non-empty StmtSequence object.
-  SourceLocation getStartLoc() const;
+  SourceLocation getBeginLoc() const;
 
   /// Returns the end sourcelocation of the last statement in this sequence.
   ///
@@ -161,7 +161,7 @@ public:
 /// The result of findClones can be further constrained with the constrainClones
 /// method.
 ///
-/// This class only searches for clones in exectuable source code
+/// This class only searches for clones in executable source code
 /// (e.g. function bodies). Other clones (e.g. cloned comments or declarations)
 /// are not supported.
 class CloneDetector {
@@ -332,7 +332,7 @@ struct FilenamePatternConstraint {
   StringRef IgnoredFilesPattern;
   std::shared_ptr<llvm::Regex> IgnoredFilesRegex;
 
-  FilenamePatternConstraint(StringRef IgnoredFilesPattern) 
+  FilenamePatternConstraint(StringRef IgnoredFilesPattern)
       : IgnoredFilesPattern(IgnoredFilesPattern) {
     IgnoredFilesRegex = std::make_shared<llvm::Regex>("^(" +
         IgnoredFilesPattern.str() + "$)");

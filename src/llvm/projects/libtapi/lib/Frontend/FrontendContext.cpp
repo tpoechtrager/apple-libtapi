@@ -17,9 +17,10 @@
 TAPI_NAMESPACE_INTERNAL_BEGIN
 
 FrontendContext::FrontendContext(
-    StringRef workingDirectory,
+    const llvm::Triple &triple, StringRef workingDirectory,
     IntrusiveRefCntPtr<FileSystemStatCacheFactory> cacheFactory,
-    IntrusiveRefCntPtr<clang::vfs::FileSystem> vfs) {
+    IntrusiveRefCntPtr<llvm::vfs::FileSystem> vfs)
+    : target(triple), api(triple) {
   fileManager = new FileManager(clang::FileSystemOptions{workingDirectory},
                                 cacheFactory, vfs);
 }

@@ -9,12 +9,45 @@
 
 #include "clang/Index/IndexDataStoreSymbolUtils.h"
 #include "IndexDataStoreUtils.h"
+#include "llvm/ADT/SmallString.h"
 #include "llvm/Bitcode/BitstreamWriter.h"
+#include "llvm/Support/Path.h"
+#include "llvm/Support/raw_ostream.h"
 
 using namespace clang;
 using namespace clang::index;
 using namespace clang::index::store;
 using namespace llvm;
+
+static void appendSubDir(StringRef subdir, SmallVectorImpl<char> &StorePathBuf) {
+  SmallString<10> VersionPath;
+  raw_svector_ostream(VersionPath) << 'v' << STORE_FORMAT_VERSION;
+
+  sys::path::append(StorePathBuf, VersionPath);
+  sys::path::append(StorePathBuf, subdir);
+}
+
+void store::appendInteriorUnitPath(StringRef UnitName,
+                                   SmallVectorImpl<char> &PathBuf) {
+  sys::path::append(PathBuf, UnitName);
+}
+
+void store::appendUnitSubDir(SmallVectorImpl<char> &StorePathBuf) {
+  return appendSubDir("units", StorePathBuf);
+}
+
+void store::appendRecordSubDir(SmallVectorImpl<char> &StorePathBuf) {
+  return appendSubDir("records", StorePathBuf);
+}
+
+void store::appendInteriorRecordPath(StringRef RecordName,
+                                     SmallVectorImpl<char> &PathBuf) {
+  // To avoid putting a huge number of files into the records directory, create
+  // subdirectories based on the last 2 characters from the hash.
+  StringRef hash2chars = RecordName.substr(RecordName.size()-2);
+  sys::path::append(PathBuf, hash2chars);
+  sys::path::append(PathBuf, RecordName);
+}
 
 void store::emitBlockID(unsigned ID, const char *Name,
                         BitstreamWriter &Stream, RecordDataImpl &Record) {
@@ -175,15 +208,75 @@ SymbolLanguage index::getSymbolLanguage(indexstore_symbol_language_t L) {
 /// Map an indexstore representation to a SymbolPropertySet, handling
 /// unknown values.
 SymbolPropertySet index::getSymbolProperties(uint64_t Props) {
-  // FIXME: currently these enums must be kept in sync.
-  return (uint64_t)Props;
+  SymbolPropertySet SymbolProperties = 0;
+  if (Props & INDEXSTORE_SYMBOL_PROPERTY_GENERIC)
+    SymbolProperties |= (SymbolPropertySet)SymbolProperty::Generic;
+  if (Props & INDEXSTORE_SYMBOL_PROPERTY_TEMPLATE_PARTIAL_SPECIALIZATION)
+    SymbolProperties |= (SymbolPropertySet)SymbolProperty::TemplatePartialSpecialization;
+  if (Props & INDEXSTORE_SYMBOL_PROPERTY_TEMPLATE_SPECIALIZATION)
+    SymbolProperties |= (SymbolPropertySet)SymbolProperty::TemplateSpecialization;
+  if (Props & INDEXSTORE_SYMBOL_PROPERTY_UNITTEST)
+    SymbolProperties |= (SymbolPropertySet)SymbolProperty::UnitTest;
+  if (Props & INDEXSTORE_SYMBOL_PROPERTY_IBANNOTATED)
+    SymbolProperties |= (SymbolPropertySet)SymbolProperty::IBAnnotated;
+  if (Props & INDEXSTORE_SYMBOL_PROPERTY_IBOUTLETCOLLECTION)
+    SymbolProperties |= (SymbolPropertySet)SymbolProperty::IBOutletCollection;
+  if (Props & INDEXSTORE_SYMBOL_PROPERTY_GKINSPECTABLE)
+    SymbolProperties |= (SymbolPropertySet)SymbolProperty::GKInspectable;
+  if (Props & INDEXSTORE_SYMBOL_PROPERTY_LOCAL)
+    SymbolProperties |= (SymbolPropertySet)SymbolProperty::Local;
+  if (Props & INDEXSTORE_SYMBOL_PROPERTY_PROTOCOL_INTERFACE)
+    SymbolProperties |= (SymbolPropertySet)SymbolProperty::ProtocolInterface;
+
+  return SymbolProperties;
 }
 
 /// Map an indexstore representation to a SymbolRoleSet, handling unknown
 /// values.
 SymbolRoleSet index::getSymbolRoles(uint64_t Roles) {
-  // FIXME: currently these enums must be kept in sync.
-  return (uint64_t)Roles;
+  SymbolRoleSet SymbolRoles = 0;
+  if (Roles & INDEXSTORE_SYMBOL_ROLE_DECLARATION)
+    SymbolRoles |= (SymbolRoleSet)SymbolRole::Declaration;
+  if (Roles & INDEXSTORE_SYMBOL_ROLE_DEFINITION)
+    SymbolRoles |= (SymbolRoleSet)SymbolRole::Definition;
+  if (Roles & INDEXSTORE_SYMBOL_ROLE_REFERENCE)
+    SymbolRoles |= (SymbolRoleSet)SymbolRole::Reference;
+  if (Roles & INDEXSTORE_SYMBOL_ROLE_READ)
+    SymbolRoles |= (SymbolRoleSet)SymbolRole::Read;
+  if (Roles & INDEXSTORE_SYMBOL_ROLE_WRITE)
+    SymbolRoles |= (SymbolRoleSet)SymbolRole::Write;
+  if (Roles & INDEXSTORE_SYMBOL_ROLE_CALL)
+    SymbolRoles |= (SymbolRoleSet)SymbolRole::Call;
+  if (Roles & INDEXSTORE_SYMBOL_ROLE_DYNAMIC)
+    SymbolRoles |= (SymbolRoleSet)SymbolRole::Dynamic;
+  if (Roles & INDEXSTORE_SYMBOL_ROLE_ADDRESSOF)
+    SymbolRoles |= (SymbolRoleSet)SymbolRole::AddressOf;
+  if (Roles & INDEXSTORE_SYMBOL_ROLE_IMPLICIT)
+    SymbolRoles |= (SymbolRoleSet)SymbolRole::Implicit;
+  if (Roles & INDEXSTORE_SYMBOL_ROLE_UNDEFINITION)
+    SymbolRoles |= (SymbolRoleSet)SymbolRole::Undefinition;
+  if (Roles & INDEXSTORE_SYMBOL_ROLE_REL_CHILDOF)
+    SymbolRoles |= (SymbolRoleSet)SymbolRole::RelationChildOf;
+  if (Roles & INDEXSTORE_SYMBOL_ROLE_REL_BASEOF)
+    SymbolRoles |= (SymbolRoleSet)SymbolRole::RelationBaseOf;
+  if (Roles & INDEXSTORE_SYMBOL_ROLE_REL_OVERRIDEOF)
+    SymbolRoles |= (SymbolRoleSet)SymbolRole::RelationOverrideOf;
+  if (Roles & INDEXSTORE_SYMBOL_ROLE_REL_RECEIVEDBY)
+    SymbolRoles |= (SymbolRoleSet)SymbolRole::RelationReceivedBy;
+  if (Roles & INDEXSTORE_SYMBOL_ROLE_REL_CALLEDBY)
+    SymbolRoles |= (SymbolRoleSet)SymbolRole::RelationCalledBy;
+  if (Roles & INDEXSTORE_SYMBOL_ROLE_REL_EXTENDEDBY)
+    SymbolRoles |= (SymbolRoleSet)SymbolRole::RelationExtendedBy;
+  if (Roles & INDEXSTORE_SYMBOL_ROLE_REL_ACCESSOROF)
+    SymbolRoles |= (SymbolRoleSet)SymbolRole::RelationAccessorOf;
+  if (Roles & INDEXSTORE_SYMBOL_ROLE_REL_CONTAINEDBY)
+    SymbolRoles |= (SymbolRoleSet)SymbolRole::RelationContainedBy;
+  if (Roles & INDEXSTORE_SYMBOL_ROLE_REL_IBTYPEOF)
+    SymbolRoles |= (SymbolRoleSet)SymbolRole::RelationIBTypeOf;
+  if (Roles & INDEXSTORE_SYMBOL_ROLE_REL_SPECIALIZATIONOF)
+    SymbolRoles |= (SymbolRoleSet)SymbolRole::RelationSpecializationOf;
+
+  return SymbolRoles;
 }
 
 /// Map a SymbolLanguage to a indexstore_symbol_language_t.
@@ -345,6 +438,9 @@ uint64_t index::getIndexStoreProperties(SymbolPropertySet Props) {
     case SymbolProperty::Local:
       storeProp |= INDEXSTORE_SYMBOL_PROPERTY_LOCAL;
       break;
+    case SymbolProperty::ProtocolInterface:
+      storeProp |= INDEXSTORE_SYMBOL_PROPERTY_PROTOCOL_INTERFACE;
+      break;
     }
   });
   return storeProp;
@@ -381,6 +477,9 @@ uint64_t index::getIndexStoreRoles(SymbolRoleSet Roles) {
       break;
     case SymbolRole::Implicit:
       storeRoles |= INDEXSTORE_SYMBOL_ROLE_IMPLICIT;
+      break;
+    case SymbolRole::Undefinition:
+      storeRoles |= INDEXSTORE_SYMBOL_ROLE_UNDEFINITION;
       break;
     case SymbolRole::RelationChildOf:
       storeRoles |= INDEXSTORE_SYMBOL_ROLE_REL_CHILDOF;

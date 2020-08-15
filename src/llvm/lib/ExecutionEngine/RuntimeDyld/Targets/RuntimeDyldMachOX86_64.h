@@ -29,7 +29,7 @@ public:
 
   unsigned getMaxStubSize() override { return 8; }
 
-  unsigned getStubAlignment() override { return 1; }
+  unsigned getStubAlignment() override { return 8; }
 
   Expected<relocation_iterator>
   processRelocationRef(unsigned SectionID, relocation_iterator RelI,
@@ -85,7 +85,7 @@ public:
   }
 
   void resolveRelocation(const RelocationEntry &RE, uint64_t Value) override {
-    DEBUG(dumpRelocationToResolve(RE, Value));
+    LLVM_DEBUG(dumpRelocationToResolve(RE, Value));
     const SectionEntry &Section = Sections[RE.SectionID];
     uint8_t *LocalAddress = Section.getAddressWithOffset(RE.Offset);
 

@@ -41,7 +41,7 @@ static cl::opt<bool> PrintMustModRef("print-mustmodref", cl::ReallyHidden);
 
 static cl::opt<bool> EvalAAMD("evaluate-aa-metadata", cl::ReallyHidden);
 
-static void PrintResults(const char *Msg, bool P, const Value *V1,
+static void PrintResults(AliasResult AR, bool P, const Value *V1,
                          const Value *V2, const Module *M) {
   if (PrintAll || P) {
     std::string o1, o2;
@@ -50,18 +50,15 @@ static void PrintResults(const char *Msg, bool P, const Value *V1,
       V1->printAsOperand(os1, true, M);
       V2->printAsOperand(os2, true, M);
     }
-    
+
     if (o2 < o1)
       std::swap(o1, o2);
-    errs() << "  " << Msg << ":\t"
-           << o1 << ", "
-           << o2 << "\n";
+    errs() << "  " << AR << ":\t" << o1 << ", " << o2 << "\n";
   }
 }
 
-static inline void
-PrintModRefResults(const char *Msg, bool P, Instruction *I, Value *Ptr,
-                   Module *M) {
+static inline void PrintModRefResults(const char *Msg, bool P, Instruction *I,
+                                      Value *Ptr, Module *M) {
   if (PrintAll || P) {
     errs() << "  " << Msg << ":  Ptr: ";
     Ptr->printAsOperand(errs(), true, M);
@@ -69,21 +66,19 @@ PrintModRefResults(const char *Msg, bool P, Instruction *I, Value *Ptr,
   }
 }
 
-static inline void
-PrintModRefResults(const char *Msg, bool P, CallSite CSA, CallSite CSB,
-                   Module *M) {
+static inline void PrintModRefResults(const char *Msg, bool P, CallSite CSA,
+                                      CallSite CSB, Module *M) {
   if (PrintAll || P) {
-    errs() << "  " << Msg << ": " << *CSA.getInstruction()
-           << " <-> " << *CSB.getInstruction() << '\n';
+    errs() << "  " << Msg << ": " << *CSA.getInstruction() << " <-> "
+           << *CSB.getInstruction() << '\n';
   }
 }
 
-static inline void
-PrintLoadStoreResults(const char *Msg, bool P, const Value *V1,
-                      const Value *V2, const Module *M) {
+static inline void PrintLoadStoreResults(AliasResult AR, bool P,
+                                         const Value *V1, const Value *V2,
+                                         const Module *M) {
   if (PrintAll || P) {
-    errs() << "  " << Msg << ": " << *V1
-           << " <-> " << *V2 << '\n';
+    errs() << "  " << AR << ": " << *V1 << " <-> " << *V2 << '\n';
   }
 }
 
@@ -146,31 +141,33 @@ void AAEvaluator::runInternal(Function &F, AAResults &AA) {
   // iterate over the worklist, and run the full (n^2)/2 disambiguations
   for (SetVector<Value *>::iterator I1 = Pointers.begin(), E = Pointers.end();
        I1 != E; ++I1) {
-    uint64_t I1Size = MemoryLocation::UnknownSize;
+    auto I1Size = LocationSize::unknown();
     Type *I1ElTy = cast<PointerType>((*I1)->getType())->getElementType();
-    if (I1ElTy->isSized()) I1Size = DL.getTypeStoreSize(I1ElTy);
+    if (I1ElTy->isSized())
+      I1Size = LocationSize::precise(DL.getTypeStoreSize(I1ElTy));
 
     for (SetVector<Value *>::iterator I2 = Pointers.begin(); I2 != I1; ++I2) {
-      uint64_t I2Size = MemoryLocation::UnknownSize;
-      Type *I2ElTy =cast<PointerType>((*I2)->getType())->getElementType();
-      if (I2ElTy->isSized()) I2Size = DL.getTypeStoreSize(I2ElTy);
+      auto I2Size = LocationSize::unknown();
+      Type *I2ElTy = cast<PointerType>((*I2)->getType())->getElementType();
+      if (I2ElTy->isSized())
+        I2Size = LocationSize::precise(DL.getTypeStoreSize(I2ElTy));
 
-      switch (AA.alias(*I1, I1Size, *I2, I2Size)) {
+      AliasResult AR = AA.alias(*I1, I1Size, *I2, I2Size);
+      switch (AR) {
       case NoAlias:
-        PrintResults("NoAlias", PrintNoAlias, *I1, *I2, F.getParent());
+        PrintResults(AR, PrintNoAlias, *I1, *I2, F.getParent());
         ++NoAliasCount;
         break;
       case MayAlias:
-        PrintResults("MayAlias", PrintMayAlias, *I1, *I2, F.getParent());
+        PrintResults(AR, PrintMayAlias, *I1, *I2, F.getParent());
         ++MayAliasCount;
         break;
       case PartialAlias:
-        PrintResults("PartialAlias", PrintPartialAlias, *I1, *I2,
-                     F.getParent());
+        PrintResults(AR, PrintPartialAlias, *I1, *I2, F.getParent());
         ++PartialAliasCount;
         break;
       case MustAlias:
-        PrintResults("MustAlias", PrintMustAlias, *I1, *I2, F.getParent());
+        PrintResults(AR, PrintMustAlias, *I1, *I2, F.getParent());
         ++MustAliasCount;
         break;
       }
@@ -181,26 +178,23 @@ void AAEvaluator::runInternal(Function &F, AAResults &AA) {
     // iterate over all pairs of load, store
     for (Value *Load : Loads) {
       for (Value *Store : Stores) {
-        switch (AA.alias(MemoryLocation::get(cast<LoadInst>(Load)),
-                         MemoryLocation::get(cast<StoreInst>(Store)))) {
+        AliasResult AR = AA.alias(MemoryLocation::get(cast<LoadInst>(Load)),
+                                  MemoryLocation::get(cast<StoreInst>(Store)));
+        switch (AR) {
         case NoAlias:
-          PrintLoadStoreResults("NoAlias", PrintNoAlias, Load, Store,
-                                F.getParent());
+          PrintLoadStoreResults(AR, PrintNoAlias, Load, Store, F.getParent());
           ++NoAliasCount;
           break;
         case MayAlias:
-          PrintLoadStoreResults("MayAlias", PrintMayAlias, Load, Store,
-                                F.getParent());
+          PrintLoadStoreResults(AR, PrintMayAlias, Load, Store, F.getParent());
           ++MayAliasCount;
           break;
         case PartialAlias:
-          PrintLoadStoreResults("PartialAlias", PrintPartialAlias, Load, Store,
-                                F.getParent());
+          PrintLoadStoreResults(AR, PrintPartialAlias, Load, Store, F.getParent());
           ++PartialAliasCount;
           break;
         case MustAlias:
-          PrintLoadStoreResults("MustAlias", PrintMustAlias, Load, Store,
-                                F.getParent());
+          PrintLoadStoreResults(AR, PrintMustAlias, Load, Store, F.getParent());
           ++MustAliasCount;
           break;
         }
@@ -211,26 +205,23 @@ void AAEvaluator::runInternal(Function &F, AAResults &AA) {
     for (SetVector<Value *>::iterator I1 = Stores.begin(), E = Stores.end();
          I1 != E; ++I1) {
       for (SetVector<Value *>::iterator I2 = Stores.begin(); I2 != I1; ++I2) {
-        switch (AA.alias(MemoryLocation::get(cast<StoreInst>(*I1)),
-                         MemoryLocation::get(cast<StoreInst>(*I2)))) {
+        AliasResult AR = AA.alias(MemoryLocation::get(cast<StoreInst>(*I1)),
+                                  MemoryLocation::get(cast<StoreInst>(*I2)));
+        switch (AR) {
         case NoAlias:
-          PrintLoadStoreResults("NoAlias", PrintNoAlias, *I1, *I2,
-                                F.getParent());
+          PrintLoadStoreResults(AR, PrintNoAlias, *I1, *I2, F.getParent());
           ++NoAliasCount;
           break;
         case MayAlias:
-          PrintLoadStoreResults("MayAlias", PrintMayAlias, *I1, *I2,
-                                F.getParent());
+          PrintLoadStoreResults(AR, PrintMayAlias, *I1, *I2, F.getParent());
           ++MayAliasCount;
           break;
         case PartialAlias:
-          PrintLoadStoreResults("PartialAlias", PrintPartialAlias, *I1, *I2,
-                                F.getParent());
+          PrintLoadStoreResults(AR, PrintPartialAlias, *I1, *I2, F.getParent());
           ++PartialAliasCount;
           break;
         case MustAlias:
-          PrintLoadStoreResults("MustAlias", PrintMustAlias, *I1, *I2,
-                                F.getParent());
+          PrintLoadStoreResults(AR, PrintMustAlias, *I1, *I2, F.getParent());
           ++MustAliasCount;
           break;
         }
@@ -243,9 +234,10 @@ void AAEvaluator::runInternal(Function &F, AAResults &AA) {
     Instruction *I = C.getInstruction();
 
     for (auto Pointer : Pointers) {
-      uint64_t Size = MemoryLocation::UnknownSize;
+      auto Size = LocationSize::unknown();
       Type *ElTy = cast<PointerType>(Pointer->getType())->getElementType();
-      if (ElTy->isSized()) Size = DL.getTypeStoreSize(ElTy);
+      if (ElTy->isSized())
+        Size = LocationSize::precise(DL.getTypeStoreSize(ElTy));
 
       switch (AA.getModRefInfo(C, Pointer, Size)) {
       case ModRefInfo::NoModRef:

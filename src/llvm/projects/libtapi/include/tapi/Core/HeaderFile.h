@@ -18,8 +18,8 @@
 #include "tapi/Core/LLVM.h"
 #include "tapi/Defines.h"
 #include "llvm/ADT/StringRef.h"
-#include <string>
 #include <vector>
+#include <string>
 
 TAPI_NAMESPACE_INTERNAL_BEGIN
 
@@ -37,6 +37,7 @@ struct HeaderFile {
   bool isUmbrellaHeader{false};
   bool isExcluded{false};
   bool isExtra{false};
+  bool isPreInclude{false};
 
   HeaderFile(StringRef fullPath, HeaderType type,
              StringRef relativePath = StringRef())

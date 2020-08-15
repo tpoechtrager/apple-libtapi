@@ -18,23 +18,52 @@
 #include "tapi/Core/Architecture.h"
 #include "tapi/Core/ArchitectureSet.h"
 #include "tapi/Core/AvailabilityInfo.h"
-#include "tapi/Core/STLExtras.h"
 #include "tapi/Core/XPI.h"
 #include "tapi/Defines.h"
 #include "clang/Basic/SourceLocation.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/Hashing.h"
-#include "llvm/ADT/SmallPtrSet.h"
-#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/iterator.h"
 #include "llvm/ADT/iterator_range.h"
 #include "llvm/Support/Allocator.h"
 #include <stddef.h>
-#include <unordered_map>
 
 namespace clang {
 class PresumedLoc;
 } // namespace clang
+
+TAPI_NAMESPACE_INTERNAL_BEGIN
+
+struct SymbolsMapKey {
+  XPIKind kind;
+  StringRef name;
+
+  SymbolsMapKey(XPIKind kind, StringRef name) : kind(kind), name(name) {}
+};
+
+TAPI_NAMESPACE_INTERNAL_END
+
+namespace llvm {
+using namespace TAPI_INTERNAL;
+template <> struct DenseMapInfo<SymbolsMapKey> {
+  static inline SymbolsMapKey getEmptyKey() {
+    return SymbolsMapKey(XPIKind::GlobalSymbol, StringRef{});
+  }
+
+  static inline SymbolsMapKey getTombstoneKey() {
+    return SymbolsMapKey(XPIKind::ObjectiveCInstanceVariable, StringRef{});
+  }
+
+  static unsigned getHashValue(const SymbolsMapKey &key) {
+    return combineHashValue(hash_value(key.kind), hash_value(key.name));
+  }
+
+  static bool isEqual(const SymbolsMapKey &lhs, const SymbolsMapKey &rhs) {
+    return std::tie(lhs.kind, lhs.name) == std::tie(rhs.kind, rhs.name);
+  }
+};
+} // namespace llvm
 
 TAPI_NAMESPACE_INTERNAL_BEGIN
 
@@ -51,165 +80,119 @@ private:
     return StringRef(reinterpret_cast<const char *>(ptr), string.size());
   }
 
+  GlobalSymbol *addGlobalSymbolImp(StringRef name, APILinkage linkage,
+                                   APIFlags flags,
+                                   APIAccess access = APIAccess::Unknown);
+
+  ObjCClass *addObjCClassImpl(StringRef name, APILinkage linkage,
+                              APIAccess access = APIAccess::Unknown);
+
+  ObjCClassEHType *
+  addObjCClassEHTypeImpl(StringRef name, APILinkage linkage,
+                         APIAccess access = APIAccess::Unknown);
+
+  ObjCInstanceVariable *
+  addObjCInstanceVariableImpl(StringRef name, APILinkage linkage,
+                              APIAccess access = APIAccess::Unknown);
+
 public:
-  struct SymbolsMapKey {
-    XPIKind kind;
-    StringRef name;
-
-    SymbolsMapKey(XPIKind kind, StringRef name) : kind(kind), name(name) {}
-  };
-
-  struct SymbolsMapKeyHash {
-    std::size_t operator()(const SymbolsMapKey &key) const {
-      return llvm::hash_combine(key.kind, key.name);
-    }
-  };
-
-  struct SymbolsMapKeyEqual {
-    bool operator()(const SymbolsMapKey &lhs, const SymbolsMapKey &rhs) const {
-      return std::tie(lhs.kind, lhs.name) == std::tie(rhs.kind, rhs.name);
-    }
-  };
-
-  struct SelectorsMapKey {
-    StringRef containerName;
-    StringRef selectorName;
-    union {
-      unsigned raw;
-      struct {
-        unsigned isInstanceMethod : 1;
-        unsigned containerIsProtocol : 1;
-      } bits;
-    };
-
-    SelectorsMapKey(StringRef containerName, StringRef selectorName,
-                    bool isInstanceMethod, bool containerIsProtocol)
-        : containerName(containerName), selectorName(selectorName), raw(0) {
-      bits.isInstanceMethod = isInstanceMethod;
-      bits.containerIsProtocol = containerIsProtocol;
-    }
-  };
-
-  struct SelectorsMapKeyHash {
-    std::size_t operator()(const SelectorsMapKey &key) const {
-      return llvm::hash_combine(key.containerName, key.selectorName, key.raw);
-    }
-  };
-
-  struct SelectorsMapKeyEqual {
-    bool operator()(const SelectorsMapKey &lhs,
-                    const SelectorsMapKey &rhs) const {
-      return std::tie(lhs.containerName, lhs.selectorName, lhs.raw) ==
-             std::tie(rhs.containerName, rhs.selectorName, rhs.raw);
-    }
-  };
-
-  struct CategoriesMapKey {
-    StringRef containerName;
-    StringRef categoryName;
-
-    CategoriesMapKey(StringRef containerName, StringRef categoryName)
-        : containerName(containerName), categoryName(categoryName) {}
-  };
-
-  struct CategoriesMapKeyHash {
-    std::size_t operator()(const CategoriesMapKey &key) const {
-      return llvm::hash_combine(key.containerName, key.categoryName);
-    }
-  };
-
-  struct CategoriesMapKeyEqual {
-    bool operator()(const CategoriesMapKey &lhs,
-                    const CategoriesMapKey &rhs) const {
-      return std::tie(lhs.containerName, lhs.categoryName) ==
-             std::tie(rhs.containerName, rhs.categoryName);
-    }
-  };
-
-  struct ProtocolsMapKeyHash {
-    std::size_t operator()(const StringRef &key) const {
-      return llvm::hash_value(key);
-    }
-  };
-
-  struct ProtocolsMapKeyEqual {
-    bool operator()(const StringRef &lhs, const StringRef &rhs) const {
-      return lhs == rhs;
-    }
-  };
-
-  using SymbolsMapType =
-      std::unordered_map<SymbolsMapKey, XPI *, SymbolsMapKeyHash,
-                         SymbolsMapKeyEqual>;
-  using SelectorsMapType =
-      std::unordered_map<SelectorsMapKey, ObjCSelector *, SelectorsMapKeyHash,
-                         SelectorsMapKeyEqual>;
-  using CategoriesMapType =
-      std::unordered_map<CategoriesMapKey, ObjCCategory *, CategoriesMapKeyHash,
-                         CategoriesMapKeyEqual>;
-  using ProtocolsMapType =
-      std::unordered_map<StringRef, ObjCProtocol *, ProtocolsMapKeyHash>;
+  using SymbolsMapType = llvm::DenseMap<SymbolsMapKey, XPI *>;
   SymbolsMapType _symbols;
-  SelectorsMapType _selectors;
-  CategoriesMapType _categories;
-  ProtocolsMapType _protocols;
 
-public:
   XPISet() = default;
 
-  GlobalSymbol *addGlobalSymbol(StringRef name, clang::PresumedLoc loc,
-                                XPIAccess access, Architecture arch,
-                                const AvailabilityInfo &info,
-                                bool isWeakDefined = false);
-  ObjCClass *addObjCClass(StringRef name, clang::PresumedLoc loc,
-                          XPIAccess access, Architecture arch,
-                          const AvailabilityInfo &info,
-                          ObjCClass *superClass = nullptr);
-  ObjCClassEHType *addObjCClassEHType(StringRef name, clang::PresumedLoc loc,
-                                      XPIAccess access, Architecture arch,
-                                      const AvailabilityInfo &info);
-  ObjCInstanceVariable *addObjCInstanceVariable(StringRef name,
-                                                clang::PresumedLoc loc,
-                                                XPIAccess access,
-                                                Architecture arch,
-                                                const AvailabilityInfo &info);
-  ObjCSelector *addObjCSelector(ObjCContainer *container, StringRef name,
-                                bool isInstanceMethod, bool isDynamic,
-                                clang::PresumedLoc loc, XPIAccess access,
-                                Architecture arch, const AvailabilityInfo &info,
-                                bool isDerivedFromProtocol = false);
-  ObjCCategory *addObjCCategory(ObjCClass *baseClass, StringRef name,
-                                clang::PresumedLoc loc, XPIAccess access,
-                                Architecture arch,
-                                const AvailabilityInfo &info);
-  ObjCProtocol *addObjCProtocol(StringRef name, clang::PresumedLoc loc,
-                                XPIAccess access, Architecture arch,
-                                const AvailabilityInfo info);
+  GlobalSymbol *addGlobalSymbol(StringRef name, APILinkage linkage,
+                                APIFlags flags, const Target &target,
+                                APIAccess access = APIAccess::Unknown,
+                                AvailabilityInfo info = AvailabilityInfo()) {
+    auto globalSymbol = addGlobalSymbolImp(name, linkage, flags, access);
+    globalSymbol->addAvailabilityInfo(target, info);
+    return globalSymbol;
+  }
 
-  GlobalSymbol *addGlobalSymbol(StringRef name, ArchitectureSet archs,
-                                SymbolFlags flags, XPIAccess access);
-  ObjCClass *addObjCClass(StringRef name, ArchitectureSet archs,
-                          XPIAccess access, ObjCClass *superClass = nullptr);
-  ObjCClassEHType *addObjCClassEHType(StringRef name, ArchitectureSet archs,
-                                      XPIAccess access);
-  ObjCInstanceVariable *addObjCInstanceVariable(StringRef name,
-                                                ArchitectureSet archs,
-                                                XPIAccess access);
-  ObjCSelector *addObjCSelector(ObjCContainer *container, StringRef name,
-                                ArchitectureSet archs, bool isInstanceMethod,
-                                bool isDynamic, XPIAccess access);
-  ObjCCategory *addObjCCategory(ObjCClass *baseClass, StringRef name,
-                                ArchitectureSet archs, XPIAccess access);
-  ObjCProtocol *addObjCProtocol(StringRef name, ArchitectureSet archs,
-                                XPIAccess access);
+  template <typename RangeT,
+            typename ElT = typename std::remove_reference<
+                decltype(*std::begin(std::declval<RangeT>()))>::type>
+  GlobalSymbol *addGlobalSymbol(StringRef name, APILinkage linkage,
+                                APIFlags flags, RangeT &&targets,
+                                APIAccess access = APIAccess::Unknown,
+                                AvailabilityInfo info = AvailabilityInfo()) {
+    auto *symbol = addGlobalSymbolImp(name, linkage, flags, access);
+    for (const auto &target : targets)
+      symbol->addAvailabilityInfo(target, info);
+
+    return symbol;
+  }
+
+  ObjCClass *addObjCClass(StringRef name, APILinkage linkage,
+                          const Target &target,
+                          APIAccess access = APIAccess::Unknown,
+                          AvailabilityInfo info = AvailabilityInfo()) {
+    auto *symbol = addObjCClassImpl(name, linkage, access);
+    symbol->addAvailabilityInfo(target, info);
+    return symbol;
+  }
+
+  template <typename RangeT,
+            typename ElT = typename std::remove_reference<
+                decltype(*std::begin(std::declval<RangeT>()))>::type>
+  ObjCClass *addObjCClass(StringRef name, APILinkage linkage, RangeT &&targets,
+                          APIAccess access = APIAccess::Unknown,
+                          AvailabilityInfo info = AvailabilityInfo()) {
+    auto *symbol = addObjCClassImpl(name, linkage, access);
+    for (const auto &target : targets)
+      symbol->addAvailabilityInfo(target, info);
+    return symbol;
+  }
+
+  ObjCClassEHType *
+  addObjCClassEHType(StringRef name, APILinkage linkage, const Target &target,
+                     APIAccess access = APIAccess::Unknown,
+                     AvailabilityInfo info = AvailabilityInfo()) {
+    auto *symbol = addObjCClassEHTypeImpl(name, linkage, access);
+    symbol->addAvailabilityInfo(target, info);
+    return symbol;
+  }
+
+  template <typename RangeT,
+            typename ElT = typename std::remove_reference<
+                decltype(*std::begin(std::declval<RangeT>()))>::type>
+  ObjCClassEHType *
+  addObjCClassEHType(StringRef name, APILinkage linkage, RangeT &&targets,
+                     APIAccess access = APIAccess::Unknown,
+                     AvailabilityInfo info = AvailabilityInfo()) {
+    auto *symbol = addObjCClassEHTypeImpl(name, linkage, access);
+    for (const auto &target : targets)
+      symbol->addAvailabilityInfo(target, info);
+    return symbol;
+  }
+
+  ObjCInstanceVariable *
+  addObjCInstanceVariable(StringRef name, APILinkage linkage,
+                          const Target &target,
+                          APIAccess access = APIAccess::Unknown,
+                          AvailabilityInfo info = AvailabilityInfo()) {
+    auto *symbol = addObjCInstanceVariableImpl(name, linkage, access);
+    symbol->addAvailabilityInfo(target, info);
+    return symbol;
+  }
+
+  template <typename RangeT,
+            typename ElT = typename std::remove_reference<
+                decltype(*std::begin(std::declval<RangeT>()))>::type>
+  ObjCInstanceVariable *
+  addObjCInstanceVariable(StringRef name, APILinkage linkage, RangeT &&targets,
+                          APIAccess access = APIAccess::Unknown,
+                          AvailabilityInfo info = AvailabilityInfo()) {
+    auto *symbol = addObjCInstanceVariableImpl(name, linkage, access);
+    for (const auto &target : targets)
+      symbol->addAvailabilityInfo(target, info);
+    return symbol;
+  }
 
   const XPI *findSymbol(const XPI &) const;
   const XPI *findSymbol(XPIKind kind, StringRef name) const;
   bool removeSymbol(XPIKind, StringRef name);
-  const ObjCSelector *findSelector(const SelectorsMapKey &) const;
-  const ObjCCategory *findCategory(const CategoriesMapKey &) const;
-  const ObjCCategory *findCategory(const ObjCCategory *) const;
-  const ObjCProtocol *findProtocol(StringRef) const;
 
   struct const_symbol_iterator
       : public llvm::iterator_adaptor_base<
@@ -227,59 +210,20 @@ public:
   };
   using const_symbol_range = llvm::iterator_range<const_symbol_iterator>;
 
-  // Custom iterator to return only exported symbols.
-  struct const_export_iterator
-      : public llvm::iterator_adaptor_base<
-            const_export_iterator, const_symbol_iterator,
-            std::forward_iterator_tag, const XPI *> {
-    const_symbol_iterator _end;
+  using const_filtered_symbol_iterator =
+      llvm::filter_iterator<const_symbol_iterator,
+                            std::function<bool(const XPI *)>>;
+  using const_filtered_symbol_range =
+      llvm::iterator_range<const_filtered_symbol_iterator>;
 
-    const_export_iterator() = default;
-    template <typename U>
-    const_export_iterator(U &&it, U &&end)
-        : iterator_adaptor_base(std::forward<U &&>(it)),
-          _end(std::forward<U &&>(end)) {
-      while (I != _end && !I->isExportedSymbol())
-        ++I;
-    }
+  // range that contains all symbols.
+  const_symbol_range symbols() const;
 
-    const_export_iterator &operator++() {
-      do {
-        ++I;
-      } while (I != _end && !I->isExportedSymbol());
-      return *this;
-    }
+  // range that contains all defined and exported symbols.
+  const_filtered_symbol_range exports() const;
 
-    const_export_iterator operator++(int) {
-      const_export_iterator tmp(*this);
-      do {
-        ++I;
-      } while (I != _end && !I->isExportedSymbol());
-      return tmp;
-    }
-  };
-  using const_export_range = llvm::iterator_range<const_export_iterator>;
-
-  const_symbol_range symbols() const {
-    return {_symbols.begin(), _symbols.end()};
-  }
-
-  const_export_range exports() const {
-    return {const_export_iterator(_symbols.begin(), _symbols.end()),
-            const_export_iterator(_symbols.end(), _symbols.end())};
-  }
-
-  using const_selector_range =
-      llvm::iterator_range<SelectorsMapType::const_iterator>;
-  const_selector_range selectors() const { return _selectors; }
-
-  using const_category_range =
-      llvm::iterator_range<CategoriesMapType::const_iterator>;
-  const_category_range categories() const { return _categories; }
-
-  using const_protocol_range =
-      llvm::iterator_range<ProtocolsMapType::const_iterator>;
-  const_protocol_range protocols() const { return _protocols; }
+  // range that contains all undefined and exported symbols.
+  const_filtered_symbol_range undefineds() const;
 
   void *Allocate(size_t Size, unsigned Align = 8) {
     return allocator.Allocate(Size, Align);

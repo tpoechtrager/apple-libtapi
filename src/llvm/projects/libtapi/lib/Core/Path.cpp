@@ -17,11 +17,11 @@
 #include "tapi/Core/LLVM.h"
 #include "tapi/Core/Utils.h"
 #include "tapi/Defines.h"
-#include "clang/Basic/VirtualFileSystem.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/Path.h"
+#include "llvm/Support/VirtualFileSystem.h"
 
 using namespace llvm;
 
@@ -55,19 +55,16 @@ enumerateFiles(FileManager &fm, StringRef path,
   PathSeq files;
   std::error_code ec;
   auto &fs = *fm.getVirtualFileSystem();
-  for (clang::vfs::recursive_directory_iterator i(fs, path, ec), ie; i != ie;
+  for (llvm::vfs::recursive_directory_iterator i(fs, path, ec), ie; i != ie;
        i.increment(ec)) {
-
-    // Skip files that not exist. This usually happens for broken symlinks.
-    if (ec == std::errc::no_such_file_or_directory) {
-      ec.clear();
-      continue;
-    }
-
     if (ec)
       return errorCodeToError(ec);
 
-    auto path = i->getName();
+    // Skip files that not exist. This usually happens for broken symlinks.
+    if (fs.status(i->path()) == std::errc::no_such_file_or_directory)
+      continue;
+
+    auto path = i->path();
     if (func(path))
       files.emplace_back(path);
   }

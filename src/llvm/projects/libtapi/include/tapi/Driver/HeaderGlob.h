@@ -1,4 +1,4 @@
-//===--- tapi/Core/HeaderGlob.h - Header Glob -------------------*- C++ -*-===//
+//===--- tapi/Driver/HeaderGlob.h - Header Glob -----------------*- C++ -*-===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -17,6 +17,7 @@
 
 #include "tapi/Core/HeaderFile.h"
 #include "tapi/Core/LLVM.h"
+#include "tapi/Driver/Glob.h"
 #include "tapi/Defines.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Error.h"

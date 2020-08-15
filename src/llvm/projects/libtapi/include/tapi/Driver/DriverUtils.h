@@ -28,7 +28,7 @@ class DiagnosticsEngine;
 bool findAndAddHeaderFiles(HeaderSeq &headersOut, FileManager &fm,
                            DiagnosticsEngine &diag, PathSeq headersIn,
                            HeaderType type, StringRef sysroot,
-                           StringRef basePath, unsigned diagID);
+                           StringRef basePath);
 
 TAPI_NAMESPACE_INTERNAL_END
 

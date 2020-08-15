@@ -1,13 +1,14 @@
-#[[
 add_tapi_library(tapiDriver
   API2XPIConverter.cpp
   ArchiveDriver.cpp
   Configuration.cpp
-  ConfigurationFile.cpp
+  ConfigurationFileReader.cpp
   DirectoryScanner.cpp
   Driver.cpp
   DriverOptions.cpp
   DriverUtils.cpp
+  GenerateAPITestsDriver.cpp
+  Glob.cpp
   HeaderGlob.cpp
   InstallAPIDriver.cpp
   Options.cpp
@@ -20,9 +21,9 @@ add_tapi_library(tapiDriver
   TapiDriverOptions
 
   LINK_LIBS
+  clangBasic
   tapiConfig
   tapiCore
   tapiDiagnostics
   tapiFrontend
   )
-]]

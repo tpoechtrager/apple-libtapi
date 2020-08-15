@@ -1,10 +1,10 @@
 //===- PrettyStackTrace.cpp - Pretty Crash Handling -----------------------===//
-// 
+//
 //                     The LLVM Compiler Infrastructure
 //
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
-// 
+//
 //===----------------------------------------------------------------------===//
 //
 // This file defines some helpful functions for dealing with the possibility of
@@ -34,7 +34,7 @@ using namespace llvm;
 // If backtrace support is not enabled, compile out support for pretty stack
 // traces.  This has the secondary effect of not requiring thread local storage
 // when backtrace support is disabled.
-#if defined(HAVE_BACKTRACE) && ENABLE_BACKTRACES
+#if ENABLE_BACKTRACES
 
 // We need a thread local pointer to manage the stack of our stack trace
 // objects, but we *really* cannot tolerate destructors running and do not want
@@ -72,10 +72,10 @@ static void PrintStack(raw_ostream &OS) {
 static void PrintCurStackTrace(raw_ostream &OS) {
   // Don't print an empty trace.
   if (!PrettyStackTraceHead) return;
-  
+
   // If there are pretty stack frames registered, walk and emit them.
   OS << "Stack dump:\n";
-  
+
   PrintStack(OS);
   OS.flush();
 }
@@ -85,10 +85,14 @@ static void PrintCurStackTrace(raw_ostream &OS) {
 //  If any clients of llvm try to link to libCrashReporterClient.a themselves,
 //  only one crash info struct will be used.
 extern "C" {
-CRASH_REPORTER_CLIENT_HIDDEN 
-struct crashreporter_annotations_t gCRAnnotations 
-        __attribute__((section("__DATA," CRASHREPORTER_ANNOTATIONS_SECTION))) 
+CRASH_REPORTER_CLIENT_HIDDEN
+struct crashreporter_annotations_t gCRAnnotations
+        __attribute__((section("__DATA," CRASHREPORTER_ANNOTATIONS_SECTION)))
+#if CRASHREPORTER_ANNOTATIONS_VERSION < 5
         = { CRASHREPORTER_ANNOTATIONS_VERSION, 0, 0, 0, 0, 0, 0 };
+#else
+        = { CRASHREPORTER_ANNOTATIONS_VERSION, 0, 0, 0, 0, 0, 0, 0 };
+#endif
 }
 #elif defined(__APPLE__) && HAVE_CRASHREPORTER_INFO
 extern "C" const char *__crashreporter_info__
@@ -110,25 +114,24 @@ static void CrashHandler(void *) {
     raw_svector_ostream Stream(TmpStr);
     PrintCurStackTrace(Stream);
   }
-  
+
   if (!TmpStr.empty()) {
 #ifdef HAVE_CRASHREPORTERCLIENT_H
     // Cast to void to avoid warning.
-    (void)CRSetCrashLogMessage(std::string(TmpStr.str()).c_str());
-#elif HAVE_CRASHREPORTER_INFO 
-    __crashreporter_info__ = strdup(std::string(TmpStr.str()).c_str());
+    (void)CRSetCrashLogMessage(TmpStr.c_str());
+#elif HAVE_CRASHREPORTER_INFO
+    __crashreporter_info__ = strdup(TmpStr.c_str());
 #endif
     errs() << TmpStr.str();
   }
-  
+
 #endif
 }
 
-// defined(HAVE_BACKTRACE) && ENABLE_BACKTRACES
-#endif
+#endif // ENABLE_BACKTRACES
 
 PrettyStackTraceEntry::PrettyStackTraceEntry() {
-#if defined(HAVE_BACKTRACE) && ENABLE_BACKTRACES
+#if ENABLE_BACKTRACES
   // Link ourselves.
   NextEntry = PrettyStackTraceHead;
   PrettyStackTraceHead = this;
@@ -136,7 +139,7 @@ PrettyStackTraceEntry::PrettyStackTraceEntry() {
 }
 
 PrettyStackTraceEntry::~PrettyStackTraceEntry() {
-#if defined(HAVE_BACKTRACE) && ENABLE_BACKTRACES
+#if ENABLE_BACKTRACES
   assert(PrettyStackTraceHead == this &&
          "Pretty stack trace entry destruction is out of order");
   PrettyStackTraceHead = NextEntry;
@@ -171,7 +174,7 @@ void PrettyStackTraceProgram::print(raw_ostream &OS) const {
   OS << '\n';
 }
 
-#if defined(HAVE_BACKTRACE) && ENABLE_BACKTRACES
+#if ENABLE_BACKTRACES
 static bool RegisterCrashPrinter() {
   sys::AddSignalHandler(CrashHandler, nullptr);
   return false;
@@ -179,7 +182,7 @@ static bool RegisterCrashPrinter() {
 #endif
 
 void llvm::EnablePrettyStackTrace() {
-#if defined(HAVE_BACKTRACE) && ENABLE_BACKTRACES
+#if ENABLE_BACKTRACES
   // The first time this is called, we register the crash printer.
   static bool HandlerRegistered = RegisterCrashPrinter();
   (void)HandlerRegistered;
@@ -187,7 +190,7 @@ void llvm::EnablePrettyStackTrace() {
 }
 
 const void *llvm::SavePrettyStackState() {
-#if defined(HAVE_BACKTRACE) && ENABLE_BACKTRACES
+#if ENABLE_BACKTRACES
   return PrettyStackTraceHead;
 #else
   return nullptr;
@@ -195,7 +198,7 @@ const void *llvm::SavePrettyStackState() {
 }
 
 void llvm::RestorePrettyStackState(const void *Top) {
-#if defined(HAVE_BACKTRACE) && ENABLE_BACKTRACES
+#if ENABLE_BACKTRACES
   PrettyStackTraceHead =
       static_cast<PrettyStackTraceEntry *>(const_cast<void *>(Top));
 #endif

@@ -38,6 +38,7 @@ class Symbol;
 ///
 /// \brief Defines a list of supported platforms.
 /// \since 1.0
+/// \deprecated 1.6
 ///
 enum class Platform : unsigned {
   /// \brief Unknown platform
@@ -64,9 +65,20 @@ enum class Platform : unsigned {
   /// \since 1.2
   bridgeOS = 5,
 
+  /// DO NOT RENAME. This needs to be coordinated with ld64.
+  /// \brief iOSMac
+  /// \since 1.4
   iOSMac = 6,
-  zippered = 10
-};
+
+  /// \brief driverKit
+  /// \since 1.5
+  DriverKit = 7,
+
+  /// \brief zippered
+  /// This value is temporary for bringup and will be removed.
+  /// \since 1.4
+  zippered = ~0U,
+} __attribute__((deprecated));
 
 ///
 /// \brief Defines a list of Objective-C constraints.
@@ -241,7 +253,7 @@ public:
   create(const std::string &path, const uint8_t *data, size_t size,
          cpu_type_t cpuType, cpu_subtype_t cpuSubType,
          CpuSubTypeMatching matchingMode, PackedVersion32 minOSVersion,
-         std::string &errorMessage) noexcept;
+         std::string &errorMessage) noexcept __attribute__((deprecated));
 
   ///
   /// \brief Create a LinkerInterfaceFile from the provided buffer.
@@ -266,7 +278,8 @@ public:
   static LinkerInterfaceFile *
   create(const std::string &path, const uint8_t *data, size_t size,
          cpu_type_t cpuType, cpu_subtype_t cpuSubType, ParsingFlags flags,
-         PackedVersion32 minOSVersion, std::string &errorMessage) noexcept;
+         PackedVersion32 minOSVersion, std::string &errorMessage) noexcept
+      __attribute__((deprecated));
 
   ///
   /// \brief Create a LinkerInterfaceFile from a file.
@@ -301,8 +314,17 @@ public:
   /// \brief Query the platform
   /// \return Returns the platform supported by the TAPI file.
   /// \since 1.0
+  /// \deprecated 1.6
   ///
-  Platform getPlatform() const noexcept;
+  Platform getPlatform() const noexcept __attribute__((deprecated));
+
+  ///
+  /// \brief Query the supported platforms
+  /// \return Returns the set of platforms supported by the TAPI file as
+  ///         defined by the MachO load command LC_BUILD_VERSION.
+  /// \since 1.6
+  ///
+  const std::vector<uint32_t> &getPlatformSet() const noexcept;
 
   ///
   /// \brief Query the install name.
@@ -342,10 +364,11 @@ public:
 
   ///
   /// \brief Query the Objective-C Constraint.
-  /// \return Returns the Objetive-C constraint.
+  /// \return Returns always ObjCConstraint::None.
   /// \since 1.0
+  /// \deprecated 1.6
   ///
-  ObjCConstraint getObjCConstraint() const noexcept;
+  ObjCConstraint getObjCConstraint() const noexcept __attribute__((deprecated));
 
   ///
   /// \brief Query if the library has two level namespace.

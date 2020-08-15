@@ -26,6 +26,7 @@
 #include "clang/Frontend/CompilerInvocation.h"
 #include "clang/Frontend/Utils.h"
 #include "clang/Index/USRGeneration.h"
+#include "clang/Tooling/CompilationDatabase.h"
 #include "clang/Tooling/Refactor/IndexerQuery.h"
 #include "clang/Tooling/Refactor/RefactoringActionFinder.h"
 #include "clang/Tooling/Refactor/RefactoringActions.h"
@@ -52,6 +53,7 @@ translateRefactoringActionType(CXRefactoringActionType Action) {
     return RefactoringActionType::Name;
 #include "clang/Tooling/Refactor/RefactoringActions.def"
   }
+  llvm_unreachable("unknown CXRefactoringActionType value");
 }
 
 static CXRefactoringActionType
@@ -62,6 +64,7 @@ translateRefactoringActionType(RefactoringActionType Action) {
     return CXRefactor_##Name;
 #include "clang/Tooling/Refactor/RefactoringActions.def"
   }
+  llvm_unreachable("unknown RefactoringActionType value");
 }
 
 static CXSymbolOccurrenceKind
@@ -82,6 +85,7 @@ translateOccurrenceKind(rename::OldSymbolOccurrence::OccurrenceKind Kind) {
   case rename::OldSymbolOccurrence::MatchingStringLiteral:
     return CXSymbolOccurrence_MatchingStringLiteral;
   }
+  llvm_unreachable("unknown OccurrenceKind value");
 }
 
 namespace {
@@ -1290,12 +1294,12 @@ clang_RefactoringAction_getSourceRangeOfInterest(CXRefactoringAction Action) {
       if (const Stmt *S = Operation->getTransformedStmt()) {
         SourceRange Range = S->getSourceRange();
         if (const Stmt *Last = Operation->getLastTransformedStmt())
-          Range.setEnd(Last->getLocEnd());
+          Range.setEnd(Last->getEndLoc());
         return cxloc::translateSourceRange(CXXUnit->getASTContext(), Range);
       } else if (const Decl *D = Operation->getTransformedDecl()) {
         SourceRange Range = D->getSourceRange();
         if (const Decl *Last = Operation->getLastTransformedDecl())
-          Range.setEnd(Last->getLocEnd());
+          Range.setEnd(Last->getEndLoc());
         return cxloc::translateSourceRange(CXXUnit->getASTContext(), Range);
       }
     }

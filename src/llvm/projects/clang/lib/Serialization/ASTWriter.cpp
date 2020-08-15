@@ -42,7 +42,6 @@
 #include "clang/Basic/LLVM.h"
 #include "clang/Basic/Lambda.h"
 #include "clang/Basic/LangOptions.h"
-#include "clang/Basic/MemoryBufferCache.h"
 #include "clang/Basic/Module.h"
 #include "clang/Basic/ObjCRuntime.h"
 #include "clang/Basic/OpenCLOptions.h"
@@ -53,7 +52,6 @@
 #include "clang/Basic/TargetInfo.h"
 #include "clang/Basic/TargetOptions.h"
 #include "clang/Basic/Version.h"
-#include "clang/Basic/VersionTuple.h"
 #include "clang/Lex/HeaderSearch.h"
 #include "clang/Lex/HeaderSearchOptions.h"
 #include "clang/Lex/MacroInfo.h"
@@ -67,6 +65,7 @@
 #include "clang/Sema/Sema.h"
 #include "clang/Sema/Weak.h"
 #include "clang/Serialization/ASTReader.h"
+#include "clang/Serialization/InMemoryModuleCache.h"
 #include "clang/Serialization/Module.h"
 #include "clang/Serialization/ModuleFileExtension.h"
 #include "clang/Serialization/SerializationDiagnostic.h"
@@ -79,16 +78,17 @@
 #include "llvm/ADT/Optional.h"
 #include "llvm/ADT/PointerIntPair.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
-#include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Bitcode/BitCodes.h"
 #include "llvm/Bitcode/BitstreamWriter.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Compression.h"
+#include "llvm/Support/DJB.h"
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/EndianStream.h"
 #include "llvm/Support/Error.h"
@@ -97,6 +97,7 @@
 #include "llvm/Support/OnDiskHashTable.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/SHA1.h"
+#include "llvm/Support/VersionTuple.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <cassert>
@@ -138,10 +139,10 @@ namespace clang {
     ASTWriter &Writer;
     ASTRecordWriter Record;
 
-    /// \brief Type code that corresponds to the record generated.
+    /// Type code that corresponds to the record generated.
     TypeCode Code = static_cast<TypeCode>(0);
 
-    /// \brief Abbreviation to use for the record, if any.
+    /// Abbreviation to use for the record, if any.
     unsigned AbbrevToUse = 0;
 
   public:
@@ -276,6 +277,7 @@ void ASTTypeWriter::VisitFunctionType(const FunctionType *T) {
   Record.push_back(C.getCC());
   Record.push_back(C.getProducesResult());
   Record.push_back(C.getNoCallerSavedRegs());
+  Record.push_back(C.getNoCfCheck());
 
   if (C.getHasRegParm() || C.getRegParm() || C.getProducesResult())
     AbbrevToUse = 0;
@@ -293,7 +295,7 @@ static void addExceptionSpec(const FunctionProtoType *T,
     Record.push_back(T->getNumExceptions());
     for (unsigned I = 0, N = T->getNumExceptions(); I != N; ++I)
       Record.AddTypeRef(T->getExceptionType(I));
-  } else if (T->getExceptionSpecType() == EST_ComputedNoexcept) {
+  } else if (isComputedNoexcept(T->getExceptionSpecType())) {
     Record.AddStmt(T->getNoexceptExpr());
   } else if (T->getExceptionSpecType() == EST_Uninstantiated) {
     Record.AddDeclRef(T->getExceptionSpecDecl());
@@ -308,7 +310,7 @@ void ASTTypeWriter::VisitFunctionProtoType(const FunctionProtoType *T) {
 
   Record.push_back(T->isVariadic());
   Record.push_back(T->hasTrailingReturn());
-  Record.push_back(T->getTypeQuals());
+  Record.push_back(T->getTypeQuals().getAsOpaqueValue());
   Record.push_back(static_cast<unsigned>(T->getRefQualifier()));
   addExceptionSpec(T, Record);
 
@@ -453,7 +455,15 @@ ASTTypeWriter::VisitDependentSizedExtVectorType(
   Code = TYPE_DEPENDENT_SIZED_EXT_VECTOR;
 }
 
-void 
+void ASTTypeWriter::VisitDependentVectorType(const DependentVectorType *T) {
+  Record.AddTypeRef(T->getElementType());
+  Record.AddStmt(const_cast<Expr*>(T->getSizeExpr()));
+  Record.AddSourceLocation(T->getAttributeLoc());
+  Record.push_back(T->getVectorKind());
+  Code = TYPE_DEPENDENT_SIZED_VECTOR;
+}
+
+void
 ASTTypeWriter::VisitDependentAddressSpaceType(
     const DependentAddressSpaceType *T) {
   Record.AddTypeRef(T->getPointeeType());
@@ -511,6 +521,7 @@ void ASTTypeWriter::VisitElaboratedType(const ElaboratedType *T) {
   Record.push_back(T->getKeyword());
   Record.AddNestedNameSpecifier(T->getQualifier());
   Record.AddTypeRef(T->getNamedType());
+  Record.AddDeclRef(T->getOwnedTagDecl());
   Code = TYPE_ELABORATED;
 }
 
@@ -661,7 +672,7 @@ void TypeLocWriter::VisitDependentAddressSpaceTypeLoc(
   SourceRange range = TL.getAttrOperandParensRange();
   Record.AddSourceLocation(range.getBegin());
   Record.AddSourceLocation(range.getEnd());
-  Record.AddStmt(TL.getAttrExprOperand());       
+  Record.AddStmt(TL.getAttrExprOperand());
 }
 
 void TypeLocWriter::VisitDependentSizedExtVectorTypeLoc(
@@ -670,6 +681,11 @@ void TypeLocWriter::VisitDependentSizedExtVectorTypeLoc(
 }
 
 void TypeLocWriter::VisitVectorTypeLoc(VectorTypeLoc TL) {
+  Record.AddSourceLocation(TL.getNameLoc());
+}
+
+void TypeLocWriter::VisitDependentVectorTypeLoc(
+    DependentVectorTypeLoc TL) {
   Record.AddSourceLocation(TL.getNameLoc());
 }
 
@@ -754,19 +770,7 @@ void TypeLocWriter::VisitEnumTypeLoc(EnumTypeLoc TL) {
 }
 
 void TypeLocWriter::VisitAttributedTypeLoc(AttributedTypeLoc TL) {
-  Record.AddSourceLocation(TL.getAttrNameLoc());
-  if (TL.hasAttrOperand()) {
-    SourceRange range = TL.getAttrOperandParensRange();
-    Record.AddSourceLocation(range.getBegin());
-    Record.AddSourceLocation(range.getEnd());
-  }
-  if (TL.hasAttrExprOperand()) {
-    Expr *operand = TL.getAttrExprOperand();
-    Record.push_back(operand ? 1 : 0);
-    if (operand) Record.AddStmt(operand);
-  } else if (TL.hasAttrEnumOperand()) {
-    Record.AddSourceLocation(TL.getAttrEnumOperandLoc());
-  }
+  Record.AddAttr(TL.getAttr());
 }
 
 void TypeLocWriter::VisitTemplateTypeParmTypeLoc(TemplateTypeParmTypeLoc TL) {
@@ -884,6 +888,7 @@ void ASTWriter::WriteTypeAbbrevs() {
   Abv->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Fixed, 4)); // CC
   Abv->Add(BitCodeAbbrevOp(0));                         // ProducesResult
   Abv->Add(BitCodeAbbrevOp(0));                         // NoCallerSavedRegs
+  Abv->Add(BitCodeAbbrevOp(0));                         // NoCfCheck
   // FunctionProtoType
   Abv->Add(BitCodeAbbrevOp(0));                         // IsVariadic
   Abv->Add(BitCodeAbbrevOp(0));                         // HasTrailingReturn
@@ -1077,7 +1082,6 @@ void ASTWriter::WriteBlockInfoBlock() {
   BLOCK(OPTIONS_BLOCK);
   RECORD(LANGUAGE_OPTIONS);
   RECORD(TARGET_OPTIONS);
-  RECORD(FILE_SYSTEM_OPTIONS);
   RECORD(HEADER_SEARCH_OPTIONS);
   RECORD(PREPROCESSOR_OPTIONS);
 
@@ -1293,7 +1297,7 @@ void ASTWriter::WriteBlockInfoBlock() {
   RECORD(DECL_PRAGMA_COMMENT);
   RECORD(DECL_PRAGMA_DETECT_MISMATCH);
   RECORD(DECL_OMP_DECLARE_REDUCTION);
-  
+
   // Statements and Exprs can occur in the Decls and Types block.
   AddStmtsExprs(Stream, Record);
 
@@ -1309,6 +1313,8 @@ void ASTWriter::WriteBlockInfoBlock() {
   BLOCK(UNHASHED_CONTROL_BLOCK);
   RECORD(SIGNATURE);
   RECORD(DIAGNOSTIC_OPTIONS);
+  RECORD(HEADER_SEARCH_PATHS);
+  RECORD(FILE_SYSTEM_OPTIONS);
   RECORD(DIAG_PRAGMA_MAPPINGS);
 
 #undef RECORD
@@ -1316,7 +1322,7 @@ void ASTWriter::WriteBlockInfoBlock() {
   Stream.ExitBlock();
 }
 
-/// \brief Prepares a path for being written to an AST file by converting it
+/// Prepares a path for being written to an AST file by converting it
 /// to an absolute path and removing nested './'s.
 ///
 /// \return \c true if the path was changed.
@@ -1326,7 +1332,7 @@ static bool cleanPathForOutput(FileManager &FileMgr,
   return Changed | llvm::sys::path::remove_dots(Path);
 }
 
-/// \brief Adjusts the given filename to only write out the portion of the
+/// Adjusts the given filename to only write out the portion of the
 /// filename that is not part of the system root directory.
 ///
 /// \param Filename the file name to adjust.
@@ -1428,6 +1434,36 @@ ASTFileSignature ASTWriter::writeUnhashedControlBlock(Preprocessor &PP,
   // are generally transient files and will almost always be overridden.
   Stream.EmitRecord(DIAGNOSTIC_OPTIONS, Record);
 
+  // Header search paths.
+  Record.clear();
+  const HeaderSearchOptions &HSOpts
+    = PP.getHeaderSearchInfo().getHeaderSearchOpts();
+
+  // Include entries.
+  Record.push_back(HSOpts.UserEntries.size());
+  for (unsigned I = 0, N = HSOpts.UserEntries.size(); I != N; ++I) {
+    const HeaderSearchOptions::Entry &Entry = HSOpts.UserEntries[I];
+    AddString(Entry.Path, Record);
+    Record.push_back(static_cast<unsigned>(Entry.Group));
+    Record.push_back(Entry.IsFramework);
+    Record.push_back(Entry.IgnoreSysRoot);
+  }
+
+  // System header prefixes.
+  Record.push_back(HSOpts.SystemHeaderPrefixes.size());
+  for (unsigned I = 0, N = HSOpts.SystemHeaderPrefixes.size(); I != N; ++I) {
+    AddString(HSOpts.SystemHeaderPrefixes[I].Prefix, Record);
+    Record.push_back(HSOpts.SystemHeaderPrefixes[I].IsSystemHeader);
+  }
+  Stream.EmitRecord(HEADER_SEARCH_PATHS, Record);
+
+  // File system options.
+  Record.clear();
+  const FileSystemOptions &FSOpts =
+      Context.getSourceManager().getFileManager().getFileSystemOpts();
+  AddString(FSOpts.WorkingDir, Record);
+  Stream.EmitRecord(FILE_SYSTEM_OPTIONS, Record);
+
   // Write out the diagnostic/pragma mappings.
   WritePragmaDiagnosticMappings(Diags, /* IsModule = */ WritingModule);
 
@@ -1436,7 +1472,7 @@ ASTFileSignature ASTWriter::writeUnhashedControlBlock(Preprocessor &PP,
   return Signature;
 }
 
-/// \brief Write the control block.
+/// Write the control block.
 void ASTWriter::WriteControlBlock(Preprocessor &PP, ASTContext &Context,
                                   StringRef isysroot,
                                   const std::string &OutputFile) {
@@ -1444,7 +1480,7 @@ void ASTWriter::WriteControlBlock(Preprocessor &PP, ASTContext &Context,
 
   Stream.EnterSubblock(CONTROL_BLOCK_ID, 5);
   RecordData Record;
-  
+
   // Metadata
   auto MetadataAbbrev = std::make_shared<BitCodeAbbrev>();
   MetadataAbbrev->Add(BitCodeAbbrevOp(METADATA));
@@ -1454,16 +1490,23 @@ void ASTWriter::WriteControlBlock(Preprocessor &PP, ASTContext &Context,
   MetadataAbbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Fixed, 16)); // Clang min.
   MetadataAbbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Fixed, 1)); // Relocatable
   MetadataAbbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Fixed, 1)); // Timestamps
+  MetadataAbbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Fixed, 1)); // PCHHasObjectFile
   MetadataAbbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Fixed, 1)); // Errors
   MetadataAbbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Blob)); // SVN branch/tag
   unsigned MetadataAbbrevCode = Stream.EmitAbbrev(std::move(MetadataAbbrev));
   assert((!WritingModule || isysroot.empty()) &&
          "writing module as a relocatable PCH?");
   {
-    RecordData::value_type Record[] = {METADATA, VERSION_MAJOR, VERSION_MINOR,
-                                       CLANG_VERSION_MAJOR, CLANG_VERSION_MINOR,
-                                       !isysroot.empty(), IncludeTimestamps,
-                                       ASTHasCompilerErrors};
+    RecordData::value_type Record[] = {
+        METADATA,
+        VERSION_MAJOR,
+        VERSION_MINOR,
+        CLANG_VERSION_MAJOR,
+        CLANG_VERSION_MINOR,
+        !isysroot.empty(),
+        IncludeTimestamps,
+        Context.getLangOpts().BuildingPCHWithObjectFile,
+        ASTHasCompilerErrors};
     Stream.EmitRecordWithBlob(MetadataAbbrevCode, Record,
                               getClangFullRepositoryVersion());
   }
@@ -1613,36 +1656,12 @@ void ASTWriter::WriteControlBlock(Preprocessor &PP, ASTContext &Context,
   }
   Stream.EmitRecord(TARGET_OPTIONS, Record);
 
-  // File system options.
-  Record.clear();
-  const FileSystemOptions &FSOpts =
-      Context.getSourceManager().getFileManager().getFileSystemOpts();
-  AddString(FSOpts.WorkingDir, Record);
-  Stream.EmitRecord(FILE_SYSTEM_OPTIONS, Record);
-
   // Header search options.
   Record.clear();
   const HeaderSearchOptions &HSOpts
     = PP.getHeaderSearchInfo().getHeaderSearchOpts();
+
   AddString(HSOpts.Sysroot, Record);
-
-  // Include entries.
-  Record.push_back(HSOpts.UserEntries.size());
-  for (unsigned I = 0, N = HSOpts.UserEntries.size(); I != N; ++I) {
-    const HeaderSearchOptions::Entry &Entry = HSOpts.UserEntries[I];
-    AddString(Entry.Path, Record);
-    Record.push_back(static_cast<unsigned>(Entry.Group));
-    Record.push_back(Entry.IsFramework);
-    Record.push_back(Entry.IgnoreSysRoot);
-  }
-
-  // System header prefixes.
-  Record.push_back(HSOpts.SystemHeaderPrefixes.size());
-  for (unsigned I = 0, N = HSOpts.SystemHeaderPrefixes.size(); I != N; ++I) {
-    AddString(HSOpts.SystemHeaderPrefixes[I].Prefix, Record);
-    Record.push_back(HSOpts.SystemHeaderPrefixes[I].IsSystemHeader);
-  }
-
   AddString(HSOpts.ResourceDir, Record);
   AddString(HSOpts.ModuleCachePath, Record);
   AddString(HSOpts.ModuleUserBuildPath, Record);
@@ -1682,7 +1701,6 @@ void ASTWriter::WriteControlBlock(Preprocessor &PP, ASTContext &Context,
   // Detailed record is important since it is used for the module cache hash.
   Record.push_back(PPOpts.DetailedRecord);
   AddString(PPOpts.ImplicitPCHInclude, Record);
-  AddString(PPOpts.ImplicitPTHInclude, Record);
   Record.push_back(static_cast<unsigned>(PPOpts.ObjCXXARCStandardLibrary));
   Stream.EmitRecord(PREPROCESSOR_OPTIONS, Record);
 
@@ -1732,7 +1750,7 @@ void ASTWriter::WriteControlBlock(Preprocessor &PP, ASTContext &Context,
 
 namespace  {
 
-/// \brief An input file.
+/// An input file.
 struct InputFileEntry {
   const FileEntry *File;
   bool IsSystemFile;
@@ -1842,7 +1860,7 @@ void ASTWriter::WriteInputFiles(SourceManager &SourceMgr,
 // Source Manager Serialization
 //===----------------------------------------------------------------------===//
 
-/// \brief Create an abbreviation for the SLocEntry that refers to a
+/// Create an abbreviation for the SLocEntry that refers to a
 /// file.
 static unsigned CreateSLocFileAbbrev(llvm::BitstreamWriter &Stream) {
   using namespace llvm;
@@ -1861,7 +1879,7 @@ static unsigned CreateSLocFileAbbrev(llvm::BitstreamWriter &Stream) {
   return Stream.EmitAbbrev(std::move(Abbrev));
 }
 
-/// \brief Create an abbreviation for the SLocEntry that refers to a
+/// Create an abbreviation for the SLocEntry that refers to a
 /// buffer.
 static unsigned CreateSLocBufferAbbrev(llvm::BitstreamWriter &Stream) {
   using namespace llvm;
@@ -1876,7 +1894,7 @@ static unsigned CreateSLocBufferAbbrev(llvm::BitstreamWriter &Stream) {
   return Stream.EmitAbbrev(std::move(Abbrev));
 }
 
-/// \brief Create an abbreviation for the SLocEntry that refers to a
+/// Create an abbreviation for the SLocEntry that refers to a
 /// buffer's blob.
 static unsigned CreateSLocBufferBlobAbbrev(llvm::BitstreamWriter &Stream,
                                            bool Compressed) {
@@ -1891,7 +1909,7 @@ static unsigned CreateSLocBufferBlobAbbrev(llvm::BitstreamWriter &Stream,
   return Stream.EmitAbbrev(std::move(Abbrev));
 }
 
-/// \brief Create an abbreviation for the SLocEntry that refers to a macro
+/// Create an abbreviation for the SLocEntry that refers to a macro
 /// expansion.
 static unsigned CreateSLocExpansionAbbrev(llvm::BitstreamWriter &Stream) {
   using namespace llvm;
@@ -1902,6 +1920,7 @@ static unsigned CreateSLocExpansionAbbrev(llvm::BitstreamWriter &Stream) {
   Abbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::VBR, 8)); // Spelling location
   Abbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::VBR, 8)); // Start location
   Abbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::VBR, 8)); // End location
+  Abbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Fixed, 1)); // Is token range
   Abbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::VBR, 6)); // Token length
   return Stream.EmitAbbrev(std::move(Abbrev));
 }
@@ -1911,11 +1930,11 @@ namespace {
   // Trait used for the on-disk hash table of header search information.
   class HeaderFileInfoTrait {
     ASTWriter &Writer;
-    
+
     // Keep track of the framework names we've used during serialization.
     SmallVector<char, 128> FrameworkStringData;
     llvm::StringMap<unsigned> FrameworkNameOffset;
-    
+
   public:
     HeaderFileInfoTrait(ASTWriter &Writer) : Writer(Writer) {}
 
@@ -1928,7 +1947,7 @@ namespace {
 
     using UnresolvedModule =
         llvm::PointerIntPair<Module *, 2, ModuleMap::ModuleHeaderRole>;
-    
+
     struct data_type {
       const HeaderFileInfo &HFI;
       ArrayRef<ModuleMap::KnownHeader> KnownHeaders;
@@ -1938,19 +1957,19 @@ namespace {
 
     using hash_value_type = unsigned;
     using offset_type = unsigned;
-    
+
     hash_value_type ComputeHash(key_type_ref key) {
       // The hash is based only on size/time of the file, so that the reader can
       // match even when symlinking or excess path elements ("foo/../", "../")
       // change the form of the name. However, complete path is still the key.
       return llvm::hash_combine(key.Size, key.ModTime);
     }
-    
+
     std::pair<unsigned, unsigned>
     EmitKeyDataLength(raw_ostream& Out, key_type_ref key, data_type_ref Data) {
       using namespace llvm::support;
 
-      endian::Writer<little> LE(Out);
+      endian::Writer LE(Out, little);
       unsigned KeyLen = key.Filename.size() + 1 + 8 + 8;
       LE.write<uint16_t>(KeyLen);
       unsigned DataLen = 1 + 2 + 4 + 4;
@@ -1966,7 +1985,7 @@ namespace {
     void EmitKey(raw_ostream& Out, key_type_ref key, unsigned KeyLen) {
       using namespace llvm::support;
 
-      endian::Writer<little> LE(Out);
+      endian::Writer LE(Out, little);
       LE.write<uint64_t>(key.Size);
       KeyLen -= 8;
       LE.write<uint64_t>(key.ModTime);
@@ -1978,16 +1997,16 @@ namespace {
                   data_type_ref Data, unsigned DataLen) {
       using namespace llvm::support;
 
-      endian::Writer<little> LE(Out);
+      endian::Writer LE(Out, little);
       uint64_t Start = Out.tell(); (void)Start;
-      
+
       unsigned char Flags = (Data.HFI.isImport << 5)
                           | (Data.HFI.isPragmaOnce << 4)
                           | (Data.HFI.DirInfo << 1)
                           | Data.HFI.IndexHeaderMapHeader;
       LE.write<uint8_t>(Flags);
       LE.write<uint16_t>(Data.HFI.NumIncludes);
-      
+
       if (!Data.HFI.ControllingMacro)
         LE.write<uint32_t>(Data.HFI.ControllingMacroID);
       else
@@ -2000,10 +2019,10 @@ namespace {
           = FrameworkNameOffset.find(Data.HFI.Framework);
         if (Pos == FrameworkNameOffset.end()) {
           Offset = FrameworkStringData.size() + 1;
-          FrameworkStringData.append(Data.HFI.Framework.begin(), 
+          FrameworkStringData.append(Data.HFI.Framework.begin(),
                                      Data.HFI.Framework.end());
           FrameworkStringData.push_back(0);
-          
+
           FrameworkNameOffset[Data.HFI.Framework] = Offset;
         } else
           Offset = Pos->second;
@@ -2027,14 +2046,14 @@ namespace {
 
       assert(Out.tell() - Start == DataLen && "Wrong data length");
     }
-    
+
     const char *strings_begin() const { return FrameworkStringData.begin(); }
     const char *strings_end() const { return FrameworkStringData.end(); }
   };
 
 } // namespace
 
-/// \brief Write the header search block for the list of files that 
+/// Write the header search block for the list of files that
 ///
 /// \param HS The header search structure to save.
 void ASTWriter::WriteHeaderSearch(const HeaderSearch &HS) {
@@ -2100,7 +2119,7 @@ void ASTWriter::WriteHeaderSearch(const HeaderSearch &HS) {
 
   SmallVector<const FileEntry *, 16> FilesByUID;
   HS.getFileMgr().GetUniqueIDMapping(FilesByUID);
-  
+
   if (FilesByUID.size() > HS.header_file_size())
     FilesByUID.resize(HS.header_file_size());
 
@@ -2148,7 +2167,7 @@ void ASTWriter::WriteHeaderSearch(const HeaderSearch &HS) {
 
     llvm::raw_svector_ostream Out(TableData);
     // Make sure that no bucket is at offset 0
-    endian::Writer<little>(Out).write<uint32_t>(0);
+    endian::write<uint32_t>(Out, 0, little);
     BucketOffset = Generator.Emit(Out, GeneratorTrait);
   }
 
@@ -2162,13 +2181,13 @@ void ASTWriter::WriteHeaderSearch(const HeaderSearch &HS) {
   Abbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Fixed, 32));
   Abbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Blob));
   unsigned TableAbbrev = Stream.EmitAbbrev(std::move(Abbrev));
-  
+
   // Write the header search table
   RecordData::value_type Record[] = {HEADER_SEARCH_TABLE, BucketOffset,
                                      NumHeaderSearchEntries, TableData.size()};
   TableData.append(GeneratorTrait.strings_begin(),GeneratorTrait.strings_end());
   Stream.EmitRecordWithBlob(TableAbbrev, Record, TableData);
-  
+
   // Free all of the strings we had to duplicate.
   for (unsigned I = 0, N = SavedStrings.size(); I != N; ++I)
     free(const_cast<char *>(SavedStrings[I]));
@@ -2198,7 +2217,7 @@ static void emitBlob(llvm::BitstreamWriter &Stream, StringRef Blob,
   Stream.EmitRecordWithBlob(SLocBufferBlobAbbrv, Record, Blob);
 }
 
-/// \brief Writes the block containing the serialized form of the
+/// Writes the block containing the serialized form of the
 /// source manager.
 ///
 /// TODO: We should probably use an on-disk hash table (stored in a
@@ -2268,7 +2287,7 @@ void ASTWriter::WriteSourceManagerBlock(SourceManager &SourceMgr,
         Record.push_back(InputFileIDs[Content->OrigEntry]);
 
         Record.push_back(File.NumCreatedFIDs);
-        
+
         FileDeclIDsTy::iterator FDI = FileDeclIDs.find(FID);
         if (FDI != FileDeclIDs.end()) {
           Record.push_back(FDI->second->FirstDeclIndex);
@@ -2277,9 +2296,9 @@ void ASTWriter::WriteSourceManagerBlock(SourceManager &SourceMgr,
           Record.push_back(0);
           Record.push_back(0);
         }
-        
+
         Stream.EmitRecordWithAbbrev(SLocFileAbbrv, Record);
-        
+
         if (Content->BufferOverridden || Content->IsTransient)
           EmitBlob = true;
       } else {
@@ -2318,6 +2337,7 @@ void ASTWriter::WriteSourceManagerBlock(SourceManager &SourceMgr,
                             ? SourceLocation()
                             : Expansion.getExpansionLocEnd(),
                         Record);
+      Record.push_back(Expansion.isExpansionTokenRange());
 
       // Compute the token length for this macro expansion.
       unsigned NextOffset = SourceMgr.getNextLocalOffset();
@@ -2420,7 +2440,7 @@ static bool shouldIgnoreMacro(MacroDirective *MD, bool IsModule,
   return false;
 }
 
-/// \brief Writes the block containing the serialized form of the
+/// Writes the block containing the serialized form of the
 /// preprocessor.
 void ASTWriter::WritePreprocessor(const Preprocessor &PP, bool IsModule) {
   PreprocessingRecord *PPRec = PP.getPreprocessingRecord();
@@ -2480,8 +2500,7 @@ void ASTWriter::WritePreprocessor(const Preprocessor &PP, bool IsModule) {
       MacroIdentifiers.push_back(Id.second);
   // Sort the set of macro definitions that need to be serialized by the
   // name of the macro, to provide a stable ordering.
-  std::sort(MacroIdentifiers.begin(), MacroIdentifiers.end(),
-            llvm::less_ptr<IdentifierInfo>());
+  llvm::sort(MacroIdentifiers, llvm::less_ptr<IdentifierInfo>());
 
   // Emit the macro directives as a list and associate the offset with the
   // identifier they belong to.
@@ -2540,7 +2559,7 @@ void ASTWriter::WritePreprocessor(const Preprocessor &PP, bool IsModule) {
     Record.clear();
   }
 
-  /// \brief Offsets of each of the macros into the bitstream, indexed by
+  /// Offsets of each of the macros into the bitstream, indexed by
   /// the local macro ID
   ///
   /// For each identifier that is associated with a macro, this map
@@ -2640,8 +2659,8 @@ void ASTWriter::WritePreprocessorDetail(PreprocessingRecord &PPRec) {
   // If the preprocessor has a preprocessing record, emit it.
   unsigned NumPreprocessingRecords = 0;
   using namespace llvm;
-  
-  // Set up the abbreviation for 
+
+  // Set up the abbreviation for
   unsigned InclusionAbbrev = 0;
   {
     auto Abbrev = std::make_shared<BitCodeAbbrev>();
@@ -2653,15 +2672,15 @@ void ASTWriter::WritePreprocessorDetail(PreprocessingRecord &PPRec) {
     Abbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Blob));
     InclusionAbbrev = Stream.EmitAbbrev(std::move(Abbrev));
   }
-  
-  unsigned FirstPreprocessorEntityID 
-    = (Chain ? PPRec.getNumLoadedPreprocessedEntities() : 0) 
+
+  unsigned FirstPreprocessorEntityID
+    = (Chain ? PPRec.getNumLoadedPreprocessedEntities() : 0)
     + NUM_PREDEF_PP_ENTITY_IDS;
   unsigned NextPreprocessorEntityID = FirstPreprocessorEntityID;
   RecordData Record;
   for (PreprocessingRecord::iterator E = PPRec.local_begin(),
                                   EEnd = PPRec.local_end();
-       E != EEnd; 
+       E != EEnd;
        (void)++E, ++NumPreprocessingRecords, ++NextPreprocessorEntityID) {
     Record.clear();
 
@@ -2702,7 +2721,7 @@ void ASTWriter::WritePreprocessorDetail(PreprocessingRecord &PPRec) {
       Stream.EmitRecordWithBlob(InclusionAbbrev, Record, Buffer);
       continue;
     }
-    
+
     llvm_unreachable("Unhandled PreprocessedEntity in ASTWriter");
   }
   Stream.ExitBlock();
@@ -2755,21 +2774,21 @@ unsigned ASTWriter::getSubmoduleID(Module *Mod) {
   return ID;
 }
 
-/// \brief Compute the number of modules within the given tree (including the
+/// Compute the number of modules within the given tree (including the
 /// given module).
 static unsigned getNumberOfModules(Module *Mod) {
   unsigned ChildModules = 0;
   for (auto Sub = Mod->submodule_begin(), SubEnd = Mod->submodule_end();
        Sub != SubEnd; ++Sub)
     ChildModules += getNumberOfModules(*Sub);
-  
+
   return ChildModules + 1;
 }
 
 void ASTWriter::WriteSubmodules(Module *WritingModule) {
   // Enter the submodule description block.
   Stream.EnterSubblock(SUBMODULE_BLOCK_ID, /*bits for abbreviations*/5);
-  
+
   // Write the abbreviations needed for the submodules block.
   using namespace llvm;
 
@@ -2778,11 +2797,15 @@ void ASTWriter::WriteSubmodules(Module *WritingModule) {
   Abbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::VBR, 6)); // ID
   Abbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::VBR, 6)); // Parent
   Abbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Fixed, 2)); // Kind
+
+  // SWIFT-SPECIFIC FIELDS HERE. Handling them separately helps avoid merge
+  // conflicts.
+  Abbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Fixed, 1)); // IsSwiftInferIAM...
+
   Abbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Fixed, 1)); // IsFramework
   Abbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Fixed, 1)); // IsExplicit
   Abbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Fixed, 1)); // IsSystem
   Abbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Fixed, 1)); // IsExternC
-  Abbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Fixed, 1)); // IsSwiftInferIAM...
   Abbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Fixed, 1)); // InferSubmodules...
   Abbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Fixed, 1)); // InferExplicit...
   Abbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Fixed, 1)); // InferExportWild...
@@ -2864,7 +2887,7 @@ void ASTWriter::WriteSubmodules(Module *WritingModule) {
       getNumberOfModules(WritingModule),
       FirstSubmoduleID - NUM_PREDEF_SUBMODULE_IDS};
   Stream.EmitRecord(SUBMODULE_METADATA, Record);
-  
+
   // Write all of the submodules.
   std::queue<Module *> Q;
   Q.push(WritingModule);
@@ -2885,11 +2908,16 @@ void ASTWriter::WriteSubmodules(Module *WritingModule) {
                                          ID,
                                          ParentID,
                                          (RecordData::value_type)Mod->Kind,
+
+                                         // SWIFT-SPECIFIC FIELDS HERE.
+                                         // Handling them separately helps
+                                         // avoid merge conflicts.
+                                         Mod->IsSwiftInferImportAsMember,
+
                                          Mod->IsFramework,
                                          Mod->IsExplicit,
                                          Mod->IsSystem,
                                          Mod->IsExternC,
-                                         Mod->IsSwiftInferImportAsMember,
                                          Mod->InferSubmodules,
                                          Mod->InferExplicitSubmodules,
                                          Mod->InferExportWildcard,
@@ -2942,7 +2970,7 @@ void ASTWriter::WriteSubmodules(Module *WritingModule) {
         Stream.EmitRecordWithBlob(TopHeaderAbbrev, Record, H->getName());
     }
 
-    // Emit the imports. 
+    // Emit the imports.
     if (!Mod->Imports.empty()) {
       RecordData Record;
       for (auto *I : Mod->Imports)
@@ -2950,7 +2978,7 @@ void ASTWriter::WriteSubmodules(Module *WritingModule) {
       Stream.EmitRecord(SUBMODULE_IMPORTS, Record);
     }
 
-    // Emit the exports. 
+    // Emit the exports.
     if (!Mod->Exports.empty()) {
       RecordData Record;
       for (const auto &E : Mod->Exports) {
@@ -3000,12 +3028,12 @@ void ASTWriter::WriteSubmodules(Module *WritingModule) {
       RecordData::value_type Record[] = {SUBMODULE_EXPORT_AS};
       Stream.EmitRecordWithBlob(ExportAsAbbrev, Record, Mod->ExportAsModule);
     }
-    
+
     // Queue up the submodules of this module.
     for (auto *M : Mod->submodules())
       Q.push(M);
   }
-  
+
   Stream.ExitBlock();
 
   assert((NextSubmoduleID - FirstSubmoduleID ==
@@ -3044,7 +3072,7 @@ void ASTWriter::WritePragmaDiagnosticMappings(const DiagnosticsEngine &Diag,
 
     unsigned &DiagStateID = DiagStateIDMap[State];
     Record.push_back(DiagStateID);
-  
+
     if (DiagStateID == 0) {
       DiagStateID = ++CurrID;
 
@@ -3075,8 +3103,11 @@ void ASTWriter::WritePragmaDiagnosticMappings(const DiagnosticsEngine &Diag,
         !FileIDAndFile.second.HasLocalTransitions)
       continue;
     ++NumLocations;
-    AddSourceLocation(Diag.SourceMgr->getLocForStartOfFile(FileIDAndFile.first),
-                      Record);
+
+    SourceLocation Loc = Diag.SourceMgr->getComposedLoc(FileIDAndFile.first, 0);
+    assert(!Loc.isInvalid() && "start loc for valid FileID is invalid");
+    AddSourceLocation(Loc, Record);
+
     Record.push_back(FileIDAndFile.second.StateTransitions.size());
     for (auto &StatePoint : FileIDAndFile.second.StateTransitions) {
       Record.push_back(StatePoint.Offset);
@@ -3103,7 +3134,7 @@ void ASTWriter::WritePragmaDiagnosticMappings(const DiagnosticsEngine &Diag,
 // Type Serialization
 //===----------------------------------------------------------------------===//
 
-/// \brief Write the representation of a type to the AST stream.
+/// Write the representation of a type to the AST stream.
 void ASTWriter::WriteType(QualType T) {
   TypeIdx &IdxRef = TypeIdxs[T];
   if (IdxRef.getIndex() == 0) // we haven't seen this type before.
@@ -3135,11 +3166,11 @@ void ASTWriter::WriteType(QualType T) {
 // Declaration Serialization
 //===----------------------------------------------------------------------===//
 
-/// \brief Write the block containing all of the declaration IDs
+/// Write the block containing all of the declaration IDs
 /// lexically declared within the given DeclContext.
 ///
 /// \returns the offset of the DECL_CONTEXT_LEXICAL block within the
-/// bistream, or 0 if no block was written.
+/// bitstream, or 0 if no block was written.
 uint64_t ASTWriter::WriteDeclContextLexicalBlock(ASTContext &Context,
                                                  DeclContext *DC) {
   if (DC->decls_empty())
@@ -3194,8 +3225,7 @@ void ASTWriter::WriteFileDeclIDsMap() {
 
   SmallVector<std::pair<FileID, DeclIDInFileInfo *>, 64> SortedFileDeclIDs(
       FileDeclIDs.begin(), FileDeclIDs.end());
-  std::sort(SortedFileDeclIDs.begin(), SortedFileDeclIDs.end(),
-            llvm::less_first());
+  llvm::sort(SortedFileDeclIDs, llvm::less_first());
 
   // Join the vectors of DeclIDs from all files.
   SmallVector<DeclID, 256> FileGroupedDeclIDs;
@@ -3218,6 +3248,9 @@ void ASTWriter::WriteFileDeclIDsMap() {
 
 void ASTWriter::WriteComments() {
   Stream.EnterSubblock(COMMENTS_BLOCK_ID, 3);
+  auto _ = llvm::make_scope_exit([this] { Stream.ExitBlock(); });
+  if (!PP->getPreprocessorOpts().WriteCommentListToPCH)
+    return;
   ArrayRef<RawComment *> RawComments = Context->Comments.getComments();
   RecordData Record;
   for (const auto *I : RawComments) {
@@ -3228,7 +3261,6 @@ void ASTWriter::WriteComments() {
     Record.push_back(I->isAlmostTrailingComment());
     Stream.EmitRecord(COMMENTS_RAW_COMMENT, Record);
   }
-  Stream.ExitBlock();
 }
 
 //===----------------------------------------------------------------------===//
@@ -3265,7 +3297,7 @@ public:
                       data_type_ref Methods) {
     using namespace llvm::support;
 
-    endian::Writer<little> LE(Out);
+    endian::Writer LE(Out, little);
     unsigned KeyLen = 2 + (Sel.getNumArgs()? Sel.getNumArgs() * 4 : 4);
     LE.write<uint16_t>(KeyLen);
     unsigned DataLen = 4 + 2 + 2; // 2 bytes for each of the method counts
@@ -3284,7 +3316,7 @@ public:
   void EmitKey(raw_ostream& Out, Selector Sel, unsigned) {
     using namespace llvm::support;
 
-    endian::Writer<little> LE(Out);
+    endian::Writer LE(Out, little);
     uint64_t Start = Out.tell();
     assert((Start >> 32) == 0 && "Selector key offset too large");
     Writer.SetSelectorOffset(Sel, Start);
@@ -3301,7 +3333,7 @@ public:
                 data_type_ref Methods, unsigned DataLen) {
     using namespace llvm::support;
 
-    endian::Writer<little> LE(Out);
+    endian::Writer LE(Out, little);
     uint64_t Start = Out.tell(); (void)Start;
     LE.write<uint32_t>(Methods.ID);
     unsigned NumInstanceMethods = 0;
@@ -3347,7 +3379,7 @@ public:
 
 } // namespace
 
-/// \brief Write ObjC data: selectors and the method pool.
+/// Write ObjC data: selectors and the method pool.
 ///
 /// The method pool contains both instance and factory methods, stored
 /// in an on-disk hash table indexed by the selector. The hash table also
@@ -3413,7 +3445,7 @@ void ASTWriter::WriteSelectors(Sema &SemaRef) {
       ASTMethodPoolTrait Trait(*this);
       llvm::raw_svector_ostream Out(MethodPool);
       // Make sure that no bucket is at offset 0
-      endian::Writer<little>(Out).write<uint32_t>(0);
+      endian::write<uint32_t>(Out, 0, little);
       BucketOffset = Generator.Emit(Out, Trait);
     }
 
@@ -3451,7 +3483,7 @@ void ASTWriter::WriteSelectors(Sema &SemaRef) {
   }
 }
 
-/// \brief Write the selectors referenced in @selector expression into AST file.
+/// Write the selectors referenced in @selector expression into AST file.
 void ASTWriter::WriteReferencedSelectorsPool(Sema &SemaRef) {
   using namespace llvm;
 
@@ -3526,8 +3558,8 @@ class ASTIdentifierTableTrait {
   bool IsModule;
   bool NeedDecls;
   ASTWriter::RecordData *InterestingIdentifierOffsets;
-  
-  /// \brief Determines whether this is an "interesting" identifier that needs a
+
+  /// Determines whether this is an "interesting" identifier that needs a
   /// full IdentifierInfo structure written into the hash table. Notably, this
   /// doesn't check whether the name has macros defined; use PublicMacroIterator
   /// to check that.
@@ -3536,7 +3568,7 @@ class ASTIdentifierTableTrait {
         II->isPoisoned() ||
         (IsModule ? II->hasRevertedBuiltin() : II->getObjCOrBuiltinID()) ||
         II->hasRevertedTokenIDToIdentifier() ||
-        (NeedDecls && II->getFETokenInfo<void>()))
+        (NeedDecls && II->getFETokenInfo()))
       return true;
 
     return false;
@@ -3559,10 +3591,8 @@ public:
         NeedDecls(!IsModule || !Writer.getLangOpts().CPlusPlus),
         InterestingIdentifierOffsets(InterestingIdentifierOffsets) {}
 
-  bool needDecls() const { return NeedDecls; }
-
   static hash_value_type ComputeHash(const IdentifierInfo* II) {
-    return llvm::HashString(II->getName());
+    return llvm::djbHash(II->getName());
   }
 
   bool isInterestingIdentifier(const IdentifierInfo *II) {
@@ -3595,7 +3625,7 @@ public:
 
     using namespace llvm::support;
 
-    endian::Writer<little> LE(Out);
+    endian::Writer LE(Out, little);
 
     assert((uint16_t)DataLen == DataLen && (uint16_t)KeyLen == KeyLen);
     LE.write<uint16_t>(DataLen);
@@ -3624,7 +3654,7 @@ public:
                 IdentID ID, unsigned) {
     using namespace llvm::support;
 
-    endian::Writer<little> LE(Out);
+    endian::Writer LE(Out, little);
 
     auto MacroOffset = Writer.getMacroDirectivesOffset(II);
     if (!isInterestingIdentifier(II, MacroOffset)) {
@@ -3669,12 +3699,12 @@ public:
 
 } // namespace
 
-/// \brief Write the identifier table into the AST file.
+/// Write the identifier table into the AST file.
 ///
 /// The identifier table consists of a blob containing string data
 /// (the actual identifiers themselves) and a separate "offsets" index
 /// that maps identifier IDs to locations within the blob.
-void ASTWriter::WriteIdentifierTable(Preprocessor &PP, 
+void ASTWriter::WriteIdentifierTable(Preprocessor &PP,
                                      IdentifierResolver &IdResolver,
                                      bool IsModule) {
   using namespace llvm;
@@ -3699,7 +3729,7 @@ void ASTWriter::WriteIdentifierTable(Preprocessor &PP,
       IIs.push_back(ID.second);
     // Sort the identifiers lexicographically before getting them references so
     // that their order is stable.
-    std::sort(IIs.begin(), IIs.end(), llvm::less_ptr<IdentifierInfo>());
+    llvm::sort(IIs, llvm::less_ptr<IdentifierInfo>());
     for (const IdentifierInfo *II : IIs)
       if (Trait.isInterestingNonMacroIdentifier(II))
         getIdentifierRef(II);
@@ -3713,10 +3743,8 @@ void ASTWriter::WriteIdentifierTable(Preprocessor &PP,
       assert(II && "NULL identifier in identifier table");
       // Write out identifiers if either the ID is local or the identifier has
       // changed since it was loaded.
-      if (ID >= FirstIdentID || !Chain || !II->isFromAST()
-          || II->hasChangedSinceDeserialization() ||
-          (Trait.needDecls() &&
-           II->hasFETokenInfoChangedSinceDeserialization()))
+      if (ID >= FirstIdentID || !Chain || !II->isFromAST() ||
+          II->hasChangedSinceDeserialization())
         Generator.insert(II, ID, Trait);
     }
 
@@ -3728,7 +3756,7 @@ void ASTWriter::WriteIdentifierTable(Preprocessor &PP,
 
       llvm::raw_svector_ostream Out(IdentifierTable);
       // Make sure that no bucket is at offset 0
-      endian::Writer<little>(Out).write<uint32_t>(0);
+      endian::write<uint32_t>(Out, 0, little);
       BucketOffset = Generator.Emit(Out, Trait);
     }
 
@@ -3824,8 +3852,7 @@ public:
 
     using namespace llvm::support;
 
-    endian::Writer<little>(Out)
-        .write<uint32_t>(Writer.getChain()->getModuleFileID(F));
+    endian::write<uint32_t>(Out, Writer.getChain()->getModuleFileID(F), little);
   }
 
   std::pair<unsigned, unsigned> EmitKeyDataLength(raw_ostream &Out,
@@ -3833,7 +3860,7 @@ public:
                                                   data_type_ref Lookup) {
     using namespace llvm::support;
 
-    endian::Writer<little> LE(Out);
+    endian::Writer LE(Out, little);
     unsigned KeyLen = 1;
     switch (Name.getKind()) {
     case DeclarationName::Identifier:
@@ -3867,7 +3894,7 @@ public:
   void EmitKey(raw_ostream &Out, DeclarationNameKey Name, unsigned) {
     using namespace llvm::support;
 
-    endian::Writer<little> LE(Out);
+    endian::Writer LE(Out, little);
     LE.write<uint8_t>(Name.getKind());
     switch (Name.getKind()) {
     case DeclarationName::Identifier:
@@ -3899,7 +3926,7 @@ public:
                 unsigned DataLen) {
     using namespace llvm::support;
 
-    endian::Writer<little> LE(Out);
+    endian::Writer LE(Out, little);
     uint64_t Start = Out.tell(); (void)Start;
     for (unsigned I = Lookup.first, N = Lookup.second; I != N; ++I)
       LE.write<uint32_t>(DeclIDs[I]);
@@ -3911,7 +3938,8 @@ public:
 
 bool ASTWriter::isLookupResultExternal(StoredDeclsList &Result,
                                        DeclContext *DC) {
-  return Result.hasExternalDecls() && DC->NeedToReconcileExternalVisibleStorage;
+  return Result.hasExternalDecls() &&
+         DC->hasNeedToReconcileExternalVisibleStorage();
 }
 
 bool ASTWriter::isLookupResultEntirelyExternal(StoredDeclsList &Result,
@@ -3926,8 +3954,8 @@ bool ASTWriter::isLookupResultEntirelyExternal(StoredDeclsList &Result,
 void
 ASTWriter::GenerateNameLookupTable(const DeclContext *ConstDC,
                                    llvm::SmallVectorImpl<char> &LookupTable) {
-  assert(!ConstDC->HasLazyLocalLexicalLookups &&
-         !ConstDC->HasLazyExternalLexicalLookups &&
+  assert(!ConstDC->hasLazyLocalLexicalLookups() &&
+         !ConstDC->hasLazyExternalLexicalLookups() &&
          "must call buildLookups first");
 
   // FIXME: We need to build the lookups table, which is logically const.
@@ -3997,7 +4025,7 @@ ASTWriter::GenerateNameLookupTable(const DeclContext *ConstDC,
   }
 
   // Sort the names into a stable order.
-  std::sort(Names.begin(), Names.end());
+  llvm::sort(Names);
 
   if (auto *D = dyn_cast<CXXRecordDecl>(DC)) {
     // We need to establish an ordering of constructor and conversion function
@@ -4100,7 +4128,7 @@ ASTWriter::GenerateNameLookupTable(const DeclContext *ConstDC,
   Generator.emit(LookupTable, Trait, Lookups ? &Lookups->Table : nullptr);
 }
 
-/// \brief Write the block containing all of the declaration IDs
+/// Write the block containing all of the declaration IDs
 /// visible from the given DeclContext.
 ///
 /// \returns the offset of the DECL_CONTEXT_VISIBLE block within the
@@ -4134,7 +4162,7 @@ uint64_t ASTWriter::WriteDeclContextVisibleBlock(ASTContext &Context,
             std::make_pair(Entry.first, Entry.second.getLookupResult()));
     }
 
-    std::sort(LookupResults.begin(), LookupResults.end(), llvm::less_first());
+    llvm::sort(LookupResults, llvm::less_first());
     for (auto &NameAndResult : LookupResults) {
       DeclarationName Name = NameAndResult.first;
       DeclContext::lookup_result Result = NameAndResult.second;
@@ -4190,7 +4218,7 @@ uint64_t ASTWriter::WriteDeclContextVisibleBlock(ASTContext &Context,
   return Offset;
 }
 
-/// \brief Write an UPDATE_VISIBLE block for the given context.
+/// Write an UPDATE_VISIBLE block for the given context.
 ///
 /// UPDATE_VISIBLE blocks contain the declarations that are added to an existing
 /// DeclContext in a dependent AST file. As such, they only exist for the TU
@@ -4215,13 +4243,13 @@ void ASTWriter::WriteDeclContextVisibleUpdate(const DeclContext *DC) {
   Stream.EmitRecordWithBlob(UpdateVisibleAbbrev, Record, LookupTable);
 }
 
-/// \brief Write an FP_PRAGMA_OPTIONS block for the given FPOptions.
+/// Write an FP_PRAGMA_OPTIONS block for the given FPOptions.
 void ASTWriter::WriteFPPragmaOptions(const FPOptions &Opts) {
   RecordData::value_type Record[] = {Opts.getInt()};
   Stream.EmitRecord(FP_PRAGMA_OPTIONS, Record);
 }
 
-/// \brief Write an OPENCL_EXTENSIONS block for the given OpenCLOptions.
+/// Write an OPENCL_EXTENSIONS block for the given OpenCLOptions.
 void ASTWriter::WriteOpenCLExtensions(Sema &SemaRef) {
   if (!SemaRef.Context.getLangOpts().OpenCL)
     return;
@@ -4278,16 +4306,16 @@ void ASTWriter::WriteCUDAPragmas(Sema &SemaRef) {
 void ASTWriter::WriteObjCCategories() {
   SmallVector<ObjCCategoriesInfo, 2> CategoriesMap;
   RecordData Categories;
-  
+
   for (unsigned I = 0, N = ObjCClassesWithCategories.size(); I != N; ++I) {
     unsigned Size = 0;
     unsigned StartIndex = Categories.size();
-    
+
     ObjCInterfaceDecl *Class = ObjCClassesWithCategories[I];
-    
+
     // Allocate space for the size.
     Categories.push_back(0);
-    
+
     // Add the categories.
     for (ObjCInterfaceDecl::known_categories_iterator
            Cat = Class->known_categories_begin(),
@@ -4296,10 +4324,10 @@ void ASTWriter::WriteObjCCategories() {
       assert(getDeclID(*Cat) != 0 && "Bogus category");
       AddDeclRef(*Cat, Categories);
     }
-    
+
     // Update the size.
     Categories[StartIndex] = Size;
-    
+
     // Record this interface -> category map.
     ObjCCategoriesInfo CatInfo = { getDeclID(Class), StartIndex };
     CategoriesMap.push_back(CatInfo);
@@ -4348,7 +4376,7 @@ void ASTWriter::WriteLateParsedTemplates(Sema &SemaRef) {
   Stream.EmitRecord(LATE_PARSED_TEMPLATE, Record);
 }
 
-/// \brief Write the state of 'pragma clang optimize' at the end of the module.
+/// Write the state of 'pragma clang optimize' at the end of the module.
 void ASTWriter::WriteOptimizePragmaOptions(Sema &SemaRef) {
   RecordData Record;
   SourceLocation PragmaLoc = SemaRef.getOptimizeOffPragmaLocation();
@@ -4356,14 +4384,14 @@ void ASTWriter::WriteOptimizePragmaOptions(Sema &SemaRef) {
   Stream.EmitRecord(OPTIMIZE_PRAGMA_OPTIONS, Record);
 }
 
-/// \brief Write the state of 'pragma ms_struct' at the end of the module.
+/// Write the state of 'pragma ms_struct' at the end of the module.
 void ASTWriter::WriteMSStructPragmaOptions(Sema &SemaRef) {
   RecordData Record;
   Record.push_back(SemaRef.MSStructPragmaOn ? PMSST_ON : PMSST_OFF);
   Stream.EmitRecord(MSSTRUCT_PRAGMA_OPTIONS, Record);
 }
 
-/// \brief Write the state of 'pragma pointers_to_members' at the end of the
+/// Write the state of 'pragma pointers_to_members' at the end of the
 //module.
 void ASTWriter::WriteMSPointersToMembersPragmaOptions(Sema &SemaRef) {
   RecordData Record;
@@ -4372,7 +4400,7 @@ void ASTWriter::WriteMSPointersToMembersPragmaOptions(Sema &SemaRef) {
   Stream.EmitRecord(POINTERS_TO_MEMBERS_PRAGMA_OPTIONS, Record);
 }
 
-/// \brief Write the state of 'pragma pack' at the end of the module.
+/// Write the state of 'pragma pack' at the end of the module.
 void ASTWriter::WritePackPragmaOptions(Sema &SemaRef) {
   // Don't serialize pragma pack state for modules, since it should only take
   // effect on a per-submodule basis.
@@ -4431,16 +4459,21 @@ void ASTWriter::WriteModuleFileExtension(Sema &SemaRef,
 // General Serialization Routines
 //===----------------------------------------------------------------------===//
 
-/// \brief Emit the list of attributes to the specified record.
-void ASTRecordWriter::AddAttributes(ArrayRef<const Attr *> Attrs) {
+void ASTRecordWriter::AddAttr(const Attr *A) {
   auto &Record = *this;
-  Record.push_back(Attrs.size());
-  for (const auto *A : Attrs) {
-    Record.push_back(A->getKind()); // FIXME: stable encoding, target attrs
-    Record.AddSourceRange(A->getRange());
+  if (!A)
+    return Record.push_back(0);
+  Record.push_back(A->getKind() + 1); // FIXME: stable encoding, target attrs
+  Record.AddSourceRange(A->getRange());
 
 #include "clang/Serialization/AttrPCHWrite.inc"
-  }
+}
+
+/// Emit the list of attributes to the specified record.
+void ASTRecordWriter::AddAttributes(ArrayRef<const Attr *> Attrs) {
+  push_back(Attrs.size());
+  for (const auto *A : Attrs)
+    AddAttr(A);
 }
 
 void ASTWriter::AddToken(const Token &Tok, RecordDataImpl &Record) {
@@ -4505,7 +4538,7 @@ void ASTWriter::AddVersionTuple(const VersionTuple &Version,
     Record.push_back(0);
 }
 
-/// \brief Note that the identifier II occurs at the given offset
+/// Note that the identifier II occurs at the given offset
 /// within the identifier table.
 void ASTWriter::SetIdentifierOffset(const IdentifierInfo *II, uint32_t Offset) {
   IdentID ID = IdentifierIDs[II];
@@ -4515,7 +4548,7 @@ void ASTWriter::SetIdentifierOffset(const IdentifierInfo *II, uint32_t Offset) {
     IdentifierOffsets[ID - FirstIdentID] = Offset;
 }
 
-/// \brief Note that the selector Sel occurs at the given offset
+/// Note that the selector Sel occurs at the given offset
 /// within the method pool/selector table.
 void ASTWriter::SetSelectorOffset(Selector Sel, uint32_t Offset) {
   unsigned ID = SelectorIDs[Sel];
@@ -4528,10 +4561,11 @@ void ASTWriter::SetSelectorOffset(Selector Sel, uint32_t Offset) {
 }
 
 ASTWriter::ASTWriter(llvm::BitstreamWriter &Stream,
-                     SmallVectorImpl<char> &Buffer, MemoryBufferCache &PCMCache,
+                     SmallVectorImpl<char> &Buffer,
+                     InMemoryModuleCache &ModuleCache,
                      ArrayRef<std::shared_ptr<ModuleFileExtension>> Extensions,
                      bool IncludeTimestamps)
-    : Stream(Stream), Buffer(Buffer), PCMCache(PCMCache),
+    : Stream(Stream), Buffer(Buffer), ModuleCache(ModuleCache),
       IncludeTimestamps(IncludeTimestamps) {
   for (const auto &Ext : Extensions) {
     if (auto Writer = Ext->createExtensionWriter(*this))
@@ -4555,11 +4589,12 @@ time_t ASTWriter::getTimestampForOutput(const FileEntry *E) const {
 ASTFileSignature ASTWriter::WriteAST(Sema &SemaRef,
                                      const std::string &OutputFile,
                                      Module *WritingModule, StringRef isysroot,
-                                     bool hasErrors) {
+                                     bool hasErrors,
+                                     bool ShouldCacheASTInMemory) {
   WritingAST = true;
 
   ASTHasCompilerErrors = hasErrors;
-  
+
   // Emit the file header.
   Stream.Emit((unsigned)'C', 8);
   Stream.Emit((unsigned)'P', 8);
@@ -4579,11 +4614,11 @@ ASTFileSignature ASTWriter::WriteAST(Sema &SemaRef,
   this->BaseDirectory.clear();
 
   WritingAST = false;
-  if (SemaRef.Context.getLangOpts().ImplicitModules && WritingModule) {
+  if (ShouldCacheASTInMemory) {
     // Construct MemoryBuffer and update buffer manager.
-    PCMCache.addBuffer(OutputFile,
-                       llvm::MemoryBuffer::getMemBufferCopy(
-                           StringRef(Buffer.begin(), Buffer.size())));
+    ModuleCache.addBuiltPCM(OutputFile,
+                            llvm::MemoryBuffer::getMemBufferCopy(
+                                StringRef(Buffer.begin(), Buffer.size())));
   }
   return Signature;
 }
@@ -4607,7 +4642,7 @@ ASTFileSignature ASTWriter::WriteASTCore(Sema &SemaRef, StringRef isysroot,
   // Make sure that the AST reader knows to finalize itself.
   if (Chain)
     Chain->finalizeForWriting();
-  
+
   ASTContext &Context = SemaRef.Context;
   Preprocessor &PP = SemaRef.PP;
 
@@ -4648,7 +4683,7 @@ ASTFileSignature ASTWriter::WriteASTCore(Sema &SemaRef, StringRef isysroot,
   // headers.
   RecordData TentativeDefinitions;
   AddLazyVectorDecls(*this, SemaRef.TentativeDefinitions, TentativeDefinitions);
-  
+
   // Build a record containing all of the file scoped decls in this file.
   RecordData UnusedFileScopedDecls;
   if (!isModule)
@@ -4736,13 +4771,15 @@ ASTFileSignature ASTWriter::WriteASTCore(Sema &SemaRef, StringRef isysroot,
   // analyze later in AST.
   RecordData DeleteExprsToAnalyze;
 
-  for (const auto &DeleteExprsInfo :
-       SemaRef.getMismatchingDeleteExpressions()) {
-    AddDeclRef(DeleteExprsInfo.first, DeleteExprsToAnalyze);
-    DeleteExprsToAnalyze.push_back(DeleteExprsInfo.second.size());
-    for (const auto &DeleteLoc : DeleteExprsInfo.second) {
-      AddSourceLocation(DeleteLoc.first, DeleteExprsToAnalyze);
-      DeleteExprsToAnalyze.push_back(DeleteLoc.second);
+  if (!isModule) {
+    for (const auto &DeleteExprsInfo :
+         SemaRef.getMismatchingDeleteExpressions()) {
+      AddDeclRef(DeleteExprsInfo.first, DeleteExprsToAnalyze);
+      DeleteExprsToAnalyze.push_back(DeleteExprsInfo.second.size());
+      for (const auto &DeleteLoc : DeleteExprsInfo.second) {
+        AddSourceLocation(DeleteLoc.first, DeleteExprsToAnalyze);
+        DeleteExprsToAnalyze.push_back(DeleteLoc.second);
+      }
     }
   }
 
@@ -4769,7 +4806,7 @@ ASTFileSignature ASTWriter::WriteASTCore(Sema &SemaRef, StringRef isysroot,
       NewGlobalKindDeclPairs.push_back(GetDeclRef(D));
     }
   }
-  
+
   auto Abv = std::make_shared<BitCodeAbbrev>();
   Abv->Add(llvm::BitCodeAbbrevOp(TU_UPDATE_LEXICAL));
   Abv->Add(llvm::BitCodeAbbrevOp(llvm::BitCodeAbbrevOp::Blob));
@@ -4791,7 +4828,7 @@ ASTFileSignature ASTWriter::WriteASTCore(Sema &SemaRef, StringRef isysroot,
   // If we have any extern "C" names, write out a visible update for them.
   if (Context.ExternCContext)
     WriteDeclContextVisibleUpdate(Context.ExternCContext);
-  
+
   // If the translation unit has an anonymous namespace, and we don't already
   // have an update block for it, write it as an update block.
   // FIXME: Why do we not do this if there's already an update block?
@@ -4830,7 +4867,7 @@ ASTFileSignature ASTWriter::WriteASTCore(Sema &SemaRef, StringRef isysroot,
         IIs.push_back(II);
     }
     // Sort the identifiers to visit based on their name.
-    std::sort(IIs.begin(), IIs.end(), llvm::less_ptr<IdentifierInfo>());
+    llvm::sort(IIs, llvm::less_ptr<IdentifierInfo>());
     for (const IdentifierInfo *II : IIs) {
       for (IdentifierResolver::iterator D = SemaRef.IdResolver.begin(II),
                                      DEnd = SemaRef.IdResolver.end();
@@ -4880,7 +4917,7 @@ ASTFileSignature ASTWriter::WriteASTCore(Sema &SemaRef, StringRef isysroot,
     //   declaration-id:i32
     //   c++-base-specifiers-id:i32
     //   type-id:i32)
-    // 
+    //
     // module-kind is the ModuleKind enum value. If it is MK_PrebuiltModule or
     // MK_ExplicitModule, then the module-name is the module name. Otherwise,
     // it is the module file name.
@@ -4894,7 +4931,7 @@ ASTFileSignature ASTWriter::WriteASTCore(Sema &SemaRef, StringRef isysroot,
       for (ModuleFile &M : Chain->ModuleMgr) {
         using namespace llvm::support;
 
-        endian::Writer<little> LE(Out);
+        endian::Writer LE(Out, little);
         LE.write<uint8_t>(static_cast<uint8_t>(M.Kind));
         StringRef Name =
           M.Kind == MK_PrebuiltModule || M.Kind == MK_ExplicitModule
@@ -4971,12 +5008,15 @@ ASTFileSignature ASTWriter::WriteASTCore(Sema &SemaRef, StringRef isysroot,
   WriteFPPragmaOptions(SemaRef.getFPOptions());
   WriteOpenCLExtensions(SemaRef);
   WriteOpenCLExtensionTypes(SemaRef);
-  WriteOpenCLExtensionDecls(SemaRef);
   WriteCUDAPragmas(SemaRef);
 
-  // If we're emitting a module, write out the submodule information.  
+  // If we're emitting a module, write out the submodule information.
   if (WritingModule)
     WriteSubmodules(WritingModule);
+
+  // We need to have information about submodules to correctly deserialize
+  // decls from OpenCLExtensionDecls block
+  WriteOpenCLExtensionDecls(SemaRef);
 
   Stream.EmitRecord(SPECIAL_TYPES, SpecialTypes);
 
@@ -5024,7 +5064,7 @@ ASTFileSignature ASTWriter::WriteASTCore(Sema &SemaRef, StringRef isysroot,
   // Write the record containing CUDA-specific declaration references.
   if (!CUDASpecialDeclRefs.empty())
     Stream.EmitRecord(CUDA_SPECIAL_DECL_REFS, CUDASpecialDeclRefs);
-  
+
   // Write the delegating constructors.
   if (!DelegatingCtorDecls.empty())
     Stream.EmitRecord(DELEGATING_CTORS, DelegatingCtorDecls);
@@ -5067,7 +5107,7 @@ ASTFileSignature ASTWriter::WriteASTCore(Sema &SemaRef, StringRef isysroot,
       };
 
       // Sort and deduplicate module IDs.
-      std::sort(Imports.begin(), Imports.end(), Cmp);
+      llvm::sort(Imports, Cmp);
       Imports.erase(std::unique(Imports.begin(), Imports.end(), Eq),
                     Imports.end());
 
@@ -5203,7 +5243,7 @@ void ASTWriter::WriteDeclUpdatesBlocks(RecordDataImpl &OffsetsRecord) {
         }
         Record.push_back(RD->getTagKind());
         Record.AddSourceLocation(RD->getLocation());
-        Record.AddSourceLocation(RD->getLocStart());
+        Record.AddSourceLocation(RD->getBeginLoc());
         Record.AddSourceRange(RD->getBraceRange());
 
         // Instantiation may change attributes; write them all out afresh.
@@ -5244,6 +5284,7 @@ void ASTWriter::WriteDeclUpdatesBlocks(RecordDataImpl &OffsetsRecord) {
         break;
 
       case UPD_DECL_MARKED_OPENMP_DECLARETARGET:
+        Record.push_back(D->getAttr<OMPDeclareTargetDeclAttr>()->getMapType());
         Record.AddSourceRange(
             D->getAttr<OMPDeclareTargetDeclAttr>()->getRange());
         break;
@@ -5329,7 +5370,7 @@ MacroID ASTWriter::getMacroRef(MacroInfo *MI, const IdentifierInfo *Name) {
 MacroID ASTWriter::getMacroID(MacroInfo *MI) {
   if (!MI || MI->isBuiltinMacro())
     return 0;
-  
+
   assert(MacroIDs.find(MI) != MacroIDs.end() && "Macro not emitted!");
   return MacroIDs[MI];
 }
@@ -5412,12 +5453,11 @@ void ASTRecordWriter::AddTypeSourceInfo(TypeSourceInfo *TInfo) {
     return;
   }
 
+  AddTypeRef(TInfo->getType());
   AddTypeLoc(TInfo->getTypeLoc());
 }
 
 void ASTRecordWriter::AddTypeLoc(TypeLoc TL) {
-  AddTypeRef(TL.getType());
-
   TypeLocWriter TLW(*this);
   for (; !TL.isNull(); TL = TL.getNextTypeLoc())
     TLW.Visit(TL);
@@ -5473,12 +5513,12 @@ DeclID ASTWriter::GetDeclRef(const Decl *D) {
   if (!D) {
     return 0;
   }
-  
+
   // If D comes from an AST file, its declaration ID is already known and
   // fixed.
   if (D->isFromASTFile())
     return D->getGlobalID();
-  
+
   assert(!(reinterpret_cast<uintptr_t>(D) & 0x01) && "Invalid decl pointer");
   DeclID &ID = DeclIDs[D];
   if (ID == 0) {
@@ -5742,6 +5782,7 @@ void ASTRecordWriter::AddNestedNameSpecifierLoc(NestedNameSpecifierLoc NNS) {
     case NestedNameSpecifier::TypeSpec:
     case NestedNameSpecifier::TypeSpecWithTemplate:
       Record->push_back(Kind == NestedNameSpecifier::TypeSpecWithTemplate);
+      AddTypeRef(NNS.getTypeLoc().getType());
       AddTypeLoc(NNS.getTypeLoc());
       AddSourceLocation(NNS.getLocalSourceRange().getEnd());
       break;
@@ -5800,7 +5841,7 @@ void ASTRecordWriter::AddTemplateName(TemplateName Name) {
     AddTemplateName(subst->getReplacement());
     break;
   }
-      
+
   case TemplateName::SubstTemplateTemplateParmPack: {
     SubstTemplateTemplateParmPackStorage *SubstPack
       = Name.getAsSubstTemplateTemplateParmPack();
@@ -5863,7 +5904,7 @@ void ASTRecordWriter::AddTemplateParameterList(
     AddDeclRef(P);
 }
 
-/// \brief Emit a template argument list.
+/// Emit a template argument list.
 void ASTRecordWriter::AddTemplateArgumentList(
     const TemplateArgumentList *TemplateArgs) {
   assert(TemplateArgs && "No TemplateArgs!");
@@ -5900,7 +5941,7 @@ void ASTRecordWriter::AddCXXBaseSpecifier(const CXXBaseSpecifier &Base) {
   Record->push_back(Base.getInheritConstructors());
   AddTypeSourceInfo(Base.getTypeSourceInfo());
   AddSourceRange(Base.getSourceRange());
-  AddSourceLocation(Base.isPackExpansion()? Base.getEllipsisLoc() 
+  AddSourceLocation(Base.isPackExpansion()? Base.getEllipsisLoc()
                                           : SourceLocation());
 }
 
@@ -5973,7 +6014,9 @@ void ASTRecordWriter::AddCXXDefinitionData(const CXXRecordDecl *D) {
   Record->push_back(Data.Polymorphic);
   Record->push_back(Data.Abstract);
   Record->push_back(Data.IsStandardLayout);
-  Record->push_back(Data.HasNoNonEmptyBases);
+  Record->push_back(Data.IsCXX11StandardLayout);
+  Record->push_back(Data.HasBasesWithFields);
+  Record->push_back(Data.HasBasesWithNonStaticDataMembers);
   Record->push_back(Data.HasPrivateFields);
   Record->push_back(Data.HasProtectedFields);
   Record->push_back(Data.HasPublicFields);
@@ -6033,9 +6076,9 @@ void ASTRecordWriter::AddCXXDefinitionData(const CXXRecordDecl *D) {
 
   AddUnresolvedSet(Data.Conversions.get(*Writer->Context));
   AddUnresolvedSet(Data.VisibleConversions.get(*Writer->Context));
-  // Data.Definition is the owning decl, no need to write it. 
+  // Data.Definition is the owning decl, no need to write it.
   AddDeclRef(D->getFirstFriend());
-  
+
   // Add lambda-specific data.
   if (Data.IsLambda) {
     auto &Lambda = D->getLambdaData();
@@ -6328,7 +6371,7 @@ void ASTWriter::AddedObjCCategoryToInterface(const ObjCCategoryDecl *CatD,
   assert(!WritingAST && "Already writing the AST!");
   if (!IFD->isFromASTFile())
     return; // Declaration not imported from PCH.
-  
+
   assert(IFD->getDefinition() && "Category on a class without a definition?");
   ObjCClassesWithCategories.insert(
     const_cast<ObjCInterfaceDecl *>(IFD->getDefinition()));
@@ -6418,4 +6461,490 @@ void ASTWriter::AddedCXXTemplateSpecialization(const FunctionTemplateDecl *TD,
     return;
 
   DeclsToEmitEvenIfUnreferenced.push_back(D);
+}
+
+//===----------------------------------------------------------------------===//
+//// OMPClause Serialization
+////===----------------------------------------------------------------------===//
+
+void OMPClauseWriter::writeClause(OMPClause *C) {
+  Record.push_back(C->getClauseKind());
+  Visit(C);
+  Record.AddSourceLocation(C->getBeginLoc());
+  Record.AddSourceLocation(C->getEndLoc());
+}
+
+void OMPClauseWriter::VisitOMPClauseWithPreInit(OMPClauseWithPreInit *C) {
+  Record.push_back(C->getCaptureRegion());
+  Record.AddStmt(C->getPreInitStmt());
+}
+
+void OMPClauseWriter::VisitOMPClauseWithPostUpdate(OMPClauseWithPostUpdate *C) {
+  VisitOMPClauseWithPreInit(C);
+  Record.AddStmt(C->getPostUpdateExpr());
+}
+
+void OMPClauseWriter::VisitOMPIfClause(OMPIfClause *C) {
+  VisitOMPClauseWithPreInit(C);
+  Record.push_back(C->getNameModifier());
+  Record.AddSourceLocation(C->getNameModifierLoc());
+  Record.AddSourceLocation(C->getColonLoc());
+  Record.AddStmt(C->getCondition());
+  Record.AddSourceLocation(C->getLParenLoc());
+}
+
+void OMPClauseWriter::VisitOMPFinalClause(OMPFinalClause *C) {
+  Record.AddStmt(C->getCondition());
+  Record.AddSourceLocation(C->getLParenLoc());
+}
+
+void OMPClauseWriter::VisitOMPNumThreadsClause(OMPNumThreadsClause *C) {
+  VisitOMPClauseWithPreInit(C);
+  Record.AddStmt(C->getNumThreads());
+  Record.AddSourceLocation(C->getLParenLoc());
+}
+
+void OMPClauseWriter::VisitOMPSafelenClause(OMPSafelenClause *C) {
+  Record.AddStmt(C->getSafelen());
+  Record.AddSourceLocation(C->getLParenLoc());
+}
+
+void OMPClauseWriter::VisitOMPSimdlenClause(OMPSimdlenClause *C) {
+  Record.AddStmt(C->getSimdlen());
+  Record.AddSourceLocation(C->getLParenLoc());
+}
+
+void OMPClauseWriter::VisitOMPCollapseClause(OMPCollapseClause *C) {
+  Record.AddStmt(C->getNumForLoops());
+  Record.AddSourceLocation(C->getLParenLoc());
+}
+
+void OMPClauseWriter::VisitOMPDefaultClause(OMPDefaultClause *C) {
+  Record.push_back(C->getDefaultKind());
+  Record.AddSourceLocation(C->getLParenLoc());
+  Record.AddSourceLocation(C->getDefaultKindKwLoc());
+}
+
+void OMPClauseWriter::VisitOMPProcBindClause(OMPProcBindClause *C) {
+  Record.push_back(C->getProcBindKind());
+  Record.AddSourceLocation(C->getLParenLoc());
+  Record.AddSourceLocation(C->getProcBindKindKwLoc());
+}
+
+void OMPClauseWriter::VisitOMPScheduleClause(OMPScheduleClause *C) {
+  VisitOMPClauseWithPreInit(C);
+  Record.push_back(C->getScheduleKind());
+  Record.push_back(C->getFirstScheduleModifier());
+  Record.push_back(C->getSecondScheduleModifier());
+  Record.AddStmt(C->getChunkSize());
+  Record.AddSourceLocation(C->getLParenLoc());
+  Record.AddSourceLocation(C->getFirstScheduleModifierLoc());
+  Record.AddSourceLocation(C->getSecondScheduleModifierLoc());
+  Record.AddSourceLocation(C->getScheduleKindLoc());
+  Record.AddSourceLocation(C->getCommaLoc());
+}
+
+void OMPClauseWriter::VisitOMPOrderedClause(OMPOrderedClause *C) {
+  Record.push_back(C->getLoopNumIterations().size());
+  Record.AddStmt(C->getNumForLoops());
+  for (Expr *NumIter : C->getLoopNumIterations())
+    Record.AddStmt(NumIter);
+  for (unsigned I = 0, E = C->getLoopNumIterations().size(); I <E; ++I)
+    Record.AddStmt(C->getLoopCounter(I));
+  Record.AddSourceLocation(C->getLParenLoc());
+}
+
+void OMPClauseWriter::VisitOMPNowaitClause(OMPNowaitClause *) {}
+
+void OMPClauseWriter::VisitOMPUntiedClause(OMPUntiedClause *) {}
+
+void OMPClauseWriter::VisitOMPMergeableClause(OMPMergeableClause *) {}
+
+void OMPClauseWriter::VisitOMPReadClause(OMPReadClause *) {}
+
+void OMPClauseWriter::VisitOMPWriteClause(OMPWriteClause *) {}
+
+void OMPClauseWriter::VisitOMPUpdateClause(OMPUpdateClause *) {}
+
+void OMPClauseWriter::VisitOMPCaptureClause(OMPCaptureClause *) {}
+
+void OMPClauseWriter::VisitOMPSeqCstClause(OMPSeqCstClause *) {}
+
+void OMPClauseWriter::VisitOMPThreadsClause(OMPThreadsClause *) {}
+
+void OMPClauseWriter::VisitOMPSIMDClause(OMPSIMDClause *) {}
+
+void OMPClauseWriter::VisitOMPNogroupClause(OMPNogroupClause *) {}
+
+void OMPClauseWriter::VisitOMPPrivateClause(OMPPrivateClause *C) {
+  Record.push_back(C->varlist_size());
+  Record.AddSourceLocation(C->getLParenLoc());
+  for (auto *VE : C->varlists()) {
+    Record.AddStmt(VE);
+  }
+  for (auto *VE : C->private_copies()) {
+    Record.AddStmt(VE);
+  }
+}
+
+void OMPClauseWriter::VisitOMPFirstprivateClause(OMPFirstprivateClause *C) {
+  Record.push_back(C->varlist_size());
+  VisitOMPClauseWithPreInit(C);
+  Record.AddSourceLocation(C->getLParenLoc());
+  for (auto *VE : C->varlists()) {
+    Record.AddStmt(VE);
+  }
+  for (auto *VE : C->private_copies()) {
+    Record.AddStmt(VE);
+  }
+  for (auto *VE : C->inits()) {
+    Record.AddStmt(VE);
+  }
+}
+
+void OMPClauseWriter::VisitOMPLastprivateClause(OMPLastprivateClause *C) {
+  Record.push_back(C->varlist_size());
+  VisitOMPClauseWithPostUpdate(C);
+  Record.AddSourceLocation(C->getLParenLoc());
+  for (auto *VE : C->varlists())
+    Record.AddStmt(VE);
+  for (auto *E : C->private_copies())
+    Record.AddStmt(E);
+  for (auto *E : C->source_exprs())
+    Record.AddStmt(E);
+  for (auto *E : C->destination_exprs())
+    Record.AddStmt(E);
+  for (auto *E : C->assignment_ops())
+    Record.AddStmt(E);
+}
+
+void OMPClauseWriter::VisitOMPSharedClause(OMPSharedClause *C) {
+  Record.push_back(C->varlist_size());
+  Record.AddSourceLocation(C->getLParenLoc());
+  for (auto *VE : C->varlists())
+    Record.AddStmt(VE);
+}
+
+void OMPClauseWriter::VisitOMPReductionClause(OMPReductionClause *C) {
+  Record.push_back(C->varlist_size());
+  VisitOMPClauseWithPostUpdate(C);
+  Record.AddSourceLocation(C->getLParenLoc());
+  Record.AddSourceLocation(C->getColonLoc());
+  Record.AddNestedNameSpecifierLoc(C->getQualifierLoc());
+  Record.AddDeclarationNameInfo(C->getNameInfo());
+  for (auto *VE : C->varlists())
+    Record.AddStmt(VE);
+  for (auto *VE : C->privates())
+    Record.AddStmt(VE);
+  for (auto *E : C->lhs_exprs())
+    Record.AddStmt(E);
+  for (auto *E : C->rhs_exprs())
+    Record.AddStmt(E);
+  for (auto *E : C->reduction_ops())
+    Record.AddStmt(E);
+}
+
+void OMPClauseWriter::VisitOMPTaskReductionClause(OMPTaskReductionClause *C) {
+  Record.push_back(C->varlist_size());
+  VisitOMPClauseWithPostUpdate(C);
+  Record.AddSourceLocation(C->getLParenLoc());
+  Record.AddSourceLocation(C->getColonLoc());
+  Record.AddNestedNameSpecifierLoc(C->getQualifierLoc());
+  Record.AddDeclarationNameInfo(C->getNameInfo());
+  for (auto *VE : C->varlists())
+    Record.AddStmt(VE);
+  for (auto *VE : C->privates())
+    Record.AddStmt(VE);
+  for (auto *E : C->lhs_exprs())
+    Record.AddStmt(E);
+  for (auto *E : C->rhs_exprs())
+    Record.AddStmt(E);
+  for (auto *E : C->reduction_ops())
+    Record.AddStmt(E);
+}
+
+void OMPClauseWriter::VisitOMPInReductionClause(OMPInReductionClause *C) {
+  Record.push_back(C->varlist_size());
+  VisitOMPClauseWithPostUpdate(C);
+  Record.AddSourceLocation(C->getLParenLoc());
+  Record.AddSourceLocation(C->getColonLoc());
+  Record.AddNestedNameSpecifierLoc(C->getQualifierLoc());
+  Record.AddDeclarationNameInfo(C->getNameInfo());
+  for (auto *VE : C->varlists())
+    Record.AddStmt(VE);
+  for (auto *VE : C->privates())
+    Record.AddStmt(VE);
+  for (auto *E : C->lhs_exprs())
+    Record.AddStmt(E);
+  for (auto *E : C->rhs_exprs())
+    Record.AddStmt(E);
+  for (auto *E : C->reduction_ops())
+    Record.AddStmt(E);
+  for (auto *E : C->taskgroup_descriptors())
+    Record.AddStmt(E);
+}
+
+void OMPClauseWriter::VisitOMPLinearClause(OMPLinearClause *C) {
+  Record.push_back(C->varlist_size());
+  VisitOMPClauseWithPostUpdate(C);
+  Record.AddSourceLocation(C->getLParenLoc());
+  Record.AddSourceLocation(C->getColonLoc());
+  Record.push_back(C->getModifier());
+  Record.AddSourceLocation(C->getModifierLoc());
+  for (auto *VE : C->varlists()) {
+    Record.AddStmt(VE);
+  }
+  for (auto *VE : C->privates()) {
+    Record.AddStmt(VE);
+  }
+  for (auto *VE : C->inits()) {
+    Record.AddStmt(VE);
+  }
+  for (auto *VE : C->updates()) {
+    Record.AddStmt(VE);
+  }
+  for (auto *VE : C->finals()) {
+    Record.AddStmt(VE);
+  }
+  Record.AddStmt(C->getStep());
+  Record.AddStmt(C->getCalcStep());
+}
+
+void OMPClauseWriter::VisitOMPAlignedClause(OMPAlignedClause *C) {
+  Record.push_back(C->varlist_size());
+  Record.AddSourceLocation(C->getLParenLoc());
+  Record.AddSourceLocation(C->getColonLoc());
+  for (auto *VE : C->varlists())
+    Record.AddStmt(VE);
+  Record.AddStmt(C->getAlignment());
+}
+
+void OMPClauseWriter::VisitOMPCopyinClause(OMPCopyinClause *C) {
+  Record.push_back(C->varlist_size());
+  Record.AddSourceLocation(C->getLParenLoc());
+  for (auto *VE : C->varlists())
+    Record.AddStmt(VE);
+  for (auto *E : C->source_exprs())
+    Record.AddStmt(E);
+  for (auto *E : C->destination_exprs())
+    Record.AddStmt(E);
+  for (auto *E : C->assignment_ops())
+    Record.AddStmt(E);
+}
+
+void OMPClauseWriter::VisitOMPCopyprivateClause(OMPCopyprivateClause *C) {
+  Record.push_back(C->varlist_size());
+  Record.AddSourceLocation(C->getLParenLoc());
+  for (auto *VE : C->varlists())
+    Record.AddStmt(VE);
+  for (auto *E : C->source_exprs())
+    Record.AddStmt(E);
+  for (auto *E : C->destination_exprs())
+    Record.AddStmt(E);
+  for (auto *E : C->assignment_ops())
+    Record.AddStmt(E);
+}
+
+void OMPClauseWriter::VisitOMPFlushClause(OMPFlushClause *C) {
+  Record.push_back(C->varlist_size());
+  Record.AddSourceLocation(C->getLParenLoc());
+  for (auto *VE : C->varlists())
+    Record.AddStmt(VE);
+}
+
+void OMPClauseWriter::VisitOMPDependClause(OMPDependClause *C) {
+  Record.push_back(C->varlist_size());
+  Record.push_back(C->getNumLoops());
+  Record.AddSourceLocation(C->getLParenLoc());
+  Record.push_back(C->getDependencyKind());
+  Record.AddSourceLocation(C->getDependencyLoc());
+  Record.AddSourceLocation(C->getColonLoc());
+  for (auto *VE : C->varlists())
+    Record.AddStmt(VE);
+  for (unsigned I = 0, E = C->getNumLoops(); I < E; ++I)
+    Record.AddStmt(C->getLoopData(I));
+}
+
+void OMPClauseWriter::VisitOMPDeviceClause(OMPDeviceClause *C) {
+  VisitOMPClauseWithPreInit(C);
+  Record.AddStmt(C->getDevice());
+  Record.AddSourceLocation(C->getLParenLoc());
+}
+
+void OMPClauseWriter::VisitOMPMapClause(OMPMapClause *C) {
+  Record.push_back(C->varlist_size());
+  Record.push_back(C->getUniqueDeclarationsNum());
+  Record.push_back(C->getTotalComponentListNum());
+  Record.push_back(C->getTotalComponentsNum());
+  Record.AddSourceLocation(C->getLParenLoc());
+  for (unsigned I = 0; I < OMPMapClause::NumberOfModifiers; ++I) {
+    Record.push_back(C->getMapTypeModifier(I));
+    Record.AddSourceLocation(C->getMapTypeModifierLoc(I));
+  }
+  Record.push_back(C->getMapType());
+  Record.AddSourceLocation(C->getMapLoc());
+  Record.AddSourceLocation(C->getColonLoc());
+  for (auto *E : C->varlists())
+    Record.AddStmt(E);
+  for (auto *D : C->all_decls())
+    Record.AddDeclRef(D);
+  for (auto N : C->all_num_lists())
+    Record.push_back(N);
+  for (auto N : C->all_lists_sizes())
+    Record.push_back(N);
+  for (auto &M : C->all_components()) {
+    Record.AddStmt(M.getAssociatedExpression());
+    Record.AddDeclRef(M.getAssociatedDeclaration());
+  }
+}
+
+void OMPClauseWriter::VisitOMPNumTeamsClause(OMPNumTeamsClause *C) {
+  VisitOMPClauseWithPreInit(C);
+  Record.AddStmt(C->getNumTeams());
+  Record.AddSourceLocation(C->getLParenLoc());
+}
+
+void OMPClauseWriter::VisitOMPThreadLimitClause(OMPThreadLimitClause *C) {
+  VisitOMPClauseWithPreInit(C);
+  Record.AddStmt(C->getThreadLimit());
+  Record.AddSourceLocation(C->getLParenLoc());
+}
+
+void OMPClauseWriter::VisitOMPPriorityClause(OMPPriorityClause *C) {
+  Record.AddStmt(C->getPriority());
+  Record.AddSourceLocation(C->getLParenLoc());
+}
+
+void OMPClauseWriter::VisitOMPGrainsizeClause(OMPGrainsizeClause *C) {
+  Record.AddStmt(C->getGrainsize());
+  Record.AddSourceLocation(C->getLParenLoc());
+}
+
+void OMPClauseWriter::VisitOMPNumTasksClause(OMPNumTasksClause *C) {
+  Record.AddStmt(C->getNumTasks());
+  Record.AddSourceLocation(C->getLParenLoc());
+}
+
+void OMPClauseWriter::VisitOMPHintClause(OMPHintClause *C) {
+  Record.AddStmt(C->getHint());
+  Record.AddSourceLocation(C->getLParenLoc());
+}
+
+void OMPClauseWriter::VisitOMPDistScheduleClause(OMPDistScheduleClause *C) {
+  VisitOMPClauseWithPreInit(C);
+  Record.push_back(C->getDistScheduleKind());
+  Record.AddStmt(C->getChunkSize());
+  Record.AddSourceLocation(C->getLParenLoc());
+  Record.AddSourceLocation(C->getDistScheduleKindLoc());
+  Record.AddSourceLocation(C->getCommaLoc());
+}
+
+void OMPClauseWriter::VisitOMPDefaultmapClause(OMPDefaultmapClause *C) {
+  Record.push_back(C->getDefaultmapKind());
+  Record.push_back(C->getDefaultmapModifier());
+  Record.AddSourceLocation(C->getLParenLoc());
+  Record.AddSourceLocation(C->getDefaultmapModifierLoc());
+  Record.AddSourceLocation(C->getDefaultmapKindLoc());
+}
+
+void OMPClauseWriter::VisitOMPToClause(OMPToClause *C) {
+  Record.push_back(C->varlist_size());
+  Record.push_back(C->getUniqueDeclarationsNum());
+  Record.push_back(C->getTotalComponentListNum());
+  Record.push_back(C->getTotalComponentsNum());
+  Record.AddSourceLocation(C->getLParenLoc());
+  for (auto *E : C->varlists())
+    Record.AddStmt(E);
+  for (auto *D : C->all_decls())
+    Record.AddDeclRef(D);
+  for (auto N : C->all_num_lists())
+    Record.push_back(N);
+  for (auto N : C->all_lists_sizes())
+    Record.push_back(N);
+  for (auto &M : C->all_components()) {
+    Record.AddStmt(M.getAssociatedExpression());
+    Record.AddDeclRef(M.getAssociatedDeclaration());
+  }
+}
+
+void OMPClauseWriter::VisitOMPFromClause(OMPFromClause *C) {
+  Record.push_back(C->varlist_size());
+  Record.push_back(C->getUniqueDeclarationsNum());
+  Record.push_back(C->getTotalComponentListNum());
+  Record.push_back(C->getTotalComponentsNum());
+  Record.AddSourceLocation(C->getLParenLoc());
+  for (auto *E : C->varlists())
+    Record.AddStmt(E);
+  for (auto *D : C->all_decls())
+    Record.AddDeclRef(D);
+  for (auto N : C->all_num_lists())
+    Record.push_back(N);
+  for (auto N : C->all_lists_sizes())
+    Record.push_back(N);
+  for (auto &M : C->all_components()) {
+    Record.AddStmt(M.getAssociatedExpression());
+    Record.AddDeclRef(M.getAssociatedDeclaration());
+  }
+}
+
+void OMPClauseWriter::VisitOMPUseDevicePtrClause(OMPUseDevicePtrClause *C) {
+  Record.push_back(C->varlist_size());
+  Record.push_back(C->getUniqueDeclarationsNum());
+  Record.push_back(C->getTotalComponentListNum());
+  Record.push_back(C->getTotalComponentsNum());
+  Record.AddSourceLocation(C->getLParenLoc());
+  for (auto *E : C->varlists())
+    Record.AddStmt(E);
+  for (auto *VE : C->private_copies())
+    Record.AddStmt(VE);
+  for (auto *VE : C->inits())
+    Record.AddStmt(VE);
+  for (auto *D : C->all_decls())
+    Record.AddDeclRef(D);
+  for (auto N : C->all_num_lists())
+    Record.push_back(N);
+  for (auto N : C->all_lists_sizes())
+    Record.push_back(N);
+  for (auto &M : C->all_components()) {
+    Record.AddStmt(M.getAssociatedExpression());
+    Record.AddDeclRef(M.getAssociatedDeclaration());
+  }
+}
+
+void OMPClauseWriter::VisitOMPIsDevicePtrClause(OMPIsDevicePtrClause *C) {
+  Record.push_back(C->varlist_size());
+  Record.push_back(C->getUniqueDeclarationsNum());
+  Record.push_back(C->getTotalComponentListNum());
+  Record.push_back(C->getTotalComponentsNum());
+  Record.AddSourceLocation(C->getLParenLoc());
+  for (auto *E : C->varlists())
+    Record.AddStmt(E);
+  for (auto *D : C->all_decls())
+    Record.AddDeclRef(D);
+  for (auto N : C->all_num_lists())
+    Record.push_back(N);
+  for (auto N : C->all_lists_sizes())
+    Record.push_back(N);
+  for (auto &M : C->all_components()) {
+    Record.AddStmt(M.getAssociatedExpression());
+    Record.AddDeclRef(M.getAssociatedDeclaration());
+  }
+}
+
+void OMPClauseWriter::VisitOMPUnifiedAddressClause(OMPUnifiedAddressClause *) {}
+
+void OMPClauseWriter::VisitOMPUnifiedSharedMemoryClause(
+    OMPUnifiedSharedMemoryClause *) {}
+
+void OMPClauseWriter::VisitOMPReverseOffloadClause(OMPReverseOffloadClause *) {}
+
+void
+OMPClauseWriter::VisitOMPDynamicAllocatorsClause(OMPDynamicAllocatorsClause *) {
+}
+
+void OMPClauseWriter::VisitOMPAtomicDefaultMemOrderClause(
+    OMPAtomicDefaultMemOrderClause *C) {
+  Record.push_back(C->getAtomicDefaultMemOrderKind());
+  Record.AddSourceLocation(C->getLParenLoc());
+  Record.AddSourceLocation(C->getAtomicDefaultMemOrderKindKwLoc());
 }

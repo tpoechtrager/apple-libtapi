@@ -16,7 +16,6 @@
 #define TAPI_CORE_MACHO_DYLIB_READER_H
 
 #include "tapi/Core/ArchitectureSet.h"
-#include "tapi/Core/File.h"
 #include "tapi/Core/LLVM.h"
 #include "tapi/Core/Registry.h"
 #include "tapi/Defines.h"
@@ -32,7 +31,7 @@ public:
                FileType types) const override;
   Expected<FileType> getFileType(file_magic magic,
                                  MemoryBufferRef bufferRef) const override;
-  Expected<std::unique_ptr<File>>
+  Expected<std::unique_ptr<InterfaceFile>>
   readFile(std::unique_ptr<MemoryBuffer> memBuffer, ReadFlags readFlags,
            ArchitectureSet arches) const override;
 };

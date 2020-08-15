@@ -212,7 +212,7 @@ void APIVisitor::HandleTranslationUnit(ASTContext &context) {
   TraverseDecl(decl);
 }
 
-Optional<std::pair<API::APIAccess, PresumedLoc>>
+Optional<std::pair<APIAccess, PresumedLoc>>
 APIVisitor::getFileAttributesForDecl(const NamedDecl *decl) const {
   auto loc = decl->getLocation();
   if (loc.isInvalid())
@@ -235,16 +235,16 @@ APIVisitor::getFileAttributesForDecl(const NamedDecl *decl) const {
   if (it == frontend.files.end())
     return None;
 
-  API::APIAccess access;
+  APIAccess access;
   switch (it->second) {
   case HeaderType::Public:
-    access = API::APIAccess::Public;
+    access = APIAccess::Public;
     break;
   case HeaderType::Private:
-    access = API::APIAccess::Private;
+    access = APIAccess::Private;
     break;
   case HeaderType::Project:
-    access = API::APIAccess::Project;
+    access = APIAccess::Project;
     break;
   }
 
@@ -359,14 +359,15 @@ bool APIVisitor::VisitVarDecl(const VarDecl *decl) {
   auto attributes = getFileAttributesForDecl(decl);
   if (!attributes)
     return true;
-  API::APIAccess access;
+  APIAccess access;
   PresumedLoc loc;
   std::tie(access, loc) = attributes.getValue();
   auto name = getMangledName(decl);
   auto avail = getAvailabilityInfo(decl);
   bool isWeakDef = decl->hasAttr<WeakAttr>();
 
-  frontend.api.addGlobalVariable(name, loc, avail, access, decl, isWeakDef);
+  frontend.api.addGlobalVariable(name, loc, avail, access, decl,
+                                 APILinkage::Exported, isWeakDef);
 
   return true;
 }
@@ -382,6 +383,10 @@ bool APIVisitor::VisitFunctionDecl(const FunctionDecl *decl) {
       if (p.get<CXXRecordDecl>())
         return true;
     }
+
+    // ConstructorDecl and DestructorDecl are handled in CXXRecord.
+    if (isa<CXXConstructorDecl>(method) || isa<CXXDestructorDecl>(method))
+      return true;
   }
 
   // Keep inlined function for API comparison.
@@ -410,7 +415,7 @@ bool APIVisitor::VisitFunctionDecl(const FunctionDecl *decl) {
   auto attributes = getFileAttributesForDecl(decl);
   if (!attributes)
     return true;
-  API::APIAccess access;
+  APIAccess access;
   PresumedLoc loc;
   auto name = getMangledName(decl);
   std::tie(access, loc) = attributes.getValue();
@@ -418,7 +423,9 @@ bool APIVisitor::VisitFunctionDecl(const FunctionDecl *decl) {
   bool isExplicitInstantiation = decl->getTemplateSpecializationKind() ==
                                  TSK_ExplicitInstantiationDeclaration;
   bool isWeakDef = isExplicitInstantiation || decl->hasAttr<WeakAttr>();
-  frontend.api.addFunction(name, loc, avail, access, decl, isWeakDef, inlined);
+  APILinkage linkage = inlined ? APILinkage::Internal : APILinkage::Exported;
+
+  frontend.api.addFunction(name, loc, avail, access, decl, linkage, isWeakDef);
 
   return true;
 }
@@ -435,7 +442,7 @@ bool APIVisitor::VisitEnumDecl(const EnumDecl *decl) {
     auto attributes = getFileAttributesForDecl(decl);
     if (!attributes)
       continue;
-    API::APIAccess access;
+    APIAccess access;
     PresumedLoc loc;
     std::tie(access, loc) = attributes.getValue();
     auto avail = getAvailabilityInfo(value);
@@ -468,16 +475,16 @@ bool APIVisitor::VisitObjCInterfaceDecl(const ObjCInterfaceDecl *decl) {
   // When the interface is not exported, then there are no linkable symbols
   // exported from the library. The Objective-C metadata for the class and
   // selectors on the other hand are always recorded.
-  bool exported = isExported(decl);
+  auto linkage = isExported(decl) ? APILinkage::Exported : APILinkage::Internal;
 
   // Record the ObjC Class
   auto name = decl->getObjCRuntimeNameAsString();
-  API::APIAccess access;
+  APIAccess access;
   PresumedLoc loc;
   std::tie(access, loc) = attributes.getValue();
   auto avail = getAvailabilityInfo(decl);
   auto *objcClass = frontend.api.addObjCInterface(
-      name, loc, avail, access, exported, superClassName, decl);
+      name, loc, avail, access, linkage, superClassName, decl);
   objcClass->hasExceptionAttribute =
       !context.getLangOpts().ObjCRuntime.isFragile() &&
       hasObjCExceptionAttribute(decl);
@@ -505,7 +512,7 @@ bool APIVisitor::VisitObjCCategoryDecl(const ObjCCategoryDecl *decl) {
   auto attributes = getFileAttributesForDecl(decl);
   if (!attributes)
     return true;
-  API::APIAccess access;
+  APIAccess access;
   PresumedLoc loc;
   std::tie(access, loc) = attributes.getValue();
   auto avail = getAvailabilityInfo(decl);
@@ -535,7 +542,7 @@ bool APIVisitor::VisitObjCProtocolDecl(const ObjCProtocolDecl *decl) {
   auto attributes = getFileAttributesForDecl(decl);
   if (!attributes)
     return true;
-  API::APIAccess access;
+  APIAccess access;
   PresumedLoc loc;
   std::tie(access, loc) = attributes.getValue();
   auto avail = getAvailabilityInfo(decl);
@@ -549,8 +556,8 @@ bool APIVisitor::VisitObjCProtocolDecl(const ObjCProtocolDecl *decl) {
 }
 
 void APIVisitor::recordObjCMethods(
-    API::ObjCContainerRecord *record,
-    const ObjCContainerDecl::method_range methods, bool isDynamic) {
+    ObjCContainerRecord *record, const ObjCContainerDecl::method_range methods,
+    bool isDynamic) {
   for (const auto *method : methods) {
     // Don't record selectors for properties.
     if (method->isPropertyAccessor())
@@ -559,66 +566,75 @@ void APIVisitor::recordObjCMethods(
     auto attributes = getFileAttributesForDecl(method);
     if (!attributes)
       continue;
-    API::APIAccess access;
+    APIAccess access;
     PresumedLoc loc;
     std::tie(access, loc) = attributes.getValue();
     auto avail = getAvailabilityInfo(method);
     frontend.api.addObjCMethod(record, name, loc, avail, access,
-                               method->isInstanceMethod(), method->isOptional(),
-                               isDynamic, method);
+                             method->isInstanceMethod(), method->isOptional(),
+                             isDynamic, method);
   }
 }
 
 void APIVisitor::recordObjCProperties(
-    API::ObjCContainerRecord *record,
+    ObjCContainerRecord *record,
     const ObjCContainerDecl::prop_range properties) {
   for (const auto *property : properties) {
     auto attributes = getFileAttributesForDecl(property);
     if (!attributes)
       continue;
-    API::APIAccess access;
+    APIAccess access;
     PresumedLoc loc;
     std::tie(access, loc) = attributes.getValue();
     auto name = property->getName();
     auto getter = property->getGetterName().getAsString();
     auto setter = property->getSetterName().getAsString();
     auto avail = getAvailabilityInfo(property);
+    // Get the attributes for property.
+    unsigned attr = ObjCPropertyRecord::NoAttr;
+    if (property->getPropertyAttributes() & ObjCPropertyDecl::OBJC_PR_readonly)
+      attr |= ObjCPropertyRecord::ReadOnly;
+    if (property->getPropertyAttributes() & ObjCPropertyDecl::OBJC_PR_class)
+      attr |= ObjCPropertyRecord::Class;
+
     frontend.api.addObjCProperty(record, name, getter, setter, loc, avail,
-                                 access, property->getPropertyAttributes(),
+                                 access,
+                                 (ObjCPropertyRecord::AttributeKind)attr,
                                  property->isOptional(), property);
   }
 }
 
 void APIVisitor::recordObjCInstanceVariables(
-    API::ObjCContainerRecord *record,
+    ObjCContainerRecord *record,
     const iterator_range<DeclContext::specific_decl_iterator<ObjCIvarDecl>>
         ivars) {
-  bool isFragile = context.getLangOpts().ObjCRuntime.isFragile();
+  auto linkage = context.getLangOpts().ObjCRuntime.isFragile()
+                     ? APILinkage::Unknown
+                     : APILinkage::Exported;
   for (const auto *ivar : ivars) {
     auto attributes = getFileAttributesForDecl(ivar);
     if (!attributes)
       continue;
-    API::APIAccess access;
+    APIAccess access;
     PresumedLoc loc;
     std::tie(access, loc) = attributes.getValue();
     auto avail = getAvailabilityInfo(ivar);
     auto accessControl = ivar->getCanonicalAccessControl();
     frontend.api.addObjCInstanceVariable(record, ivar->getName(), loc, avail,
-                                         access, accessControl, isFragile,
-                                         ivar);
+                                         access, accessControl, linkage, ivar);
   }
 }
 
 void APIVisitor::recordObjCProtocols(
-    API::ObjCContainerRecord *container,
+    ObjCContainerRecord *container,
     ObjCInterfaceDecl::protocol_range protocols) {
   for (const auto *protocol : protocols)
     container->protocols.push_back(protocol->getName());
 }
 
 void APIVisitor::emitVTableSymbols(const CXXRecordDecl *decl, PresumedLoc loc,
-                                   AvailabilityInfo avail,
-                                   API::APIAccess access, bool emittedVTable) {
+                                   AvailabilityInfo avail, APIAccess access,
+                                   bool emittedVTable) {
   if (hasVTable(context, decl)) {
     emittedVTable = true;
     auto vtableLinkage = getVTableLinkage(context, decl);
@@ -627,7 +643,7 @@ void APIVisitor::emitVTableSymbols(const CXXRecordDecl *decl, PresumedLoc loc,
       auto name = getMangledCXXVTableName(decl);
       bool isWeakDef = vtableLinkage == LinkageType::WeakODRLinkage;
       frontend.api.addGlobalVariable(name, loc, avail, access, nullptr,
-                                     isWeakDef);
+                                     APILinkage::Exported, isWeakDef);
 
       if (!decl->getDescribedClassTemplate() && !decl->isInvalidDecl()) {
         auto vtable = context.getVTableContext();
@@ -638,7 +654,8 @@ void APIVisitor::emitVTableSymbols(const CXXRecordDecl *decl, PresumedLoc loc,
 
           for (auto &thunk : *thunks) {
             auto name = getMangledCXXThunk(decl, thunk);
-            frontend.api.addFunction(name, loc, avail, access, nullptr);
+            frontend.api.addFunction(name, loc, avail, access, nullptr,
+                                     APILinkage::Exported);
           }
         };
 
@@ -664,10 +681,12 @@ void APIVisitor::emitVTableSymbols(const CXXRecordDecl *decl, PresumedLoc loc,
 
   if (hasRTTI(context, decl)) {
     auto name = getMangledCXXRTTI(decl);
-    frontend.api.addGlobalVariable(name, loc, avail, access, nullptr);
+    frontend.api.addGlobalVariable(name, loc, avail, access, nullptr,
+                                   APILinkage::Exported);
 
     name = getMangledCXXRTTIName(decl);
-    frontend.api.addGlobalVariable(name, loc, avail, access, nullptr);
+    frontend.api.addGlobalVariable(name, loc, avail, access, nullptr,
+                                   APILinkage::Exported);
   }
 
   for (const auto &it : decl->bases()) {
@@ -676,7 +695,7 @@ void APIVisitor::emitVTableSymbols(const CXXRecordDecl *decl, PresumedLoc loc,
     auto attributes = getFileAttributesForDecl(base);
     if (!attributes)
       continue;
-    API::APIAccess baseAccess;
+    APIAccess baseAccess;
     PresumedLoc baseLoc;
     std::tie(baseAccess, baseLoc) = attributes.getValue();
     auto baseAvail = getAvailabilityInfo(base);
@@ -699,7 +718,7 @@ bool APIVisitor::VisitCXXRecordDecl(const CXXRecordDecl *decl) {
   auto attributes = getFileAttributesForDecl(decl);
   if (!attributes)
     return true;
-  API::APIAccess access;
+  APIAccess access;
   PresumedLoc loc;
   std::tie(access, loc) = attributes.getValue();
   auto avail = getAvailabilityInfo(decl);
@@ -761,7 +780,7 @@ bool APIVisitor::VisitCXXRecordDecl(const CXXRecordDecl *decl) {
     auto attributes = getFileAttributesForDecl(method);
     if (!attributes)
       return true;
-    API::APIAccess access;
+    APIAccess access;
     PresumedLoc loc;
     std::tie(access, loc) = attributes.getValue();
     auto avail = getAvailabilityInfo(method);
@@ -772,11 +791,13 @@ bool APIVisitor::VisitCXXRecordDecl(const CXXRecordDecl *decl) {
         continue;
 
       auto name = getMangledCtorDtor(method, Ctor_Base);
-      frontend.api.addFunction(name, loc, avail, access, nullptr, isWeakDef);
+      frontend.api.addFunction(name, loc, avail, access, nullptr,
+                               APILinkage::Exported, isWeakDef);
 
       if (!decl->isAbstract()) {
         auto name = getMangledCtorDtor(method, Ctor_Complete);
-        frontend.api.addFunction(name, loc, avail, access, nullptr, isWeakDef);
+        frontend.api.addFunction(name, loc, avail, access, nullptr,
+                                 APILinkage::Exported, isWeakDef);
       }
 
       continue;
@@ -788,21 +809,25 @@ bool APIVisitor::VisitCXXRecordDecl(const CXXRecordDecl *decl) {
         continue;
 
       auto name = getMangledCtorDtor(method, Dtor_Base);
-      frontend.api.addFunction(name, loc, avail, access, nullptr, isWeakDef);
+      frontend.api.addFunction(name, loc, avail, access, nullptr,
+                               APILinkage::Exported, isWeakDef);
 
       name = getMangledCtorDtor(method, Dtor_Complete);
-      frontend.api.addFunction(name, loc, avail, access, nullptr, isWeakDef);
+      frontend.api.addFunction(name, loc, avail, access, nullptr,
+                               APILinkage::Exported, isWeakDef);
 
       if (dtor->isVirtual()) {
         auto name = getMangledCtorDtor(method, Dtor_Deleting);
-        frontend.api.addFunction(name, loc, avail, access, nullptr, isWeakDef);
+        frontend.api.addFunction(name, loc, avail, access, nullptr,
+                                 APILinkage::Exported, isWeakDef);
       }
 
       continue;
     }
 
     auto name = getMangledName(method);
-    frontend.api.addFunction(name, loc, avail, access, nullptr, isWeakDef);
+    frontend.api.addFunction(name, loc, avail, access, nullptr,
+                             APILinkage::Exported, isWeakDef);
   }
 
   if (auto *templ = dyn_cast<ClassTemplateSpecializationDecl>(decl)) {
@@ -830,12 +855,13 @@ bool APIVisitor::VisitCXXRecordDecl(const CXXRecordDecl *decl) {
     auto attributes = getFileAttributesForDecl(var);
     if (!attributes)
       return true;
-    API::APIAccess access;
+    APIAccess access;
     PresumedLoc loc;
     std::tie(access, loc) = attributes.getValue();
     auto avail = getAvailabilityInfo(var);
     bool isWeakDef = var->hasAttr<WeakAttr>() || keepInlineAsWeak;
-    frontend.api.addGlobalVariable(name, loc, avail, access, var, isWeakDef);
+    frontend.api.addGlobalVariable(name, loc, avail, access, var,
+                                   APILinkage::Exported, isWeakDef);
   }
 
   return true;
@@ -844,7 +870,7 @@ bool APIVisitor::VisitCXXRecordDecl(const CXXRecordDecl *decl) {
 bool APIVisitor::VisitTypedefNameDecl(const TypedefNameDecl *decl) {
   // Skip ObjC Type Parameter for now.
   if (isa<ObjCTypeParamDecl>(decl))
-    return true;
+   return true;
 
   if (!decl->isDefinedOutsideFunctionOrMethod())
     return true;
@@ -852,7 +878,7 @@ bool APIVisitor::VisitTypedefNameDecl(const TypedefNameDecl *decl) {
   auto attributes = getFileAttributesForDecl(decl);
   if (!attributes)
     return true;
-  API::APIAccess access;
+  APIAccess access;
   PresumedLoc loc;
   std::tie(access, loc) = attributes.getValue();
   auto name = decl->getNameAsString();

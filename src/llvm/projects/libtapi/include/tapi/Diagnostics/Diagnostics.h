@@ -16,7 +16,7 @@
 #include "clang/Basic/DiagnosticIDs.h"
 #include "clang/Basic/LangOptions.h"
 #include "clang/Driver/DriverDiagnostic.h"
-#include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/IntrusiveRefCntPtr.h"
 
 namespace llvm {
@@ -64,6 +64,10 @@ public:
     diag->setSourceManager(sourceMgr);
   }
 
+  clang::SourceManager &getSourceManager() const {
+    return diag->getSourceManager();
+  }
+
   void notePriorDiagnosticFrom(DiagnosticsEngine &diag);
 
   clang::DiagnosticConsumer *getClient() { return diag->getClient(); }
@@ -76,7 +80,15 @@ public:
     diag->SetArgToStringFn(fn, cookie);
   }
 
-  void ignoreDiagnotic(unsigned diagID) { ignoredDiags.insert(diagID); }
+  void setDiagLevel(unsigned diagID, clang::DiagnosticIDs::Level level);
+
+  void ignoreDiagnotic(unsigned diagID) {
+    setDiagLevel(diagID, clang::DiagnosticIDs::Ignored);
+  }
+
+  void setDiagnosticAsError(unsigned diagID) {
+    setDiagLevel(diagID, clang::DiagnosticIDs::Error);
+  }
 
   clang::DiagnosticIDs::Level getDiagnosticLevel(unsigned diagID);
 
@@ -85,7 +97,7 @@ private:
   IntrusiveRefCntPtr<clang::DiagnosticsEngine> diag;
   clang::LangOptions langOpts;
   bool warningsAsErrors = false;
-  llvm::DenseSet<unsigned> ignoredDiags;
+  llvm::DenseMap<unsigned, clang::DiagnosticIDs::Level> diagLevelMap;
 };
 
 TAPI_NAMESPACE_INTERNAL_END

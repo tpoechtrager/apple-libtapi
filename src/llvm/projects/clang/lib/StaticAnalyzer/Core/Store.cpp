@@ -65,10 +65,6 @@ const ElementRegion *StoreManager::MakeElementRegion(const SubRegion *Base,
   return MRMgr.getElementRegion(EleTy, idx, Base, svalBuilder.getContext());
 }
 
-StoreRef StoreManager::BindDefault(Store store, const MemRegion *R, SVal V) {
-  return StoreRef(store, *this);
-}
-
 const ElementRegion *StoreManager::GetElementZeroRegion(const SubRegion *R,
                                                         QualType T) {
   NonLoc idx = svalBuilder.makeZeroArrayIndex();
@@ -92,7 +88,7 @@ const MemRegion *StoreManager::castRegion(const MemRegion *R, QualType CastToTy)
       return R;
 
     // We don't know what to make of it.  Return a NULL region, which
-    // will be interpretted as UnknownVal.
+    // will be interpreted as UnknownVal.
     return nullptr;
   }
 
@@ -142,6 +138,7 @@ const MemRegion *StoreManager::castRegion(const MemRegion *R, QualType CastToTy)
     case MemRegion::VarRegionKind:
     case MemRegion::CXXTempObjectRegionKind:
     case MemRegion::CXXBaseObjectRegionKind:
+    case MemRegion::CXXDerivedObjectRegionKind:
       return MakeElementRegion(cast<SubRegion>(R), PointeeTy);
 
     case MemRegion::ElementRegionKind: {
@@ -276,9 +273,8 @@ SVal StoreManager::evalDerivedToBase(SVal Derived, const CXXBasePath &Path) {
 
 SVal StoreManager::evalDerivedToBase(SVal Derived, QualType BaseType,
                                      bool IsVirtual) {
-  Optional<loc::MemRegionVal> DerivedRegVal =
-      Derived.getAs<loc::MemRegionVal>();
-  if (!DerivedRegVal)
+  const MemRegion *DerivedReg = Derived.getAsRegion();
+  if (!DerivedReg)
     return Derived;
 
   const CXXRecordDecl *BaseDecl = BaseType->getPointeeCXXRecordDecl();
@@ -286,8 +282,18 @@ SVal StoreManager::evalDerivedToBase(SVal Derived, QualType BaseType,
     BaseDecl = BaseType->getAsCXXRecordDecl();
   assert(BaseDecl && "not a C++ object?");
 
+  if (const auto *AlreadyDerivedReg =
+          dyn_cast<CXXDerivedObjectRegion>(DerivedReg)) {
+    if (const auto *SR =
+            dyn_cast<SymbolicRegion>(AlreadyDerivedReg->getSuperRegion()))
+      if (SR->getSymbol()->getType()->getPointeeCXXRecordDecl() == BaseDecl)
+        return loc::MemRegionVal(SR);
+
+    DerivedReg = AlreadyDerivedReg->getSuperRegion();
+  }
+
   const MemRegion *BaseReg = MRMgr.getCXXBaseObjectRegion(
-      BaseDecl, cast<SubRegion>(DerivedRegVal->getRegion()), IsVirtual);
+      BaseDecl, cast<SubRegion>(DerivedReg), IsVirtual);
 
   return loc::MemRegionVal(BaseReg);
 }
@@ -361,12 +367,26 @@ SVal StoreManager::attemptDownCast(SVal Base, QualType TargetType,
     const MemRegion *Uncasted = MR->StripCasts(/*IncludeBaseCasts=*/false);
     if (Uncasted == MR) {
       // We reached the bottom of the hierarchy and did not find the derived
-      // class. We we must be casting the base to derived, so the cast should
+      // class. We must be casting the base to derived, so the cast should
       // fail.
       break;
     }
 
     MR = Uncasted;
+  }
+
+  // If we're casting a symbolic base pointer to a derived class, use
+  // CXXDerivedObjectRegion to represent the cast. If it's a pointer to an
+  // unrelated type, it must be a weird reinterpret_cast and we have to
+  // be fine with ElementRegion. TODO: Should we instead make
+  // Derived{TargetClass, Element{SourceClass, SR}}?
+  if (const auto *SR = dyn_cast<SymbolicRegion>(MR)) {
+    QualType T = SR->getSymbol()->getType();
+    const CXXRecordDecl *SourceClass = T->getPointeeCXXRecordDecl();
+    if (TargetClass && SourceClass && TargetClass->isDerivedFrom(SourceClass))
+      return loc::MemRegionVal(
+          MRMgr.getCXXDerivedObjectRegion(TargetClass, SR));
+    return loc::MemRegionVal(GetElementZeroRegion(SR, TargetType));
   }
 
   // We failed if the region we ended up with has perfect type info.
@@ -378,21 +398,34 @@ SVal StoreManager::attemptDownCast(SVal Base, QualType TargetType,
 ///  implicit casts that arise from loads from regions that are reinterpreted
 ///  as another region.
 SVal StoreManager::CastRetrievedVal(SVal V, const TypedValueRegion *R,
-                                    QualType castTy, bool performTestOnly) {
+                                    QualType castTy) {
   if (castTy.isNull() || V.isUnknownOrUndef())
     return V;
 
-  ASTContext &Ctx = svalBuilder.getContext();
-
-  if (performTestOnly) {
-    // Automatically translate references to pointers.
-    QualType T = R->getValueType();
-    if (const ReferenceType *RT = T->getAs<ReferenceType>())
-      T = Ctx.getPointerType(RT->getPointeeType());
-
-    assert(svalBuilder.getContext().hasSameUnqualifiedType(castTy, T));
-    return V;
+  // The dispatchCast() call below would convert the int into a float.
+  // What we want, however, is a bit-by-bit reinterpretation of the int
+  // as a float, which usually yields nothing garbage. For now skip casts
+  // from ints to floats.
+  // TODO: What other combinations of types are affected?
+  if (castTy->isFloatingType()) {
+    SymbolRef Sym = V.getAsSymbol();
+    if (Sym && !Sym->getType()->isFloatingType())
+      return UnknownVal();
   }
+
+  // When retrieving symbolic pointer and expecting a non-void pointer,
+  // wrap them into element regions of the expected type if necessary.
+  // SValBuilder::dispatchCast() doesn't do that, but it is necessary to
+  // make sure that the retrieved value makes sense, because there's no other
+  // cast in the AST that would tell us to cast it to the correct pointer type.
+  // We might need to do that for non-void pointers as well.
+  // FIXME: We really need a single good function to perform casts for us
+  // correctly every time we need it.
+  if (castTy->isPointerType() && !castTy->isVoidPointerType())
+    if (const auto *SR = dyn_cast_or_null<SymbolicRegion>(V.getAsRegion()))
+      if (SR->getSymbol()->getType().getCanonicalType() !=
+          castTy.getCanonicalType())
+        return loc::MemRegionVal(castRegion(SR, castTy));
 
   return svalBuilder.dispatchCast(V, castTy);
 }
@@ -450,10 +483,10 @@ SVal StoreManager::getLValueElement(QualType elementType, NonLoc Offset,
   //  value. See also the similar FIXME in getLValueFieldOrIvar().
   if (Base.isUnknownOrUndef() || Base.getAs<loc::ConcreteInt>())
     return Base;
-  
+
   if (Base.getAs<loc::GotoLabel>())
     return UnknownVal();
-  
+
   const SubRegion *BaseRegion =
       Base.castAs<loc::MemRegionVal>().getRegionAs<SubRegion>();
 

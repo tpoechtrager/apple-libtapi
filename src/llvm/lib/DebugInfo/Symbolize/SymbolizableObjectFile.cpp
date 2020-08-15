@@ -137,6 +137,11 @@ std::error_code SymbolizableObjectFile::addSymbol(const SymbolRef &Symbol,
                                                   uint64_t SymbolSize,
                                                   DataExtractor *OpdExtractor,
                                                   uint64_t OpdAddress) {
+  // Avoid adding symbols from an unknown/undefined section.
+  const ObjectFile *Obj = Symbol.getObject();
+  Expected<section_iterator> Sec = Symbol.getSection();
+  if (!Sec || (Obj && Obj->section_end() == *Sec))
+    return std::error_code();
   Expected<SymbolRef::Type> SymbolTypeOrErr = Symbol.getType();
   if (!SymbolTypeOrErr)
     return errorToErrorCode(SymbolTypeOrErr.takeError());
@@ -155,7 +160,7 @@ std::error_code SymbolizableObjectFile::addSymbol(const SymbolRef &Symbol,
     // of the function's code, not the descriptor.
     uint64_t OpdOffset = SymbolAddress - OpdAddress;
     uint32_t OpdOffset32 = OpdOffset;
-    if (OpdOffset == OpdOffset32 && 
+    if (OpdOffset == OpdOffset32 &&
         OpdExtractor->isValidOffsetForAddress(OpdOffset32))
       SymbolAddress = OpdExtractor->getAddress(&OpdOffset32);
   }

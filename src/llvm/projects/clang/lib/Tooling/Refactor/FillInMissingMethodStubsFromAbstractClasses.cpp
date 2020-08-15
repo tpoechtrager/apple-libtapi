@@ -161,9 +161,9 @@ static SourceLocation findInsertionLocationForMethodsFromAbstractClass(
     for (const CXXMethodDecl *OM : M->overridden_methods()) {
       OM = OM->getCanonicalDecl();
       if (OM->getLexicalDeclContext() == AbstractClass) {
-        SourceLocation EndLoc = M->getLocEnd();
+        SourceLocation EndLoc = M->getEndLoc();
         if (EndLoc.isMacroID())
-          EndLoc = SM.getExpansionRange(EndLoc).second;
+          EndLoc = SM.getExpansionRange(EndLoc).getEnd();
         if (Loc.isInvalid())
           Loc = EndLoc;
         else if (SM.isBeforeInTranslationUnit(Loc, EndLoc))
@@ -226,7 +226,7 @@ FillInMissingMethodStubsFromAbstractClassesOperation::perform(
   std::string InsertionGroupOSStr;
   llvm::raw_string_ostream InsertionGroupOS(InsertionGroupOSStr);
 
-  SourceLocation InsertionLoc = Class->getLocEnd();
+  SourceLocation InsertionLoc = Class->getEndLoc();
   const CXXRecordDecl *CurrentAbstractClass = nullptr;
   SourceLocation CurrentGroupInsertionLoc;
   for (const auto &I : llvm::enumerate(MissingMethods)) {

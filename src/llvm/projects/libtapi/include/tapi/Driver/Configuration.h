@@ -16,12 +16,13 @@
 #define TAPI_CORE_CONFIGURATION_H
 
 #include "tapi/Core/ArchitectureSet.h"
-#include "tapi/Core/ArchitectureSupport.h"
+#include "tapi/Core/PackedVersion.h"
 #include "tapi/Core/Path.h"
 #include "tapi/Defines.h"
 #include "tapi/Driver/ConfigurationFile.h"
 #include "clang/Frontend/FrontendOptions.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/ADT/Triple.h"
 #include <map>
 #include <string>
 
@@ -56,25 +57,53 @@ struct CommandLineConfiguration {
   bool validateSystemHeaders = false;
 };
 
-struct Configuration {
-  ArchitectureSet arches;
-  CommandLineConfiguration commandLine;
-  ConfigurationFile file;
-  std::map<std::string, const configuration::v1::FrameworkConfiguration *>
-      pathToConfig;
-  std::vector<const configuration::v1::DylibConfiguration *> dylibConfigs;
+class Configuration {
+public:
+  Configuration(Context &context) : context(context) {}
+  void setConfiguration(ConfigurationFile &&configFile, Context &context);
 
-  void setConfiguration(ConfigurationFile &&configFile, StringRef basePath,
-                        Context &context);
+  CommandLineConfiguration& getCommandlineConfig() {
+    return commandLine;
+  }
+  const ArchitectureSet &getArchitectures() const { return arches; }
+  void setArchitectures(const ArchitectureSet &archSet) {
+    arches = archSet;
+  }
 
-  StringRef getSysRoot() const;
+  std::string getSysRoot() const;
+  void setRootPath(StringRef root) { rootPath = root.str(); }
+
   clang::InputKind::Language getLanguage(StringRef path) const;
-  const std::vector<Macro> &getMacros(StringRef path) const;
-  const PathSeq &getIncludePaths(StringRef path) const;
-  const PathSeq &getFrameworkPaths(StringRef path) const;
+  std::vector<Macro> getMacros(StringRef path) const;
+  PathSeq getIncludePaths(StringRef path) const;
+  PathSeq getFrameworkPaths(StringRef path) const;
   PathSeq getExtraHeaders(StringRef path, HeaderType type) const;
   PathSeq getPreIncludedHeaders(StringRef path, HeaderType type) const;
   PathSeq getExcludedHeaders(StringRef path, HeaderType type) const;
+  std::string getUmbrellaHeader(StringRef path, HeaderType type) const;
+  bool isiOSMacProject() const;
+  bool isDriverKitProject() const {
+    return isDriverKit;
+  }
+  bool useOverlay() const;
+  bool useUmbrellaOnly() const;
+  bool isPromotedToPublicDylib(StringRef installName) const;
+
+private:
+  Context &context;
+  CommandLineConfiguration commandLine;
+  ArchitectureSet arches;
+  bool isiOSMac = false;
+  bool isDriverKit = false;
+  ConfigurationFile file;
+  std::map<std::string, const configuration::v1::FrameworkConfiguration *>
+      pathToConfig;
+  std::unique_ptr<configuration::v1::ProjectConfiguration> projectConfig;
+  std::string rootPath;
+
+  PathSeq updateDirectories(const PathSeq &paths) const;
+  PathSeq updateSDKHeaderFiles(const PathSeq &paths) const;
+  PathSeq updateBinaryFiles(const PathSeq &paths) const;
 };
 
 TAPI_NAMESPACE_INTERNAL_END

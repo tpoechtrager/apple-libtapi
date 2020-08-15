@@ -17,10 +17,10 @@
 
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/BinaryFormat/COFF.h"
-#include "llvm/Config/config.h"
 #include "llvm/DebugInfo/DWARF/DWARFContext.h"
 #include "llvm/DebugInfo/PDB/PDB.h"
 #include "llvm/DebugInfo/PDB/PDBContext.h"
+#include "llvm/Demangle/Demangle.h"
 #include "llvm/Object/COFF.h"
 #include "llvm/Object/MachO.h"
 #include "llvm/Object/MachOUniversal.h"
@@ -33,7 +33,6 @@
 #include "llvm/Support/Path.h"
 #include <algorithm>
 #include <cassert>
-#include <cstdlib>
 #include <cstring>
 
 #if defined(_MSC_VER)
@@ -167,32 +166,40 @@ bool checkFileCRC(StringRef Path, uint32_t CRCHash) {
 
 bool findDebugBinary(const std::string &OrigPath,
                      const std::string &DebuglinkName, uint32_t CRCHash,
+                     const std::string &FallbackDebugPath,
                      std::string &Result) {
-  std::string OrigRealPath = OrigPath;
-#if defined(HAVE_REALPATH)
-  if (char *RP = realpath(OrigPath.c_str(), nullptr)) {
-    OrigRealPath = RP;
-    free(RP);
-  }
-#endif
-  SmallString<16> OrigDir(OrigRealPath);
+  SmallString<16> OrigDir(OrigPath);
   llvm::sys::path::remove_filename(OrigDir);
   SmallString<16> DebugPath = OrigDir;
-  // Try /path/to/original_binary/debuglink_name
+  // Try relative/path/to/original_binary/debuglink_name
   llvm::sys::path::append(DebugPath, DebuglinkName);
   if (checkFileCRC(DebugPath, CRCHash)) {
     Result = DebugPath.str();
     return true;
   }
-  // Try /path/to/original_binary/.debug/debuglink_name
-  DebugPath = OrigRealPath;
+  // Try relative/path/to/original_binary/.debug/debuglink_name
+  DebugPath = OrigDir;
   llvm::sys::path::append(DebugPath, ".debug", DebuglinkName);
   if (checkFileCRC(DebugPath, CRCHash)) {
     Result = DebugPath.str();
     return true;
   }
-  // Try /usr/lib/debug/path/to/original_binary/debuglink_name
-  DebugPath = "/usr/lib/debug";
+  // Make the path absolute so that lookups will go to
+  // "/usr/lib/debug/full/path/to/debug", not
+  // "/usr/lib/debug/to/debug"
+  llvm::sys::fs::make_absolute(OrigDir);
+  if (!FallbackDebugPath.empty()) {
+    // Try <FallbackDebugPath>/absolute/path/to/original_binary/debuglink_name
+    DebugPath = FallbackDebugPath;
+  } else {
+#if defined(__NetBSD__)
+    // Try /usr/libdata/debug/absolute/path/to/original_binary/debuglink_name
+    DebugPath = "/usr/libdata/debug";
+#else
+    // Try /usr/lib/debug/absolute/path/to/original_binary/debuglink_name
+    DebugPath = "/usr/lib/debug";
+#endif
+  }
   llvm::sys::path::append(DebugPath, llvm::sys::path::relative_path(OrigDir),
                           DebuglinkName);
   if (checkFileCRC(DebugPath, CRCHash)) {
@@ -278,7 +285,8 @@ ObjectFile *LLVMSymbolizer::lookUpDebuglinkObject(const std::string &Path,
   std::string DebugBinaryPath;
   if (!getGNUDebuglinkContents(Obj, DebuglinkName, CRCHash))
     return nullptr;
-  if (!findDebugBinary(Path, DebuglinkName, CRCHash, DebugBinaryPath))
+  if (!findDebugBinary(Path, DebuglinkName, CRCHash, Opts.FallbackDebugPath,
+                       DebugBinaryPath))
     return nullptr;
   auto DbgObjOrErr = getOrCreateObject(DebugBinaryPath, ArchName);
   if (!DbgObjOrErr) {
@@ -404,7 +412,8 @@ LLVMSymbolizer::getOrCreateModuleInfo(const std::string &ModuleName,
                                     Objects.first->getFileName(), Session)) {
         Modules.insert(
             std::make_pair(ModuleName, std::unique_ptr<SymbolizableModule>()));
-        return std::move(Err);
+        // Return along the PDB filename to provide more context
+        return createFileError(PDBFileName, std::move(Err));
       }
       Context.reset(new PDBContext(*CoffObject, std::move(Session)));
     }
@@ -459,28 +468,22 @@ StringRef demanglePE32ExternCFunc(StringRef SymbolName) {
 
 } // end anonymous namespace
 
-#if !defined(_MSC_VER)
-// Assume that __cxa_demangle is provided by libcxxabi (except for Windows).
-extern "C" char *__cxa_demangle(const char *mangled_name, char *output_buffer,
-                                size_t *length, int *status);
-#endif
-
 std::string
 LLVMSymbolizer::DemangleName(const std::string &Name,
                              const SymbolizableModule *DbiModuleDescriptor) {
-#if !defined(_MSC_VER)
   // We can spoil names of symbols with C linkage, so use an heuristic
   // approach to check if the name should be demangled.
   if (Name.substr(0, 2) == "_Z") {
     int status = 0;
-    char *DemangledName = __cxa_demangle(Name.c_str(), nullptr, nullptr, &status);
+    char *DemangledName = itaniumDemangle(Name.c_str(), nullptr, nullptr, &status);
     if (status != 0)
       return Name;
     std::string Result = DemangledName;
     free(DemangledName);
     return Result;
   }
-#else
+
+#if defined(_MSC_VER)
   if (!Name.empty() && Name.front() == '?') {
     // Only do MSVC C++ demangling on symbols starting with '?'.
     char DemangledName[1024] = {0};

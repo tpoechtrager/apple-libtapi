@@ -1,3 +1,5 @@
+from __future__ import print_function
+
 import errno
 import itertools
 import math
@@ -100,6 +102,20 @@ def to_string(b):
         raise TypeError('not sure how to convert %s to %s' % (type(b), str))
 
 
+def to_unicode(s):
+    """Return the parameter as type which supports unicode, possibly decoding
+    it.
+
+    In Python2, this is the unicode type. In Python3 it's the str type.
+
+    """
+    if isinstance(s, bytes):
+        # In Python2, this branch is taken for both 'str' and 'bytes'.
+        # In Python3, this branch is taken only for 'bytes'.
+        return s.decode('utf-8')
+    return s
+
+
 def detectCPUs():
     """Detects the number of CPUs on a system.
 
@@ -126,6 +142,25 @@ def detectCPUs():
     return 1  # Default
 
 
+def mkdir(path):
+    try:
+        if platform.system() == 'Windows':
+            from ctypes import windll
+            from ctypes import GetLastError, WinError
+
+            path = os.path.abspath(path)
+            NTPath = unicode(r'\\?\%s' % path)
+            if not windll.kernel32.CreateDirectoryW(NTPath, None):
+                raise WinError(GetLastError())
+        else:
+            os.mkdir(path)
+    except OSError:
+        e = sys.exc_info()[1]
+        # ignore EEXIST, which may occur during a race condition
+        if e.errno != errno.EEXIST:
+            raise
+
+
 def mkdir_p(path):
     """mkdir_p(path) - Make the "path" directory, if it does not exist; this
     will also make directories for any missing parent directories."""
@@ -136,13 +171,7 @@ def mkdir_p(path):
     if parent != path:
         mkdir_p(parent)
 
-    try:
-        os.mkdir(path)
-    except OSError:
-        e = sys.exc_info()[1]
-        # Ignore EEXIST, which may occur during a race condition.
-        if e.errno != errno.EEXIST:
-            raise
+    mkdir(path)
 
 
 def listdir_files(dirname, suffixes=None, exclude_filenames=None):
@@ -194,7 +223,7 @@ def which(command, paths=None):
         paths = os.environ.get('PATH', '')
 
     # Check for absolute match first.
-    if os.path.isfile(command):
+    if os.path.isabs(command) and os.path.isfile(command):
         return os.path.normpath(command)
 
     # Would be nice if Python had a lib function for this.

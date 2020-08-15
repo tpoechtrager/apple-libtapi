@@ -11,7 +11,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "ClangSACheckers.h"
+#include "clang/StaticAnalyzer/Checkers/BuiltinCheckerRegistration.h"
 #include "clang/StaticAnalyzer/Core/BugReporter/BugType.h"
 #include "clang/StaticAnalyzer/Core/Checker.h"
 #include "clang/StaticAnalyzer/Core/CheckerManager.h"
@@ -132,7 +132,7 @@ void ChrootChecker::checkPreStmt(const CallExpr *CE, CheckerContext &C) const {
   if (!II_chdir)
     II_chdir = &Ctx.Idents.get("chdir");
 
-  // Ingnore chroot and chdir.
+  // Ignore chroot and chdir.
   if (FD->getIdentifier() == II_chroot || FD->getIdentifier() == II_chdir)
     return;
 
@@ -152,4 +152,8 @@ void ChrootChecker::checkPreStmt(const CallExpr *CE, CheckerContext &C) const {
 
 void ento::registerChrootChecker(CheckerManager &mgr) {
   mgr.registerChecker<ChrootChecker>();
+}
+
+bool ento::shouldRegisterChrootChecker(const LangOptions &LO) {
+  return true;
 }

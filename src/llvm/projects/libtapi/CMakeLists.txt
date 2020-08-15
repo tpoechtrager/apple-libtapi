@@ -65,9 +65,22 @@ configure_file(
   ${CMAKE_CURRENT_BINARY_DIR}/include/tapi/Version.inc)
 
 # Check if the linker support -no_inits.
-SET(CMAKE_REQUIRED_FLAGS "-Wl,-no_inits")
-check_c_compiler_flag("" LINKER_SUPPORTS_NO_INITS)
+check_linker_flag("-Wl,-no_inits" LINKER_SUPPORTS_NO_INITS)
 
+# MARZIPAN RENAME: We might need to update this. This will also require an
+# update of the linker on the CI bots.
+# Check if the linker has iosmac support.
+check_linker_flag("-Wl,-iosmac_version_min,12.0" LINKER_SUPPORTS_IOSMAC)
+# MARZIPAN RENAME
+
+# Check if i386 is supported.
+SET(CMAKE_OLD_REQUIRED_FLAGS ${CMAKE_REQUIRED_FLAGS})
+SET(CMAKE_OLD_LINKER_FLAGS ${CMAKE_EXE_LINKER_FLAGS})
+SET(CMAKE_REQUIRED_FLAGS "-arch i386")
+SET(CMAKE_EXE_LINKER_FLAGS "-Wl,-arch_errors_fatal -Wl,-framework,Foundation")
+check_c_compiler_flag("" SDK_SUPPORTS_I386)
+SET(CMAKE_REQUIRED_FLAGS ${CMAKE_OLD_REQUIRED_FLAGS})
+SET(CMAKE_EXE_LINKER_FLAGS ${CMAKE_OLD_LINKER_FLAGS})
 
 macro(add_tapi_library name)
   cmake_parse_arguments(ARG
@@ -149,23 +162,6 @@ macro(add_tapi_executable name)
   set_target_properties(${name} PROPERTIES FOLDER "Tapi executables")
 endmacro(add_tapi_executable)
 
-function(tapi_clang_tablegen)
-  cmake_parse_arguments(CTG "" "SOURCE;TARGET" "" ${ARGN})
-
-  if( NOT CTG_SOURCE )
-    message(FATAL_ERROR "SOURCE source-file required by clang_tablegen")
-  endif()
-
-  set( LLVM_TARGET_DEFINITIONS ${CTG_SOURCE} )
-  tablegen(CLANG ${CTG_UNPARSED_ARGUMENTS})
-
-  if(CTG_TARGET)
-    add_public_tablegen_target(${CTG_TARGET})
-    set_target_properties( ${CTG_TARGET} PROPERTIES FOLDER "Tapi tablegenning")
-    set_property(GLOBAL APPEND PROPERTY TAPI_TABLEGEN_TARGETS ${CTG_TARGET})
-  endif()
-endfunction(tapi_clang_tablegen)
-
 include_directories(BEFORE
   ${CMAKE_CURRENT_BINARY_DIR}/include
   ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -179,22 +175,7 @@ option(TAPI_INCLUDE_DOCS "Generate build targets for the TAPI docs."
 # Include must go first.
 add_subdirectory(include)
 # All targets below may depend on all tablegen'd files.
-get_property(TAPI_TABLEGEN_TARGETS GLOBAL PROPERTY TAPI_TABLEGEN_TARGETS)
-list(APPEND LLVM_COMMON_DEPENDS ${TAPI_TABLEGEN_TARGETS})
+#get_property(TAPI_TABLEGEN_TARGETS GLOBAL PROPERTY TAPI_TABLEGEN_TARGETS)
+#list(APPEND LLVM_COMMON_DEPENDS ${TAPI_TABLEGEN_TARGETS})
 add_subdirectory(lib)
 add_subdirectory(tools)
-if( TAPI_INCLUDE_TESTS )
-  if(EXISTS ${LLVM_MAIN_SRC_DIR}/utils/unittest/googletest/include/gtest/gtest.h)
-    add_subdirectory(unittests)
-    list(APPEND TAPI_TEST_DEPS TapiUnitTests)
-    list(APPEND TAPI_TEST_PARAMS
-      tapi_unit_site_config=${CMAKE_CURRENT_BINARY_DIR}/test/Unit/lit.site.cfg
-      )
-  endif()
-  if(EXISTS ${TAPI_SOURCE_DIR}/test)
-    add_subdirectory(test)
-  endif()
-endif()
-if( TAPI_INCLUDE_DOCS )
-  add_subdirectory(docs)
-endif()

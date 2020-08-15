@@ -58,11 +58,13 @@
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Metadata.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/NoFolder.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Use.h"
@@ -213,15 +215,16 @@ doPromotion(Function *F, SmallPtrSetImpl<Argument *> &ArgsToPromote,
   FunctionType *NFTy = FunctionType::get(RetTy, Params, FTy->isVarArg());
 
   // Create the new function body and insert it into the module.
-  Function *NF = Function::Create(NFTy, F->getLinkage(), F->getName());
+  Function *NF = Function::Create(NFTy, F->getLinkage(), F->getAddressSpace(),
+                                  F->getName());
   NF->copyAttributesFrom(F);
 
   // Patch the pointer to LLVM function in debug info descriptor.
   NF->setSubprogram(F->getSubprogram());
   F->setSubprogram(nullptr);
 
-  DEBUG(dbgs() << "ARG PROMOTION:  Promoting to:" << *NF << "\n"
-               << "From: " << *F);
+  LLVM_DEBUG(dbgs() << "ARG PROMOTION:  Promoting to:" << *NF << "\n"
+                    << "From: " << *F);
 
   // Recompute the parameter attributes list based on the new arguments for
   // the function.
@@ -241,6 +244,7 @@ doPromotion(Function *F, SmallPtrSetImpl<Argument *> &ArgsToPromote,
     assert(CS.getCalledFunction() == F);
     Instruction *Call = CS.getInstruction();
     const AttributeList &CallPAL = CS.getAttributes();
+    IRBuilder<NoFolder> IRB(Call);
 
     // Loop over the operands, inserting GEP and loads in the caller as
     // appropriate.
@@ -259,10 +263,11 @@ doPromotion(Function *F, SmallPtrSetImpl<Argument *> &ArgsToPromote,
             ConstantInt::get(Type::getInt32Ty(F->getContext()), 0), nullptr};
         for (unsigned i = 0, e = STy->getNumElements(); i != e; ++i) {
           Idxs[1] = ConstantInt::get(Type::getInt32Ty(F->getContext()), i);
-          Value *Idx = GetElementPtrInst::Create(
-              STy, *AI, Idxs, (*AI)->getName() + "." + Twine(i), Call);
+          auto *Idx =
+              IRB.CreateGEP(STy, *AI, Idxs, (*AI)->getName() + "." + Twine(i));
           // TODO: Tell AA about the new values?
-          Args.push_back(new LoadInst(Idx, Idx->getName() + ".val", Call));
+          Args.push_back(IRB.CreateLoad(STy->getElementType(i), Idx,
+                                        Idx->getName() + ".val"));
           ArgAttrVec.push_back(AttributeSet());
         }
       } else if (!I->use_empty()) {
@@ -292,13 +297,13 @@ doPromotion(Function *F, SmallPtrSetImpl<Argument *> &ArgsToPromote,
                 ElTy = cast<CompositeType>(ElTy)->getTypeAtIndex(II);
             }
             // And create a GEP to extract those indices.
-            V = GetElementPtrInst::Create(ArgIndex.first, V, Ops,
-                                          V->getName() + ".idx", Call);
+            V = IRB.CreateGEP(ArgIndex.first, V, Ops, V->getName() + ".idx");
             Ops.clear();
           }
           // Since we're replacing a load make sure we take the alignment
           // of the previous load.
-          LoadInst *newLoad = new LoadInst(V, V->getName() + ".val", Call);
+          LoadInst *newLoad =
+              IRB.CreateLoad(OrigLoad->getType(), V, V->getName() + ".val");
           newLoad->setAlignment(OrigLoad->getAlignment());
           // Transfer the AA info too.
           AAMDNodes AAInfo;
@@ -426,8 +431,8 @@ doPromotion(Function *F, SmallPtrSetImpl<Argument *> &ArgsToPromote,
         I2->setName(I->getName() + ".val");
         LI->replaceAllUsesWith(&*I2);
         LI->eraseFromParent();
-        DEBUG(dbgs() << "*** Promoted load of argument '" << I->getName()
-                     << "' in function '" << F->getName() << "'\n");
+        LLVM_DEBUG(dbgs() << "*** Promoted load of argument '" << I->getName()
+                          << "' in function '" << F->getName() << "'\n");
       } else {
         GetElementPtrInst *GEP = cast<GetElementPtrInst>(I->user_back());
         IndicesVector Operands;
@@ -453,8 +458,8 @@ doPromotion(Function *F, SmallPtrSetImpl<Argument *> &ArgsToPromote,
         NewName += ".val";
         TheArg->setName(NewName);
 
-        DEBUG(dbgs() << "*** Promoted agg argument '" << TheArg->getName()
-                     << "' of function '" << NF->getName() << "'\n");
+        LLVM_DEBUG(dbgs() << "*** Promoted agg argument '" << TheArg->getName()
+                          << "' of function '" << NF->getName() << "'\n");
 
         // All of the uses must be load instructions.  Replace them all with
         // the argument specified by ArgNo.
@@ -688,11 +693,11 @@ static bool isSafeToPromoteArgument(Argument *Arg, bool isByValOrInAlloca,
     // to do.
     if (ToPromote.find(Operands) == ToPromote.end()) {
       if (MaxElements > 0 && ToPromote.size() == MaxElements) {
-        DEBUG(dbgs() << "argpromotion not promoting argument '"
-                     << Arg->getName()
-                     << "' because it would require adding more "
-                     << "than " << MaxElements
-                     << " arguments to the function.\n");
+        LLVM_DEBUG(dbgs() << "argpromotion not promoting argument '"
+                          << Arg->getName()
+                          << "' because it would require adding more "
+                          << "than " << MaxElements
+                          << " arguments to the function.\n");
         // We limit aggregate promotion to only promoting up to a fixed number
         // of elements of the aggregate.
         return false;
@@ -738,7 +743,7 @@ static bool isSafeToPromoteArgument(Argument *Arg, bool isByValOrInAlloca,
   return true;
 }
 
-/// \brief Checks if a type could have padding bytes.
+/// Checks if a type could have padding bytes.
 static bool isDenselyPacked(Type *type, const DataLayout &DL) {
   // There is no size information, so be conservative.
   if (!type->isSized())
@@ -772,7 +777,7 @@ static bool isDenselyPacked(Type *type, const DataLayout &DL) {
   return true;
 }
 
-/// \brief Checks if the padding bytes of an argument could be accessed.
+/// Checks if the padding bytes of an argument could be accessed.
 static bool canPaddingBeAccessed(Argument *arg) {
   assert(arg->hasByValAttr());
 
@@ -817,6 +822,12 @@ promoteArguments(Function *F, function_ref<AAResults &(Function &F)> AARGetter,
                  unsigned MaxElements,
                  Optional<function_ref<void(CallSite OldCS, CallSite NewCS)>>
                      ReplaceCallSite) {
+  // Don't perform argument promotion for naked functions; otherwise we can end
+  // up removing parameters that are seemingly 'not used' as they are referred
+  // to in the assembly.
+  if(F->hasFnAttribute(Attribute::Naked))
+    return nullptr;
+
   // Make sure that it is local to this module.
   if (!F->hasLocalLinkage())
     return nullptr;
@@ -895,11 +906,11 @@ promoteArguments(Function *F, function_ref<AAResults &(Function &F)> AARGetter,
     if (isSafeToPromote) {
       if (StructType *STy = dyn_cast<StructType>(AgTy)) {
         if (MaxElements > 0 && STy->getNumElements() > MaxElements) {
-          DEBUG(dbgs() << "argpromotion disable promoting argument '"
-                       << PtrArg->getName()
-                       << "' because it would require adding more"
-                       << " than " << MaxElements
-                       << " arguments to the function.\n");
+          LLVM_DEBUG(dbgs() << "argpromotion disable promoting argument '"
+                            << PtrArg->getName()
+                            << "' because it would require adding more"
+                            << " than " << MaxElements
+                            << " arguments to the function.\n");
           continue;
         }
 
@@ -973,7 +984,7 @@ PreservedAnalyses ArgumentPromotionPass::run(LazyCallGraph::SCC &C,
         return FAM.getResult<AAManager>(F);
       };
 
-      Function *NewF = promoteArguments(&OldF, AARGetter, 3u, None);
+      Function *NewF = promoteArguments(&OldF, AARGetter, MaxElements, None);
       if (!NewF)
         continue;
       LocalChange = true;

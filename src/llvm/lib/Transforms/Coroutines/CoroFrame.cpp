@@ -19,6 +19,8 @@
 
 #include "CoroInternal.h"
 #include "llvm/ADT/BitVector.h"
+#include "llvm/Transforms/Utils/Local.h"
+#include "llvm/Config/llvm-config.h"
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/IRBuilder.h"
@@ -27,7 +29,7 @@
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/circular_raw_ostream.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
-#include "llvm/Transforms/Utils/Local.h"
+#include "llvm/Transforms/Utils/PromoteMemToReg.h"
 
 using namespace llvm;
 
@@ -48,7 +50,7 @@ public:
   BlockToIndexMapping(Function &F) {
     for (BasicBlock &BB : F)
       V.push_back(&BB);
-    std::sort(V.begin(), V.end());
+    llvm::sort(V);
   }
 
   size_t blockToIndex(BasicBlock *BB) const {
@@ -105,8 +107,8 @@ struct SuspendCrossingInfo {
 
     assert(Block[UseIndex].Consumes[DefIndex] && "use must consume def");
     bool const Result = Block[UseIndex].Kills[DefIndex];
-    DEBUG(dbgs() << UseBB->getName() << " => " << DefBB->getName()
-                 << " answer is " << Result << "\n");
+    LLVM_DEBUG(dbgs() << UseBB->getName() << " => " << DefBB->getName()
+                      << " answer is " << Result << "\n");
     return Result;
   }
 
@@ -214,8 +216,8 @@ SuspendCrossingInfo::SuspendCrossingInfo(Function &F, coro::Shape &Shape)
 
   bool Changed;
   do {
-    DEBUG(dbgs() << "iteration " << ++Iteration);
-    DEBUG(dbgs() << "==============\n");
+    LLVM_DEBUG(dbgs() << "iteration " << ++Iteration);
+    LLVM_DEBUG(dbgs() << "==============\n");
 
     Changed = false;
     for (size_t I = 0; I < N; ++I) {
@@ -259,20 +261,20 @@ SuspendCrossingInfo::SuspendCrossingInfo(Function &F, coro::Shape &Shape)
         Changed |= (S.Kills != SavedKills) || (S.Consumes != SavedConsumes);
 
         if (S.Kills != SavedKills) {
-          DEBUG(dbgs() << "\nblock " << I << " follower " << SI->getName()
-                       << "\n");
-          DEBUG(dump("S.Kills", S.Kills));
-          DEBUG(dump("SavedKills", SavedKills));
+          LLVM_DEBUG(dbgs() << "\nblock " << I << " follower " << SI->getName()
+                            << "\n");
+          LLVM_DEBUG(dump("S.Kills", S.Kills));
+          LLVM_DEBUG(dump("SavedKills", SavedKills));
         }
         if (S.Consumes != SavedConsumes) {
-          DEBUG(dbgs() << "\nblock " << I << " follower " << SI << "\n");
-          DEBUG(dump("S.Consume", S.Consumes));
-          DEBUG(dump("SavedCons", SavedConsumes));
+          LLVM_DEBUG(dbgs() << "\nblock " << I << " follower " << SI << "\n");
+          LLVM_DEBUG(dump("S.Consume", S.Consumes));
+          LLVM_DEBUG(dump("SavedCons", SavedConsumes));
         }
       }
     }
   } while (Changed);
-  DEBUG(dump());
+  LLVM_DEBUG(dump());
 }
 
 #undef DEBUG_TYPE // "coro-suspend-crossing"
@@ -281,10 +283,13 @@ SuspendCrossingInfo::SuspendCrossingInfo(Function &F, coro::Shape &Shape)
 // We build up the list of spills for every case where a use is separated
 // from the definition by a suspend point.
 
+static const unsigned InvalidField = ~0U;
+
 namespace {
 class Spill {
-  Value *Def;
-  Instruction *User;
+  Value *Def = nullptr;
+  Instruction *User = nullptr;
+  unsigned FieldNo = InvalidField;
 
 public:
   Spill(Value *Def, llvm::User *U) : Def(Def), User(cast<Instruction>(U)) {}
@@ -292,6 +297,20 @@ public:
   Value *def() const { return Def; }
   Instruction *user() const { return User; }
   BasicBlock *userBlock() const { return User->getParent(); }
+
+  // Note that field index is stored in the first SpillEntry for a particular
+  // definition. Subsequent mentions of a defintion do not have fieldNo
+  // assigned. This works out fine as the users of Spills capture the info about
+  // the definition the first time they encounter it. Consider refactoring
+  // SpillInfo into two arrays to normalize the spill representation.
+  unsigned fieldIndex() const {
+    assert(FieldNo != InvalidField && "Accessing unassigned field");
+    return FieldNo;
+  }
+  void setFieldIndex(unsigned FieldNumber) {
+    assert(FieldNo == InvalidField && "Reassigning field number");
+    FieldNo = FieldNumber;
+  }
 };
 } // namespace
 
@@ -314,6 +333,57 @@ static void dump(StringRef Title, SpillInfo const &Spills) {
 }
 #endif
 
+namespace {
+// We cannot rely solely on natural alignment of a type when building a
+// coroutine frame and if the alignment specified on the Alloca instruction
+// differs from the natural alignment of the alloca type we will need to insert
+// padding.
+struct PaddingCalculator {
+  const DataLayout &DL;
+  LLVMContext &Context;
+  unsigned StructSize = 0;
+
+  PaddingCalculator(LLVMContext &Context, DataLayout const &DL)
+      : DL(DL), Context(Context) {}
+
+  // Replicate the logic from IR/DataLayout.cpp to match field offset
+  // computation for LLVM structs.
+  void addType(Type *Ty) {
+    unsigned TyAlign = DL.getABITypeAlignment(Ty);
+    if ((StructSize & (TyAlign - 1)) != 0)
+      StructSize = alignTo(StructSize, TyAlign);
+
+    StructSize += DL.getTypeAllocSize(Ty); // Consume space for this data item.
+  }
+
+  void addTypes(SmallVectorImpl<Type *> const &Types) {
+    for (auto *Ty : Types)
+      addType(Ty);
+  }
+
+  unsigned computePadding(Type *Ty, unsigned ForcedAlignment) {
+    unsigned TyAlign = DL.getABITypeAlignment(Ty);
+    auto Natural = alignTo(StructSize, TyAlign);
+    auto Forced = alignTo(StructSize, ForcedAlignment);
+
+    // Return how many bytes of padding we need to insert.
+    if (Natural != Forced)
+      return std::max(Natural, Forced) - StructSize;
+
+    // Rely on natural alignment.
+    return 0;
+  }
+
+  // If padding required, return the padding field type to insert.
+  ArrayType *getPaddingType(Type *Ty, unsigned ForcedAlignment) {
+    if (auto Padding = computePadding(Ty, ForcedAlignment))
+      return ArrayType::get(Type::getInt8Ty(Context), Padding);
+
+    return nullptr;
+  }
+};
+} // namespace
+
 // Build a struct that will keep state for an active coroutine.
 //   struct f.frame {
 //     ResumeFnTy ResumeFnAddr;
@@ -325,6 +395,8 @@ static void dump(StringRef Title, SpillInfo const &Spills) {
 static StructType *buildFrameType(Function &F, coro::Shape &Shape,
                                   SpillInfo &Spills) {
   LLVMContext &C = F.getContext();
+  const DataLayout &DL = F.getParent()->getDataLayout();
+  PaddingCalculator Padder(C, DL);
   SmallString<32> Name(F.getName());
   Name.append(".Frame");
   StructType *FrameTy = StructType::create(C, Name);
@@ -354,8 +426,10 @@ static StructType *buildFrameType(Function &F, coro::Shape &Shape,
 
   Value *CurrentDef = nullptr;
 
+  Padder.addTypes(Types);
+
   // Create an entry for every spilled value.
-  for (auto const &S : Spills) {
+  for (auto &S : Spills) {
     if (CurrentDef == S.def())
       continue;
 
@@ -365,12 +439,22 @@ static StructType *buildFrameType(Function &F, coro::Shape &Shape,
       continue;
 
     Type *Ty = nullptr;
-    if (auto *AI = dyn_cast<AllocaInst>(CurrentDef))
+    if (auto *AI = dyn_cast<AllocaInst>(CurrentDef)) {
       Ty = AI->getAllocatedType();
-    else
+      if (unsigned AllocaAlignment = AI->getAlignment()) {
+        // If alignment is specified in alloca, see if we need to insert extra
+        // padding.
+        if (auto PaddingTy = Padder.getPaddingType(Ty, AllocaAlignment)) {
+          Types.push_back(PaddingTy);
+          Padder.addType(PaddingTy);
+        }
+      }
+    } else {
       Ty = CurrentDef->getType();
-
+    }
+    S.setFieldIndex(Types.size());
     Types.push_back(Ty);
+    Padder.addType(Ty);
   }
   FrameTy->setBody(Types);
 
@@ -447,7 +531,7 @@ static Instruction *insertSpills(SpillInfo &Spills, coro::Shape &Shape) {
   Value *CurrentValue = nullptr;
   BasicBlock *CurrentBlock = nullptr;
   Value *CurrentReload = nullptr;
-  unsigned Index = Shape.getFirstSpillFieldIndex() - 1;
+  unsigned Index = 0; // Proper field number will be read from field definition.
 
   // We need to keep track of any allocas that need "spilling"
   // since they will live in the coroutine frame now, all access to them
@@ -464,6 +548,7 @@ static Instruction *insertSpills(SpillInfo &Spills, coro::Shape &Shape) {
   // Create a load instruction to reload the spilled value from the coroutine
   // frame.
   auto CreateReload = [&](Instruction *InsertBefore) {
+    assert(Index != InvalidField && "accessing unassigned field number");
     Builder.SetInsertPoint(InsertBefore);
     auto *G = Builder.CreateConstInBoundsGEP2_32(FrameTy, FramePtr, 0, Index,
                                                  CurrentValue->getName() +
@@ -481,7 +566,7 @@ static Instruction *insertSpills(SpillInfo &Spills, coro::Shape &Shape) {
       CurrentBlock = nullptr;
       CurrentReload = nullptr;
 
-      Index++;
+      Index = E.fieldIndex();
 
       if (auto *AI = dyn_cast<AllocaInst>(CurrentValue)) {
         // Spilled AllocaInst will be replaced with GEP from the coroutine frame
@@ -524,7 +609,8 @@ static Instruction *insertSpills(SpillInfo &Spills, coro::Shape &Shape) {
         } else {
           // For all other values, the spill is placed immediately after
           // the definition.
-          assert(!isa<TerminatorInst>(E.def()) && "unexpected terminator");
+          assert(!cast<Instruction>(E.def())->isTerminator() &&
+                 "unexpected terminator");
           InsertPt = cast<Instruction>(E.def())->getNextNode();
         }
 
@@ -579,7 +665,7 @@ static Instruction *insertSpills(SpillInfo &Spills, coro::Shape &Shape) {
 }
 
 // Sets the unwind edge of an instruction to a particular successor.
-static void setUnwindEdgeTo(TerminatorInst *TI, BasicBlock *Succ) {
+static void setUnwindEdgeTo(Instruction *TI, BasicBlock *Succ) {
   if (auto *II = dyn_cast<InvokeInst>(TI))
     II->setUnwindDest(Succ);
   else if (auto *CS = dyn_cast<CatchSwitchInst>(TI))
@@ -800,6 +886,8 @@ static void moveSpillUsesAfterCoroBegin(Function &F, SpillInfo const &Spills,
     for (User *U : CurrentValue->users()) {
       Instruction *I = cast<Instruction>(U);
       if (!DT.dominates(CoroBegin, I)) {
+        LLVM_DEBUG(dbgs() << "will move: " << *I << "\n");
+
         // TODO: Make this more robust. Currently if we run into a situation
         // where simple instruction move won't work we panic and
         // report_fatal_error.
@@ -809,7 +897,6 @@ static void moveSpillUsesAfterCoroBegin(Function &F, SpillInfo const &Spills,
                                " dominated by CoroBegin");
         }
 
-        DEBUG(dbgs() << "will move: " << *I << "\n");
         NeedsMoving.push_back(I);
       }
     }
@@ -990,10 +1077,175 @@ static Instruction *lowerNonLocalAlloca(CoroAllocaAllocInst *AI,
   return cast<Instruction>(Alloc);
 }
 
+/// Get the current swifterror value.
+static Value *emitGetSwiftErrorValue(IRBuilder<> &Builder, Type *ValueTy,
+                                     coro::Shape &Shape) {
+  // Make a fake function pointer as a sort of intrinsic.
+  auto FnTy = FunctionType::get(ValueTy, {}, false);
+  auto Fn = ConstantPointerNull::get(FnTy->getPointerTo());
+
+  auto Call = Builder.CreateCall(Fn, {});
+  Shape.SwiftErrorOps.push_back(Call);
+
+  return Call;
+}
+
+/// Set the given value as the current swifterror value.
+///
+/// Returns a slot that can be used as a swifterror slot.
+static Value *emitSetSwiftErrorValue(IRBuilder<> &Builder, Value *V,
+                                     coro::Shape &Shape) {
+  // Make a fake function pointer as a sort of intrinsic.
+  auto FnTy = FunctionType::get(V->getType()->getPointerTo(),
+                                {V->getType()}, false);
+  auto Fn = ConstantPointerNull::get(FnTy->getPointerTo());
+
+  auto Call = Builder.CreateCall(Fn, { V });
+  Shape.SwiftErrorOps.push_back(Call);
+
+  return Call;
+}
+
+/// Set the swifterror value from the given alloca before a call,
+/// then put in back in the alloca afterwards.
+///
+/// Returns an address that will stand in for the swifterror slot
+/// until splitting.
+static Value *emitSetAndGetSwiftErrorValueAround(Instruction *Call,
+                                                 AllocaInst *Alloca,
+                                                 coro::Shape &Shape) {
+  auto ValueTy = Alloca->getAllocatedType();
+  IRBuilder<> Builder(Call);
+
+  // Load the current value from the alloca and set it as the
+  // swifterror value.
+  auto ValueBeforeCall = Builder.CreateLoad(ValueTy, Alloca);
+  auto Addr = emitSetSwiftErrorValue(Builder, ValueBeforeCall, Shape);
+
+  // Move to after the call.  Since swifterror only has a guaranteed
+  // value on normal exits, we can ignore implicit and explicit unwind
+  // edges.
+  if (isa<CallInst>(Call)) {
+    Builder.SetInsertPoint(Call->getNextNode());
+  } else {
+    auto Invoke = cast<InvokeInst>(Call);
+    Builder.SetInsertPoint(Invoke->getNormalDest()->getFirstNonPHIOrDbg());
+  }
+
+  // Get the current swifterror value and store it to the alloca.
+  auto ValueAfterCall = emitGetSwiftErrorValue(Builder, ValueTy, Shape);
+  Builder.CreateStore(ValueAfterCall, Alloca);
+
+  return Addr;
+}
+
+/// Eliminate a formerly-swifterror alloca by inserting the get/set
+/// intrinsics and attempting to MemToReg the alloca away.
+static void eliminateSwiftErrorAlloca(Function &F, AllocaInst *Alloca,
+                                      coro::Shape &Shape) {
+  for (auto UI = Alloca->use_begin(), UE = Alloca->use_end(); UI != UE; ) {
+    // We're likely changing the use list, so use a mutation-safe
+    // iteration pattern.
+    auto &Use = *UI;
+    ++UI;
+
+    // swifterror values can only be used in very specific ways.
+    // We take advantage of that here.
+    auto User = Use.getUser();
+    if (isa<LoadInst>(User) || isa<StoreInst>(User))
+      continue;
+
+    assert(isa<CallInst>(User) || isa<InvokeInst>(User));
+    auto Call = cast<Instruction>(User);
+
+    auto Addr = emitSetAndGetSwiftErrorValueAround(Call, Alloca, Shape);
+
+    // Use the returned slot address as the call argument.
+    Use.set(Addr);
+  }
+
+  // All the uses should be loads and stores now.
+  assert(isAllocaPromotable(Alloca));
+}
+
+/// "Eliminate" a swifterror argument by reducing it to the alloca case
+/// and then loading and storing in the prologue and epilog.
+///
+/// The argument keeps the swifterror flag.
+static void eliminateSwiftErrorArgument(Function &F, Argument &Arg,
+                                        coro::Shape &Shape,
+                             SmallVectorImpl<AllocaInst*> &AllocasToPromote) {
+  IRBuilder<> Builder(F.getEntryBlock().getFirstNonPHIOrDbg());
+
+  auto ArgTy = cast<PointerType>(Arg.getType());
+  auto ValueTy = ArgTy->getElementType();
+
+  // Reduce to the alloca case:
+
+  // Create an alloca and replace all uses of the arg with it.
+  auto Alloca = Builder.CreateAlloca(ValueTy, ArgTy->getAddressSpace());
+  Arg.replaceAllUsesWith(Alloca);
+
+  // Set an initial value in the alloca.  swifterror is always null on entry.
+  auto InitialValue = Constant::getNullValue(ValueTy);
+  Builder.CreateStore(InitialValue, Alloca);
+
+  // Find all the suspends in the function and save and restore around them.
+  for (auto Suspend : Shape.CoroSuspends) {
+    (void) emitSetAndGetSwiftErrorValueAround(Suspend, Alloca, Shape);
+  }
+
+  // Find all the coro.ends in the function and restore the error value.
+  for (auto End : Shape.CoroEnds) {
+    Builder.SetInsertPoint(End);
+    auto FinalValue = Builder.CreateLoad(ValueTy, Alloca);
+    (void) emitSetSwiftErrorValue(Builder, FinalValue, Shape);
+  }
+
+  // Now we can use the alloca logic.
+  AllocasToPromote.push_back(Alloca);
+  eliminateSwiftErrorAlloca(F, Alloca, Shape);
+}
+
+/// Eliminate all problematic uses of swifterror arguments and allocas
+/// from the function.  We'll fix them up later when splitting the function.
+static void eliminateSwiftError(Function &F, coro::Shape &Shape) {
+  SmallVector<AllocaInst*, 4> AllocasToPromote;
+
+  // Look for a swifterror argument.
+  for (auto &Arg : F.args()) {
+    if (!Arg.hasSwiftErrorAttr()) continue;
+
+    eliminateSwiftErrorArgument(F, Arg, Shape, AllocasToPromote);
+    break;
+  }
+
+  // Look for swifterror allocas.
+  for (auto &Inst : F.getEntryBlock()) {
+    auto Alloca = dyn_cast<AllocaInst>(&Inst);
+    if (!Alloca || !Alloca->isSwiftError()) continue;
+
+    // Clear the swifterror flag.
+    Alloca->setSwiftError(false);
+
+    AllocasToPromote.push_back(Alloca);
+    eliminateSwiftErrorAlloca(F, Alloca, Shape);
+  }
+
+  // If we have any allocas to promote, compute a dominator tree and
+  // promote them en masse.
+  if (!AllocasToPromote.empty()) {
+    DominatorTree DT(F);
+    PromoteMemToReg(AllocasToPromote, DT);
+  }
+}
+
 void coro::buildCoroutineFrame(Function &F, Shape &Shape) {
   // Lower coro.dbg.declare to coro.dbg.value, since we are going to rewrite
   // access to local variables.
   LowerDbgDeclare(F);
+
+  eliminateSwiftError(F, Shape);
 
   if (Shape.ABI == coro::ABI::Switch &&
       Shape.SwitchLowering.PromiseAlloca) {
@@ -1037,7 +1289,7 @@ void coro::buildCoroutineFrame(Function &F, Shape &Shape) {
       break;
 
     // Rewrite materializable instructions to be materialized at the use point.
-    DEBUG(dump("Materializations", Spills));
+    LLVM_DEBUG(dump("Materializations", Spills));
     rewriteMaterializableInstructions(Builder, Spills);
     Spills.clear();
   }
@@ -1096,7 +1348,7 @@ void coro::buildCoroutineFrame(Function &F, Shape &Shape) {
         Spills.emplace_back(&I, U);
       }
   }
-  DEBUG(dump("Spills", Spills));
+  LLVM_DEBUG(dump("Spills", Spills));
   moveSpillUsesAfterCoroBegin(F, Spills, Shape.CoroBegin);
   Shape.FrameTy = buildFrameType(F, Shape, Spills);
   Shape.FramePtr = insertSpills(Spills, Shape);

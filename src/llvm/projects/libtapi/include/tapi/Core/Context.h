@@ -20,6 +20,7 @@
 #include "tapi/Diagnostics/Diagnostics.h"
 #include "tapi/Driver/Options.h"
 
+
 TAPI_NAMESPACE_INTERNAL_BEGIN
 
 class Context {
@@ -37,6 +38,7 @@ protected:
   IntrusiveRefCntPtr<FileManager> _fm;
   DiagnosticsEngine &_diag;
 };
+
 
 TAPI_NAMESPACE_INTERNAL_END
 

@@ -13,6 +13,9 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+
 #include "tapi/Core/FileSystem.h"
 #include "tapi/tapi.h"
 #include "llvm/ADT/StringExtras.h"
@@ -249,3 +252,5 @@ int main(int argc, const char *argv[]) {
 
   return 0;
 }
+
+#pragma clang diagnostic pop

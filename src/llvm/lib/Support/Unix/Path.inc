@@ -31,28 +31,16 @@
 #ifdef HAVE_SYS_MMAN_H
 #include <sys/mman.h>
 #endif
-#if HAVE_DIRENT_H
-# include <dirent.h>
-# define NAMLEN(dirent) strlen((dirent)->d_name)
-#else
-# define dirent direct
-# define NAMLEN(dirent) (dirent)->d_namlen
-# if HAVE_SYS_NDIR_H
-#  include <sys/ndir.h>
-# endif
-# if HAVE_SYS_DIR_H
-#  include <sys/dir.h>
-# endif
-# if HAVE_NDIR_H
-#  include <ndir.h>
-# endif
-#endif
 
+#include <dirent.h>
 #include <pwd.h>
 
 #ifdef __APPLE__
 #include <mach-o/dyld.h>
 #include <sys/attr.h>
+#include <copyfile.h>
+#elif defined(__DragonFly__)
+#include <sys/mount.h>
 #endif
 
 // Both stdio.h and cstdio are included via different paths and
@@ -64,11 +52,12 @@
 // For GNU Hurd
 #if defined(__GNU__) && !defined(PATH_MAX)
 # define PATH_MAX 4096
+# define MAXPATHLEN 4096
 #endif
 
 #include <sys/types.h>
 #if !defined(__APPLE__) && !defined(__OpenBSD__) && !defined(__FreeBSD__) &&   \
-    !defined(__linux__)
+    !defined(__linux__) && !defined(__FreeBSD_kernel__)
 #include <sys/statvfs.h>
 #define STATVFS statvfs
 #define FSTATVFS fstatvfs
@@ -97,7 +86,7 @@
 #define STATVFS_F_FRSIZE(vfs) static_cast<uint64_t>(vfs.f_bsize)
 #endif
 
-#if defined(__NetBSD__)
+#if defined(__NetBSD__) || defined(__DragonFly__) || defined(__GNU__)
 #define STATVFS_F_FLAG(vfs) (vfs).f_flag
 #else
 #define STATVFS_F_FLAG(vfs) (vfs).f_flags
@@ -108,9 +97,12 @@ using namespace llvm;
 namespace llvm {
 namespace sys  {
 namespace fs {
+
+const file_t kInvalidFile = -1;
+
 #if defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__) ||     \
     defined(__minix) || defined(__FreeBSD_kernel__) || defined(__linux__) ||   \
-    defined(__CYGWIN__) || defined(__DragonFly__) || defined(_AIX)
+    defined(__CYGWIN__) || defined(__DragonFly__) || defined(_AIX) || defined(__GNU__)
 static int
 test_dir(char ret[PATH_MAX], const char *dir, const char *bin)
 {
@@ -190,14 +182,34 @@ std::string getMainExecutable(const char *argv0, void *MainAddr) {
   char exe_path[MAXPATHLEN];
   StringRef aPath("/proc/self/exe");
   if (sys::fs::exists(aPath)) {
-      // /proc is not always mounted under Linux (chroot for example).
-      ssize_t len = readlink(aPath.str().c_str(), exe_path, sizeof(exe_path));
-      if (len >= 0)
-          return std::string(exe_path, len);
+    // /proc is not always mounted under Linux (chroot for example).
+    ssize_t len = readlink(aPath.str().c_str(), exe_path, sizeof(exe_path));
+    if (len < 0)
+      return "";
+
+    // Null terminate the string for realpath. readlink never null
+    // terminates its output.
+    len = std::min(len, ssize_t(sizeof(exe_path) - 1));
+    exe_path[len] = '\0';
+
+    // On Linux, /proc/self/exe always looks through symlinks. However, on
+    // GNU/Hurd, /proc/self/exe is a symlink to the path that was used to start
+    // the program, and not the eventual binary file. Therefore, call realpath
+    // so this behaves the same on all platforms.
+#if _POSIX_VERSION >= 200112 || defined(__GLIBC__)
+    char *real_path = realpath(exe_path, NULL);
+    std::string ret = std::string(real_path);
+    free(real_path);
+    return ret;
+#else
+    char real_path[MAXPATHLEN];
+    realpath(exe_path, real_path);
+    return std::string(real_path);
+#endif
   } else {
-      // Fall back to the classical detection.
-      if (getprogpath(exe_path, argv0))
-        return exe_path;
+    // Fall back to the classical detection.
+    if (getprogpath(exe_path, argv0))
+      return exe_path;
   }
 #elif defined(HAVE_DLFCN_H) && defined(HAVE_DLADDR)
   // Use dladdr to get executable path if available.
@@ -218,11 +230,11 @@ std::string getMainExecutable(const char *argv0, void *MainAddr) {
 }
 
 TimePoint<> basic_file_status::getLastAccessedTime() const {
-  return toTimePoint(fs_st_atime);
+  return toTimePoint(fs_st_atime, fs_st_atime_nsec);
 }
 
 TimePoint<> basic_file_status::getLastModificationTime() const {
-  return toTimePoint(fs_st_mtime);
+  return toTimePoint(fs_st_mtime, fs_st_mtime_nsec);
 }
 
 UniqueID file_status::getUniqueID() const {
@@ -359,7 +371,7 @@ std::error_code remove(const Twine &path, bool IgnoreNonExisting) {
 }
 
 static bool is_local_impl(struct STATVFS &Vfs) {
-#if defined(__linux__)
+#if defined(__linux__) || defined(__GNU__)
 #ifndef NFS_SUPER_MAGIC
 #define NFS_SUPER_MAGIC 0x6969
 #endif
@@ -369,7 +381,11 @@ static bool is_local_impl(struct STATVFS &Vfs) {
 #ifndef CIFS_MAGIC_NUMBER
 #define CIFS_MAGIC_NUMBER 0xFF534D42
 #endif
+#ifdef __GNU__
+  switch ((uint32_t)Vfs.__f_type) {
+#else
   switch ((uint32_t)Vfs.f_type) {
+#endif
   case NFS_SUPER_MAGIC:
   case SMB_SUPER_MAGIC:
   case CIFS_MAGIC_NUMBER:
@@ -379,6 +395,12 @@ static bool is_local_impl(struct STATVFS &Vfs) {
   }
 #elif defined(__CYGWIN__)
   // Cygwin doesn't expose this information; would need to use Win32 API.
+  return false;
+#elif defined(__Fuchsia__)
+  // Fuchsia doesn't yet support remote filesystem mounts.
+  return true;
+#elif defined(__HAIKU__)
+  // Haiku doesn't expose this information.
   return false;
 #elif defined(__sun)
   // statvfs::f_basetype contains a null-terminated FSType name of the mounted target
@@ -529,37 +551,62 @@ static void expandTildeExpr(SmallVectorImpl<char> &Path) {
   llvm::sys::path::append(Path, Storage);
 }
 
+
+void expand_tilde(const Twine &path, SmallVectorImpl<char> &dest) {
+  dest.clear();
+  if (path.isTriviallyEmpty())
+    return;
+
+  path.toVector(dest);
+  expandTildeExpr(dest);
+
+  return;
+}
+
+static file_type typeForMode(mode_t Mode) {
+  if (S_ISDIR(Mode))
+    return file_type::directory_file;
+  else if (S_ISREG(Mode))
+    return file_type::regular_file;
+  else if (S_ISBLK(Mode))
+    return file_type::block_file;
+  else if (S_ISCHR(Mode))
+    return file_type::character_file;
+  else if (S_ISFIFO(Mode))
+    return file_type::fifo_file;
+  else if (S_ISSOCK(Mode))
+    return file_type::socket_file;
+  else if (S_ISLNK(Mode))
+    return file_type::symlink_file;
+  return file_type::type_unknown;
+}
+
 static std::error_code fillStatus(int StatRet, const struct stat &Status,
-                             file_status &Result) {
+                                  file_status &Result) {
   if (StatRet != 0) {
-    std::error_code ec(errno, std::generic_category());
-    if (ec == errc::no_such_file_or_directory)
+    std::error_code EC(errno, std::generic_category());
+    if (EC == errc::no_such_file_or_directory)
       Result = file_status(file_type::file_not_found);
     else
       Result = file_status(file_type::status_error);
-    return ec;
+    return EC;
   }
 
-  file_type Type = file_type::type_unknown;
-
-  if (S_ISDIR(Status.st_mode))
-    Type = file_type::directory_file;
-  else if (S_ISREG(Status.st_mode))
-    Type = file_type::regular_file;
-  else if (S_ISBLK(Status.st_mode))
-    Type = file_type::block_file;
-  else if (S_ISCHR(Status.st_mode))
-    Type = file_type::character_file;
-  else if (S_ISFIFO(Status.st_mode))
-    Type = file_type::fifo_file;
-  else if (S_ISSOCK(Status.st_mode))
-    Type = file_type::socket_file;
-  else if (S_ISLNK(Status.st_mode))
-    Type = file_type::symlink_file;
+  uint32_t atime_nsec, mtime_nsec;
+#if defined(HAVE_STRUCT_STAT_ST_MTIMESPEC_TV_NSEC)
+  atime_nsec = Status.st_atimespec.tv_nsec;
+  mtime_nsec = Status.st_mtimespec.tv_nsec;
+#elif defined(HAVE_STRUCT_STAT_ST_MTIM_TV_NSEC)
+  atime_nsec = Status.st_atim.tv_nsec;
+  mtime_nsec = Status.st_mtim.tv_nsec;
+#else
+  atime_nsec = mtime_nsec = 0;
+#endif
 
   perms Perms = static_cast<perms>(Status.st_mode) & all_perms;
-  Result = file_status(Type, Perms, Status.st_dev, Status.st_nlink,
-                       Status.st_ino, Status.st_atime, Status.st_mtime,
+  Result = file_status(typeForMode(Status.st_mode), Perms, Status.st_dev,
+                       Status.st_nlink, Status.st_ino,
+                       Status.st_atime, atime_nsec, Status.st_mtime, mtime_nsec,
                        Status.st_uid, Status.st_gid, Status.st_size);
 
   return std::error_code();
@@ -589,17 +636,22 @@ std::error_code setPermissions(const Twine &Path, perms Permissions) {
   return std::error_code();
 }
 
-std::error_code setLastModificationAndAccessTime(int FD, TimePoint<> Time) {
+std::error_code setLastAccessAndModificationTime(int FD, TimePoint<> AccessTime,
+                                                 TimePoint<> ModificationTime) {
 #if defined(HAVE_FUTIMENS)
   timespec Times[2];
-  Times[0] = Times[1] = sys::toTimeSpec(Time);
+  Times[0] = sys::toTimeSpec(AccessTime);
+  Times[1] = sys::toTimeSpec(ModificationTime);
   if (::futimens(FD, Times))
     return std::error_code(errno, std::generic_category());
   return std::error_code();
 #elif defined(HAVE_FUTIMES)
   timeval Times[2];
-  Times[0] = Times[1] = sys::toTimeVal(
-      std::chrono::time_point_cast<std::chrono::microseconds>(Time));
+  Times[0] = sys::toTimeVal(
+      std::chrono::time_point_cast<std::chrono::microseconds>(AccessTime));
+  Times[1] =
+      sys::toTimeVal(std::chrono::time_point_cast<std::chrono::microseconds>(
+          ModificationTime));
   if (::futimes(FD, Times))
     return std::error_code(errno, std::generic_category());
   return std::error_code();
@@ -643,7 +695,8 @@ std::error_code mapped_file_region::init(int FD, uint64_t Offset,
 
 mapped_file_region::mapped_file_region(int fd, mapmode mode, size_t length,
                                        uint64_t offset, std::error_code &ec)
-    : Size(length), Mapping() {
+    : Size(length), Mapping(), Mode(mode) {
+  (void)Mode;
   ec = init(fd, offset, mode);
   if (ec)
     Mapping = nullptr;
@@ -696,19 +749,30 @@ std::error_code detail::directory_iterator_destruct(detail::DirIterState &it) {
   return std::error_code();
 }
 
-std::error_code detail::directory_iterator_increment(detail::DirIterState &it) {
+static file_type direntType(dirent* Entry) {
+  // Most platforms provide the file type in the dirent: Linux/BSD/Mac.
+  // The DTTOIF macro lets us reuse our status -> type conversion.
+#if defined(_DIRENT_HAVE_D_TYPE) && defined(DTTOIF)
+  return typeForMode(DTTOIF(Entry->d_type));
+#else
+  // Other platforms such as Solaris require a stat() to get the type.
+  return file_type::type_unknown;
+#endif
+}
+
+std::error_code detail::directory_iterator_increment(detail::DirIterState &It) {
   errno = 0;
-  dirent *cur_dir = ::readdir(reinterpret_cast<DIR *>(it.IterationHandle));
-  if (cur_dir == nullptr && errno != 0) {
+  dirent *CurDir = ::readdir(reinterpret_cast<DIR *>(It.IterationHandle));
+  if (CurDir == nullptr && errno != 0) {
     return std::error_code(errno, std::generic_category());
-  } else if (cur_dir != nullptr) {
-    StringRef name(cur_dir->d_name, NAMLEN(cur_dir));
-    if ((name.size() == 1 && name[0] == '.') ||
-        (name.size() == 2 && name[0] == '.' && name[1] == '.'))
-      return directory_iterator_increment(it);
-    it.CurrentEntry.replace_filename(name);
+  } else if (CurDir != nullptr) {
+    StringRef Name(CurDir->d_name);
+    if ((Name.size() == 1 && Name[0] == '.') ||
+        (Name.size() == 2 && Name[0] == '.' && Name[1] == '.'))
+      return directory_iterator_increment(It);
+    It.CurrentEntry.replace_filename(Name, direntType(CurDir));
   } else
-    return directory_iterator_destruct(it);
+    return directory_iterator_destruct(It);
 
   return std::error_code();
 }
@@ -729,21 +793,85 @@ static bool hasProcSelfFD() {
 }
 #endif
 
-std::error_code openFileForRead(const Twine &Name, int &ResultFD,
-                                SmallVectorImpl<char> *RealPath) {
+static int nativeOpenFlags(CreationDisposition Disp, OpenFlags Flags,
+                           FileAccess Access) {
+  int Result = 0;
+  if (Access == FA_Read)
+    Result |= O_RDONLY;
+  else if (Access == FA_Write)
+    Result |= O_WRONLY;
+  else if (Access == (FA_Read | FA_Write))
+    Result |= O_RDWR;
+
+  // This is for compatibility with old code that assumed F_Append implied
+  // would open an existing file.  See Windows/Path.inc for a longer comment.
+  if (Flags & F_Append)
+    Disp = CD_OpenAlways;
+
+  if (Disp == CD_CreateNew) {
+    Result |= O_CREAT; // Create if it doesn't exist.
+    Result |= O_EXCL;  // Fail if it does.
+  } else if (Disp == CD_CreateAlways) {
+    Result |= O_CREAT; // Create if it doesn't exist.
+    Result |= O_TRUNC; // Truncate if it does.
+  } else if (Disp == CD_OpenAlways) {
+    Result |= O_CREAT; // Create if it doesn't exist.
+  } else if (Disp == CD_OpenExisting) {
+    // Nothing special, just don't add O_CREAT and we get these semantics.
+  }
+
+  if (Flags & F_Append)
+    Result |= O_APPEND;
+
+#ifdef O_CLOEXEC
+  if (!(Flags & OF_ChildInherit))
+    Result |= O_CLOEXEC;
+#endif
+
+  return Result;
+}
+
+std::error_code openFile(const Twine &Name, int &ResultFD,
+                         CreationDisposition Disp, FileAccess Access,
+                         OpenFlags Flags, unsigned Mode) {
+  int OpenFlags = nativeOpenFlags(Disp, Flags, Access);
+
   SmallString<128> Storage;
   StringRef P = Name.toNullTerminatedStringRef(Storage);
-  int OpenFlags = O_RDONLY;
-#ifdef O_CLOEXEC
-  OpenFlags |= O_CLOEXEC;
-#endif
-  if ((ResultFD = sys::RetryAfterSignal(-1, open, P.begin(), OpenFlags)) < 0)
+  // Call ::open in a lambda to avoid overload resolution in RetryAfterSignal
+  // when open is overloaded, such as in Bionic.
+  auto Open = [&]() { return ::open(P.begin(), OpenFlags, Mode); };
+  if ((ResultFD = sys::RetryAfterSignal(-1, Open)) < 0)
     return std::error_code(errno, std::generic_category());
 #ifndef O_CLOEXEC
-  int r = fcntl(ResultFD, F_SETFD, FD_CLOEXEC);
-  (void)r;
-  assert(r == 0 && "fcntl(F_SETFD, FD_CLOEXEC) failed");
+  if (!(Flags & OF_ChildInherit)) {
+    int r = fcntl(ResultFD, F_SETFD, FD_CLOEXEC);
+    (void)r;
+    assert(r == 0 && "fcntl(F_SETFD, FD_CLOEXEC) failed");
+  }
 #endif
+  return std::error_code();
+}
+
+Expected<int> openNativeFile(const Twine &Name, CreationDisposition Disp,
+                             FileAccess Access, OpenFlags Flags,
+                             unsigned Mode) {
+
+  int FD;
+  std::error_code EC = openFile(Name, FD, Disp, Access, Flags, Mode);
+  if (EC)
+    return errorCodeToError(EC);
+  return FD;
+}
+
+std::error_code openFileForRead(const Twine &Name, int &ResultFD,
+                                OpenFlags Flags,
+                                SmallVectorImpl<char> *RealPath) {
+  std::error_code EC =
+      openFile(Name, ResultFD, CD_OpenExisting, FA_Read, Flags, 0666);
+  if (EC)
+    return EC;
+
   // Attempt to get the real name of the file, if the user asked
   if(!RealPath)
     return std::error_code();
@@ -763,6 +891,9 @@ std::error_code openFileForRead(const Twine &Name, int &ResultFD,
     if (CharCount > 0)
       RealPath->append(Buffer, Buffer + CharCount);
   } else {
+    SmallString<128> Storage;
+    StringRef P = Name.toNullTerminatedStringRef(Storage);
+
     // Use ::realpath to get the real path name
     if (::realpath(P.begin(), Buffer) != nullptr)
       RealPath->append(Buffer, Buffer + strlen(Buffer));
@@ -771,41 +902,18 @@ std::error_code openFileForRead(const Twine &Name, int &ResultFD,
   return std::error_code();
 }
 
-std::error_code openFileForWrite(const Twine &Name, int &ResultFD,
-                            sys::fs::OpenFlags Flags, unsigned Mode) {
-  // Verify that we don't have both "append" and "excl".
-  assert((!(Flags & sys::fs::F_Excl) || !(Flags & sys::fs::F_Append)) &&
-         "Cannot specify both 'excl' and 'append' file creation flags!");
+Expected<file_t> openNativeFileForRead(const Twine &Name, OpenFlags Flags,
+                                       SmallVectorImpl<char> *RealPath) {
+  file_t ResultFD;
+  std::error_code EC = openFileForRead(Name, ResultFD, Flags, RealPath);
+  if (EC)
+    return errorCodeToError(EC);
+  return ResultFD;
+}
 
-  int OpenFlags = O_CREAT;
-
-#ifdef O_CLOEXEC
-  OpenFlags |= O_CLOEXEC;
-#endif
-
-  if (Flags & F_RW)
-    OpenFlags |= O_RDWR;
-  else
-    OpenFlags |= O_WRONLY;
-
-  if (Flags & F_Append)
-    OpenFlags |= O_APPEND;
-  else
-    OpenFlags |= O_TRUNC;
-
-  if (Flags & F_Excl)
-    OpenFlags |= O_EXCL;
-
-  SmallString<128> Storage;
-  StringRef P = Name.toNullTerminatedStringRef(Storage);
-  if ((ResultFD = sys::RetryAfterSignal(-1, open, P.begin(), OpenFlags, Mode)) < 0)
-    return std::error_code(errno, std::generic_category());
-#ifndef O_CLOEXEC
-  int r = fcntl(ResultFD, F_SETFD, FD_CLOEXEC);
-  (void)r;
-  assert(r == 0 && "fcntl(F_SETFD, FD_CLOEXEC) failed");
-#endif
-  return std::error_code();
+void closeFile(file_t &F) {
+  ::close(F);
+  F = kInvalidFile;
 }
 
 template <typename T>
@@ -913,29 +1021,6 @@ static bool getDarwinConfDir(bool TempDir, SmallVectorImpl<char> &Result) {
   return false;
 }
 
-static bool getUserCacheDir(SmallVectorImpl<char> &Result) {
-  // First try using XDG_CACHE_HOME env variable,
-  // as specified in XDG Base Directory Specification at
-  // http://standards.freedesktop.org/basedir-spec/basedir-spec-latest.html
-  if (const char *XdgCacheDir = std::getenv("XDG_CACHE_HOME")) {
-    Result.clear();
-    Result.append(XdgCacheDir, XdgCacheDir + strlen(XdgCacheDir));
-    return true;
-  }
-
-  // Try Darwin configuration query
-  if (getDarwinConfDir(false, Result))
-    return true;
-
-  // Use "$HOME/.cache" if $HOME is available
-  if (home_directory(Result)) {
-    append(Result, ".cache");
-    return true;
-  }
-
-  return false;
-}
-
 static const char *getEnvTempDir() {
   // Check whether the temporary directory is specified by an environment
   // variable.
@@ -978,6 +1063,37 @@ void system_temp_directory(bool ErasedOnReboot, SmallVectorImpl<char> &Result) {
 }
 
 } // end namespace path
+
+namespace fs {
+
+#ifdef __APPLE__
+/// This implementation tries to perform an APFS CoW clone of the file,
+/// which can be much faster and uses less space.
+/// Unfortunately fcopyfile(3) does not support COPYFILE_CLONE, so the
+/// file descriptor variant of this function still uses the default
+/// implementation.
+std::error_code copy_file(const Twine &From, const Twine &To) {
+  uint32_t Flag = COPYFILE_DATA;
+  if (__builtin_available(macos 10.12, *)) {
+    bool IsSymlink;
+    if (std::error_code Error = is_symlink_file(From, IsSymlink))
+      return Error;
+    // COPYFILE_CLONE clones the symlink instead of following it
+    // and returns EEXISTS if the target file already exists.
+    if (!IsSymlink && !exists(To))
+      Flag = COPYFILE_CLONE;
+  }
+
+  int Status =
+      copyfile(From.str().c_str(), To.str().c_str(), /* State */ NULL, Flag);
+
+  if (Status == 0)
+    return std::error_code();
+  return std::error_code(errno, std::generic_category());
+}
+#endif // __APPLE__
+
+} // end namespace fs
 
 } // end namespace sys
 } // end namespace llvm

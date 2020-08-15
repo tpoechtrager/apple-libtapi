@@ -18,6 +18,7 @@
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/ADT/StringSwitch.h"
 #include "llvm/Support/Format.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -38,7 +39,7 @@ Platform mapToSim(Platform platform, bool wantSim) {
   }
 }
 
-static Platform mapToPlatform(const Triple &target) {
+Platform mapToPlatform(const Triple &target) {
   switch (target.getOS()) {
   default:
     return Platform::unknown;
@@ -47,6 +48,8 @@ static Platform mapToPlatform(const Triple &target) {
   case Triple::IOS:
     if (target.isSimulatorEnvironment())
       return Platform::iOSSimulator;
+    if (target.getEnvironment() == Triple::MacABI)
+      return Platform::macCatalyst;
     return Platform::iOS;
   case Triple::TvOS:
     return target.isSimulatorEnvironment() ? Platform::tvOSSimulator
@@ -57,19 +60,23 @@ static Platform mapToPlatform(const Triple &target) {
   }
 }
 
-Platform mapToSinglePlatform(ArrayRef<Triple> targets) {
-  auto result = Platform::unknown;
-  for (const auto &target : targets) {
-    auto p = mapToPlatform(target);
-    if (p == Platform::unknown)
-      return Platform::unknown;
-    if (result == Platform::unknown) {
-      result = p;
-      continue;
-    }
-    if (result != p)
-      return Platform::unknown;
-  }
+Platform mapToPlatformFromXBSEnv(StringRef env) {
+  return StringSwitch<Platform>(env)
+      .Case("ios", Platform::iOS)
+      .Case("watch", Platform::watchOS)
+      .Case("atv", Platform::tvOS)
+      .Case("osx", Platform::macOS)
+      .Case("bridgeos", Platform::bridgeOS)
+      .Case("ios_sim", Platform::iOSSimulator)
+      .Case("watch_sim", Platform::watchOSSimulator)
+      .Case("atv_sim", Platform::tvOSSimulator)
+      .Default(Platform::unknown);
+}
+
+PlatformSet mapToPlatformSet(ArrayRef<Triple> targets) {
+  PlatformSet result;
+  for (const auto &target : targets)
+    result.emplace(mapToPlatform(target));
   return result;
 }
 
@@ -81,22 +88,18 @@ StringRef getPlatformName(Platform platform) {
     return "macOS";
   case Platform::iOS:
     return "iOS";
-  case Platform::iOSSimulator:
-    return "iOSSimulator";
-  case Platform::watchOS:
-    return "watchOS";
-  case Platform::watchOSSimulator:
-    return "watchOSSimulator";
   case Platform::tvOS:
     return "tvOS";
+  case Platform::watchOS:
+    return "watchOS";
+  case Platform::macCatalyst:
+    return "macCatalyst";
+  case Platform::iOSSimulator:
+    return "iOS Simulator";
   case Platform::tvOSSimulator:
-    return "tvOSSimulator";
-  case Platform::bridgeOS:
-    return "bridgeOS";
-  case Platform::iOSMac:
-    return "iOSMac";
-  case Platform::zippered:
-    return "zippered";
+    return "tvOS Simulator";
+  case Platform::watchOSSimulator:
+    return "watchOS Simulator";
   }
 }
 
@@ -108,22 +111,20 @@ std::string getOSAndEnvironmentName(Platform platform, std::string version) {
     return "macos" + version;
   case Platform::iOS:
     return "ios" + version;
-  case Platform::iOSSimulator:
-    return "ios" + version + "-simulator";
-  case Platform::watchOS:
-    return "watchos" + version;
-  case Platform::watchOSSimulator:
-    return "watchos" + version + "-simulator";
   case Platform::tvOS:
     return "tvos" + version;
-  case Platform::tvOSSimulator:
-    return "tvos" + version + "-simulator";
+  case Platform::watchOS:
+    return "watchos" + version;
   case Platform::bridgeOS:
     return "bridgeos" + version;
-  case Platform::iOSMac:
-    return "iOSMac" + version;
-  case Platform::zippered:
-    return "zippered" + version;
+  case Platform::macCatalyst:
+    return "ios" + version + "-macabi";
+  case Platform::iOSSimulator:
+    return "ios" + version + "-simulator";
+  case Platform::tvOSSimulator:
+    return "tvos" + version + "-simulator";
+  case Platform::watchOSSimulator:
+    return "watchos" + version + "-simulator";
   }
 }
 
@@ -132,9 +133,38 @@ raw_ostream &operator<<(raw_ostream &os, Platform platform) {
   return os;
 }
 
+raw_ostream &operator<<(raw_ostream &os, PlatformSet platforms) {
+  os << "[ ";
+  unsigned index = 0;
+  for (auto platform : platforms) {
+    if (index > 0)
+      os << ", ";
+    os << platform;
+    ++index;
+  }
+  os << " ]";
+  return os;
+}
+
 const DiagnosticBuilder &operator<<(const DiagnosticBuilder &db,
                                     Platform platform) {
   db.AddString(getPlatformName(platform));
+  return db;
+}
+
+const DiagnosticBuilder &operator<<(const DiagnosticBuilder &db,
+                                    PlatformSet platforms) {
+  std::string diagString;
+  diagString.append("[ ");
+  unsigned index = 0;
+  for (auto platform : platforms) {
+    if (index > 0)
+      diagString.append(", ");
+    diagString.append(getPlatformName(platform));
+    ++index;
+  }
+  diagString.append(" ]");
+  db.AddString(diagString);
   return db;
 }
 

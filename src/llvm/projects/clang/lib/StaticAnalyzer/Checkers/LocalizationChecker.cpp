@@ -15,7 +15,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "ClangSACheckers.h"
+#include "clang/StaticAnalyzer/Checkers/BuiltinCheckerRegistration.h"
 #include "clang/AST/Attr.h"
 #include "clang/AST/Decl.h"
 #include "clang/AST/DeclObjC.h"
@@ -113,8 +113,7 @@ NonLocalizedStringChecker::NonLocalizedStringChecker() {
 }
 
 namespace {
-class NonLocalizedStringBRVisitor final
-    : public BugReporterVisitorImpl<NonLocalizedStringBRVisitor> {
+class NonLocalizedStringBRVisitor final : public BugReporterVisitor {
 
   const MemRegion *NonLocalizedString;
   bool Satisfied;
@@ -126,7 +125,6 @@ public:
   }
 
   std::shared_ptr<PathDiagnosticPiece> VisitNode(const ExplodedNode *Succ,
-                                                 const ExplodedNode *Pred,
                                                  BugReporterContext &BRC,
                                                  BugReport &BR) override;
 
@@ -1004,7 +1002,6 @@ void NonLocalizedStringChecker::checkPostStmt(const ObjCStringLiteral *SL,
 
 std::shared_ptr<PathDiagnosticPiece>
 NonLocalizedStringBRVisitor::VisitNode(const ExplodedNode *Succ,
-                                       const ExplodedNode *Pred,
                                        BugReporterContext &BRC, BugReport &BR) {
   if (Satisfied)
     return nullptr;
@@ -1107,7 +1104,7 @@ void EmptyLocalizationContextChecker::checkASTDecl(
 void EmptyLocalizationContextChecker::MethodCrawler::VisitObjCMessageExpr(
     const ObjCMessageExpr *ME) {
 
-  // FIXME: We may be able to use PPCallbacks to check for empy context
+  // FIXME: We may be able to use PPCallbacks to check for empty context
   // comments as part of preprocessing and avoid this re-lexing hack.
   const ObjCInterfaceDecl *OD = ME->getReceiverInterface();
   if (!OD)
@@ -1388,7 +1385,7 @@ void PluralMisuseChecker::MethodCrawler::reportPluralMisuseError(
   // Generate the bug report.
   BR.EmitBasicReport(AC->getDecl(), Checker, "Plural Misuse",
                      "Localizability Issue (Apple)",
-                     "Plural cases are not supported accross all languages. "
+                     "Plural cases are not supported across all languages. "
                      "Use a .stringsdict file instead",
                      PathDiagnosticLocation(S, BR.getSourceManager(), AC));
 }
@@ -1401,13 +1398,26 @@ void ento::registerNonLocalizedStringChecker(CheckerManager &mgr) {
   NonLocalizedStringChecker *checker =
       mgr.registerChecker<NonLocalizedStringChecker>();
   checker->IsAggressive =
-      mgr.getAnalyzerOptions().getBooleanOption("AggressiveReport", false);
+      mgr.getAnalyzerOptions().getCheckerBooleanOption("AggressiveReport",
+                                                       false, checker);
+}
+
+bool ento::shouldRegisterNonLocalizedStringChecker(const LangOptions &LO) {
+  return true;
 }
 
 void ento::registerEmptyLocalizationContextChecker(CheckerManager &mgr) {
   mgr.registerChecker<EmptyLocalizationContextChecker>();
 }
 
+bool ento::shouldRegisterEmptyLocalizationContextChecker(const LangOptions &LO) {
+  return true;
+}
+
 void ento::registerPluralMisuseChecker(CheckerManager &mgr) {
   mgr.registerChecker<PluralMisuseChecker>();
+}
+
+bool ento::shouldRegisterPluralMisuseChecker(const LangOptions &LO) {
+  return true;
 }

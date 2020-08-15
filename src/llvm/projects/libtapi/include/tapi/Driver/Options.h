@@ -10,10 +10,10 @@
 #ifndef TAPI_DRIVER_OPTIONS_H
 #define TAPI_DRIVER_OPTIONS_H
 
-#include "tapi/Core/ArchitectureSupport.h"
 #include "tapi/Core/FileManager.h"
 #include "tapi/Core/InterfaceFile.h"
 #include "tapi/Core/LLVM.h"
+#include "tapi/Core/PackedVersion.h"
 #include "tapi/Core/Path.h"
 #include "tapi/Core/Platform.h"
 #include "tapi/Defines.h"
@@ -39,6 +39,7 @@ enum class TAPICommand : unsigned {
   Stubify,
   InstallAPI,
   Reexport,
+  GenerateAPITests,
 };
 
 /// \brief A list of InstallAPI verification modes.
@@ -85,6 +86,21 @@ enum class SnapshotMode {
   Load,
 };
 
+struct LibraryRef {
+  std::string installName;
+  ArchitectureSet architectures;
+
+  LibraryRef() = default;
+
+  LibraryRef(const std::string &name, ArchitectureSet architectures)
+      : installName(name), architectures(architectures) {}
+};
+
+static inline bool operator==(const LibraryRef &lhs, const LibraryRef &rhs) {
+  return std::tie(lhs.installName, lhs.architectures) ==
+         std::tie(rhs.installName, rhs.architectures);
+}
+
 struct SnapshotOptions {
   /// \brief Snapshot mode.
   SnapshotMode snapshotMode = SnapshotMode::Create;
@@ -108,13 +124,20 @@ struct DriverOptions {
   /// \brief Print help.
   bool printHelp = false;
 
+  /// \brief Print hidden options too.
+  bool printHelpHidden = false;
+
   /// \brief List of input paths.
   PathSeq inputs;
 
   /// \brief Output path.
   std::string outputPath;
 
-  bool operator==(const DriverOptions &other) const;
+  /// VFS Overlay paths.
+  PathSeq vfsOverlayPaths;
+
+  /// Clang executable path.
+  std::string clangExecutablePath;
 };
 
 struct ArchiveOptions {
@@ -122,12 +145,10 @@ struct ArchiveOptions {
   ArchiveAction action = ArchiveAction::Unknown;
 
   /// \brief Specifies the archive action architecture to use (if applicable).
-  Architecture arch = Architecture::unknown;
+  Architecture arch = AK_unknown;
 
   /// \brief This allows merging of TBD files containing the same architecture.
   bool allowArchitectureMerges = false;
-
-  bool operator==(const ArchiveOptions &other) const;
 };
 
 struct LinkerOptions {
@@ -144,10 +165,10 @@ struct LinkerOptions {
   bool isDynamicLibrary = false;
 
   /// \brief List of allowable clients to use for the dynamic library.
-  std::vector<InterfaceFileRef> allowableClients;
+  std::vector<LibraryRef> allowableClients;
 
   /// \brief List of reexported libraries to use for the dynamic library.
-  std::vector<InterfaceFileRef> reexportInstallNames;
+  std::vector<LibraryRef> reexportInstallNames;
 
   /// \brief List of reexported libraries to use for the dynamic library.
   std::vector<std::pair<std::string, ArchitectureSet>> reexportedLibraries;
@@ -161,15 +182,19 @@ struct LinkerOptions {
   /// \brief Is application extension safe.
   bool isApplicationExtensionSafe = false;
 
-  bool operator==(const LinkerOptions &other) const;
+  /// \brief Path to the alias list file.
+  std::vector<std::pair<std::string, ArchitectureSet>> aliasLists;
 };
 
 struct FrontendOptions {
   /// \brief Targets to build for.
   std::vector<llvm::Triple> targets;
 
+  /// \brief Additonal target variants to build for.
+  std::vector<llvm::Triple> targetVariants;
+
   /// \brief Specify the language to use for parsing.
-  clang::InputKind::Language language = clang::InputKind::ObjC;
+  clang::InputKind::Language language = clang::InputKind::Unknown;
 
   /// \brief Language standard to use for parsing.
   std::string language_std;
@@ -227,7 +252,8 @@ struct FrontendOptions {
   /// \brief Use Objective-C weak ARC (-fobjc-weak).
   bool useObjectiveCWeakARC = false;
 
-  bool operator==(const FrontendOptions &other) const;
+  /// \brief Verbose, show scan content and options.
+  bool verbose = false;
 };
 
 struct DiagnosticsOptions {
@@ -236,13 +262,11 @@ struct DiagnosticsOptions {
 
   /// \brief Error limit.
   unsigned errorLimit = 0;
-
-  bool operator==(const DiagnosticsOptions &other) const;
 };
 
 struct TAPIOptions {
-  /// \brief Generate additional symbols for code coverage.
-  bool generateCodeCoverageSymbols = false;
+  /// Path to file list (JSON).
+  std::string fileList;
 
   /// \brief Path to public umbrella header.
   std::string publicUmbrellaHeaderPath;
@@ -256,11 +280,17 @@ struct TAPIOptions {
   /// \brief List of extra private header files.
   PathSeq extraPrivateHeaders;
 
+  /// List of extra project header files.
+  PathSeq extraProjectHeaders;
+
   /// \brief List of excluded public header files.
   PathSeq excludePublicHeaders;
 
   /// \brief List of excluded private header files.
   PathSeq excludePrivateHeaders;
+
+  /// \brief List of excluded project header files.
+  PathSeq excludeProjectHeaders;
 
   /// \brief Path to dynamic library for verification.
   std::string verifyAgainst;
@@ -268,14 +298,11 @@ struct TAPIOptions {
   /// \brief Verification mode.
   VerificationMode verificationMode = VerificationMode::ErrorsOnly;
 
+  /// \brief Generate additional symbols for code coverage.
+  bool generateCodeCoverageSymbols = false;
+
   /// \brief Demangle symbols (C++) when printing.
   bool demangle = false;
-
-  /// \brief Scan public headers.
-  bool scanPublicHeaders = true;
-
-  /// \brief Scan private headers.
-  bool scanPrivateHeaders = true;
 
   /// \brief Delete input file after stubbing.
   bool deleteInputFile = false;
@@ -292,8 +319,10 @@ struct TAPIOptions {
   /// \brief Set 'installapi' flag.
   bool setInstallAPIFlag = false;
 
+
   /// \brief Specify the output file type.
-  FileType fileType = FileType::TBD_V3;
+  VersionedFileType fileType = TBDv3;
+
 
   /// \brief Infer the include paths based on the provided/found header files.
   bool inferIncludePaths = true;
@@ -301,8 +330,20 @@ struct TAPIOptions {
   /// \brief Print the API/XPI after a certain phase.
   std::string printAfter;
 
-  bool operator==(const TAPIOptions &other) const;
+  /// \brief Verify the API of zippered frameworks.
+  bool verifyAPI = true;
+
+  /// \brief Skip external headers when verifying the API of a zippered
+  /// framework.
+  bool verifyAPISkipExternalHeaders = true;
+
+  /// \brief Emit API verification errors as warning.
+  bool verifyAPIErrorAsWarning = false;
+
+  /// \brief Whitelist YAML file for API verification.
+  std::string verifyAPIWhitelist; // EquivalentTypes.conf
 };
+
 
 class Options {
 private:
@@ -330,6 +371,7 @@ private:
 
   bool processTAPIOptions(DiagnosticsEngine &diag,
                           llvm::opt::InputArgList &args);
+
 
   void initOptionsFromSnapshot(const Snapshot &snapshot);
 

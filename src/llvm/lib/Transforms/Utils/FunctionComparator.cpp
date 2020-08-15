@@ -18,7 +18,6 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/Hashing.h"
 #include "llvm/ADT/SmallPtrSet.h"
-#include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/Attributes.h"
 #include "llvm/IR/BasicBlock.h"
@@ -377,7 +376,7 @@ int FunctionComparator::cmpConstants(const Constant *L,
     }
   }
   default: // Unknown constant, abort.
-    DEBUG(dbgs() << "Looking at valueID " << L->getValueID() << "\n");
+    LLVM_DEBUG(dbgs() << "Looking at valueID " << L->getValueID() << "\n");
     llvm_unreachable("Constant ValueID not recognized.");
     return -1;
   }
@@ -411,8 +410,6 @@ int FunctionComparator::cmpTypes(Type *TyL, Type *TyR) const {
   switch (TyL->getTypeID()) {
   default:
     llvm_unreachable("Unknown type!");
-    // Fall through in Release mode.
-    LLVM_FALLTHROUGH;
   case Type::IntegerTyID:
     return cmpNumbers(cast<IntegerType>(TyL)->getBitWidth(),
                       cast<IntegerType>(TyR)->getBitWidth());
@@ -560,31 +557,20 @@ int FunctionComparator::cmpOperations(const Instruction *L,
   }
   if (const CmpInst *CI = dyn_cast<CmpInst>(L))
     return cmpNumbers(CI->getPredicate(), cast<CmpInst>(R)->getPredicate());
-  if (const CallInst *CI = dyn_cast<CallInst>(L)) {
-    if (int Res = cmpNumbers(CI->getCallingConv(),
-                             cast<CallInst>(R)->getCallingConv()))
+  if (auto CSL = CallSite(const_cast<Instruction *>(L))) {
+    auto CSR = CallSite(const_cast<Instruction *>(R));
+    if (int Res = cmpNumbers(CSL.getCallingConv(), CSR.getCallingConv()))
       return Res;
-    if (int Res =
-            cmpAttrs(CI->getAttributes(), cast<CallInst>(R)->getAttributes()))
+    if (int Res = cmpAttrs(CSL.getAttributes(), CSR.getAttributes()))
       return Res;
-    if (int Res = cmpOperandBundlesSchema(CI, R))
+    if (int Res = cmpOperandBundlesSchema(L, R))
       return Res;
-    return cmpRangeMetadata(
-        CI->getMetadata(LLVMContext::MD_range),
-        cast<CallInst>(R)->getMetadata(LLVMContext::MD_range));
-  }
-  if (const InvokeInst *II = dyn_cast<InvokeInst>(L)) {
-    if (int Res = cmpNumbers(II->getCallingConv(),
-                             cast<InvokeInst>(R)->getCallingConv()))
-      return Res;
-    if (int Res =
-            cmpAttrs(II->getAttributes(), cast<InvokeInst>(R)->getAttributes()))
-      return Res;
-    if (int Res = cmpOperandBundlesSchema(II, R))
-      return Res;
-    return cmpRangeMetadata(
-        II->getMetadata(LLVMContext::MD_range),
-        cast<InvokeInst>(R)->getMetadata(LLVMContext::MD_range));
+    if (const CallInst *CI = dyn_cast<CallInst>(L))
+      if (int Res = cmpNumbers(CI->getTailCallKind(),
+                               cast<CallInst>(R)->getTailCallKind()))
+        return Res;
+    return cmpRangeMetadata(L->getMetadata(LLVMContext::MD_range),
+                            R->getMetadata(LLVMContext::MD_range));
   }
   if (const InsertValueInst *IVI = dyn_cast<InsertValueInst>(L)) {
     ArrayRef<unsigned> LIndices = IVI->getIndices();
@@ -868,8 +854,8 @@ int FunctionComparator::compare() {
     if (int Res = cmpBasicBlocks(BBL, BBR))
       return Res;
 
-    const TerminatorInst *TermL = BBL->getTerminator();
-    const TerminatorInst *TermR = BBR->getTerminator();
+    const Instruction *TermL = BBL->getTerminator();
+    const Instruction *TermR = BBR->getTerminator();
 
     assert(TermL->getNumSuccessors() == TermR->getNumSuccessors());
     for (unsigned i = 0, e = TermL->getNumSuccessors(); i != e; ++i) {
@@ -925,7 +911,7 @@ FunctionComparator::FunctionHash FunctionComparator::functionHash(Function &F) {
   H.add(F.arg_size());
 
   SmallVector<const BasicBlock *, 8> BBs;
-  SmallSet<const BasicBlock *, 16> VisitedBBs;
+  SmallPtrSet<const BasicBlock *, 16> VisitedBBs;
 
   // Walk the blocks in the same order as FunctionComparator::cmpBasicBlocks(),
   // accumulating the hash of the function "structure." (BB and opcode sequence)
@@ -939,7 +925,7 @@ FunctionComparator::FunctionHash FunctionComparator::functionHash(Function &F) {
     for (auto &Inst : *BB) {
       H.add(Inst.getOpcode());
     }
-    const TerminatorInst *Term = BB->getTerminator();
+    const Instruction *Term = BB->getTerminator();
     for (unsigned i = 0, e = Term->getNumSuccessors(); i != e; ++i) {
       if (!VisitedBBs.insert(Term->getSuccessor(i)).second)
         continue;

@@ -1,4 +1,4 @@
-//===- lib/Core/APIVisitor.cpp - TAPI API Visitor ---------------*- C++ -*-===//
+//===- lib/Core/APIMutator.cpp - TAPI API Visitor ---------------*- C++ -*-===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -13,14 +13,22 @@ using namespace llvm;
 
 TAPI_NAMESPACE_INTERNAL_BEGIN
 
+APIMutator::~APIMutator() {}
+
+void APIMutator::visitGlobal(GlobalRecord &) {}
+void APIMutator::visitEnumConstant(EnumConstantRecord &) {}
+void APIMutator::visitObjCInterface(ObjCInterfaceRecord &) {}
+void APIMutator::visitObjCCategory(ObjCCategoryRecord &) {}
+void APIMutator::visitObjCProtocol(ObjCProtocolRecord &) {}
+void APIMutator::visitTypeDef(APIRecord &) {}
+
 APIVisitor::~APIVisitor() {}
 
-void APIVisitor::visitGlobalVariable(const API::GlobalRecord &) {}
-void APIVisitor::visitFunction(const API::FunctionRecord &) {}
-void APIVisitor::visitEnumConstant(const API::EnumConstantRecord &) {}
-void APIVisitor::visitObjCInterface(const API::ObjCInterfaceRecord &) {}
-void APIVisitor::visitObjCCategory(const API::ObjCCategoryRecord &) {}
-void APIVisitor::visitObjCProtocol(const API::ObjCProtocolRecord &) {}
-void APIVisitor::visitTypeDef(const API::GlobalRecord &) {}
+void APIVisitor::visitGlobal(const GlobalRecord &) {}
+void APIVisitor::visitEnumConstant(const EnumConstantRecord &) {}
+void APIVisitor::visitObjCInterface(const ObjCInterfaceRecord &) {}
+void APIVisitor::visitObjCCategory(const ObjCCategoryRecord &) {}
+void APIVisitor::visitObjCProtocol(const ObjCProtocolRecord &) {}
+void APIVisitor::visitTypeDef(const APIRecord &) {}
 
 TAPI_NAMESPACE_INTERNAL_END

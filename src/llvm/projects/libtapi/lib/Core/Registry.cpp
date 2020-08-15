@@ -14,10 +14,7 @@
 
 #include "tapi/Core/Registry.h"
 #include "tapi/Core/MachODylibReader.h"
-#include "tapi/Core/ReexportFileWriter.h"
-#include "tapi/Core/TextStub_v1.h"
-#include "tapi/Core/TextStub_v2.h"
-#include "tapi/Core/TextStub_v3.h"
+#include "tapi/Core/TextStub.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/raw_ostream.h"
@@ -35,7 +32,7 @@ class DiagnosticReader : public Reader {
                FileType types = FileType::All) const override;
   Expected<FileType> getFileType(file_magic magic,
                                  MemoryBufferRef bufferRef) const override;
-  Expected<std::unique_ptr<File>>
+  Expected<std::unique_ptr<InterfaceFile>>
   readFile(std::unique_ptr<MemoryBuffer> memBuffer, ReadFlags readFlags,
            ArchitectureSet arches) const override;
 };
@@ -57,7 +54,7 @@ DiagnosticReader::getFileType(file_magic magic,
   return Invalid;
 }
 
-Expected<std::unique_ptr<File>>
+Expected<std::unique_ptr<InterfaceFile>>
 DiagnosticReader::readFile(std::unique_ptr<MemoryBuffer> memBuffer,
                            ReadFlags readFlags, ArchitectureSet arches) const {
   auto str = memBuffer->getBuffer().trim();
@@ -94,16 +91,17 @@ Expected<FileType> Registry::getFileType(MemoryBufferRef memBuffer) const {
   return FileType::Invalid;
 }
 
-bool Registry::canWrite(const File *file) const {
+bool Registry::canWrite(const InterfaceFile *file,
+                        VersionedFileType fileType) const {
   for (const auto &writer : _writers) {
-    if (writer->canWrite(file))
+    if (writer->canWrite(file, fileType))
       return true;
   }
 
   return false;
 }
 
-Expected<std::unique_ptr<File>>
+Expected<std::unique_ptr<InterfaceFile>>
 Registry::readFile(std::unique_ptr<MemoryBuffer> memBuffer, ReadFlags readFlags,
                    ArchitectureSet arches) const {
   auto data = memBuffer->getBuffer();
@@ -119,25 +117,28 @@ Registry::readFile(std::unique_ptr<MemoryBuffer> memBuffer, ReadFlags readFlags,
       "unsupported file type", std::make_error_code(std::errc::not_supported));
 }
 
-Error Registry::writeFile(const File *file, const std::string &path) const {
+Error Registry::writeFile(const std::string &path, const InterfaceFile *file,
+                          VersionedFileType fileType) const {
   std::error_code ec;
-  raw_fd_ostream os(path, ec, sys::fs::F_Text);
-  if (ec)
-    return errorCodeToError(ec);
-  auto error = writeFile(os, file);
-  if (error)
-    return error;
-  os.close();
+  {
+    raw_fd_ostream os(path, ec, sys::fs::F_Text);
+    if (ec)
+      return errorCodeToError(ec);
+    auto error = writeFile(os, file, fileType);
+    if (error)
+      return error;
+  }
   if (ec)
     return errorCodeToError(ec);
   return Error::success();
 }
 
-Error Registry::writeFile(raw_ostream &os, const File *file) const {
+Error Registry::writeFile(raw_ostream &os, const InterfaceFile *file,
+                          VersionedFileType fileType) const {
   for (const auto &writer : _writers) {
-    if (!writer->canWrite(file))
+    if (!writer->canWrite(file, fileType))
       continue;
-    return writer->writeFile(os, file);
+    return writer->writeFile(os, file, fileType);
   }
 
   return make_error<StringError>(
@@ -156,6 +157,8 @@ void Registry::addYAMLReaders() {
       std::unique_ptr<DocumentHandler>(new stub::v2::YAMLDocumentHandler));
   reader->add(
       std::unique_ptr<DocumentHandler>(new stub::v3::YAMLDocumentHandler));
+  reader->add(
+      std::unique_ptr<DocumentHandler>(new stub::v4::YAMLDocumentHandler));
   add(std::unique_ptr<Reader>(std::move(reader)));
 }
 
@@ -167,13 +170,13 @@ void Registry::addYAMLWriters() {
       std::unique_ptr<DocumentHandler>(new stub::v2::YAMLDocumentHandler));
   writer->add(
       std::unique_ptr<DocumentHandler>(new stub::v3::YAMLDocumentHandler));
+  writer->add(
+      std::unique_ptr<DocumentHandler>(new stub::v4::YAMLDocumentHandler));
   add(std::unique_ptr<Writer>(std::move(writer)));
 }
 
-void Registry::addReexportWriters() {
-  add(std::unique_ptr<Writer>(new ReexportFileWriter));
+void Registry::addDiagnosticReader() {
+  add(make_unique<DiagnosticReader>());
 }
-
-void Registry::addDiagnosticReader() { add(make_unique<DiagnosticReader>()); }
 
 TAPI_NAMESPACE_INTERNAL_END

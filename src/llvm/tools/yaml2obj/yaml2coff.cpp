@@ -8,7 +8,7 @@
 //===----------------------------------------------------------------------===//
 ///
 /// \file
-/// \brief The COFF component of yaml2obj.
+/// The COFF component of yaml2obj.
 ///
 //===----------------------------------------------------------------------===//
 
@@ -46,7 +46,8 @@ struct COFFParser {
 
   bool isPE() const { return Obj.OptionalHeader.hasValue(); }
   bool is64Bit() const {
-    return Obj.Header.Machine == COFF::IMAGE_FILE_MACHINE_AMD64;
+    return Obj.Header.Machine == COFF::IMAGE_FILE_MACHINE_AMD64 ||
+           Obj.Header.Machine == COFF::IMAGE_FILE_MACHINE_ARM64;
   }
 
   uint32_t getFileAlignment() const {
@@ -233,7 +234,10 @@ static bool layoutCOFF(COFFParser &CP) {
       }
     } else if (S.Name == ".debug$T") {
       if (S.SectionData.binary_size() == 0)
-        S.SectionData = CodeViewYAML::toDebugT(S.DebugT, CP.Allocator);
+        S.SectionData = CodeViewYAML::toDebugT(S.DebugT, CP.Allocator, S.Name);
+    } else if (S.Name == ".debug$P") {
+      if (S.SectionData.binary_size() == 0)
+        S.SectionData = CodeViewYAML::toDebugT(S.DebugP, CP.Allocator, S.Name);
     } else if (S.Name == ".debug$H") {
       if (S.DebugH.hasValue() && S.SectionData.binary_size() == 0)
         S.SectionData = CodeViewYAML::toDebugH(*S.DebugH, CP.Allocator);

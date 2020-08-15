@@ -6,7 +6,7 @@
 // License. See LICENSE.TXT for details.
 //
 //===----------------------------------------------------------------------===//
-#define TAPI_DRIVER_SNAPSHOT_H
+
 #ifndef TAPI_DRIVER_SNAPSHOT_H
 #define TAPI_DRIVER_SNAPSHOT_H
 
@@ -26,11 +26,13 @@ namespace llvm {
 namespace yaml {
 template <typename T> struct MappingTraits;
 }
-} // namespace llvm
+}
 
 TAPI_NAMESPACE_INTERNAL_BEGIN
 
-using FileMapping = std::map<std::string, uint64_t>;
+using FileMapping = std::map<std::string, std::string>;
+using SymlinkMapping = std::map<std::string, std::string>;
+using DirectorySet = std::set<std::string>;
 
 /// \brief A snapshot records all options and files that are accessed during a
 ///        TAPI invocation and stored to disk.
@@ -116,6 +118,8 @@ private:
   IntrusiveRefCntPtr<SnapshotFileSystem> fs;
 
   FileMapping pathToHash;
+  SymlinkMapping symlinkToPath;
+  DirectorySet directorySet;
   PathSeq files;
   PathSeq directories;
   PathSeq normalizedDirectories;
@@ -127,6 +131,8 @@ private:
   bool wantSnapshot = false;
   bool snapshotWritten = false;
   MappingContext context;
+
+  void findAndRecordSymlinks(SmallVectorImpl<char> &path, int level);
 
   template <typename T> friend struct llvm::yaml::MappingTraits;
   friend class Options;

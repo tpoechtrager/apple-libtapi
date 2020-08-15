@@ -15,8 +15,8 @@
 #ifndef TAPI_CORE_AVAILABILITY_INFO_H
 #define TAPI_CORE_AVAILABILITY_INFO_H
 
-#include "tapi/Core/ArchitectureSupport.h"
 #include "tapi/Core/LLVM.h"
+#include "tapi/Core/PackedVersion.h"
 #include "tapi/Defines.h"
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/Support/Error.h"
@@ -49,6 +49,10 @@ struct AvailabilityInfo {
         "availabilities do not match",
         std::make_error_code(std::errc::not_supported));
   }
+
+  std::string str() const;
+
+  bool isUnavailable() const { return _unavailable; }
 
   void print(raw_ostream &os) const;
 

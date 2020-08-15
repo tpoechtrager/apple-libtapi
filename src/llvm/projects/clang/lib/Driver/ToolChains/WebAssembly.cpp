@@ -11,6 +11,7 @@
 #include "CommonArgs.h"
 #include "clang/Driver/Compilation.h"
 #include "clang/Driver/Driver.h"
+#include "clang/Driver/DriverDiagnostic.h"
 #include "clang/Driver/Options.h"
 #include "llvm/Option/ArgList.h"
 
@@ -21,15 +22,11 @@ using namespace clang;
 using namespace llvm::opt;
 
 wasm::Linker::Linker(const ToolChain &TC)
-  : GnuTool("wasm::Linker", "lld", TC) {}
+    : GnuTool("wasm::Linker", "lld", TC) {}
 
-bool wasm::Linker::isLinkJob() const {
-  return true;
-}
+bool wasm::Linker::isLinkJob() const { return true; }
 
-bool wasm::Linker::hasIntegratedCPP() const {
-  return false;
-}
+bool wasm::Linker::hasIntegratedCPP() const { return false; }
 
 void wasm::Linker::ConstructJob(Compilation &C, const JobAction &JA,
                                 const InputInfo &Output,
@@ -40,8 +37,6 @@ void wasm::Linker::ConstructJob(Compilation &C, const JobAction &JA,
   const ToolChain &ToolChain = getToolChain();
   const char *Linker = Args.MakeArgString(ToolChain.GetLinkerPath());
   ArgStringList CmdArgs;
-  CmdArgs.push_back("-flavor");
-  CmdArgs.push_back("wasm");
 
   if (Args.hasArg(options::OPT_s))
     CmdArgs.push_back("--strip-all");
@@ -62,8 +57,6 @@ void wasm::Linker::ConstructJob(Compilation &C, const JobAction &JA,
     if (Args.hasArg(options::OPT_pthread))
       CmdArgs.push_back("-lpthread");
 
-    CmdArgs.push_back("-allow-undefined-file");
-    CmdArgs.push_back(Args.MakeArgString(ToolChain.GetFilePath("wasm.syms")));
     CmdArgs.push_back("-lc");
     AddRunTimeLibs(ToolChain, ToolChain.getDriver(), CmdArgs, Args);
   }
@@ -76,7 +69,7 @@ void wasm::Linker::ConstructJob(Compilation &C, const JobAction &JA,
 
 WebAssembly::WebAssembly(const Driver &D, const llvm::Triple &Triple,
                          const llvm::opt::ArgList &Args)
-  : ToolChain(D, Triple, Args) {
+    : ToolChain(D, Triple, Args) {
 
   assert(Triple.isArch32Bit() != Triple.isArch64Bit());
 
@@ -118,7 +111,14 @@ ToolChain::RuntimeLibType WebAssembly::GetDefaultRuntimeLibType() const {
   return ToolChain::RLT_CompilerRT;
 }
 
-ToolChain::CXXStdlibType WebAssembly::GetCXXStdlibType(const ArgList &Args) const {
+ToolChain::CXXStdlibType
+WebAssembly::GetCXXStdlibType(const ArgList &Args) const {
+  if (Arg *A = Args.getLastArg(options::OPT_stdlib_EQ)) {
+    StringRef Value = A->getValue();
+    if (Value != "libc++")
+      getDriver().Diag(diag::err_drv_invalid_stdlib_name)
+          << A->getAsString(Args);
+  }
   return ToolChain::CST_Libcxx;
 }
 
@@ -134,6 +134,19 @@ void WebAssembly::AddClangCXXStdlibIncludeArgs(const ArgList &DriverArgs,
       !DriverArgs.hasArg(options::OPT_nostdincxx))
     addSystemInclude(DriverArgs, CC1Args,
                      getDriver().SysRoot + "/include/c++/v1");
+}
+
+void WebAssembly::AddCXXStdlibLibArgs(const llvm::opt::ArgList &Args,
+                                      llvm::opt::ArgStringList &CmdArgs) const {
+
+  switch (GetCXXStdlibType(Args)) {
+  case ToolChain::CST_Libcxx:
+    CmdArgs.push_back("-lc++");
+    CmdArgs.push_back("-lc++abi");
+    break;
+  case ToolChain::CST_Libstdcxx:
+    llvm_unreachable("invalid stdlib name");
+  }
 }
 
 std::string WebAssembly::getThreadModel() const {

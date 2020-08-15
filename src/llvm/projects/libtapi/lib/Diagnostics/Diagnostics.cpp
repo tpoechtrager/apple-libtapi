@@ -14,7 +14,6 @@
 
 #include "tapi/Diagnostics/Diagnostics.h"
 #include "tapi/Core/LLVM.h"
-#include "tapi/Core/STLExtras.h"
 #include "tapi/Defines.h"
 #include "clang/Basic/Diagnostic.h"
 #include "clang/Basic/DiagnosticOptions.h"
@@ -79,7 +78,8 @@ DiagnosticsEngine::DiagnosticsEngine(raw_ostream &errorStream) {
   diag = new clang::DiagnosticsEngine(
       new clang::DiagnosticIDs(), diagOpts.get(),
       new clang::TextDiagnosticPrinter(errorStream, diagOpts.get()));
-  assert(is_sorted(diagInfo) && "diagnostic array should be sorted");
+  assert(std::is_sorted(std::begin(diagInfo), std::end(diagInfo)) &&
+         "diagnostic array should be sorted");
   diag->getClient()->BeginSourceFile(langOpts);
 }
 
@@ -87,11 +87,14 @@ DiagnosticsEngine::DiagnosticsEngine(clang::DiagnosticConsumer *client) {
   diagOpts = createDiagnosticsEngineOpts();
   diag = new clang::DiagnosticsEngine(new clang::DiagnosticIDs(),
                                       diagOpts.get(), client);
-  assert(is_sorted(diagInfo) && "diagnostic array should be sorted");
+  assert(std::is_sorted(std::begin(diagInfo), std::end(diagInfo)) &&
+         "diagnostic array should be sorted");
   diag->getClient()->BeginSourceFile(langOpts);
 }
 
-DiagnosticsEngine::~DiagnosticsEngine() { diag->getClient()->EndSourceFile(); }
+DiagnosticsEngine::~DiagnosticsEngine() {
+  diag->getClient()->EndSourceFile();
+}
 
 void DiagnosticsEngine::notePriorDiagnosticFrom(DiagnosticsEngine &diag2) {
   diag->notePriorDiagnosticFrom(*diag2.diag);
@@ -104,8 +107,9 @@ DiagnosticsEngine::getDiagnosticLevel(unsigned diagID) {
   assert(index < diagInfoSize && "invalid Tapi DiagInfo index");
   auto &record = diagInfo[index];
 
-  if (ignoredDiags.count(diagID))
-    return clang::DiagnosticIDs::Ignored;
+  auto mapEntry = diagLevelMap.find(diagID);
+  if (mapEntry != diagLevelMap.end())
+    return mapEntry->second;
 
   if (record.Class == CLASS_NOTE)
     return clang::DiagnosticIDs::Note;
@@ -115,6 +119,13 @@ DiagnosticsEngine::getDiagnosticLevel(unsigned diagID) {
     return clang::DiagnosticIDs::Error;
 
   return level;
+}
+
+void DiagnosticsEngine::setDiagLevel(unsigned diagID,
+    clang::DiagnosticIDs::Level level) {
+  auto entry = diagLevelMap.insert({diagID, level});
+  if (!entry.second)
+    entry.first->second = level;
 }
 
 clang::DiagnosticBuilder DiagnosticsEngine::report(clang::SourceLocation loc,
@@ -143,7 +154,8 @@ void DiagnosticsEngine::setupDiagnosticsFile(StringRef output) {
     auto fileOS = llvm::make_unique<llvm::raw_fd_ostream>(
         output, ec, llvm::sys::fs::F_Append | llvm::sys::fs::F_Text);
     if (ec) {
-      report(diag::err_cannot_open_file) << output << ec.message();
+      report(diag::err_cannot_open_file)
+          << output << ec.message();
     } else {
       fileOS->SetUnbuffered();
       os = fileOS.get();

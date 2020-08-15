@@ -26,20 +26,20 @@ using namespace tapi::internal;
 namespace llvm {
 namespace yaml {
 
-template <> struct DocumentListTraits<std::vector<const File *>> {
-  static size_t size(IO &io, std::vector<const File *> &seq) {
+template <> struct DocumentListTraits<std::vector<const InterfaceFile *>> {
+  static size_t size(IO &io, std::vector<const InterfaceFile *> &seq) {
     return seq.size();
   }
-  static const File *&element(IO &io, std::vector<const File *> &seq,
-                              size_t index) {
+  static const InterfaceFile *&
+  element(IO &io, std::vector<const InterfaceFile *> &seq, size_t index) {
     if (index >= seq.size())
       seq.resize(index + 1);
     return seq[index];
   }
 };
 
-template <> struct MappingTraits<const File *> {
-  static void mapping(IO &io, const File *&file) {
+template <> struct MappingTraits<const InterfaceFile *> {
+  static void mapping(IO &io, const InterfaceFile *&file) {
     auto ctx = reinterpret_cast<YAMLContext *>(io.getContext());
     assert(ctx != nullptr);
     ctx->base.handleDocument(io, file);
@@ -72,9 +72,10 @@ bool YAMLBase::canRead(MemoryBufferRef memBufferRef, FileType types) const {
   return false;
 }
 
-bool YAMLBase::canWrite(const File *file) const {
+bool YAMLBase::canWrite(const InterfaceFile *file,
+                        VersionedFileType fileType) const {
   for (const auto &handler : _documentHandlers) {
-    if (handler->canWrite(file))
+    if (handler->canWrite(file, fileType))
       return true;
   }
   return false;
@@ -89,7 +90,7 @@ FileType YAMLBase::getFileType(MemoryBufferRef bufferRef) const {
   return FileType::Invalid;
 }
 
-bool YAMLBase::handleDocument(IO &io, const File *&file) const {
+bool YAMLBase::handleDocument(IO &io, const InterfaceFile *&file) const {
   for (const auto &handler : _documentHandlers) {
     if (handler->handleDocument(io, file))
       return true;
@@ -107,7 +108,7 @@ Expected<FileType> YAMLReader::getFileType(file_magic magic,
   return YAMLBase::getFileType(memBufferRef);
 }
 
-Expected<std::unique_ptr<File>>
+Expected<std::unique_ptr<InterfaceFile>>
 YAMLReader::readFile(std::unique_ptr<MemoryBuffer> memBuffer,
                      ReadFlags readFlags, ArchitectureSet arches) const {
   // Create YAML Input Reader.
@@ -117,7 +118,7 @@ YAMLReader::readFile(std::unique_ptr<MemoryBuffer> memBuffer,
   llvm::yaml::Input yin(memBuffer->getBuffer(), &ctx, DiagHandler, &ctx);
 
   // Fill vector with File objects created by parsing yaml.
-  std::vector<const File *> files;
+  std::vector<const InterfaceFile *> files;
   yin >> files;
 
   if (yin.error())
@@ -127,30 +128,33 @@ YAMLReader::readFile(std::unique_ptr<MemoryBuffer> memBuffer,
   if (files.empty())
     return errorCodeToError(std::make_error_code(std::errc::not_supported));
 
-  auto *file = const_cast<File *>(files.front());
+  auto *file = const_cast<InterfaceFile *>(files.front());
   file->setMemoryBuffer(std::move(memBuffer));
 
   for (auto it = std::next(files.begin()); it != files.end(); ++it) {
-    auto *document = const_cast<File *>(*it);
-    file->addDocument(std::unique_ptr<File>(document));
+    auto *document = const_cast<InterfaceFile *>(*it);
+    file->addDocument(std::unique_ptr<InterfaceFile>(document));
   }
 
-  return std::unique_ptr<File>(file);
+  return std::unique_ptr<InterfaceFile>(file);
 }
 
-bool YAMLWriter::canWrite(const File *file) const {
-  return YAMLBase::canWrite(file);
+bool YAMLWriter::canWrite(const InterfaceFile *file,
+                          VersionedFileType fileType) const {
+  return YAMLBase::canWrite(file, fileType);
 }
 
-Error YAMLWriter::writeFile(raw_ostream &os, const File *file) const {
+Error YAMLWriter::writeFile(raw_ostream &os, const InterfaceFile *file,
+                            VersionedFileType fileType) const {
   if (file == nullptr)
     return errorCodeToError(std::make_error_code(std::errc::invalid_argument));
 
   YAMLContext ctx(*this);
   ctx.path = file->getPath();
+  ctx.fileType = fileType;
   llvm::yaml::Output yout(os, &ctx, /*WrapColumn=*/80);
 
-  std::vector<const File *> files;
+  std::vector<const InterfaceFile *> files;
   files.emplace_back(file);
 
   for (auto &it : file->_documents)

@@ -53,7 +53,7 @@ with CTU analysis enabled, execute:
     
     $ analyze-build --ctu
 
-For CTU analysis an additional (function-definition) collection-phase is required. 
+For CTU analysis an additional (external definition) collection-phase is required. 
 For debugging purposes, it is possible to separately execute the collection 
 and the analysis phase. By doing this, the intermediate files used for 
 the analysis are kept on the disk in `./ctu-dir`.
@@ -84,11 +84,11 @@ tool has three distinct model to run the analyzer:
     This is the default behaviour, can be enforced with `--override-compiler`
     flag.
 
-2.  Use special library to intercept compiler calls durring the build process.
+2.  Use special library to intercept compiler calls during the build process.
     The analyzer run against each modules after the build finished.
     Use `--intercept-first` flag to get this model.
 
-3.  Use compiler wrappers to intercept compiler calls durring the build process.
+3.  Use compiler wrappers to intercept compiler calls during the build process.
     The analyzer run against each modules after the build finished.
     Use `--intercept-first` and `--override-compiler` flags together to get
     this model.
@@ -105,7 +105,7 @@ process removes removes intermediate modules (generated sources) the analyzer
 output still kept.
 
 The 2. and 3. generate the compilation database first, and filters out those
-modules which are not exists. So, it's suitable for incremental analysis durring
+modules which are not exists. So, it's suitable for incremental analysis during
 the development.
 
 The 2. mode is available only on FreeBSD and Linux. Where library preload
