@@ -7,7 +7,7 @@ https://github.com/apple/llvm-project/commits/apple/stable/20190104
 
 ## Dependencies: ##
 
-CMake, Python and GCC or Clang
+CMake, Python and Clang or GCC 8+
 
 ## Installation: ##
 
