@@ -1763,7 +1763,7 @@ static void printCPUType(uint32_t cputype, uint32_t cpusubtype) {
       outs() << "    cputype CPU_TYPE_ARM64\n";
       outs() << "    cpusubtype CPU_SUBTYPE_ARM64_ALL\n";
       break;
-    case Mach0::CPU_SUBTYPE_ARM64E:
+    case MachO::CPU_SUBTYPE_ARM64E:
       outs() << "    cputype CPU_TYPE_ARM64\n";
       outs() << "    cpusubtype CPU_SUBTYPE_ARM64E\n";
       break;
