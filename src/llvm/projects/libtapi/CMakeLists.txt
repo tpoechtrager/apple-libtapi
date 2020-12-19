@@ -162,6 +162,23 @@ macro(add_tapi_executable name)
   set_target_properties(${name} PROPERTIES FOLDER "Tapi executables")
 endmacro(add_tapi_executable)
 
+function(tapi_clang_tablegen)
+  cmake_parse_arguments(CTG "" "SOURCE;TARGET" "" ${ARGN})
+
+  if( NOT CTG_SOURCE )
+    message(FATAL_ERROR "SOURCE source-file required by clang_tablegen")
+  endif()
+
+  set( LLVM_TARGET_DEFINITIONS ${CTG_SOURCE} )
+  tablegen(CLANG ${CTG_UNPARSED_ARGUMENTS})
+
+  if(CTG_TARGET)
+    add_public_tablegen_target(${CTG_TARGET})
+    set_target_properties( ${CTG_TARGET} PROPERTIES FOLDER "Tapi tablegenning")
+    set_property(GLOBAL APPEND PROPERTY TAPI_TABLEGEN_TARGETS ${CTG_TARGET})
+  endif()
+endfunction(tapi_clang_tablegen)
+
 include_directories(BEFORE
   ${CMAKE_CURRENT_BINARY_DIR}/include
   ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -172,10 +189,17 @@ option(TAPI_INCLUDE_TESTS "Generate build targets for the TAPI unit tests."
 option(TAPI_INCLUDE_DOCS "Generate build targets for the TAPI docs."
       ${LLVM_INCLUDE_DOCS})
 
+if (NOT DEFINED CLANG_VERSION)
+  set(CLANG_VERSION "${LLVM_VERSION_MAJOR}.${LLVM_VERSION_MINOR}.${LLVM_VERSION_PATCH}")
+endif ()
+if (NOT DEFINED CLANG_TABLEGEN_EXE)
+  set(CLANG_TABLEGEN_EXE "${LLVM_TOOLS_BINARY_DIR}/clang-tblgen")
+endif ()
+
 # Include must go first.
 add_subdirectory(include)
 # All targets below may depend on all tablegen'd files.
-#get_property(TAPI_TABLEGEN_TARGETS GLOBAL PROPERTY TAPI_TABLEGEN_TARGETS)
-#list(APPEND LLVM_COMMON_DEPENDS ${TAPI_TABLEGEN_TARGETS})
+get_property(TAPI_TABLEGEN_TARGETS GLOBAL PROPERTY TAPI_TABLEGEN_TARGETS)
+list(APPEND LLVM_COMMON_DEPENDS ${TAPI_TABLEGEN_TARGETS})
 add_subdirectory(lib)
 add_subdirectory(tools)
