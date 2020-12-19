@@ -16,7 +16,8 @@ add_tapi_executable(tapi
   )
 
 target_link_libraries(tapi
-  tapiDriver
+  PRIVATE
+    tapiDriver
   )
 
 if (TAPI_BUILD_LIBIOSSDK)
