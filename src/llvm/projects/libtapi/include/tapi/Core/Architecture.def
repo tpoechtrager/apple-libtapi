@@ -4,6 +4,15 @@
 #define ARCHINFO(arch)
 #endif
 
+
+#ifdef SUPPORT_ARCH_PPC
+ARCHINFO(ppc, MachO::CPU_TYPE_POWERPC, MachO::CPU_SUBTYPE_POWERPC_ALL)
+#endif
+
+#ifdef SUPPORT_ARCH_PPC64
+ARCHINFO(ppc64, MachO::CPU_TYPE_POWERPC64, MachO::CPU_SUBTYPE_POWERPC_ALL)
+#endif
+
 ///
 /// X86 architectures sorted by cpu type and sub type id.
 ///
