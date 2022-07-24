@@ -8,7 +8,7 @@ pushd build &>/dev/null
 
 INSTALLPREFIX=$(cat INSTALLPREFIX)
 
-$MAKE install-libtapi install-tapi-headers -j $JOBS
+$MAKE install-libtapi install-tapi-headers install-tapi -j $JOBS
 
 popd &>/dev/null
 popd &>/dev/null
