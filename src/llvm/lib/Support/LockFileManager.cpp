@@ -31,7 +31,7 @@
 #include <unistd.h>
 #endif
 
-#if defined(__APPLE__) && defined(__MAC_OS_X_VERSION_MIN_REQUIRED) && (__MAC_OS_X_VERSION_MIN_REQUIRED > 1050)
+#if defined(__APPLE__) && defined(__MAC_OS_X_VERSION_MIN_REQUIRED) && (__MAC_OS_X_VERSION_MIN_REQUIRED > 1050) && !defined(__POWERPC__)
 #define USE_OSX_GETHOSTUUID 1
 #else
 #define USE_OSX_GETHOSTUUID 0
