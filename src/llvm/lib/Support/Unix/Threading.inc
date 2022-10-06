@@ -154,7 +154,11 @@ void llvm::set_thread_name(const Twine &Name) {
   ::pthread_setname_np(::pthread_self(), "%s",
     const_cast<char *>(NameStr.data()));
 #elif defined(__APPLE__)
+#if defined(__POWERPC__)
+  ::pthread_setname_np((char*) NameStr.data());
+#else
   ::pthread_setname_np(NameStr.data());
+#endif
 #endif
 }
 
