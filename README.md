@@ -1,4 +1,4 @@
-# Apple TAPI library - Version 1100.0.11; API: 1.6.0 #
+# Apple TAPI library - Version 1300.0.6.5; API: 1.6.0 #
 
 Sources taken from: 
 
@@ -7,7 +7,7 @@ https://github.com/apple/llvm-project/commits/apple/stable/20190104
 
 ## Dependencies: ##
 
-CMake, Python and Clang or GCC 8+
+CMake, Python and Clang or GCC
 
 ## Installation: ##
 
@@ -23,7 +23,3 @@ size even further.
 The text-based dynamic library stub file format (.tbd) is a human readable and
 editable YAML text file. The _TAPI_ projects uses the _LLVM_ YAML parser to read
 those files and provides this functionality to the linker as a dynamic library.
-
-## Travis CI ##
-
-[![Build Status](https://travis-ci.org/tpoechtrager/apple-libtapi.svg?branch=1100.0.11)](https://travis-ci.org/tpoechtrager/apple-libtapi)

@@ -1,9 +1,8 @@
 //===- llvm/ADT/simple_ilist.h - Simple Intrusive List ----------*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 
@@ -53,7 +52,7 @@ namespace llvm {
 /// to calling \a std::for_each() on the range to be discarded.
 ///
 /// The currently available \p Options customize the nodes in the list.  The
-/// same options must be specified in the \a ilist_node instantation for
+/// same options must be specified in the \a ilist_node instantiation for
 /// compatibility (although the order is irrelevant).
 /// \li Use \a ilist_tag to designate which ilist_node for a given \p T this
 /// list should use.  This is useful if a type \p T is part of multiple,

@@ -1,4 +1,5 @@
 import("//llvm/utils/gn/build/symlink_or_copy.gni")
+import("//llvm/utils/gn/build/write_cmake_config.gni")
 import("//llvm/version.gni")
 
 symlinks = [
@@ -18,9 +19,7 @@ symlinks = [
 ]
 foreach(target, symlinks) {
   symlink_or_copy(target[0]) {
-    deps = [
-      ":clang",
-    ]
+    deps = [ ":clang" ]
     source = "clang"
     output = "$root_out_dir/bin/${target[1]}"
   }
@@ -35,20 +34,10 @@ group("symlinks") {
 }
 
 if (host_os == "mac") {
-  action("write_info_plist") {
-    script = "//llvm/utils/gn/build/write_cmake_config.py"
-    sources = [
-      "Info.plist.in",
-    ]
-    outputs = [
-      "$target_gen_dir/Info.plist",
-    ]
-
-    args = [
-      "-o",
-      rebase_path(outputs[0], root_out_dir),
-      rebase_path(sources[0], root_out_dir),
-
+  write_cmake_config("write_info_plist") {
+    input = "Info.plist.in"
+    output = "$target_gen_dir/Info.plist"
+    values = [
       "TOOL_INFO_BUILD_VERSION=$llvm_version_major.$llvm_version_minor",
       "TOOL_INFO_NAME=clang",
       "TOOL_INFO_UTI=org.llvm.clang",
@@ -68,6 +57,7 @@ executable("clang") {
     "//clang/lib/FrontendTool",
     "//clang/lib/Headers",
     "//clang/tools/clang-offload-bundler",
+    "//clang/tools/clang-offload-wrapper",
     "//llvm/include/llvm/Config:llvm-config",
     "//llvm/lib/Analysis",
     "//llvm/lib/CodeGen",
@@ -90,6 +80,13 @@ executable("clang") {
     plist = get_target_outputs(":write_info_plist")
     ldflags = [ "-Wl,-sectcreate,__TEXT,__info_plist," +
                 rebase_path(plist[0], root_out_dir) ]
+
+    # On macOS, libcxx headers are bundled with the compiler, not with the
+    # sysroot. As a convenience, automatically copy them over when buildling
+    # clang.  This is different from the CMake build, which requires devs to
+    # explicitly build the "libcxx" target (which also needlessly compiles the
+    # libcxx sources) to get a working compiler.
+    deps += [ "//libcxx/include" ]
   }
   sources = [
     "cc1_main.cpp",

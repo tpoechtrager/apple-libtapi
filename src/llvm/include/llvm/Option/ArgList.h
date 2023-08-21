@@ -1,9 +1,8 @@
 //===- ArgList.h - Argument List Management ---------------------*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 
@@ -229,6 +228,18 @@ public:
 
   /// eraseArg - Remove any option matching \p Id.
   void eraseArg(OptSpecifier Id);
+  
+  /// eraseArgIf - Remove every `const Arg *A` for which P(A) is true.
+  template <typename Pred>
+  void eraseArgIf(Pred P) {
+    for (Arg *const &A : Args) {
+      if (P(A)) {
+        Arg **ArgsBegin = Args.data();
+        ArgsBegin[&A - ArgsBegin] = nullptr;
+        // Don't update OptRanges as it's not required and would be slow to do.
+      }
+    }
+  }
 
   /// @}
   /// @name Arg Access
@@ -302,10 +313,12 @@ public:
   bool hasFlag(OptSpecifier Pos, OptSpecifier PosAlias, OptSpecifier Neg,
                bool Default = true) const;
 
-  /// AddLastArg - Render only the last argument match \p Id0, if present.
-  void AddLastArg(ArgStringList &Output, OptSpecifier Id0) const;
-  void AddLastArg(ArgStringList &Output, OptSpecifier Id0,
-                  OptSpecifier Id1) const;
+  /// Render only the last argument match \p Id0, if present.
+  template<typename ...OptSpecifiers>
+  void AddLastArg(ArgStringList &Output, OptSpecifiers ...Ids) const {
+    if (Arg *A = getLastArg(Ids...)) // Calls claim() on all Ids's Args.
+      A->render(*this, Output);
+  }
 
   /// AddAllArgsExcept - Render all arguments matching any of the given ids
   /// and not matching any of the excluded ids.
@@ -409,6 +422,10 @@ public:
 
   const char *getArgString(unsigned Index) const override {
     return ArgStrings[Index];
+  }
+
+  void replaceArgString(unsigned Index, const Twine &S) {
+    ArgStrings[Index] = MakeArgString(S);
   }
 
   unsigned getNumInputArgStrings() const override {

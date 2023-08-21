@@ -1,9 +1,8 @@
 //===--------------------- ResourcePressureView.h ---------------*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 /// \file
@@ -70,10 +69,7 @@ namespace mca {
 
 /// This class collects resource pressure statistics and it is able to print
 /// out all the collected information as a table to an output stream.
-class ResourcePressureView : public View {
-  const llvm::MCSubtargetInfo &STI;
-  llvm::MCInstPrinter &MCIP;
-  llvm::ArrayRef<llvm::MCInst> Source;
+class ResourcePressureView : public InstructionView {
   unsigned LastInstructionIdx;
 
   // Map to quickly obtain the ResourceUsage column index from a processor

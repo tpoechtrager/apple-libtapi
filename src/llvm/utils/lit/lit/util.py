@@ -12,13 +12,6 @@ import sys
 import threading
 
 
-def norm_path(path):
-    path = os.path.realpath(path)
-    path = os.path.normpath(path)
-    path = os.path.normcase(path)
-    return path
-
-
 def is_string(value):
     try:
         # Python 2 and Python 3 are different here.
@@ -116,30 +109,17 @@ def to_unicode(s):
     return s
 
 
-def detectCPUs():
-    """Detects the number of CPUs on a system.
-
-    Cribbed from pp.
+def usable_core_count():
+    """Return the number of cores the current process can use, if supported.
+    Otherwise, return the total number of cores (like `os.cpu_count()`).
+    Default to 1 if undetermined.
 
     """
-    # Linux, Unix and MacOS:
-    if hasattr(os, 'sysconf'):
-        if 'SC_NPROCESSORS_ONLN' in os.sysconf_names:
-            # Linux & Unix:
-            ncpus = os.sysconf('SC_NPROCESSORS_ONLN')
-            if isinstance(ncpus, int) and ncpus > 0:
-                return ncpus
-        else:  # OSX:
-            return int(subprocess.check_output(['sysctl', '-n', 'hw.ncpu'],
-                                               stderr=subprocess.STDOUT))
-    # Windows:
-    if 'NUMBER_OF_PROCESSORS' in os.environ:
-        ncpus = int(os.environ['NUMBER_OF_PROCESSORS'])
-        if ncpus > 0:
-            # With more than 32 processes, process creation often fails with
-            # "Too many open files".  FIXME: Check if there's a better fix.
-            return min(ncpus, 32)
-    return 1  # Default
+    try:
+        n = len(os.sched_getaffinity(0))
+    except AttributeError:
+        n = os.cpu_count() or 1
+    return n
 
 
 def mkdir(path):
@@ -149,7 +129,11 @@ def mkdir(path):
             from ctypes import GetLastError, WinError
 
             path = os.path.abspath(path)
-            NTPath = unicode(r'\\?\%s' % path)
+            # Make sure that the path uses backslashes here, in case
+            # python would have happened to use forward slashes, as the
+            # NT path format only supports backslashes.
+            path = path.replace('/', '\\')
+            NTPath = to_unicode(r'\\?\%s' % path)
             if not windll.kernel32.CreateDirectoryW(NTPath, None):
                 raise WinError(GetLastError())
         else:
@@ -224,7 +208,7 @@ def which(command, paths=None):
 
     # Check for absolute match first.
     if os.path.isabs(command) and os.path.isfile(command):
-        return os.path.normpath(command)
+        return os.path.normcase(os.path.normpath(command))
 
     # Would be nice if Python had a lib function for this.
     if not paths:
@@ -242,7 +226,7 @@ def which(command, paths=None):
         for ext in pathext:
             p = os.path.join(path, command + ext)
             if os.path.exists(p) and not os.path.isdir(p):
-                return os.path.normpath(p)
+                return os.path.normcase(os.path.normpath(p))
 
     return None
 
@@ -283,9 +267,9 @@ def printHistogram(items, title='Items'):
 
     barW = 40
     hr = '-' * (barW + 34)
-    print('\nSlowest %s:' % title)
+    print('Slowest %s:' % title)
     print(hr)
-    for name, value in items[-20:]:
+    for name, value in reversed(items[-20:]):
         print('%.2fs: %s' % (value, name))
     print('\n%s Times:' % title)
     print(hr)
@@ -298,12 +282,13 @@ def printHistogram(items, title='Items'):
                                     'Percentage'.center(barW),
                                     'Count'.center(cDigits * 2 + 1)))
     print(hr)
-    for i, row in enumerate(histo):
+    for i, row in reversed(list(enumerate(histo))):
         pct = float(len(row)) / len(items)
         w = int(barW * pct)
         print('[%*.*fs,%*.*fs) :: [%s%s] :: [%*d/%*d]' % (
             pDigits, pfDigits, i * barH, pDigits, pfDigits, (i + 1) * barH,
             '*' * w, ' ' * (barW - w), cDigits, len(row), cDigits, len(items)))
+    print(hr)
 
 
 class ExecuteCommandTimeoutException(Exception):
@@ -426,7 +411,7 @@ def usePlatformSdkOnDarwin(config, lit_config):
         except OSError:
             res = -1
         if res == 0 and out:
-            sdk_path = out
+            sdk_path = out.decode()
             lit_config.note('using SDKROOT: %r' % sdk_path)
             config.environment['SDKROOT'] = sdk_path
 
@@ -442,34 +427,56 @@ def findPlatformSdkVersionOnMacOS(config, lit_config):
         except OSError:
             res = -1
         if res == 0 and out:
-            return out
+            return out.decode()
     return None
 
+def killProcessAndChildrenIsSupported():
+    """
+        Returns a tuple (<supported> , <error message>)
+        where
+        `<supported>` is True if `killProcessAndChildren()` is supported on
+            the current host, returns False otherwise.
+        `<error message>` is an empty string if `<supported>` is True,
+            otherwise is contains a string describing why the function is
+            not supported.
+    """
+    if platform.system() == 'AIX':
+        return (True, "")
+    try:
+        import psutil  # noqa: F401
+        return (True, "")
+    except ImportError:
+        return (False,  "Requires the Python psutil module but it could"
+                        " not be found. Try installing it via pip or via"
+                        " your operating system's package manager.")
 
 def killProcessAndChildren(pid):
     """This function kills a process with ``pid`` and all its running children
-    (recursively). It is currently implemented using the psutil module which
-    provides a simple platform neutral implementation.
+    (recursively). It is currently implemented using the psutil module on some
+    platforms which provides a simple platform neutral implementation.
 
-    TODO: Reimplement this without using psutil so we can       remove
-    our dependency on it.
+    TODO: Reimplement this without using psutil on all platforms so we can
+    remove our dependency on it.
 
     """
-    import psutil
-    try:
-        psutilProc = psutil.Process(pid)
-        # Handle the different psutil API versions
+    if platform.system() == 'AIX':
+        subprocess.call('kill -kill $(ps -o pid= -L{})'.format(pid), shell=True)
+    else:
+        import psutil
         try:
-            # psutil >= 2.x
-            children_iterator = psutilProc.children(recursive=True)
-        except AttributeError:
-            # psutil 1.x
-            children_iterator = psutilProc.get_children(recursive=True)
-        for child in children_iterator:
+            psutilProc = psutil.Process(pid)
+            # Handle the different psutil API versions
             try:
-                child.kill()
-            except psutil.NoSuchProcess:
-                pass
-        psutilProc.kill()
-    except psutil.NoSuchProcess:
-        pass
+                # psutil >= 2.x
+                children_iterator = psutilProc.children(recursive=True)
+            except AttributeError:
+                # psutil 1.x
+                children_iterator = psutilProc.get_children(recursive=True)
+            for child in children_iterator:
+                try:
+                    child.kill()
+                except psutil.NoSuchProcess:
+                    pass
+            psutilProc.kill()
+        except psutil.NoSuchProcess:
+            pass

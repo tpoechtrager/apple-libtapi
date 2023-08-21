@@ -1,9 +1,8 @@
 //===- llvm/ADT/SmallString.h - 'Normally small' strings --------*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -30,6 +29,12 @@ public:
 
   /// Initialize from a StringRef.
   SmallString(StringRef S) : SmallVector<char, InternalLen>(S.begin(), S.end()) {}
+
+  /// Initialize by concatenating a list of StringRefs.
+  SmallString(std::initializer_list<StringRef> Refs)
+      : SmallVector<char, InternalLen>() {
+    this->append(Refs);
+  }
 
   /// Initialize with a range.
   template<typename ItTy>
@@ -66,6 +71,12 @@ public:
     SmallVectorImpl<char>::append(RHS.begin(), RHS.end());
   }
 
+  /// Assign from a list of StringRefs.
+  void assign(std::initializer_list<StringRef> Refs) {
+    this->clear();
+    append(Refs);
+  }
+
   /// @}
   /// @name String Concatenation
   /// @{
@@ -88,6 +99,20 @@ public:
   /// Append from a SmallVector.
   void append(const SmallVectorImpl<char> &RHS) {
     SmallVectorImpl<char>::append(RHS.begin(), RHS.end());
+  }
+
+  /// Append from a list of StringRefs.
+  void append(std::initializer_list<StringRef> Refs) {
+    size_t SizeNeeded = this->size();
+    for (const StringRef &Ref : Refs)
+      SizeNeeded += Ref.size();
+    this->reserve(SizeNeeded);
+    auto CurEnd = this->end();
+    for (const StringRef &Ref : Refs) {
+      this->uninitialized_copy(Ref.begin(), Ref.end(), CurEnd);
+      CurEnd += Ref.size();
+    }
+    this->set_size(SizeNeeded);
   }
 
   /// @}
@@ -264,7 +289,7 @@ public:
   // Extra methods.
 
   /// Explicit conversion to StringRef.
-  StringRef str() const { return StringRef(this->begin(), this->size()); }
+  StringRef str() const { return StringRef(this->data(), this->size()); }
 
   // TODO: Make this const, if it's safe...
   const char* c_str() {
@@ -276,10 +301,14 @@ public:
   /// Implicit conversion to StringRef.
   operator StringRef() const { return str(); }
 
+  explicit operator std::string() const {
+    return std::string(this->data(), this->size());
+  }
+
   // Extra operators.
-  const SmallString &operator=(StringRef RHS) {
-    this->clear();
-    return *this += RHS;
+  SmallString &operator=(StringRef RHS) {
+    this->assign(RHS);
+    return *this;
   }
 
   SmallString &operator+=(StringRef RHS) {

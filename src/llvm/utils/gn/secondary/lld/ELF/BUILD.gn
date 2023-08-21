@@ -24,11 +24,13 @@ static_library("ELF") {
   include_dirs = [ "." ]
   sources = [
     "AArch64ErrataFix.cpp",
+    "ARMErrataFix.cpp",
     "Arch/AArch64.cpp",
     "Arch/AMDGPU.cpp",
     "Arch/ARM.cpp",
     "Arch/AVR.cpp",
     "Arch/Hexagon.cpp",
+    "Arch/MSP430.cpp",
     "Arch/Mips.cpp",
     "Arch/MipsArchTree.cpp",
     "Arch/PPC.cpp",
@@ -42,7 +44,6 @@ static_library("ELF") {
     "Driver.cpp",
     "DriverUtils.cpp",
     "EhFrame.cpp",
-    "Filesystem.cpp",
     "ICF.cpp",
     "InputFiles.cpp",
     "InputSection.cpp",

@@ -1,22 +1,13 @@
 import("//clang/utils/TableGen/clang_tablegen.gni")
+import("//llvm/utils/gn/build/write_cmake_config.gni")
 import("//llvm/version.gni")
 
 # Version header.
 
-action("version") {
-  script = "//llvm/utils/gn/build/write_cmake_config.py"
-
-  sources = [
-    "Version.inc.in",
-  ]
-  outputs = [
-    "$root_gen_dir/clang/include/clang/Basic/Version.inc",
-  ]
-  args = [
-    "-o",
-    rebase_path(outputs[0], root_out_dir),
-    rebase_path(sources[0], root_out_dir),
-
+write_cmake_config("version") {
+  input = "Version.inc.in"
+  output = "$target_gen_dir/Version.inc"
+  values = [
     "CLANG_VERSION=$llvm_version",
     "CLANG_VERSION_MAJOR=$llvm_version_major",
     "CLANG_VERSION_MINOR=$llvm_version_minor",
@@ -98,7 +89,7 @@ clang_tablegen("AttrHasAttributeImpl") {
   td_file = "Attr.td"
 }
 
-# Misc
+# ARM CDE, MVE, and NEON.
 
 clang_tablegen("arm_neon") {
   args = [ "-gen-arm-neon-sema" ]
@@ -106,4 +97,64 @@ clang_tablegen("arm_neon") {
 
 clang_tablegen("arm_fp16") {
   args = [ "-gen-arm-neon-sema" ]
+}
+
+clang_tablegen("arm_mve_builtins") {
+  args = [ "-gen-arm-mve-builtin-def" ]
+  td_file = "arm_mve.td"
+}
+
+clang_tablegen("arm_mve_builtin_cg") {
+  args = [ "-gen-arm-mve-builtin-codegen" ]
+  td_file = "arm_mve.td"
+}
+
+clang_tablegen("arm_mve_builtin_sema") {
+  args = [ "-gen-arm-mve-builtin-sema" ]
+  td_file = "arm_mve.td"
+}
+
+clang_tablegen("arm_mve_builtin_aliases") {
+  args = [ "-gen-arm-mve-builtin-aliases" ]
+  td_file = "arm_mve.td"
+}
+
+clang_tablegen("arm_sve_builtins") {
+  args = [ "-gen-arm-sve-builtins" ]
+  td_file = "arm_sve.td"
+}
+
+clang_tablegen("arm_sve_builtin_cg") {
+  args = [ "-gen-arm-sve-builtin-codegen" ]
+  td_file = "arm_sve.td"
+}
+
+clang_tablegen("arm_sve_typeflags") {
+  args = [ "-gen-arm-sve-typeflags" ]
+  td_file = "arm_sve.td"
+}
+
+clang_tablegen("arm_sve_sema_rangechecks") {
+  args = [ "-gen-arm-sve-sema-rangechecks" ]
+  td_file = "arm_sve.td"
+}
+
+clang_tablegen("arm_cde_builtins") {
+  args = [ "-gen-arm-cde-builtin-def" ]
+  td_file = "arm_cde.td"
+}
+
+clang_tablegen("arm_cde_builtin_cg") {
+  args = [ "-gen-arm-cde-builtin-codegen" ]
+  td_file = "arm_cde.td"
+}
+
+clang_tablegen("arm_cde_builtin_sema") {
+  args = [ "-gen-arm-cde-builtin-sema" ]
+  td_file = "arm_cde.td"
+}
+
+clang_tablegen("arm_cde_builtin_aliases") {
+  args = [ "-gen-arm-cde-builtin-aliases" ]
+  td_file = "arm_cde.td"
 }

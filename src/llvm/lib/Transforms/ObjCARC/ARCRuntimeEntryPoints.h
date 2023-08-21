@@ -1,9 +1,8 @@
 //===- ARCRuntimeEntryPoints.h - ObjC ARC Optimization ----------*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -23,19 +22,15 @@
 #ifndef LLVM_LIB_TRANSFORMS_OBJCARC_ARCRUNTIMEENTRYPOINTS_H
 #define LLVM_LIB_TRANSFORMS_OBJCARC_ARCRUNTIMEENTRYPOINTS_H
 
-#include "llvm/ADT/StringRef.h"
 #include "llvm/IR/Attributes.h"
-#include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Intrinsics.h"
-#include "llvm/IR/Module.h"
-#include "llvm/IR/Type.h"
 #include "llvm/Support/ErrorHandling.h"
 #include <cassert>
 
 namespace llvm {
 
-class Constant;
-class LLVMContext;
+class Function;
+class Module;
 
 namespace objcarc {
 
@@ -47,6 +42,7 @@ enum class ARCRuntimeEntryPointKind {
   Autorelease,
   StoreStrong,
   RetainRV,
+  ClaimRV,
   RetainAutorelease,
   RetainAutoreleaseRV,
 };
@@ -66,11 +62,12 @@ public:
     Autorelease = nullptr;
     StoreStrong = nullptr;
     RetainRV = nullptr;
+    ClaimRV = nullptr;
     RetainAutorelease = nullptr;
     RetainAutoreleaseRV = nullptr;
   }
 
-  Constant *get(ARCRuntimeEntryPointKind kind) {
+  Function *get(ARCRuntimeEntryPointKind kind) {
     assert(TheModule != nullptr && "Not initialized.");
 
     switch (kind) {
@@ -90,6 +87,9 @@ public:
     case ARCRuntimeEntryPointKind::RetainRV:
       return getIntrinsicEntryPoint(RetainRV,
                                 Intrinsic::objc_retainAutoreleasedReturnValue);
+    case ARCRuntimeEntryPointKind::ClaimRV:
+      return getIntrinsicEntryPoint(
+          ClaimRV, Intrinsic::objc_unsafeClaimAutoreleasedReturnValue);
     case ARCRuntimeEntryPointKind::RetainAutorelease:
       return getIntrinsicEntryPoint(RetainAutorelease,
                                     Intrinsic::objc_retainAutorelease);
@@ -106,33 +106,36 @@ private:
   Module *TheModule = nullptr;
 
   /// Declaration for ObjC runtime function objc_autoreleaseReturnValue.
-  Constant *AutoreleaseRV = nullptr;
+  Function *AutoreleaseRV = nullptr;
 
   /// Declaration for ObjC runtime function objc_release.
-  Constant *Release = nullptr;
+  Function *Release = nullptr;
 
   /// Declaration for ObjC runtime function objc_retain.
-  Constant *Retain = nullptr;
+  Function *Retain = nullptr;
 
   /// Declaration for ObjC runtime function objc_retainBlock.
-  Constant *RetainBlock = nullptr;
+  Function *RetainBlock = nullptr;
 
   /// Declaration for ObjC runtime function objc_autorelease.
-  Constant *Autorelease = nullptr;
+  Function *Autorelease = nullptr;
 
   /// Declaration for objc_storeStrong().
-  Constant *StoreStrong = nullptr;
+  Function *StoreStrong = nullptr;
 
   /// Declaration for objc_retainAutoreleasedReturnValue().
-  Constant *RetainRV = nullptr;
+  Function *RetainRV = nullptr;
+
+  /// Declaration for objc_unsafeClaimAutoreleasedReturnValue().
+  Function *ClaimRV = nullptr;
 
   /// Declaration for objc_retainAutorelease().
-  Constant *RetainAutorelease = nullptr;
+  Function *RetainAutorelease = nullptr;
 
   /// Declaration for objc_retainAutoreleaseReturnValue().
-  Constant *RetainAutoreleaseRV = nullptr;
+  Function *RetainAutoreleaseRV = nullptr;
 
-  Constant *getIntrinsicEntryPoint(Constant *&Decl, Intrinsic::ID IntID) {
+  Function *getIntrinsicEntryPoint(Function *&Decl, Intrinsic::ID IntID) {
     if (Decl)
       return Decl;
 

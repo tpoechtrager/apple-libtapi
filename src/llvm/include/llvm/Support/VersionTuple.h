@@ -1,9 +1,8 @@
 //===- VersionTuple.h - Version Number Handling -----------------*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 ///
@@ -16,13 +15,14 @@
 #define LLVM_SUPPORT_VERSIONTUPLE_H
 
 #include "llvm/ADT/DenseMapInfo.h"
+#include "llvm/ADT/Hashing.h"
 #include "llvm/ADT/Optional.h"
-#include "llvm/ADT/StringRef.h"
-#include "llvm/Support/raw_ostream.h"
 #include <string>
 #include <tuple>
 
 namespace llvm {
+class raw_ostream;
+class StringRef;
 
 /// Represents a version number in the form major[.minor[.subminor[.build]]].
 class VersionTuple {
@@ -92,6 +92,13 @@ public:
     return Build;
   }
 
+  /// Return a version tuple that contains only the first 3 version components.
+  VersionTuple withoutBuild() const {
+    if (HasBuild)
+      return VersionTuple(Major, Minor, Subminor);
+    return *this;
+  }
+
   /// Determine if two version numbers are equivalent. If not
   /// provided, minor and subminor version numbers are considered to be zero.
   friend bool operator==(const VersionTuple &X, const VersionTuple &Y) {
@@ -142,6 +149,10 @@ public:
     return !(X < Y);
   }
 
+  friend llvm::hash_code hash_value(const VersionTuple &VT) {
+    return llvm::hash_combine(VT.Major, VT.Minor, VT.Subminor, VT.Build);
+  }
+
   /// Retrieve a string representation of the version number.
   std::string getAsString() const;
 
@@ -166,11 +177,11 @@ raw_ostream &operator<<(raw_ostream &Out, const VersionTuple &V);
     static unsigned getHashValue(const VersionTuple &value) {
       unsigned result = value.getMajor();
       if (auto minor = value.getMinor())
-        result = combineHashValue(result, *minor);
+        result = detail::combineHashValue(result, *minor);
       if (auto subminor = value.getSubminor())
-        result = combineHashValue(result, *subminor);
+        result = detail::combineHashValue(result, *subminor);
       if (auto build = value.getBuild())
-        result = combineHashValue(result, *build);
+        result = detail::combineHashValue(result, *build);
 
       return result;
     }

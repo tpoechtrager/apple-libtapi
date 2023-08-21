@@ -1,0 +1,311 @@
+.TH tapi\-sdkdb 1 2019-08-02 Darwin "TAPI Tool Documentation"
+.SH NAME
+tapi\-sdkdb \- Generate SDKDB from SDKContent
+.SH SYNOPSIS
+\fItapi sdkdb\fR [options] 
+
+.SH DESCRIPTION
+.PP
+The sdkdb command creates a database containing all the interfaces from a SDK, 
+both public and private, in JSON format. SDKDB contains information about 
+symbols, Objective-C Classes, Objective-C Category, and Objective-C Protocol. 
+
+.SH OPTIONS
+.PP
+\-action=<value>
+.RS 4
+Set SDKDB generation option: 'scan-interface', 'gen-public', 'gen-private' or 'all'.
+
+scan-interface  - generates partial SDKDB containing information of RuntimeRoot, SDKContentRoot and PublicSDKContentRoot seperately. 
+.br
+gen-public      - generate full SDKDB from public interfaces. 
+.br
+gen-private     - generate full SDKDB from private interfaces. 
+.br
+all             - executes all options in sequence. 
+.RE
+
+.PP
+\-arch <architecture>
+.RS 4
+Specify the architecture to build for.
+.RE
+
+.PP
+\-\-config-file=<file>
+.RS 4
+Read configuration from <file>.
+.RE
+
+.PP
+\-\-diagnostics-file=<file>
+.RS 4
+Write diagnostics to <file>.
+.RE
+
+.PP
+\-dylibs\-only
+.RS 4
+Scan only Frameworks and UNIX libs.
+.RE
+
+.PP
+\-D <value>
+.RS 4
+Define macro.
+.RE
+
+.PP
+\-exclude-private-header <glob>
+.RS 4
+Exclude private header from parsing.
+.RE
+
+.PP
+\-exclude-public-header <glob>
+.RS 4
+Exclude public header from parsing.
+.RE
+
+.PP
+\-extra\-private\-header <path>
+.RS 4
+Add additional private header location for parsing.
+.RE
+
+.PP
+\-extra\-public\-header <path>
+.RS 4
+Add additional public header location for parsing.
+.RE
+
+.PP
+\-fmodules\-cache\-path=<directory>
+.RS 4
+Specify the module cache path.
+.RE
+
+.PP
+\-fmodules\-validate\-system\-headers
+.RS 4
+Validate the system headers that a module depends on when loading the module.
+.RE
+
+.PP
+\-fmodules
+.RS 4
+Enable the 'modules' language feature.
+.RE
+
+.PP
+\-fno\-rtti
+.RS 4
+Disable generation of rtti information.
+.RE
+
+.PP
+\-fobjc\-arc
+.RS 4
+Synthesize retain and release calls for Objective-C pointers.
+.RE
+
+.PP
+\-fobjc\-weak
+.RS 4
+Enable ARC-style weak references in Objective-C.
+.RE
+
+.PP
+\-fvisibility=<value>
+.RS 4
+Set the default symbol visibility for all global declarations.
+.RE
+
+.PP
+\-F <value>
+.RS 4
+Add directory to framework include search path.
+.RE
+
+.PP
+\-iframework <value>
+.RS 4
+Add directory to SYSTEM framework search path.
+.RE
+
+.PP
+\-isysroot <dir>
+.RS 4
+Set the system root directory (usually /).
+.RE
+
+.PP
+\-isystem <directory>
+.RS 4
+Add directory to SYSTEM include search path.
+.RE
+
+.PP
+\-I <value>
+.RS 4
+Add directory to include search path.
+.RE
+
+.PP
+\-\-load\-snapshot=<dir>
+.RS 4
+Specify the snapshot input directory.
+.RE
+
+.PP
+\-no\-private\-headers
+.RS 4
+Disable private header scanning.
+.RE
+
+.PP
+\-no\-public\-headers
+.RS 4
+Disable public header scanning.
+.RE
+
+.PP
+\-ObjC++
+.RS 4
+Treat source input files as Objective\-C++ inputs.
+.RE
+
+.PP
+\-ObjC
+.RS 4
+Treat source input files as Objective\-C inputs.
+.RE
+
+.PP
+\-o <file>
+.RS 4
+Write output to <file>.
+.RE
+
+.PP
+\-\-partial\-sdkdb\-list <filelist>
+.RS 4
+Partial SDKDB filelist path.
+.RE
+
+.PP
+\-private\-headers
+.RS 4
+Enable private header scanning.
+.RE
+
+.PP
+\-private\-umbrella\-header <path>
+.RS 4
+Specify the private umbrella header location.
+.RE
+
+.PP
+\-public\-headers
+.RS 4
+Enable public header scanning.
+.RE
+
+.PP
+\-\-public\-sdk\-content\-root <PublicSDKContentRoot>
+.RS 4
+Path to PublicSDKContentRoot.
+.RE
+
+.PP
+\-public\-umbrella\-header <path>
+.RS 4
+Specify the public umbrella header location.
+.RE
+
+.PP
+\-\-runtime\-root <RuntimeRoot>
+.RS 4
+Path to RuntimeRoot.
+.RE
+
+.PP
+\-\-sdk\-content\-root <SDKContentRoot>
+.RS 4
+Path to SDKContentRoot.
+.RE
+
+.PP
+\-\-snapshot\-dir=<dir>
+.RS 4
+Specify the snapshot output directory.
+.RE
+
+.PP
+\-\-snapshot\-use\-own\-resource\-dir
+.RS 4
+Use our own resource directory.
+.RE
+
+.PP
+\-\-snapshot
+.RS 4
+Force creation of a snapshot.
+.RE
+
+.PP
+\-std=<value>
+.RS 4
+Language standard to compile for.
+.RE
+
+.PP
+\-\-target=<value>
+.RS 4
+Generate code for the given target.
+.RE
+
+.PP
+\-U <value>
+.RS 4
+Define/Undefine macro.
+.RE
+
+.PP
+\-\-verify\-api
+.RS 4
+Verify the API of zippered frameworks.
+.RE
+
+.PP
+\-version
+.RS 4
+Display the version.
+.RE
+
+.PP
+\-v
+.RS 4
+Verbose output, show scan content and driver options.
+.RE
+
+.PP
+\-Xparser <arg>
+.RS 4
+Pass <arg> to the clang parser.
+.RE
+
+.PP
+\-x <language>
+.RS 4
+Treat subsequent input files as having type <language>.
+.RE
+
+.PP
+\-help
+.RS 4
+Prints the list of options.
+.RE
+
+.SH SEE ALSO
+tapi(1), ld(1)

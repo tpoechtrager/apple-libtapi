@@ -1,0 +1,36 @@
+#!/bin/sh
+#####
+### Convert all dynamic libraries to text-based dynamic libraries.
+###
+### This script converts all dynamic libraries/frameworks to text-based dynamic
+### libraries (*.tbd files).
+###
+#####
+set -x
+
+# Parameters:
+SDK_DIR="$1"
+
+EXTRA_TAPI_OPTIONS=""
+if [ "x$2" = "x--prune-private-frameworks" ]; then
+  EXTRA_TAPI_OPTIONS="--delete-private-frameworks -isysroot $SDK_DIR"
+  echo "info: Pruning private frameworks and libraries."
+fi
+
+# Tools:
+TAPI=`xcrun -find tapi`
+if [ -z $TAPI ]; then
+  echo "error: TAPI not found"
+  exit 1
+fi
+
+###
+### Print version of tools
+###
+echo " --- Tools --- "
+$TAPI -version
+
+###
+### Create the text-based dynamic library files and delete the original library.
+###
+$TAPI stubify --delete-input-file $EXTRA_TAPI_OPTIONS $SDK_DIR

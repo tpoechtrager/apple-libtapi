@@ -29,13 +29,15 @@ template("clang_tablegen") {
   tablegen(target_name) {
     forward_variables_from(invoker,
                            [
-                             "args",
                              "output_name",
                              "td_file",
                              "visibility",
                            ])
 
-    # FIXME: In cross builds, this should depend on the host binary.
+    args = [
+             "-I",
+             rebase_path("//clang/include", root_out_dir),
+           ] + invoker.args
     tblgen_target = "//clang/utils/TableGen:clang-tblgen"
   }
 }

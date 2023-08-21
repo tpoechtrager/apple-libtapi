@@ -1,0 +1,165 @@
+.TH tapi\-api\-verify 1 2019-08-02 Darwin "TAPI Tool Documentation"
+.SH NAME
+tapi\-api\-verify \- Perform comparison between frameworks 
+.SH SYNOPSIS
+\fItapi api-verify\fR [options] <comparsion config file>
+
+.SH DESCRIPTION
+.PP
+The api-verify command performs a comparison for the API/ABI between two framework directories
+verifying there are no undefined symbols.
+
+The \fBcomparison config file\fR is in YAML format and should contain the following components:
+.PP
+\fBRequired\fR
+.RS 4
+.PP
+base 
+.RS 4
+Contains \fItarget\fR, \fIsysroot\fR, \fIframework path\fR and optionally, additional \fIframework\fR and \fIinclude paths\fR.
+.RE
+
+.PP
+variant 
+.RS 4
+Follows the same structure as the base component.
+.RE
+.RE
+
+\fBOptional\fR
+.RS 4
+.PP
+skip-external-headers
+.RS 4
+Boolean to specify external headers.
+.RE
+
+.PP
+diag-missing-api
+.RS 4
+Boolean to specify diagnosing missing api.
+.RE
+
+.PP
+no-cascading-diagnostics  
+.RS 4
+Boolean to specify disabling cascading errors.
+.RE
+
+.PP
+compare-private-header
+.RS 4
+Boolean to specify comparing private headers instead of public ones.
+.RE
+
+.PP
+diag-depth
+.RS 4
+Integer to specify the depth of diagnostics (0 is ignored).
+.RE
+
+.PP
+verifier-diag-style
+.RS 4
+APIVerifier Diagnostic Style, options are \fIsilent\fR, \fIwarning\fR or \fIerror\fR.
+.RE
+
+.PP
+allowlist
+.RS 4
+allowlist YAML file
+.RE
+.RE
+
+\fBExample File\fR
+.br
+---
+.RS 4
+.br
+skip-external: false
+.br
+missing-api: true
+.br
+no-cascading-diags: true
+.br
+compare-private-headers: false
+.br
+diag-depth: 5
+.br
+allowlist: my-allowlist.yaml
+.br
+diag-style: warning
+
+base:
+.RS 4
+target: x86_64-apple-macos10.15
+.br
+sysroot: /
+.br
+path: /System/Library/Frameworks/ExampleAKit.framework
+.RE
+variant:
+.RS 4
+target: x86_64-apple-ios13.0-macabi
+.br
+sysroot: /
+.br
+path: /System/Library/Frameworks/ExampleBKit.framework
+.br
+includes: 
+.RS 4
+- /usr/include
+.RE
+frameworks:
+.RS 4
+  - /System/Library/Frameworks
+.br
+  - /System/Library/PrivateFrameworks
+.RE
+.RE
+.RE
+\[char46]..
+.RE
+
+
+.SH OPTIONS
+.PP
+\-x <language>
+.RS 4
+Treat subsequent input files as having type <language>
+
+=c          -   C
+.br
+=c++        -   C++
+.br
+=objc       -   Objective-C
+.br
+=objc++     -   Objective-C++
+.RE
+
+.PP
+\-Xparser <arg>
+.RS 4
+Pass <arg> to the clang parser.
+.RE
+
+.PP
+\-std=<value>
+.RS 4
+Language standard to compile for.
+.RE
+
+.PP
+\-v
+.RS 4
+Verbose output, show scan content and driver options.
+.RE
+
+.PP
+\-help
+.RS 4
+Prints the list of options.
+.RE
+
+.SH SEE ALSO
+tapi(1), ld(1)

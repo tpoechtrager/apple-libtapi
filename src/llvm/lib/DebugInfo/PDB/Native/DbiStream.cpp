@@ -1,9 +1,8 @@
 //===- DbiStream.cpp - PDB Dbi Stream (Stream 3) Access -------------------===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 
@@ -334,15 +333,11 @@ DbiStream::createIndexedStreamForHeaderType(PDBFile *Pdb,
 
   uint32_t StreamNum = getDebugStreamIndex(Type);
 
-  // This means there is no such stream
+  // This means there is no such stream.
   if (StreamNum == kInvalidStreamIndex)
     return nullptr;
 
-  if (StreamNum >= Pdb->getNumStreams())
-    return make_error<RawError>(raw_error_code::no_stream);
-
-  return MappedBlockStream::createIndexedStream(
-      Pdb->getMsfLayout(), Pdb->getMsfBuffer(), StreamNum, Pdb->getAllocator());
+  return Pdb->safelyCreateIndexedStream(StreamNum);
 }
 
 BinarySubstreamRef DbiStream::getSectionContributionData() const {

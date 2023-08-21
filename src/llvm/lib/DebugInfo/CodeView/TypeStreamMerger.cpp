@@ -1,9 +1,8 @@
 //===-- TypeStreamMerger.cpp ------------------------------------*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 
@@ -16,6 +15,7 @@
 #include "llvm/DebugInfo/CodeView/TypeIndex.h"
 #include "llvm/DebugInfo/CodeView/TypeIndexDiscovery.h"
 #include "llvm/DebugInfo/CodeView/TypeRecord.h"
+#include "llvm/DebugInfo/CodeView/TypeRecordHelpers.h"
 #include "llvm/Support/Error.h"
 
 using namespace llvm;
@@ -38,7 +38,7 @@ namespace {
 /// 0x1000.
 ///
 /// Type records are only allowed to use type indices smaller than their own, so
-/// a type stream is effectively a topologically sorted DAG. Cycles occuring in
+/// a type stream is effectively a topologically sorted DAG. Cycles occurring in
 /// the type graph of the source program are resolved with forward declarations
 /// of composite types. This class implements the following type stream merging
 /// algorithm, which relies on this DAG structure:
@@ -77,8 +77,7 @@ public:
   // Local hashing entry points
   Error mergeTypesAndIds(MergingTypeTableBuilder &DestIds,
                          MergingTypeTableBuilder &DestTypes,
-                         const CVTypeArray &IdsAndTypes,
-                         Optional<EndPrecompRecord> &EP);
+                         const CVTypeArray &IdsAndTypes, Optional<uint32_t> &S);
   Error mergeIdRecords(MergingTypeTableBuilder &Dest,
                        ArrayRef<TypeIndex> TypeSourceToDest,
                        const CVTypeArray &Ids);
@@ -90,14 +89,14 @@ public:
                          GlobalTypeTableBuilder &DestTypes,
                          const CVTypeArray &IdsAndTypes,
                          ArrayRef<GloballyHashedType> Hashes,
-                         Optional<EndPrecompRecord> &EP);
+                         Optional<uint32_t> &S);
   Error mergeIdRecords(GlobalTypeTableBuilder &Dest,
                        ArrayRef<TypeIndex> TypeSourceToDest,
                        const CVTypeArray &Ids,
                        ArrayRef<GloballyHashedType> Hashes);
   Error mergeTypeRecords(GlobalTypeTableBuilder &Dest, const CVTypeArray &Types,
                          ArrayRef<GloballyHashedType> Hashes,
-                         Optional<EndPrecompRecord> &EP);
+                         Optional<uint32_t> &S);
 
 private:
   Error doit(const CVTypeArray &Types);
@@ -197,27 +196,12 @@ private:
   /// its type indices.
   SmallVector<uint8_t, 256> RemapStorage;
 
-  Optional<EndPrecompRecord> EndPrecomp; 
+  Optional<uint32_t> PCHSignature;
 };
 
 } // end anonymous namespace
 
 const TypeIndex TypeStreamMerger::Untranslated(SimpleTypeKind::NotTranslated);
-
-static bool isIdRecord(TypeLeafKind K) {
-  switch (K) {
-  case TypeLeafKind::LF_FUNC_ID:
-  case TypeLeafKind::LF_MFUNC_ID:
-  case TypeLeafKind::LF_STRING_ID:
-  case TypeLeafKind::LF_SUBSTR_LIST:
-  case TypeLeafKind::LF_BUILDINFO:
-  case TypeLeafKind::LF_UDT_SRC_LINE:
-  case TypeLeafKind::LF_UDT_MOD_SRC_LINE:
-    return true;
-  default:
-    return false;
-  }
-}
 
 void TypeStreamMerger::addMapping(TypeIndex Idx) {
   if (!IsSecondPass) {
@@ -275,12 +259,12 @@ Error TypeStreamMerger::mergeIdRecords(MergingTypeTableBuilder &Dest,
 Error TypeStreamMerger::mergeTypesAndIds(MergingTypeTableBuilder &DestIds,
                                          MergingTypeTableBuilder &DestTypes,
                                          const CVTypeArray &IdsAndTypes,
-                                         Optional<EndPrecompRecord> &EP) {
+                                         Optional<uint32_t> &S) {
   DestIdStream = &DestIds;
   DestTypeStream = &DestTypes;
   UseGlobalHashes = false;
   auto Err = doit(IdsAndTypes);
-  EP = EndPrecomp;
+  S = PCHSignature;
   return Err;
 }
 
@@ -288,12 +272,12 @@ Error TypeStreamMerger::mergeTypesAndIds(MergingTypeTableBuilder &DestIds,
 Error TypeStreamMerger::mergeTypeRecords(GlobalTypeTableBuilder &Dest,
                                          const CVTypeArray &Types,
                                          ArrayRef<GloballyHashedType> Hashes,
-                                         Optional<EndPrecompRecord> &EP) {
+                                         Optional<uint32_t> &S) {
   DestGlobalTypeStream = &Dest;
   UseGlobalHashes = true;
   GlobalHashes = Hashes;
   auto Err = doit(Types);
-  EP = EndPrecomp;
+  S = PCHSignature;
   return Err;
 }
 
@@ -313,13 +297,13 @@ Error TypeStreamMerger::mergeTypesAndIds(GlobalTypeTableBuilder &DestIds,
                                          GlobalTypeTableBuilder &DestTypes,
                                          const CVTypeArray &IdsAndTypes,
                                          ArrayRef<GloballyHashedType> Hashes,
-                                         Optional<EndPrecompRecord> &EP) {
+                                         Optional<uint32_t> &S) {
   DestGlobalIdStream = &DestIds;
   DestGlobalTypeStream = &DestTypes;
   UseGlobalHashes = true;
   GlobalHashes = Hashes;
   auto Err = doit(IdsAndTypes);
-  EP = EndPrecomp;
+  S = PCHSignature;
   return Err;
 }
 
@@ -376,16 +360,18 @@ Error TypeStreamMerger::remapType(const CVType &Type) {
         [this, Type](MutableArrayRef<uint8_t> Storage) -> ArrayRef<uint8_t> {
       return remapIndices(Type, Storage);
     };
+    unsigned AlignedSize = alignTo(Type.RecordData.size(), 4);
+
     if (LLVM_LIKELY(UseGlobalHashes)) {
       GlobalTypeTableBuilder &Dest =
           isIdRecord(Type.kind()) ? *DestGlobalIdStream : *DestGlobalTypeStream;
       GloballyHashedType H = GlobalHashes[CurIndex.toArrayIndex()];
-      DestIdx = Dest.insertRecordAs(H, Type.RecordData.size(), DoSerialize);
+      DestIdx = Dest.insertRecordAs(H, AlignedSize, DoSerialize);
     } else {
       MergingTypeTableBuilder &Dest =
           isIdRecord(Type.kind()) ? *DestIdStream : *DestTypeStream;
 
-      RemapStorage.resize(Type.RecordData.size());
+      RemapStorage.resize(AlignedSize);
       ArrayRef<uint8_t> Result = DoSerialize(RemapStorage);
       if (!Result.empty())
         DestIdx = Dest.insertRecordBytes(Result);
@@ -402,9 +388,14 @@ Error TypeStreamMerger::remapType(const CVType &Type) {
 ArrayRef<uint8_t>
 TypeStreamMerger::remapIndices(const CVType &OriginalType,
                                MutableArrayRef<uint8_t> Storage) {
+  unsigned Align = OriginalType.RecordData.size() & 3;
+  assert(Storage.size() == alignTo(OriginalType.RecordData.size(), 4) &&
+         "The storage buffer size is not a multiple of 4 bytes which will "
+         "cause misalignment in the output TPI stream!");
+
   SmallVector<TiReference, 4> Refs;
   discoverTypeIndices(OriginalType.RecordData, Refs);
-  if (Refs.empty())
+  if (Refs.empty() && Align == 0)
     return OriginalType.RecordData;
 
   ::memcpy(Storage.data(), OriginalType.RecordData.data(),
@@ -423,6 +414,16 @@ TypeStreamMerger::remapIndices(const CVType &OriginalType,
       if (LLVM_UNLIKELY(!Success))
         return {};
     }
+  }
+
+  if (Align > 0) {
+    RecordPrefix *StorageHeader =
+        reinterpret_cast<RecordPrefix *>(Storage.data());
+    StorageHeader->RecordLen += 4 - Align;
+
+    DestContent = Storage.data() + OriginalType.RecordData.size();
+    for (; Align < 4; ++Align)
+      *DestContent++ = LF_PAD4 - Align;
   }
   return Storage;
 }
@@ -445,28 +446,27 @@ Error llvm::codeview::mergeIdRecords(MergingTypeTableBuilder &Dest,
 Error llvm::codeview::mergeTypeAndIdRecords(
     MergingTypeTableBuilder &DestIds, MergingTypeTableBuilder &DestTypes,
     SmallVectorImpl<TypeIndex> &SourceToDest, const CVTypeArray &IdsAndTypes,
-    Optional<EndPrecompRecord> &EndPrecomp) {
+    Optional<uint32_t> &PCHSignature) {
   TypeStreamMerger M(SourceToDest);
-  return M.mergeTypesAndIds(DestIds, DestTypes, IdsAndTypes, EndPrecomp);
+  return M.mergeTypesAndIds(DestIds, DestTypes, IdsAndTypes, PCHSignature);
 }
 
 Error llvm::codeview::mergeTypeAndIdRecords(
     GlobalTypeTableBuilder &DestIds, GlobalTypeTableBuilder &DestTypes,
     SmallVectorImpl<TypeIndex> &SourceToDest, const CVTypeArray &IdsAndTypes,
-    ArrayRef<GloballyHashedType> Hashes,
-    Optional<EndPrecompRecord> &EndPrecomp) {
+    ArrayRef<GloballyHashedType> Hashes, Optional<uint32_t> &PCHSignature) {
   TypeStreamMerger M(SourceToDest);
   return M.mergeTypesAndIds(DestIds, DestTypes, IdsAndTypes, Hashes,
-                            EndPrecomp);
+                            PCHSignature);
 }
 
 Error llvm::codeview::mergeTypeRecords(GlobalTypeTableBuilder &Dest,
                                        SmallVectorImpl<TypeIndex> &SourceToDest,
                                        const CVTypeArray &Types,
                                        ArrayRef<GloballyHashedType> Hashes,
-                                       Optional<EndPrecompRecord> &EndPrecomp) {
+                                       Optional<uint32_t> &PCHSignature) {
   TypeStreamMerger M(SourceToDest);
-  return M.mergeTypeRecords(Dest, Types, Hashes, EndPrecomp);
+  return M.mergeTypeRecords(Dest, Types, Hashes, PCHSignature);
 }
 
 Error llvm::codeview::mergeIdRecords(GlobalTypeTableBuilder &Dest,
@@ -483,11 +483,13 @@ Expected<bool> TypeStreamMerger::shouldRemapType(const CVType &Type) {
   // signature, through EndPrecompRecord. This is done here for performance
   // reasons, to avoid re-parsing the Types stream.
   if (Type.kind() == LF_ENDPRECOMP) {
-    assert(!EndPrecomp);
-    EndPrecomp.emplace();
+    EndPrecompRecord EP;
     if (auto EC = TypeDeserializer::deserializeAs(const_cast<CVType &>(Type),
-                                                  EndPrecomp.getValue()))
+                                                  EP))
       return joinErrors(std::move(EC), errorCorruptRecord());
+    if (PCHSignature.hasValue())
+      return errorCorruptRecord();
+    PCHSignature.emplace(EP.getSignature());
     return false;
   }
   return true;

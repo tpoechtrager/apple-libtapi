@@ -1,9 +1,8 @@
 //===-- AMDGPUAlwaysInlinePass.cpp - Promote Allocas ----------------------===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -18,6 +17,7 @@
 #include "Utils/AMDGPUBaseInfo.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/PassManager.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 
 using namespace llvm;
@@ -33,8 +33,6 @@ static cl::opt<bool> StressCalls(
 class AMDGPUAlwaysInline : public ModulePass {
   bool GlobalOpt;
 
-  void recursivelyVisitUsers(GlobalValue &GV,
-                             SmallPtrSetImpl<Function *> &FuncsToAlwaysInline);
 public:
   static char ID;
 
@@ -54,9 +52,9 @@ INITIALIZE_PASS(AMDGPUAlwaysInline, "amdgpu-always-inline",
 
 char AMDGPUAlwaysInline::ID = 0;
 
-void AMDGPUAlwaysInline::recursivelyVisitUsers(
-  GlobalValue &GV,
-  SmallPtrSetImpl<Function *> &FuncsToAlwaysInline) {
+static void
+recursivelyVisitUsers(GlobalValue &GV,
+                      SmallPtrSetImpl<Function *> &FuncsToAlwaysInline) {
   SmallVector<User *, 16> Stack;
 
   SmallPtrSet<const Value *, 8> Visited;
@@ -72,6 +70,13 @@ void AMDGPUAlwaysInline::recursivelyVisitUsers(
     if (Instruction *I = dyn_cast<Instruction>(U)) {
       Function *F = I->getParent()->getParent();
       if (!AMDGPU::isEntryFunctionCC(F->getCallingConv())) {
+        // FIXME: This is a horrible hack. We should always respect noinline,
+        // and just let us hit the error when we can't handle this.
+        //
+        // Unfortunately, clang adds noinline to all functions at -O0. We have
+        // to override this here. until that's fixed.
+        F->removeFnAttr(Attribute::NoInline);
+
         FuncsToAlwaysInline.insert(F);
         Stack.push_back(F);
       }
@@ -85,7 +90,7 @@ void AMDGPUAlwaysInline::recursivelyVisitUsers(
   }
 }
 
-bool AMDGPUAlwaysInline::runOnModule(Module &M) {
+static bool alwaysInlineImpl(Module &M, bool GlobalOpt) {
   std::vector<GlobalAlias*> AliasesToRemove;
 
   SmallPtrSet<Function *, 8> FuncsToAlwaysInline;
@@ -119,7 +124,7 @@ bool AMDGPUAlwaysInline::runOnModule(Module &M) {
 
   for (GlobalVariable &GV : M.globals()) {
     // TODO: Region address
-    unsigned AS = GV.getType()->getAddressSpace();
+    unsigned AS = GV.getAddressSpace();
     if (AS != AMDGPUAS::LOCAL_ADDRESS && AS != AMDGPUAS::REGION_ADDRESS)
       continue;
 
@@ -151,7 +156,16 @@ bool AMDGPUAlwaysInline::runOnModule(Module &M) {
   return !FuncsToAlwaysInline.empty() || !FuncsToNoInline.empty();
 }
 
+bool AMDGPUAlwaysInline::runOnModule(Module &M) {
+  return alwaysInlineImpl(M, GlobalOpt);
+}
+
 ModulePass *llvm::createAMDGPUAlwaysInlinePass(bool GlobalOpt) {
   return new AMDGPUAlwaysInline(GlobalOpt);
 }
 
+PreservedAnalyses AMDGPUAlwaysInlinePass::run(Module &M,
+                                              ModuleAnalysisManager &AM) {
+  alwaysInlineImpl(M, GlobalOpt);
+  return PreservedAnalyses::all();
+}

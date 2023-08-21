@@ -1,9 +1,8 @@
 //===--- AArch64Subtarget.h - Define Subtarget for the AArch64 -*- C++ -*--===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -20,6 +19,7 @@
 #include "AArch64RegisterInfo.h"
 #include "AArch64SelectionDAGInfo.h"
 #include "llvm/CodeGen/GlobalISel/CallLowering.h"
+#include "llvm/CodeGen/GlobalISel/InlineAsmLowering.h"
 #include "llvm/CodeGen/GlobalISel/InstructionSelector.h"
 #include "llvm/CodeGen/GlobalISel/LegalizerInfo.h"
 #include "llvm/CodeGen/GlobalISel/RegisterBankInfo.h"
@@ -39,24 +39,41 @@ class AArch64Subtarget final : public AArch64GenSubtargetInfo {
 public:
   enum ARMProcFamilyEnum : uint8_t {
     Others,
+    A64FX,
+    AppleA7,
+    AppleA10,
+    AppleA11,
+    AppleA12,
+    AppleA13,
+    Carmel,
     CortexA35,
     CortexA53,
     CortexA55,
     CortexA57,
+    CortexA65,
     CortexA72,
     CortexA73,
     CortexA75,
-    Cyclone,
-    ExynosM1,
+    CortexA76,
+    CortexA77,
+    CortexA78,
+    CortexA78C,
+    CortexR82,
+    CortexX1,
     ExynosM3,
     Falkor,
     Kryo,
+    NeoverseE1,
+    NeoverseN1,
+    NeoverseN2,
+    NeoverseV1,
     Saphira,
     ThunderX2T99,
     ThunderX,
     ThunderXT81,
     ThunderXT83,
     ThunderXT88,
+    ThunderX3T110,
     TSV110
   };
 
@@ -69,6 +86,11 @@ protected:
   bool HasV8_3aOps = false;
   bool HasV8_4aOps = false;
   bool HasV8_5aOps = false;
+  bool HasV8_6aOps = false;
+  bool HasV8_7aOps = false;
+
+  bool HasV8_0rOps = false;
+  bool HasCONTEXTIDREL2 = false;
 
   bool HasFPARMv8 = false;
   bool HasNEON = false;
@@ -93,6 +115,16 @@ protected:
   bool HasPAN_RWV = false;
   bool HasCCPP = false;
 
+  // SVE extensions
+  bool HasSVE = false;
+  bool UseExperimentalZeroingPseudos = false;
+
+  // Armv8.2 Crypto extensions
+  bool HasSM4 = false;
+  bool HasSHA3 = false;
+  bool HasSHA2 = false;
+  bool HasAES = false;
+
   // ARMv8.3 extensions
   bool HasPA = false;
   bool HasJS = false;
@@ -101,24 +133,17 @@ protected:
 
   // ARMv8.4 extensions
   bool HasNV = false;
-  bool HasRASv8_4 = false;
   bool HasMPAM = false;
   bool HasDIT = false;
   bool HasTRACEV8_4 = false;
   bool HasAM = false;
   bool HasSEL2 = false;
+  bool HasPMU = false;
   bool HasTLB_RMI = false;
   bool HasFMI = false;
   bool HasRCPC_IMMO = false;
-  // ARMv8.4 Crypto extensions
-  bool HasSM4 = true;
-  bool HasSHA3 = true;
-
-  bool HasSHA2 = true;
-  bool HasAES = true;
 
   bool HasLSLFast = false;
-  bool HasSVE = false;
   bool HasRCPC = false;
   bool HasAggressiveFMA = false;
 
@@ -128,11 +153,40 @@ protected:
   bool HasSpecRestrict = false;
   bool HasSSBS = false;
   bool HasSB = false;
-  bool HasPredCtrl = false;
+  bool HasPredRes = false;
   bool HasCCDP = false;
   bool HasBTI = false;
   bool HasRandGen = false;
   bool HasMTE = false;
+  bool HasTME = false;
+
+  // Armv8.6-A Extensions
+  bool HasBF16 = false;
+  bool HasMatMulInt8 = false;
+  bool HasMatMulFP32 = false;
+  bool HasMatMulFP64 = false;
+  bool HasAMVS = false;
+  bool HasFineGrainedTraps = false;
+  bool HasEnhancedCounterVirtualization = false;
+
+  // Armv8.7-A Extensions
+  bool HasXS = false;
+  bool HasWFxT = false;
+  bool HasHCX = false;
+  bool HasLS64 = false;
+
+  // Arm SVE2 extensions
+  bool HasSVE2 = false;
+  bool HasSVE2AES = false;
+  bool HasSVE2SM4 = false;
+  bool HasSVE2SHA3 = false;
+  bool HasSVE2BitPerm = false;
+
+  // Future architecture extensions.
+  bool HasETE = false;
+  bool HasTRBE = false;
+  bool HasBRBE = false;
+  bool HasSPE_EEF = false;
 
   // HasZeroCycleRegMove - Has zero-cycle register mov instructions.
   bool HasZeroCycleRegMove = false;
@@ -152,6 +206,7 @@ protected:
   // Enable 64-bit vectorization in SLP.
   unsigned MinVectorRegisterBitWidth = 64;
 
+  bool OutlineAtomics = false;
   bool UseAA = false;
   bool PredictableSelectIsExpensive = false;
   bool BalanceFPOps = false;
@@ -166,20 +221,27 @@ protected:
   bool HasArithmeticCbzFusion = false;
   bool HasFuseAddress = false;
   bool HasFuseAES = false;
-  bool HasFuseCryptoEOR = false;
+  bool HasFuseArithmeticLogic = false;
   bool HasFuseCCSelect = false;
+  bool HasFuseCryptoEOR = false;
   bool HasFuseLiterals = false;
   bool DisableLatencySchedHeuristic = false;
   bool UseRSqrt = false;
   bool Force32BitJumpTables = false;
+  bool UseEL1ForTP = false;
+  bool UseEL2ForTP = false;
+  bool UseEL3ForTP = false;
+  bool AllowTaggedGlobals = false;
+  bool HardenSlsRetBr = false;
+  bool HardenSlsBlr = false;
   uint8_t MaxInterleaveFactor = 2;
   uint8_t VectorInsertExtractBaseCost = 3;
   uint16_t CacheLineSize = 0;
   uint16_t PrefetchDistance = 0;
   uint16_t MinPrefetchStride = 1;
   unsigned MaxPrefetchIterationsAhead = UINT_MAX;
-  unsigned PrefFunctionAlignment = 0;
-  unsigned PrefLoopAlignment = 0;
+  unsigned PrefFunctionLogAlignment = 0;
+  unsigned PrefLoopLogAlignment = 0;
   unsigned MaxJumpTableSize = 0;
   unsigned WideningBaseCost = 0;
 
@@ -201,6 +263,7 @@ protected:
 
   /// GlobalISel related APIs.
   std::unique_ptr<CallLowering> CallLoweringInfo;
+  std::unique_ptr<InlineAsmLowering> InlineAsmLoweringInfo;
   std::unique_ptr<InstructionSelector> InstSelector;
   std::unique_ptr<LegalizerInfo> Legalizer;
   std::unique_ptr<RegisterBankInfo> RegBankInfo;
@@ -236,7 +299,8 @@ public:
     return &getInstrInfo()->getRegisterInfo();
   }
   const CallLowering *getCallLowering() const override;
-  const InstructionSelector *getInstructionSelector() const override;
+  const InlineAsmLowering *getInlineAsmLowering() const override;
+  InstructionSelector *getInstructionSelector() const override;
   const LegalizerInfo *getLegalizerInfo() const override;
   const RegisterBankInfo *getRegBankInfo() const override;
   const Triple &getTargetTriple() const { return TargetTriple; }
@@ -258,6 +322,7 @@ public:
   bool hasV8_3aOps() const { return HasV8_3aOps; }
   bool hasV8_4aOps() const { return HasV8_4aOps; }
   bool hasV8_5aOps() const { return HasV8_5aOps; }
+  bool hasV8_0rOps() const { return HasV8_0rOps; }
 
   bool hasZeroCycleRegMove() const { return HasZeroCycleRegMove; }
 
@@ -295,6 +360,7 @@ public:
   bool hasSHA3() const { return HasSHA3; }
   bool hasSHA2() const { return HasSHA2; }
   bool hasAES() const { return HasAES; }
+  bool hasCONTEXTIDREL2() const { return HasCONTEXTIDREL2; }
   bool balanceFPOps() const { return BalanceFPOps; }
   bool predictableSelectIsExpensive() const {
     return PredictableSelectIsExpensive;
@@ -311,15 +377,24 @@ public:
   bool hasArithmeticCbzFusion() const { return HasArithmeticCbzFusion; }
   bool hasFuseAddress() const { return HasFuseAddress; }
   bool hasFuseAES() const { return HasFuseAES; }
-  bool hasFuseCryptoEOR() const { return HasFuseCryptoEOR; }
+  bool hasFuseArithmeticLogic() const { return HasFuseArithmeticLogic; }
   bool hasFuseCCSelect() const { return HasFuseCCSelect; }
+  bool hasFuseCryptoEOR() const { return HasFuseCryptoEOR; }
   bool hasFuseLiterals() const { return HasFuseLiterals; }
 
   /// Return true if the CPU supports any kind of instruction fusion.
   bool hasFusion() const {
     return hasArithmeticBccFusion() || hasArithmeticCbzFusion() ||
-           hasFuseAES() || hasFuseCCSelect() || hasFuseLiterals();
+           hasFuseAES() || hasFuseArithmeticLogic() ||
+           hasFuseCCSelect() || hasFuseLiterals();
   }
+
+  bool hardenSlsRetBr() const { return HardenSlsRetBr; }
+  bool hardenSlsBlr() const { return HardenSlsBlr; }
+
+  bool useEL1ForTP() const { return UseEL1ForTP; }
+  bool useEL2ForTP() const { return UseEL2ForTP; }
+  bool useEL3ForTP() const { return UseEL3ForTP; }
 
   bool useRSqrt() const { return UseRSqrt; }
   bool force32BitJumpTables() const { return Force32BitJumpTables; }
@@ -327,18 +402,29 @@ public:
   unsigned getVectorInsertExtractBaseCost() const {
     return VectorInsertExtractBaseCost;
   }
-  unsigned getCacheLineSize() const { return CacheLineSize; }
-  unsigned getPrefetchDistance() const { return PrefetchDistance; }
-  unsigned getMinPrefetchStride() const { return MinPrefetchStride; }
-  unsigned getMaxPrefetchIterationsAhead() const {
+  unsigned getCacheLineSize() const override { return CacheLineSize; }
+  unsigned getPrefetchDistance() const override { return PrefetchDistance; }
+  unsigned getMinPrefetchStride(unsigned NumMemAccesses,
+                                unsigned NumStridedMemAccesses,
+                                unsigned NumPrefetches,
+                                bool HasCall) const override {
+    return MinPrefetchStride;
+  }
+  unsigned getMaxPrefetchIterationsAhead() const override {
     return MaxPrefetchIterationsAhead;
   }
-  unsigned getPrefFunctionAlignment() const { return PrefFunctionAlignment; }
-  unsigned getPrefLoopAlignment() const { return PrefLoopAlignment; }
+  unsigned getPrefFunctionLogAlignment() const {
+    return PrefFunctionLogAlignment;
+  }
+  unsigned getPrefLoopLogAlignment() const { return PrefLoopLogAlignment; }
 
   unsigned getMaximumJumpTableSize() const { return MaxJumpTableSize; }
 
   unsigned getWideningBaseCost() const { return WideningBaseCost; }
+
+  bool useExperimentalZeroingPseudos() const {
+    return UseExperimentalZeroingPseudos;
+  }
 
   /// CPU has TBI (top byte of addresses is ignored during HW address
   /// translation) and OS enables it.
@@ -350,6 +436,7 @@ public:
   bool hasSPE() const { return HasSPE; }
   bool hasLSLFast() const { return HasLSLFast; }
   bool hasSVE() const { return HasSVE; }
+  bool hasSVE2() const { return HasSVE2; }
   bool hasRCPC() const { return HasRCPC; }
   bool hasAggressiveFMA() const { return HasAggressiveFMA; }
   bool hasAlternativeNZCV() const { return HasAlternativeNZCV; }
@@ -357,11 +444,27 @@ public:
   bool hasSpecRestrict() const { return HasSpecRestrict; }
   bool hasSSBS() const { return HasSSBS; }
   bool hasSB() const { return HasSB; }
-  bool hasPredCtrl() const { return HasPredCtrl; }
+  bool hasPredRes() const { return HasPredRes; }
   bool hasCCDP() const { return HasCCDP; }
   bool hasBTI() const { return HasBTI; }
   bool hasRandGen() const { return HasRandGen; }
   bool hasMTE() const { return HasMTE; }
+  bool hasTME() const { return HasTME; }
+  // Arm SVE2 extensions
+  bool hasSVE2AES() const { return HasSVE2AES; }
+  bool hasSVE2SM4() const { return HasSVE2SM4; }
+  bool hasSVE2SHA3() const { return HasSVE2SHA3; }
+  bool hasSVE2BitPerm() const { return HasSVE2BitPerm; }
+  bool hasMatMulInt8() const { return HasMatMulInt8; }
+  bool hasMatMulFP32() const { return HasMatMulFP32; }
+  bool hasMatMulFP64() const { return HasMatMulFP64; }
+
+  // Armv8.6-A Extensions
+  bool hasBF16() const { return HasBF16; }
+  bool hasFineGrainedTraps() const { return HasFineGrainedTraps; }
+  bool hasEnhancedCounterVirtualization() const {
+    return HasEnhancedCounterVirtualization;
+  }
 
   bool isLittleEndian() const { return IsLittle; }
 
@@ -376,7 +479,11 @@ public:
   bool isTargetELF() const { return TargetTriple.isOSBinFormatELF(); }
   bool isTargetMachO() const { return TargetTriple.isOSBinFormatMachO(); }
 
+  bool isTargetILP32() const { return TargetTriple.isArch32Bit(); }
+
   bool useAA() const override { return UseAA; }
+
+  bool outlineAtomics() const { return OutlineAtomics; }
 
   bool hasVH() const { return HasVH; }
   bool hasPAN() const { return HasPAN; }
@@ -392,15 +499,26 @@ public:
   bool hasComplxNum() const { return HasComplxNum; }
 
   bool hasNV() const { return HasNV; }
-  bool hasRASv8_4() const { return HasRASv8_4; }
   bool hasMPAM() const { return HasMPAM; }
   bool hasDIT() const { return HasDIT; }
   bool hasTRACEV8_4() const { return HasTRACEV8_4; }
   bool hasAM() const { return HasAM; }
+  bool hasAMVS() const { return HasAMVS; }
+  bool hasXS() const { return HasXS; }
+  bool hasWFxT() const { return HasWFxT; }
+  bool hasHCX() const { return HasHCX; }
+  bool hasLS64() const { return HasLS64; }
   bool hasSEL2() const { return HasSEL2; }
+  bool hasPMU() const { return HasPMU; }
   bool hasTLB_RMI() const { return HasTLB_RMI; }
   bool hasFMI() const { return HasFMI; }
   bool hasRCPC_IMMO() const { return HasRCPC_IMMO; }
+
+  bool addrSinkUsingGEPs() const override {
+    // Keeping GEPs inbounds is important for exploiting AArch64
+    // addressing-modes in ILP32 mode.
+    return useAA() || isTargetILP32();
+  }
 
   bool useSmallAddressing() const {
     switch (TLInfo.getTargetMachine().getCodeModel()) {
@@ -416,20 +534,22 @@ public:
 
   /// ParseSubtargetFeatures - Parses features string setting specified
   /// subtarget options.  Definition of function is auto generated by tblgen.
-  void ParseSubtargetFeatures(StringRef CPU, StringRef FS);
+  void ParseSubtargetFeatures(StringRef CPU, StringRef TuneCPU, StringRef FS);
 
   /// ClassifyGlobalReference - Find the target operand flags that describe
   /// how a global value should be referenced for the current subtarget.
-  unsigned char ClassifyGlobalReference(const GlobalValue *GV,
-                                        const TargetMachine &TM) const;
+  unsigned ClassifyGlobalReference(const GlobalValue *GV,
+                                   const TargetMachine &TM) const;
 
-  unsigned char classifyGlobalFunctionReference(const GlobalValue *GV,
-                                                const TargetMachine &TM) const;
+  unsigned classifyGlobalFunctionReference(const GlobalValue *GV,
+                                           const TargetMachine &TM) const;
 
   void overrideSchedPolicy(MachineSchedPolicy &Policy,
                            unsigned NumRegionInstrs) const override;
 
   bool enableEarlyIfConversion() const override;
+
+  bool enableAdvancedRASplitCost() const override { return true; }
 
   std::unique_ptr<PBQPRAConstraint> getCustomPBQPConstraints() const override;
 
@@ -446,7 +566,39 @@ public:
     }
   }
 
+  /// Return whether FrameLowering should always set the "extended frame
+  /// present" bit in FP, or set it based on a symbol in the runtime.
+  bool swiftAsyncContextIsDynamicallySet() const {
+    // Older OS versions (particularly system unwinders) are confused by the
+    // Swift extended frame, so when building code that might be run on them we
+    // must dynamically query the concurrency library to determine whether
+    // extended frames should be flagged as present.
+    const Triple &TT = getTargetTriple();
+
+    unsigned Major, Minor, Micro;
+    TT.getOSVersion(Major, Minor, Micro);
+    switch(TT.getOS()) {
+    default:
+      return false;
+    case Triple::IOS:
+    case Triple::TvOS:
+      return Major < 15;
+    case Triple::WatchOS:
+      return Major < 8;
+    case Triple::MacOSX:
+    case Triple::Darwin:
+      return Major < 12;
+    }
+  }
+
   void mirFileLoaded(MachineFunction &MF) const override;
+
+  // Return the known range for the bit length of SVE data registers. A value
+  // of 0 means nothing is known about that particular limit beyong what's
+  // implied by the architecture.
+  unsigned getMaxSVEVectorSizeInBits() const;
+  unsigned getMinSVEVectorSizeInBits() const;
+  bool useSVEForFixedLengthVectors() const;
 };
 } // End llvm namespace
 
