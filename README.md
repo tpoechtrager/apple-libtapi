@@ -1,4 +1,4 @@
-# Apple TAPI library - Version 1300.0.6.5; API: 1.6.0 #
+# Apple TAPI library - Version 1300.6.5; API: 1.6.0 #
 
 Sources taken from: 
 
