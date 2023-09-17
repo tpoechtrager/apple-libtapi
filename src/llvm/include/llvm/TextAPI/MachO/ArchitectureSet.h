@@ -40,6 +40,8 @@ public:
   ArchitectureSet(Architecture Arch) : ArchitectureSet() { set(Arch); }
   ArchitectureSet(const std::vector<Architecture> &Archs);
 
+  static ArchitectureSet All() { return ArchitectureSet(EndIndexVal); }
+
   void set(Architecture Arch) {
     if (Arch == AK_unknown)
       return;

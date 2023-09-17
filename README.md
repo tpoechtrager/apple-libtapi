@@ -3,15 +3,21 @@
 Sources taken from: 
 
 https://opensource.apple.com/tarballs/tapi  
-https://github.com/apple/llvm-project/commits/apple/stable/20190104
+https://github.com/apple/llvm-project/tree/apple/stable/20210107
 
 ## Dependencies: ##
 
 CMake, Python and Clang or GCC
 
-## Installation: ##
+## Installation of library: ##
 
     [INSTALLPREFIX=<prefix>] ./build.sh  
+    ./install.sh
+
+## Installation of library and tapi tools: ##
+
+    # Requires clang and lld to be installed
+    [INSTALLPREFIX=<prefix>] ./build_tapi_tools.sh  
     ./install.sh
 
 ## What is TAPI? ##

@@ -7,6 +7,18 @@ TAPI_VERSION=1300.6.5
 pushd "${0%/*}" &>/dev/null
 source tools/tools.sh
 
+if [[ $(basename $0) == *tapi_tools* ]]; then
+  BUILD_TAPI_TOOLS=1
+  [[ "$CC" != *clang* ]] && export CC="clang"
+  [[ "$CXX" != *clang++* ]]  && export CXX="clang++"
+  which lld &>/dev/null || {
+    echo "Missing lld" 1>&2
+    exit 1
+  }
+  CMAKE_EXE_LINKER_FLAGS+=" -fuse-ld=lld"
+  CMAKE_SHARED_LINKER_FLAGS+=" -fuse-ld=lld"
+fi
+
 rm -rf build
 mkdir build
 
@@ -60,6 +72,8 @@ echo -n $INSTALLPREFIX > INSTALLPREFIX
 
 cmake ../src/llvm \
  -DCMAKE_CXX_FLAGS="$INCLUDE_FIX" \
+ -DCMAKE_SHARED_LINKER_FLAGS="$CMAKE_SHARED_LINKER_FLAGS" \
+ -DCMAKE_EXE_LINKER_FLAGS="$CMAKE_EXE_LINKER_FLAGS" \
  -DLLVM_INCLUDE_TESTS=OFF \
  -DCMAKE_BUILD_TYPE=RELEASE \
  -DLLVM_ENABLE_PROJECTS="tapi;clang" \
@@ -79,6 +93,14 @@ echo "## Building libtapi ##"
 echo ""
 
 $MAKE libtapi -j $JOBS
+
+if [ -n "$BUILD_TAPI_TOOLS" ]; then
+  echo ""
+  echo "## Building tapi tools ##"
+  echo ""
+
+  $MAKE tapi tapi-binary-reader tapi-run tapi-sdkdb -j $JOBS
+fi
 
 popd &>/dev/null
 popd &>/dev/null

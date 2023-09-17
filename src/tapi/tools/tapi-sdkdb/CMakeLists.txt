@@ -16,7 +16,7 @@ target_link_libraries(tapi-sdkdb
   )
 
 install(TARGETS tapi-sdkdb
-  RUNTIME DESTINATION local/bin
+  RUNTIME DESTINATION bin
   COMPONENT tapi-sdkdb
   )
 add_llvm_install_targets(install-tapi-sdkdb

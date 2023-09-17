@@ -8,7 +8,14 @@ pushd build &>/dev/null
 
 INSTALLPREFIX=$(cat INSTALLPREFIX)
 
-$MAKE install-libtapi install-tapi-headers -j $JOBS
+INSTALLTARGETS="install-libtapi install-tapi-headers"
+
+[ -e "bin/tapi" ] && INSTALLTARGETS+=" install-tapi"
+[ -e "bin/tapi-binary-reader" ] && INSTALLTARGETS+=" install-tapi-binary-reader"
+[ -e "bin/tapi-run" ] && INSTALLTARGETS+=" install-tapi-run"
+[ -e "bin/tapi-sdkdb" ] && INSTALLTARGETS+=" install-tapi-sdkdb"
+
+$MAKE $INSTALLTARGETS -j $JOBS
 
 popd &>/dev/null
 popd &>/dev/null

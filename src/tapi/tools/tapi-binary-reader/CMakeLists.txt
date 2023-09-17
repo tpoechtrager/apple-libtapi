@@ -11,6 +11,7 @@ add_tapi_executable(tapi-binary-reader
 target_link_libraries(tapi-binary-reader
   PRIVATE
   tapiCore
+  tapiObjCMetadata
   )
 
 install(TARGETS tapi-binary-reader
