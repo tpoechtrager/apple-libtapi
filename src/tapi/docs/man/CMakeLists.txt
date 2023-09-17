@@ -19,7 +19,7 @@ install(
 
 install(
   FILES ${TAPI_MAN_EXPERIMENTAL_FILES}
-  DESTINATION local/share/man/man1
+  DESTINATION share/man/man1
   COMPONENT tapi-docs
   )
 
