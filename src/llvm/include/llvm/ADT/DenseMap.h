@@ -125,7 +125,7 @@ public:
       for (BucketT *P = getBuckets(), *E = getBucketsEnd(); P != E; ++P)
         P->getFirst() = EmptyKey;
     } else {
-      unsigned NumEntries = getNumEntries();
+      unsigned NumEntries __attribute__((unused)) = getNumEntries();
       for (BucketT *P = getBuckets(), *E = getBucketsEnd(); P != E; ++P) {
         if (!KeyInfoT::isEqual(P->getFirst(), EmptyKey)) {
           if (!KeyInfoT::isEqual(P->getFirst(), TombstoneKey)) {
