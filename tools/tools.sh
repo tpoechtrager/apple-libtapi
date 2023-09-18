@@ -7,15 +7,24 @@ if [ -z "$INSTALLPREFIX" ]; then
   INSTALLPREFIX=/usr/local
 fi
 
-if [[ $PLATFORM == *BSD ]] || [ $PLATFORM == "DragonFly" ]; then
+if command -v gmake > /dev/null; then
   MAKE=gmake
+elif command -v make > /dev/null; then
+  _make_version="$(make --version)"
+  if [[ $_make_version == *"GNU"* ]]; then
+    MAKE=make
+  else
+    echo "Cannot find GNU make."
+    exit 1
+  fi
 else
-  MAKE=make
+  echo "Cannot find GNU make."
+  exit 1
 fi
 
 if [ -z "$CC" ] && [ -z "$CXX" ]; then
 
-which clang &>/dev/null && {
+command -v clang &>/dev/null && {
   export CC=clang
   export CXX=clang++
 }

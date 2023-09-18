@@ -31,43 +31,6 @@ if [ "$OPERATING_SYSTEM" = "Android" ]; then
   export CXX="$CXX -D__ANDROID_API__=26"
 fi
 
-case "$TARGET" in
-  Darwin)
-    #export MACOSX_DEPLOYMENT_TARGET=10.9
-    CMAKE_EXTRA_ARGS+="-DCMAKE_SYSTEM_NAME=Darwin "
-    CC="$(xcrun -f clang) -stdlib=libc++"
-    CXX="$(xcrun -f clang++) -stdlib=libc++"
-    export CC CXX
-  ;;
-  iOS)
-    unset MACOSX_DEPLOYMENT_TARGET
-    CMAKE_EXTRA_ARGS+="-DCMAKE_SYSTEM_NAME=Darwin "
-    export CC="arm-apple-darwin11-clang -stdlib=libc++"
-    export CXX="arm-apple-darwin11-clang++ -stdlib=libc++"
-  ;;
-  iOS-ARMV7)
-    unset MACOSX_DEPLOYMENT_TARGET
-    CMAKE_EXTRA_ARGS+="-DCMAKE_SYSTEM_NAME=Darwin "
-    export CC="arm-apple-darwin11-clang -arch armv7 -stdlib=libc++"
-    export CXX="arm-apple-darwin11-clang++ -arch armv7 -stdlib=libc++"
-  ;;
-  FreeBSD)
-    CMAKE_EXTRA_ARGS+="-DCMAKE_SYSTEM_NAME=FreeBSD "
-    export CC="amd64-pc-freebsd13.0-clang"
-    export CXX="amd64-pc-freebsd13.0-clang++"
-  ;;
-  MINGW64)
-    CMAKE_EXTRA_ARGS+="-DCMAKE_SYSTEM_NAME=Windows "
-    export CC="x86_64-w64-mingw32-gcc"
-    export CXX="x86_64-w64-mingw32-g++"
-  ;;
-  MINGW32)
-    CMAKE_EXTRA_ARGS+="-DCMAKE_SYSTEM_NAME=Windows "
-    export CC="i686-w64-mingw32-gcc"
-    export CXX="i686-w64-mingw32-g++"
-  ;;
-esac
-
 if [ -z "$INSTALLPREFIX" ]; then
   INSTALLPREFIX="/usr/local"
 fi
