@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
-# shellcheck disable=SC2086
 
 set -e
 
 TAPI_VERSION=1300.6.5
 
 pushd "${0%/*}" &>/dev/null
-. tools/tools.sh
+source tools/tools.sh
 
 if [[ "$(basename "$0")" == *tapi_tools* ]]; then
   BUILD_TAPI_TOOLS=1
@@ -87,28 +86,28 @@ cmake ../src/llvm \
  -DCMAKE_BUILD_TYPE=RELEASE \
  -DLLVM_ENABLE_PROJECTS="tapi;clang" \
  -DCMAKE_INSTALL_PREFIX="$INSTALLPREFIX" \
- -DTAPI_REPOSITORY_STRING="$TAPI_VERSION" \
- -DTAPI_FULL_VERSION="$TAPI_VERSION" \
+ -DTAPI_REPOSITORY_STRING=$TAPI_VERSION \
+ -DTAPI_FULL_VERSION=$TAPI_VERSION \
  $CMAKE_EXTRA_ARGS
 
 echo ""
 echo "## Building clangBasic ##"
 echo ""
 
-$MAKE clangBasic -j "$JOBS"
+$MAKE clangBasic -j $JOBS
 
 echo ""
 echo "## Building libtapi ##"
 echo ""
 
-$MAKE libtapi -j "$JOBS"
+$MAKE libtapi -j $JOBS
 
 if [ -n "$BUILD_TAPI_TOOLS" ]; then
   echo ""
   echo "## Building tapi tools ##"
   echo ""
 
-  "$MAKE" tapi tapi-binary-reader tapi-run tapi-sdkdb -j "$JOBS"
+  $MAKE tapi tapi-binary-reader tapi-run tapi-sdkdb -j $JOBS
 fi
 
 popd &>/dev/null
