@@ -4,7 +4,7 @@ add_tapi_executable(tapi-run
   tapi-run.cpp
   )
 
-target_link_libraries(tapi-run
+target_link_libraries(tapi-run PRIVATE
   tapiCore
   libtapi
   )
