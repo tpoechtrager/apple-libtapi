@@ -10,16 +10,9 @@ fi
 if command -v gmake > /dev/null; then
   MAKE=gmake
 elif command -v make > /dev/null; then
-  _make_version="$(make --version)"
-  if [[ $_make_version == *"GNU"* ]]; then
-    MAKE=make
-  else
-    echo "Cannot find GNU make."
-    exit 1
-  fi
+  MAKE=make
 else
-  echo "Cannot find GNU make."
-  exit 1
+  echo "'make' not found!" 1>&2
 fi
 
 if [ -z "$CC" ] && [ -z "$CXX" ]; then
