@@ -19,6 +19,17 @@ if [[ "$(basename "$0")" == *tapi_tools* ]]; then
   CMAKE_SHARED_LINKER_FLAGS+=" -fuse-ld=lld"
 fi
 
+if [ "$NINJA" = 1 ]; then
+  command -v ninja &>/dev/null || {
+    echo "Missing ninja" 1>&2
+    exit 1
+  }
+  cmakegen="Ninja"
+  MAKE="ninja"
+else
+  cmakegen="Unix Makefiles"
+fi
+
 rm -rf build
 mkdir build
 
@@ -41,7 +52,7 @@ INCLUDE_FIX+="-I $PWD/projects/clang/include "
 
 printf '%s' "$INSTALLPREFIX" > INSTALLPREFIX
 
-cmake ../src/llvm \
+cmake -G "$cmakegen" ../src/llvm \
  -DCMAKE_CXX_FLAGS="$INCLUDE_FIX" \
  -DCMAKE_SHARED_LINKER_FLAGS="$CMAKE_SHARED_LINKER_FLAGS" \
  -DCMAKE_EXE_LINKER_FLAGS="$CMAKE_EXE_LINKER_FLAGS" \
