@@ -203,7 +203,11 @@ template <typename T> struct ResolveUnderlyingType<T, false> {
 template <> struct ResolveUnderlyingType<bool, false> {
   /// In case sizeof(bool) != 1, replace `void` by an additionnal
   /// std::conditional.
+#if defined(__APPLE__) && defined(__ppc__) // Darwin ppc 32-bit ABI has 4-byte bool.
+  using type = std::conditional<sizeof(bool) == 4, uint32_t, void>::type;
+#else
   using type = std::conditional<sizeof(bool) == 1, uint8_t, void>::type;
+#endif
 };
 
 } // namespace bitfields_details
