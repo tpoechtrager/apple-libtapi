@@ -15,6 +15,14 @@ INSTALLTARGETS="install-libtapi install-tapi-headers"
 [ -e "bin/tapi-run" ] && INSTALLTARGETS+=" install-tapi-run"
 [ -e "bin/tapi-sdkdb" ] && INSTALLTARGETS+=" install-tapi-sdkdb"
 
+if [ -f build.ninja ]; then
+    command -v ninja &>/dev/null || {
+        echo "Missing ninja" 1>&2
+        exit 1
+    }
+    MAKE=ninja
+fi
+
 $MAKE $INSTALLTARGETS -j $JOBS
 
 popd &>/dev/null
