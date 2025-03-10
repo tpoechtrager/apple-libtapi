@@ -10,6 +10,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#define _LARGEFILE64_SOURCE
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringExtras.h"
