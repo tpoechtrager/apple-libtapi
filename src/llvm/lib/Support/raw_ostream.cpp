@@ -10,7 +10,9 @@
 //
 //===----------------------------------------------------------------------===//
 
+#if defined(__linux__) && !defined(_LARGEFILE64_SOURCE)
 #define _LARGEFILE64_SOURCE
+#endif
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringExtras.h"
