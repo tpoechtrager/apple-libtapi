@@ -20,6 +20,7 @@
 /// The C++ Application Programming Interface (API) for the TAPI library
 ///
 
+#include <stdint.h>
 #include <tapi/APIVersion.h>
 #include <tapi/Defines.h>
 #include <tapi/LinkerInterfaceFile.h>
