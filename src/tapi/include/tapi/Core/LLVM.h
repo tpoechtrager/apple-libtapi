@@ -15,6 +15,7 @@
 #ifndef TAPI_CORE_LLVM_H
 #define TAPI_CORE_LLVM_H
 
+#include <stdint.h>
 #include "llvm/Support/Casting.h"
 
 namespace llvm {
