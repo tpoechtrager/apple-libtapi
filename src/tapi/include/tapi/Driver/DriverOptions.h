@@ -1,9 +1,8 @@
 //===--- tapi/Driver/DriverOptions.h - Option info & table ------*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 
@@ -30,8 +29,7 @@ enum TapiFlags {
   InstallAPIOption       = 1U <<  7,
   ReexportOption         = 1U <<  8,
   SDKDBOption            = 1U <<  9,
-  GenerateAPITestsOption = 1U << 10,
-  APIVerifyOption        = 1U << 11,
+  APIVerifyOption        = 1U << 10,
 };
 // clang-format on
 

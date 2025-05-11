@@ -33,12 +33,9 @@ public:
   using FileCollector::FileCollector;
   using FileCollector::Root;
   using FileCollector::Seen;
-  using FileCollector::SymlinkMap;
   using FileCollector::VFSWriter;
 
-  bool hasSeen(StringRef fs) {
-    return Seen.find(fs) != Seen.end();
-  }
+  bool hasSeen(StringRef fs) { return Seen.contains(fs); }
 };
 
 } // end anonymous namespace

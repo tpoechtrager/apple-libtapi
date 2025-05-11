@@ -1,9 +1,8 @@
 //===--- IfSwitchConversion.cpp -  ----------------------------------------===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -97,11 +96,11 @@ static bool checkIfsHaveConditionExpression(const IfStmt *If) {
   return false;
 }
 
-static Optional<std::pair<const Expr *, const Expr *>>
+static std::optional<std::pair<const Expr *, const Expr *>>
 matchBinOp(const Expr *E, BinaryOperator::Opcode Kind) {
   const auto *BinOp = dyn_cast<BinaryOperator>(E->IgnoreParens());
   if (!BinOp || BinOp->getOpcode() != Kind)
-    return None;
+    return std::nullopt;
   return std::pair<const Expr *, const Expr *>(
       BinOp->getLHS()->IgnoreParenImpCasts(), BinOp->getRHS()->IgnoreParens());
 }
@@ -110,21 +109,22 @@ typedef llvm::SmallDenseSet<int64_t, 4> RHSValueSet;
 
 /// Returns true if the conditional expression of an 'if' statement allows
 /// the "convert to switch" refactoring action.
-static bool isConditionValid(const Expr *E, ASTContext &Context,
-                             Optional<llvm::FoldingSetNodeID> &MatchedLHSNodeID,
-                             RHSValueSet &RHSValues) {
+static bool
+isConditionValid(const Expr *E, ASTContext &Context,
+                 std::optional<llvm::FoldingSetNodeID> &MatchedLHSNodeID,
+                 RHSValueSet &RHSValues) {
   auto Equals = matchBinOp(E, BO_EQ);
-  if (!Equals.hasValue()) {
+  if (!Equals) {
     auto LogicalOr = matchBinOp(E, BO_LOr);
-    if (!LogicalOr.hasValue())
+    if (!LogicalOr)
       return false;
-    return isConditionValid(LogicalOr.getValue().first, Context,
+    return isConditionValid(LogicalOr->first, Context,
                             MatchedLHSNodeID, RHSValues) &&
-           isConditionValid(LogicalOr.getValue().second, Context,
+           isConditionValid(LogicalOr->second, Context,
                             MatchedLHSNodeID, RHSValues);
   }
-  const Expr *LHS = Equals.getValue().first;
-  const Expr *RHS = Equals.getValue().second;
+  const Expr *LHS = Equals->first;
+  const Expr *RHS = Equals->second;
   if (!LHS->getType()->isIntegralOrEnumerationType() ||
       !RHS->getType()->isIntegralOrEnumerationType())
     return false;
@@ -134,15 +134,15 @@ static bool isConditionValid(const Expr *E, ASTContext &Context,
   if (!RHS->EvaluateAsInt(Result, Context))
     return false;
   // Only allow constant that fix into 64 bits.
-  if (Result.Val.getInt().getMinSignedBits() > 64 ||
+  if (Result.Val.getInt().getSignificantBits() > 64 ||
       !RHSValues.insert(Result.Val.getInt().getExtValue()).second)
     return false;
 
   // LHS must be identical to the other LHS expressions.
   llvm::FoldingSetNodeID LHSNodeID;
   LHS->Profile(LHSNodeID, Context, /*Canonical=*/false);
-  if (MatchedLHSNodeID.hasValue()) {
-    if (MatchedLHSNodeID.getValue() != LHSNodeID)
+  if (MatchedLHSNodeID) {
+    if (*MatchedLHSNodeID != LHSNodeID)
       return false;
   } else
     MatchedLHSNodeID = std::move(LHSNodeID);
@@ -155,16 +155,16 @@ RefactoringOperationResult clang::tooling::initiateIfSwitchConversionOperation(
   // FIXME: Add support for selections.
   const auto *If = cast_or_null<IfStmt>(Slice.nearestStmt(Stmt::IfStmtClass));
   if (!If)
-    return None;
+    return std::nullopt;
 
   // Don't allow if statements without any 'else' or 'else if'.
   if (!If->getElse())
-    return None;
+    return std::nullopt;
 
   // Don't allow ifs with variable declarations in conditions or C++17
   // initializer statements.
   if (checkIfsHaveConditionExpression(If))
-    return None;
+    return std::nullopt;
 
   // Find the ranges in which initiation can be performed and verify that the
   // ifs don't have any initialization expressions or condition variables.
@@ -192,7 +192,7 @@ RefactoringOperationResult clang::tooling::initiateIfSwitchConversionOperation(
   }
 
   if (!isLocationInAnyRange(Location, Ranges, SM))
-    return None;
+    return std::nullopt;
 
   // Verify that the bodies don't have any 'break'/'default'/'case' statements.
   ValidIfBodyVerifier BodyVerifier;
@@ -202,7 +202,7 @@ RefactoringOperationResult clang::tooling::initiateIfSwitchConversionOperation(
         "if's body contains a 'break'/'default'/'case' statement");
 
   // FIXME: Use ASTMatchers if possible.
-  Optional<llvm::FoldingSetNodeID> MatchedLHSNodeID;
+  std::optional<llvm::FoldingSetNodeID> MatchedLHSNodeID;
   RHSValueSet RHSValues;
   for (const IfStmt *CurrentIf = If; CurrentIf;
        CurrentIf = dyn_cast_or_null<IfStmt>(CurrentIf->getElse())) {
@@ -221,28 +221,28 @@ RefactoringOperationResult clang::tooling::initiateIfSwitchConversionOperation(
 /// Returns the first LHS expression in the if's condition.
 const Expr *getConditionFirstLHS(const Expr *E) {
   auto Equals = matchBinOp(E, BO_EQ);
-  if (!Equals.hasValue()) {
+  if (!Equals) {
     auto LogicalOr = matchBinOp(E, BO_LOr);
-    if (!LogicalOr.hasValue())
+    if (!LogicalOr)
       return nullptr;
-    return getConditionFirstLHS(LogicalOr.getValue().first);
+    return getConditionFirstLHS(LogicalOr->first);
   }
-  return Equals.getValue().first;
+  return Equals->first;
 }
 
 /// Gathers all of the RHS operands of the == expressions in the if's condition.
 void gatherCaseValues(const Expr *E,
                       SmallVectorImpl<const Expr *> &CaseValues) {
   auto Equals = matchBinOp(E, BO_EQ);
-  if (Equals.hasValue()) {
-    CaseValues.push_back(Equals.getValue().second);
+  if (Equals) {
+    CaseValues.push_back(Equals->second);
     return;
   }
   auto LogicalOr = matchBinOp(E, BO_LOr);
-  if (!LogicalOr.hasValue())
+  if (!LogicalOr)
     return;
-  gatherCaseValues(LogicalOr.getValue().first, CaseValues);
-  gatherCaseValues(LogicalOr.getValue().second, CaseValues);
+  gatherCaseValues(LogicalOr->first, CaseValues);
+  gatherCaseValues(LogicalOr->second, CaseValues);
 }
 
 /// Return true iff the given body should be terminated with a 'break' statement
@@ -350,7 +350,7 @@ addCaseReplacements(const IfStmt *If, const CasePlacement &CaseInfo,
 
   SourceLocation PrevCaseEnd = getPreciseTokenLocEnd(
       SM.getSpellingLoc(CaseValues[0]->getEndLoc()), SM, LangOpts);
-  for (const Expr *CaseValue : llvm::makeArrayRef(CaseValues).drop_front()) {
+  for (const Expr *CaseValue : ArrayRef(CaseValues).drop_front()) {
     Replacements.emplace_back(
         SourceRange(PrevCaseEnd, SM.getSpellingLoc(CaseValue->getBeginLoc())),
         StringRef(":\ncase "));

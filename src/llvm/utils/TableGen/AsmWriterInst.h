@@ -21,7 +21,6 @@
 
 namespace llvm {
   class CodeGenInstruction;
-  class Record;
 
   struct AsmWriterOperand {
     enum OpType {
@@ -66,7 +65,8 @@ namespace llvm {
     bool operator!=(const AsmWriterOperand &Other) const {
       if (OperandType != Other.OperandType || Str != Other.Str) return true;
       if (OperandType == isMachineInstrOperand)
-        return MIOpNo != Other.MIOpNo || MiModifier != Other.MiModifier;
+        return MIOpNo != Other.MIOpNo || MiModifier != Other.MiModifier ||
+               PCRel != Other.PCRel;
       return false;
     }
     bool operator==(const AsmWriterOperand &Other) const {

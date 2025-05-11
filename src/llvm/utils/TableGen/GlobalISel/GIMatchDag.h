@@ -1,4 +1,4 @@
-//===- GIMatchDag.h - Represent a DAG to be matched -----------------------===//
+//===- GIMatchDag.h - Represent a DAG to be matched -------------*- C++ -*-===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -16,7 +16,6 @@
 #include "GIMatchDagPredicateDependencyEdge.h"
 
 namespace llvm {
-class GIMatchDag;
 
 /// This class manages lifetimes for data associated with the GIMatchDag object.
 class GIMatchDagContext {
@@ -84,9 +83,7 @@ protected:
   bool HasPostMatchPredicate = false;
 
 public:
-  GIMatchDag(GIMatchDagContext &Ctx)
-      : Ctx(Ctx), InstrNodes(), PredicateNodes(), Edges(),
-        PredicateDependencies() {}
+  GIMatchDag(GIMatchDagContext &Ctx) : Ctx(Ctx) {}
   GIMatchDag(const GIMatchDag &) = delete;
 
   GIMatchDagContext &getContext() const { return Ctx; }

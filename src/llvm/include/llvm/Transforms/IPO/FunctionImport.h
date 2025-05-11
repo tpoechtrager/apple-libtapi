@@ -136,6 +136,10 @@ public:
 /// \p ModuleToDefinedGVSummaries contains for each Module a map
 /// (GUID -> Summary) for every global defined in the module.
 ///
+/// \p isPrevailing is a callback that will be called with a global value's GUID
+/// and summary and should return whether the module corresponding to the
+/// summary contains the linker-prevailing copy of that value.
+///
 /// \p ImportLists will be populated with an entry for every Module we are
 /// importing into. This entry is itself a map that can be passed to
 /// FunctionImporter::importFunctions() above (see description there).
@@ -146,16 +150,24 @@ public:
 void ComputeCrossModuleImport(
     const ModuleSummaryIndex &Index,
     const StringMap<GVSummaryMapTy> &ModuleToDefinedGVSummaries,
+    function_ref<bool(GlobalValue::GUID, const GlobalValueSummary *)>
+        isPrevailing,
     StringMap<FunctionImporter::ImportMapTy> &ImportLists,
     StringMap<FunctionImporter::ExportSetTy> &ExportLists);
 
 /// Compute all the imports for the given module using the Index.
 ///
+/// \p isPrevailing is a callback that will be called with a global value's GUID
+/// and summary and should return whether the module corresponding to the
+/// summary contains the linker-prevailing copy of that value.
+///
 /// \p ImportList will be populated with a map that can be passed to
 /// FunctionImporter::importFunctions() above (see description there).
 void ComputeCrossModuleImportForModule(
-    StringRef ModulePath, const ModuleSummaryIndex &Index,
-    FunctionImporter::ImportMapTy &ImportList);
+    StringRef ModulePath,
+    function_ref<bool(GlobalValue::GUID, const GlobalValueSummary *)>
+        isPrevailing,
+    const ModuleSummaryIndex &Index, FunctionImporter::ImportMapTy &ImportList);
 
 /// Mark all external summaries in \p Index for import into the given module.
 /// Used for distributed builds using a distributed index.
@@ -167,16 +179,24 @@ void ComputeCrossModuleImportForModuleFromIndex(
     FunctionImporter::ImportMapTy &ImportList);
 
 /// PrevailingType enum used as a return type of callback passed
-/// to computeDeadSymbols. Yes and No values used when status explicitly
-/// set by symbols resolution, otherwise status is Unknown.
+/// to computeDeadSymbolsAndUpdateIndirectCalls. Yes and No values used when
+/// status explicitly set by symbols resolution, otherwise status is Unknown.
 enum class PrevailingType { Yes, No, Unknown };
+
+/// Update call edges for indirect calls to local functions added from
+/// SamplePGO when needed. Normally this is done during
+/// computeDeadSymbolsAndUpdateIndirectCalls, but can be called standalone
+/// when that is not called (e.g. during testing).
+void updateIndirectCalls(ModuleSummaryIndex &Index);
 
 /// Compute all the symbols that are "dead": i.e these that can't be reached
 /// in the graph from any of the given symbols listed in
 /// \p GUIDPreservedSymbols. Non-prevailing symbols are symbols without a
 /// prevailing copy anywhere in IR and are normally dead, \p isPrevailing
 /// predicate returns status of symbol.
-void computeDeadSymbols(
+/// Also update call edges for indirect calls to local functions added from
+/// SamplePGO when needed.
+void computeDeadSymbolsAndUpdateIndirectCalls(
     ModuleSummaryIndex &Index,
     const DenseSet<GlobalValue::GUID> &GUIDPreservedSymbols,
     function_ref<PrevailingType(GlobalValue::GUID)> isPrevailing);
@@ -214,10 +234,15 @@ std::error_code EmitImportsFiles(
     StringRef ModulePath, StringRef OutputFilename,
     const std::map<std::string, GVSummaryMapTy> &ModuleToSummariesForIndex);
 
-/// Resolve prevailing symbol linkages in \p TheModule based on the information
-/// recorded in the summaries during global summary-based analysis.
-void thinLTOResolvePrevailingInModule(Module &TheModule,
-                                      const GVSummaryMapTy &DefinedGlobals);
+/// Based on the information recorded in the summaries during global
+/// summary-based analysis:
+/// 1. Resolve prevailing symbol linkages and constrain visibility (CanAutoHide
+///    and consider visibility from other definitions for ELF) in \p TheModule
+/// 2. (optional) Apply propagated function attributes to \p TheModule if
+///    PropagateAttrs is true
+void thinLTOFinalizeInModule(Module &TheModule,
+                             const GVSummaryMapTy &DefinedGlobals,
+                             bool PropagateAttrs);
 
 /// Internalize \p TheModule based on the information recorded in the summaries
 /// during global summary-based analysis.

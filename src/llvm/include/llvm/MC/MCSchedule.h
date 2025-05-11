@@ -14,7 +14,6 @@
 #ifndef LLVM_MC_MCSCHEDULE_H
 #define LLVM_MC_MCSCHEDULE_H
 
-#include "llvm/ADT/Optional.h"
 #include "llvm/Config/llvm-config.h"
 #include "llvm/Support/DataTypes.h"
 #include <cassert>
@@ -59,14 +58,26 @@ struct MCProcResourceDesc {
   }
 };
 
-/// Identify one of the processor resource kinds consumed by a particular
-/// scheduling class for the specified number of cycles.
+/// Identify one of the processor resource kinds consumed by a
+/// particular scheduling class for the specified number of cycles.
+/// TODO: consider renaming the field `StartAtCycle` and `Cycles` to
+/// `AcquireAtCycle` and `ReleaseAtCycle` respectively, to stress the
+/// fact that resource allocation is now represented as an interval,
+/// relatively to the issue cycle of the instruction.
 struct MCWriteProcResEntry {
   uint16_t ProcResourceIdx;
+  /// Cycle at which the resource will be released by an instruction,
+  /// relatively to the cycle in which the instruction is issued
+  /// (assuming no stalls inbetween).
   uint16_t Cycles;
+  /// Cycle at which the resource will be grabbed by an instruction,
+  /// relatively to the cycle in which the instruction is issued
+  /// (assuming no stalls inbetween).
+  uint16_t StartAtCycle;
 
   bool operator==(const MCWriteProcResEntry &Other) const {
-    return ProcResourceIdx == Other.ProcResourceIdx && Cycles == Other.Cycles;
+    return ProcResourceIdx == Other.ProcResourceIdx && Cycles == Other.Cycles &&
+           StartAtCycle == Other.StartAtCycle;
   }
 };
 
@@ -108,15 +119,16 @@ struct MCReadAdvanceEntry {
 ///
 /// Defined as an aggregate struct for creating tables with initializer lists.
 struct MCSchedClassDesc {
-  static const unsigned short InvalidNumMicroOps = (1U << 14) - 1;
+  static const unsigned short InvalidNumMicroOps = (1U << 13) - 1;
   static const unsigned short VariantNumMicroOps = InvalidNumMicroOps - 1;
 
 #if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
   const char* Name;
 #endif
-  uint16_t NumMicroOps : 14;
-  bool     BeginGroup : 1;
-  bool     EndGroup : 1;
+  uint16_t NumMicroOps : 13;
+  uint16_t BeginGroup : 1;
+  uint16_t EndGroup : 1;
+  uint16_t RetireOOO : 1;
   uint16_t WriteProcResIdx; // First index into WriteProcResTable.
   uint16_t NumWriteProcResEntries;
   uint16_t WriteLatencyIdx; // First index into WriteLatencyTable.
@@ -300,6 +312,11 @@ struct MCSchedModel {
   bool PostRAScheduler; // default value is false
 
   bool CompleteModel;
+
+  // Tells the MachineScheduler whether or not to track resource usage
+  // using intervals via ResourceSegments (see
+  // llvm/include/llvm/CodeGen/MachineScheduler.h).
+  bool EnableIntervals;
 
   unsigned ProcID;
   const MCProcResourceDesc *ProcResourceTable;

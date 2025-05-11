@@ -19,20 +19,12 @@
 using namespace clang;
 using namespace clang::targets;
 
-const Builtin::Info Le64TargetInfo::BuiltinInfo[] = {
-#define BUILTIN(ID, TYPE, ATTRS)                                               \
-  {#ID, TYPE, ATTRS, nullptr, ALL_LANGUAGES, nullptr},
-#include "clang/Basic/BuiltinsLe64.def"
-};
-
 ArrayRef<Builtin::Info> Le64TargetInfo::getTargetBuiltins() const {
-  return llvm::makeArrayRef(BuiltinInfo, clang::Le64::LastTSBuiltin -
-                                             Builtin::FirstTSBuiltin);
+  return {};
 }
 
 void Le64TargetInfo::getTargetDefines(const LangOptions &Opts,
                                       MacroBuilder &Builder) const {
   DefineStd(Builder, "unix", Opts);
   defineCPUMacros(Builder, "le64", /*Tuning=*/false);
-  Builder.defineMacro("__ELF__");
 }

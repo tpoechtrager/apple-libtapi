@@ -5,13 +5,14 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
-//
+/// \file
 /// Provides analysis for querying information about KnownBits during GISel
 /// passes.
-//
+///
 //===----------------------------------------------------------------------===//
-#ifndef LLVM_CODEGEN_GLOBALISEL_KNOWNBITSINFO_H
-#define LLVM_CODEGEN_GLOBALISEL_KNOWNBITSINFO_H
+
+#ifndef LLVM_CODEGEN_GLOBALISEL_GISELKNOWNBITS_H
+#define LLVM_CODEGEN_GLOBALISEL_GISELKNOWNBITS_H
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/CodeGen/GlobalISel/GISelChangeObserver.h"
@@ -92,10 +93,10 @@ public:
   Align computeKnownAlignment(Register R, unsigned Depth = 0);
 
   // Observer API. No-op for non-caching implementation.
-  void erasingInstr(MachineInstr &MI) override{};
-  void createdInstr(MachineInstr &MI) override{};
-  void changingInstr(MachineInstr &MI) override{};
-  void changedInstr(MachineInstr &MI) override{};
+  void erasingInstr(MachineInstr &MI) override {}
+  void createdInstr(MachineInstr &MI) override {}
+  void changingInstr(MachineInstr &MI) override {}
+  void changedInstr(MachineInstr &MI) override {}
 
 protected:
   unsigned getMaxDepth() const { return MaxDepth; }
@@ -128,4 +129,4 @@ public:
 };
 } // namespace llvm
 
-#endif // ifdef
+#endif // LLVM_CODEGEN_GLOBALISEL_GISELKNOWNBITS_H

@@ -1,9 +1,8 @@
 //===--- APINotesReader.cpp - Side Car Reader --------------------*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -67,10 +66,6 @@ namespace {
       return key;
     }
 
-    hash_value_type ComputeHash(internal_key_type key) {
-      return static_cast<size_t>(llvm::hash_value(key));
-    }
-
     static bool EqualKey(internal_key_type lhs, internal_key_type rhs) {
       return lhs == rhs;
     }
@@ -129,16 +124,16 @@ namespace {
     unsigned swiftBridgeLength =
         endian::readNext<uint16_t, little, unaligned>(data);
     if (swiftBridgeLength > 0) {
-      info.setSwiftBridge(
-        std::string(reinterpret_cast<const char *>(data), swiftBridgeLength-1));
+      info.setSwiftBridge(std::optional<std::string>(std::string(
+          reinterpret_cast<const char *>(data), swiftBridgeLength - 1)));
       data += swiftBridgeLength-1;
     }
 
     unsigned errorDomainLength =
       endian::readNext<uint16_t, little, unaligned>(data);
     if (errorDomainLength > 0) {
-      info.setNSErrorDomain(
-        std::string(reinterpret_cast<const char *>(data), errorDomainLength-1));
+      info.setNSErrorDomain(std::optional<std::string>(std::string(
+          reinterpret_cast<const char *>(data), errorDomainLength - 1)));
       data += errorDomainLength-1;
     }
   }
@@ -188,8 +183,7 @@ namespace {
   /// Used to deserialize the on-disk Objective-C class table.
   class ObjCContextIDTableInfo {
   public:
-    // identifier ID, is-protocol
-    using internal_key_type = std::pair<unsigned, char>;
+    using internal_key_type = ContextTableKey;
     using external_key_type = internal_key_type;
     using data_type = unsigned;
     using hash_value_type = size_t;
@@ -204,7 +198,7 @@ namespace {
     }
 
     hash_value_type ComputeHash(internal_key_type key) {
-      return static_cast<size_t>(llvm::hash_value(key));
+      return static_cast<size_t>(key.hashValue());
     }
     
     static bool EqualKey(internal_key_type lhs, internal_key_type rhs) {
@@ -219,10 +213,11 @@ namespace {
     }
     
     static internal_key_type ReadKey(const uint8_t *data, unsigned length) {
-      auto nameID
-        = endian::readNext<uint32_t, little, unaligned>(data);
-      auto isProtocol = endian::readNext<uint8_t, little, unaligned>(data);
-      return { nameID, isProtocol };
+      auto parentContextID =
+          endian::readNext<uint32_t, little, unaligned>(data);
+      auto contextKind = endian::readNext<uint8_t, little, unaligned>(data);
+      auto nameID = endian::readNext<uint32_t, little, unaligned>(data);
+      return {parentContextID, contextKind, nameID};
     }
     
     static data_type ReadData(internal_key_type key, const uint8_t *data,
@@ -241,7 +236,11 @@ namespace {
     static internal_key_type ReadKey(const uint8_t *data, unsigned length) {
       return endian::readNext<uint32_t, little, unaligned>(data);
     }
-    
+
+    hash_value_type ComputeHash(internal_key_type key) {
+      return static_cast<size_t>(llvm::hash_value(key));
+    }
+
     static ObjCContextInfo readUnversioned(internal_key_type key,
                                            const uint8_t *&data) {
       ObjCContextInfo info;
@@ -294,7 +293,11 @@ namespace {
       char isInstance = endian::readNext<uint8_t, little, unaligned>(data);
       return std::make_tuple(classID, nameID, isInstance);
     }
-    
+
+    hash_value_type ComputeHash(internal_key_type key) {
+      return static_cast<size_t>(llvm::hash_value(key));
+    }
+
     static ObjCPropertyInfo readUnversioned(internal_key_type key,
                                             const uint8_t *&data) {
       ObjCPropertyInfo info;
@@ -366,7 +369,11 @@ namespace {
       auto isInstance = endian::readNext<uint8_t, little, unaligned>(data);
       return internal_key_type{ classID, selectorID, isInstance };
     }
-    
+
+    hash_value_type ComputeHash(internal_key_type key) {
+      return static_cast<size_t>(llvm::hash_value(key));
+    }
+
     static ObjCMethodInfo readUnversioned(internal_key_type key,
                                           const uint8_t *&data) {
       ObjCMethodInfo info;
@@ -432,12 +439,18 @@ namespace {
 
   /// Used to deserialize the on-disk global variable table.
   class GlobalVariableTableInfo
-    : public VersionedTableInfo<GlobalVariableTableInfo, unsigned,
-                                GlobalVariableInfo> {
+      : public VersionedTableInfo<GlobalVariableTableInfo, ContextTableKey,
+                                  GlobalVariableInfo> {
   public:
     static internal_key_type ReadKey(const uint8_t *data, unsigned length) {
+      auto contextID = endian::readNext<uint32_t, little, unaligned>(data);
+      auto contextKind = endian::readNext<uint8_t, little, unaligned>(data);
       auto nameID = endian::readNext<uint32_t, little, unaligned>(data);
-      return nameID;
+      return {contextID, contextKind, nameID};
+    }
+
+    hash_value_type ComputeHash(internal_key_type key) {
+      return static_cast<size_t>(key.hashValue());
     }
 
     static GlobalVariableInfo readUnversioned(internal_key_type key,
@@ -450,14 +463,20 @@ namespace {
 
   /// Used to deserialize the on-disk global function table.
   class GlobalFunctionTableInfo
-    : public VersionedTableInfo<GlobalFunctionTableInfo, unsigned,
-                                GlobalFunctionInfo> {
+      : public VersionedTableInfo<GlobalFunctionTableInfo, ContextTableKey,
+                                  GlobalFunctionInfo> {
   public:
     static internal_key_type ReadKey(const uint8_t *data, unsigned length) {
+      auto contextID = endian::readNext<uint32_t, little, unaligned>(data);
+      auto contextKind = endian::readNext<uint8_t, little, unaligned>(data);
       auto nameID = endian::readNext<uint32_t, little, unaligned>(data);
-      return nameID;
+      return {contextID, contextKind, nameID};
     }
-    
+
+    hash_value_type ComputeHash(internal_key_type key) {
+      return static_cast<size_t>(key.hashValue());
+    }
+
     static GlobalFunctionInfo readUnversioned(internal_key_type key,
                                               const uint8_t *&data) {
       GlobalFunctionInfo info;
@@ -475,7 +494,11 @@ namespace {
       auto nameID = endian::readNext<uint32_t, little, unaligned>(data);
       return nameID;
     }
-    
+
+    hash_value_type ComputeHash(internal_key_type key) {
+      return static_cast<size_t>(llvm::hash_value(key));
+    }
+
     static EnumConstantInfo readUnversioned(internal_key_type key,
                                             const uint8_t *&data) {
       EnumConstantInfo info;
@@ -486,13 +509,19 @@ namespace {
 
   /// Used to deserialize the on-disk tag table.
   class TagTableInfo
-    : public VersionedTableInfo<TagTableInfo, unsigned, TagInfo> {
+      : public VersionedTableInfo<TagTableInfo, ContextTableKey, TagInfo> {
   public:
     static internal_key_type ReadKey(const uint8_t *data, unsigned length) {
+      auto contextID = endian::readNext<uint32_t, little, unaligned>(data);
+      auto contextKind = endian::readNext<uint8_t, little, unaligned>(data);
       auto nameID = endian::readNext<IdentifierID, little, unaligned>(data);
-      return nameID;
+      return {contextID, contextKind, nameID};
     }
-    
+
+    hash_value_type ComputeHash(internal_key_type key) {
+      return static_cast<size_t>(key.hashValue());
+    }
+
     static TagInfo readUnversioned(internal_key_type key,
                                    const uint8_t *&data) {
       TagInfo info;
@@ -507,6 +536,28 @@ namespace {
             static_cast<EnumExtensibilityKind>((payload & 0x3) - 1);
       }
 
+      unsigned ImportAsLength =
+          endian::readNext<uint16_t, little, unaligned>(data);
+      if (ImportAsLength > 0) {
+        info.SwiftImportAs = std::string(reinterpret_cast<const char *>(data),
+                                         ImportAsLength - 1);
+        data += ImportAsLength - 1;
+      }
+      unsigned RetainOpLength =
+          endian::readNext<uint16_t, little, unaligned>(data);
+      if (RetainOpLength > 0) {
+        info.SwiftRetainOp = std::string(reinterpret_cast<const char *>(data),
+                                         RetainOpLength - 1);
+        data += RetainOpLength - 1;
+      }
+      unsigned ReleaseOpLength =
+          endian::readNext<uint16_t, little, unaligned>(data);
+      if (ReleaseOpLength > 0) {
+        info.SwiftReleaseOp = std::string(reinterpret_cast<const char *>(data),
+                                          ReleaseOpLength - 1);
+        data += ReleaseOpLength - 1;
+      }
+
       readCommonTypeInfo(data, info);
       return info;
     }
@@ -514,11 +565,17 @@ namespace {
 
   /// Used to deserialize the on-disk typedef table.
   class TypedefTableInfo
-    : public VersionedTableInfo<TypedefTableInfo, unsigned, TypedefInfo> {
+      : public VersionedTableInfo<TypedefTableInfo, ContextTableKey, TypedefInfo> {
   public:
     static internal_key_type ReadKey(const uint8_t *data, unsigned length) {
+      auto contextID = endian::readNext<uint32_t, little, unaligned>(data);
+      auto contextKind = endian::readNext<uint8_t, little, unaligned>(data);
       auto nameID = endian::readNext<IdentifierID, little, unaligned>(data);
-      return nameID;
+      return {contextID, contextKind, nameID};
+    }
+
+    hash_value_type ComputeHash(internal_key_type key) {
+      return static_cast<size_t>(key.hashValue());
     }
 
     static TypedefInfo readUnversioned(internal_key_type key,
@@ -552,7 +609,7 @@ public:
 
   // The size and modification time of the source file from
   // which this API notes file was created, if known.
-  Optional<std::pair<off_t, time_t>> SourceFileSizeAndModTime;
+  std::optional<std::pair<off_t, time_t>> SourceFileSizeAndModTime;
 
   /// Various options and attributes for the module
   ModuleOptions ModuleOpts;
@@ -625,11 +682,11 @@ public:
 
   /// Retrieve the identifier ID for the given string, or an empty
   /// optional if the string is unknown.
-  Optional<IdentifierID> getIdentifier(StringRef str);
+  std::optional<IdentifierID> getIdentifier(StringRef str);
 
   /// Retrieve the selector ID for the given selector, or an empty
   /// optional if the string is unknown.
-  Optional<SelectorID> getSelector(ObjCSelectorRef selector);
+  std::optional<SelectorID> getSelector(ObjCSelectorRef selector);
 
   bool readControlBlock(llvm::BitstreamCursor &cursor, 
                         SmallVectorImpl<uint64_t> &scratch);
@@ -655,25 +712,25 @@ public:
                         SmallVectorImpl<uint64_t> &scratch);
 };
 
-Optional<IdentifierID> APINotesReader::Implementation::getIdentifier(
-                         StringRef str) {
+std::optional<IdentifierID>
+APINotesReader::Implementation::getIdentifier(StringRef str) {
   if (!IdentifierTable)
-    return None;
+    return std::nullopt;
 
   if (str.empty())
     return IdentifierID(0);
 
   auto known = IdentifierTable->find(str);
   if (known == IdentifierTable->end())
-    return None;
+    return std::nullopt;
 
   return *known;
 }
 
-Optional<SelectorID> APINotesReader::Implementation::getSelector(
-                       ObjCSelectorRef selector) {
+std::optional<SelectorID>
+APINotesReader::Implementation::getSelector(ObjCSelectorRef selector) {
   if (!ObjCSelectorTable || !IdentifierTable)
-    return None;
+    return std::nullopt;
 
   // Translate the identifiers.
   StoredObjCSelector key;
@@ -682,16 +739,15 @@ Optional<SelectorID> APINotesReader::Implementation::getSelector(
     if (auto identID = getIdentifier(ident)) {
       key.Identifiers.push_back(*identID);
     } else {
-      return None;
+      return std::nullopt;
     }
   }
 
   auto known = ObjCSelectorTable->find(key);
   if (known == ObjCSelectorTable->end())
-    return None;
+    return std::nullopt;
 
   return *known;
-
 }
 
 bool APINotesReader::Implementation::readControlBlock(
@@ -1774,7 +1830,7 @@ StringRef APINotesReader::getModuleName() const {
   return Impl.ModuleName;
 }
 
-Optional<std::pair<off_t, time_t>>
+std::optional<std::pair<off_t, time_t>>
 APINotesReader::getSourceFileSizeAndModTime() const {
   return Impl.SourceFileSizeAndModTime;
 }
@@ -1815,17 +1871,21 @@ APINotesReader::VersionedInfo<T>::VersionedInfo(
     Selected = 0;
 }
 
-auto APINotesReader::lookupObjCClassID(StringRef name) -> Optional<ContextID> {
+auto APINotesReader::lookupObjCClassID(StringRef name)
+    -> std::optional<ContextID> {
   if (!Impl.ObjCContextIDTable)
-    return None;
+    return std::nullopt;
 
-  Optional<IdentifierID> classID = Impl.getIdentifier(name);
+  std::optional<IdentifierID> classID = Impl.getIdentifier(name);
   if (!classID)
-    return None;
+    return std::nullopt;
 
-  auto knownID = Impl.ObjCContextIDTable->find({*classID, '\0'});
+  // ObjC classes can't be declared in C++ namespaces, so use -1 as the global
+  // context.
+  auto knownID = Impl.ObjCContextIDTable->find(
+      ContextTableKey(-1, (uint8_t)ContextKind::ObjCClass, *classID));
   if (knownID == Impl.ObjCContextIDTable->end())
-    return None;
+    return std::nullopt;
 
   return ContextID(*knownID);
 }
@@ -1833,47 +1893,50 @@ auto APINotesReader::lookupObjCClassID(StringRef name) -> Optional<ContextID> {
 auto APINotesReader::lookupObjCClassInfo(StringRef name)
        -> VersionedInfo<ObjCContextInfo> {
   if (!Impl.ObjCContextInfoTable)
-    return None;
+    return std::nullopt;
 
-  Optional<ContextID> contextID = lookupObjCClassID(name);
+  std::optional<ContextID> contextID = lookupObjCClassID(name);
   if (!contextID)
-    return None;
+    return std::nullopt;
 
   auto knownInfo = Impl.ObjCContextInfoTable->find(contextID->Value);
   if (knownInfo == Impl.ObjCContextInfoTable->end())
-    return None;
+    return std::nullopt;
 
   return { Impl.SwiftVersion, *knownInfo };
 }
 
 auto APINotesReader::lookupObjCProtocolID(StringRef name)
-       -> Optional<ContextID> {
-   if (!Impl.ObjCContextIDTable)
-     return None;
+    -> std::optional<ContextID> {
+  if (!Impl.ObjCContextIDTable)
+    return std::nullopt;
 
-   Optional<IdentifierID> classID = Impl.getIdentifier(name);
-   if (!classID)
-     return None;
+  std::optional<IdentifierID> classID = Impl.getIdentifier(name);
+  if (!classID)
+    return std::nullopt;
 
-   auto knownID = Impl.ObjCContextIDTable->find({*classID, '\1'});
-   if (knownID == Impl.ObjCContextIDTable->end())
-     return None;
+  // ObjC classes can't be declared in C++ namespaces, so use -1 as the global
+  // context.
+  auto knownID = Impl.ObjCContextIDTable->find(
+      ContextTableKey(-1, (uint8_t)ContextKind::ObjCProtocol, *classID));
+  if (knownID == Impl.ObjCContextIDTable->end())
+    return std::nullopt;
 
-   return ContextID(*knownID);
+  return ContextID(*knownID);
 }
 
 auto APINotesReader::lookupObjCProtocolInfo(StringRef name)
        -> VersionedInfo<ObjCContextInfo> {
    if (!Impl.ObjCContextInfoTable)
-     return None;
+    return std::nullopt;
 
-   Optional<ContextID> contextID = lookupObjCProtocolID(name);
+   std::optional<ContextID> contextID = lookupObjCProtocolID(name);
    if (!contextID)
-     return None;
+    return std::nullopt;
 
    auto knownInfo = Impl.ObjCContextInfoTable->find(contextID->Value);
    if (knownInfo == Impl.ObjCContextInfoTable->end())
-     return None;
+    return std::nullopt;
    
    return { Impl.SwiftVersion, *knownInfo };
 }
@@ -1884,17 +1947,17 @@ auto APINotesReader::lookupObjCProperty(ContextID contextID,
                                         bool isInstance)
     -> VersionedInfo<ObjCPropertyInfo> {
   if (!Impl.ObjCPropertyTable)
-    return None;
+    return std::nullopt;
 
-  Optional<IdentifierID> propertyID = Impl.getIdentifier(name);
+  std::optional<IdentifierID> propertyID = Impl.getIdentifier(name);
   if (!propertyID)
-    return None;
+    return std::nullopt;
 
   auto known = Impl.ObjCPropertyTable->find(std::make_tuple(contextID.Value,
                                                             *propertyID,
                                                             (char)isInstance));
   if (known == Impl.ObjCPropertyTable->end())
-    return None;
+    return std::nullopt;
 
   return { Impl.SwiftVersion, *known };
 }
@@ -1905,50 +1968,55 @@ auto APINotesReader::lookupObjCMethod(
                                       bool isInstanceMethod)
     -> VersionedInfo<ObjCMethodInfo> {
   if (!Impl.ObjCMethodTable)
-    return None;
+    return std::nullopt;
 
-  Optional<SelectorID> selectorID = Impl.getSelector(selector);
+  std::optional<SelectorID> selectorID = Impl.getSelector(selector);
   if (!selectorID)
-    return None;
+    return std::nullopt;
 
   auto known = Impl.ObjCMethodTable->find(
       ObjCMethodTableInfo::internal_key_type{
           contextID.Value, *selectorID, isInstanceMethod});
   if (known == Impl.ObjCMethodTable->end())
-    return None;
+    return std::nullopt;
 
   return { Impl.SwiftVersion, *known };
 }
 
-auto APINotesReader::lookupGlobalVariable(
-                                          StringRef name)
+auto APINotesReader::lookupGlobalVariable(StringRef name,
+                                          std::optional<Context> context)
     -> VersionedInfo<GlobalVariableInfo> {
   if (!Impl.GlobalVariableTable)
-    return None;
+    return std::nullopt;
 
-  Optional<IdentifierID> nameID = Impl.getIdentifier(name);
+  std::optional<IdentifierID> nameID = Impl.getIdentifier(name);
   if (!nameID)
-    return None;
+    return std::nullopt;
 
-  auto known = Impl.GlobalVariableTable->find(*nameID);
+  ContextTableKey key(context, *nameID);
+
+  auto known = Impl.GlobalVariableTable->find(key);
   if (known == Impl.GlobalVariableTable->end())
-    return None;
+    return std::nullopt;
 
   return { Impl.SwiftVersion, *known };
 }
 
-auto APINotesReader::lookupGlobalFunction(StringRef name)
+auto APINotesReader::lookupGlobalFunction(StringRef name,
+                                          std::optional<Context> context)
     -> VersionedInfo<GlobalFunctionInfo> {
   if (!Impl.GlobalFunctionTable)
-    return None;
+    return std::nullopt;
 
-  Optional<IdentifierID> nameID = Impl.getIdentifier(name);
+  std::optional<IdentifierID> nameID = Impl.getIdentifier(name);
   if (!nameID)
-    return None;
+    return std::nullopt;
 
-  auto known = Impl.GlobalFunctionTable->find(*nameID);
+  ContextTableKey key(context, *nameID);
+
+  auto known = Impl.GlobalFunctionTable->find(key);
   if (known == Impl.GlobalFunctionTable->end())
-    return None;
+    return std::nullopt;
 
   return { Impl.SwiftVersion, *known };
 }
@@ -1956,46 +2024,72 @@ auto APINotesReader::lookupGlobalFunction(StringRef name)
 auto APINotesReader::lookupEnumConstant(StringRef name)
     -> VersionedInfo<EnumConstantInfo> {
   if (!Impl.EnumConstantTable)
-    return None;
+    return std::nullopt;
 
-  Optional<IdentifierID> nameID = Impl.getIdentifier(name);
+  std::optional<IdentifierID> nameID = Impl.getIdentifier(name);
   if (!nameID)
-    return None;
+    return std::nullopt;
 
   auto known = Impl.EnumConstantTable->find(*nameID);
   if (known == Impl.EnumConstantTable->end())
-    return None;
+    return std::nullopt;
 
   return { Impl.SwiftVersion, *known };
 }
 
-auto APINotesReader::lookupTag(StringRef name) -> VersionedInfo<TagInfo> {
+auto APINotesReader::lookupTag(StringRef name, std::optional<Context> context)
+    -> VersionedInfo<TagInfo> {
   if (!Impl.TagTable)
-    return None;
+    return std::nullopt;
 
-  Optional<IdentifierID> nameID = Impl.getIdentifier(name);
+  std::optional<IdentifierID> nameID = Impl.getIdentifier(name);
   if (!nameID)
-    return None;
+    return std::nullopt;
 
-  auto known = Impl.TagTable->find(*nameID);
+  ContextTableKey key(context, *nameID);
+
+  auto known = Impl.TagTable->find(key);
   if (known == Impl.TagTable->end())
-    return None;
+    return std::nullopt;
 
   return { Impl.SwiftVersion, *known };
 }
 
-auto APINotesReader::lookupTypedef(StringRef name)
+auto APINotesReader::lookupTypedef(StringRef name,
+                                   std::optional<Context> context)
     -> VersionedInfo<TypedefInfo> {
   if (!Impl.TypedefTable)
-    return None;
+    return std::nullopt;
 
-  Optional<IdentifierID> nameID = Impl.getIdentifier(name);
+  std::optional<IdentifierID> nameID = Impl.getIdentifier(name);
   if (!nameID)
-    return None;
+    return std::nullopt;
 
-  auto known = Impl.TypedefTable->find(*nameID);
+  ContextTableKey key(context, *nameID);
+
+  auto known = Impl.TypedefTable->find(key);
   if (known == Impl.TypedefTable->end())
-    return None;
+    return std::nullopt;
 
   return { Impl.SwiftVersion, *known };
+}
+
+auto APINotesReader::lookupNamespaceID(
+    StringRef name, std::optional<ContextID> parentNamespaceID)
+    -> std::optional<ContextID> {
+  if (!Impl.ObjCContextIDTable)
+    return std::nullopt;
+
+  std::optional<IdentifierID> namespaceID = Impl.getIdentifier(name);
+  if (!namespaceID)
+    return std::nullopt;
+
+  uint32_t rawParentNamespaceID =
+      parentNamespaceID ? parentNamespaceID->Value : -1;
+  auto knownID = Impl.ObjCContextIDTable->find(
+      {rawParentNamespaceID, (char)ContextKind::Namespace, *namespaceID});
+  if (knownID == Impl.ObjCContextIDTable->end())
+    return std::nullopt;
+
+  return ContextID(*knownID);
 }

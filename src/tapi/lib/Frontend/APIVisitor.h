@@ -1,9 +1,8 @@
 //===- tapi/Frontend/APIVisitor - TAPI API Visitor --------------*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 ///
@@ -15,6 +14,7 @@
 #define TAPI_FRONTEND_API_VISITOR_H
 
 #include "tapi/Core/API.h"
+#include "tapi/Core/APICommon.h"
 #include "tapi/Core/LLVM.h"
 #include "tapi/Defines.h"
 #include "tapi/Frontend/FrontendContext.h"
@@ -33,13 +33,16 @@
 using llvm::DataLayout;
 using TAPI_INTERNAL::API;
 using TAPI_INTERNAL::APIAccess;
+using TAPI_INTERNAL::APILoc;
 using TAPI_INTERNAL::AvailabilityInfo;
+using TAPI_INTERNAL::EnumRecord;
 using TAPI_INTERNAL::FrontendContext;
 using TAPI_INTERNAL::ObjCContainerRecord;
 
 namespace clang {
 
-class APIVisitor : public ASTConsumer, public RecursiveASTVisitor<APIVisitor> {
+class APIVisitor final : public ASTConsumer,
+                         public RecursiveASTVisitor<APIVisitor> {
 public:
   APIVisitor(FrontendContext &context);
   void HandleTranslationUnit(ASTContext &context) override;
@@ -55,22 +58,24 @@ public:
   bool VisitTypedefNameDecl(const TypedefNameDecl *decl);
 
 private:
+  void recordEnumConstants(EnumRecord *record,
+                           const EnumDecl::enumerator_range constants);
   void recordObjCMethods(ObjCContainerRecord *record,
                          const ObjCContainerDecl::method_range methods,
                          bool isDynamic = false);
   void recordObjCProperties(ObjCContainerRecord *record,
                             const ObjCContainerDecl::prop_range properties);
   void recordObjCInstanceVariables(
-      ObjCContainerRecord *record,
+      ObjCContainerRecord *record, StringRef superClassName,
       const llvm::iterator_range<
           DeclContext::specific_decl_iterator<ObjCIvarDecl>>
           ivars);
   void recordObjCProtocols(ObjCContainerRecord *record,
                            ObjCInterfaceDecl::protocol_range protocols);
-  void emitVTableSymbols(const CXXRecordDecl *decl, PresumedLoc loc,
+  void emitVTableSymbols(const CXXRecordDecl *decl, APILoc loc,
                          AvailabilityInfo avail, APIAccess access,
                          bool emittedVTable = false);
-  llvm::Optional<std::pair<APIAccess, PresumedLoc>>
+  std::optional<std::pair<APIAccess, APILoc>>
   getFileAttributesForDecl(const NamedDecl *decl) const;
   std::string getMangledName(const NamedDecl *decl) const;
   std::string getBackendMangledName(Twine name) const;
@@ -82,12 +87,13 @@ private:
   std::string getMangledCtorDtor(const CXXMethodDecl *decl, int type) const;
   AvailabilityInfo getAvailabilityInfo(const Decl *decl) const;
   bool isAvailabilitySPI(SourceLocation loc) const;
+  StringRef getTypedefName(const TagDecl *decl) const;
 
   FrontendContext &frontend;
   ASTContext &context;
   SourceManager &sourceManager;
   std::unique_ptr<clang::ItaniumMangleContext> mc;
-  const DataLayout &dataLayout;
+  StringRef dataLayout;
 };
 
 class APIVisitorAction : public ASTFrontendAction {

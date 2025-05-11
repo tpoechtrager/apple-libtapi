@@ -38,11 +38,11 @@ endif()
 if(DEFINED ENV{RC_SUPPORTED_ARCHS})
   string(REPLACE " " ";" TAPI_SUPPORTED_ARCHS $ENV{RC_SUPPORTED_ARCHS})
 elseif(NOT DEFINED TAPI_SUPPORTED_ARCHS)
-  set(TAPI_SUPPORTED_ARCHS i386 x86_64 x86_64h armv4t armv6 armv5 armv7 armv7s armv7k armv6m armv7m armv7em arm64 arm64e)
+  set(TAPI_SUPPORTED_ARCHS i386 x86_64 x86_64h armv4t armv6 armv5 armv7 armv7s armv7k armv6m armv7m armv7em arm64)
 endif()
 message(STATUS "Supported Architectures: ${TAPI_SUPPORTED_ARCHS}")
 
-set(KNOWN_ARCHS i386 x86_64 x86_64h armv4t armv6 armv5 armv7 armv7s armv7k armv6m armv7m armv7em arm64 arm64e ppc ppc64)
+set(KNOWN_ARCHS i386 x86_64 x86_64h armv4t armv6 armv5 armv7 armv7s armv7k armv6m armv7m armv7em arm64)
 
 set (CONFIG_FILE ${CMAKE_CURRENT_BINARY_DIR}/include/tapi/Core/ArchitectureConfig.h)
 file(WRITE ${CONFIG_FILE} "#ifndef TAPI_CORE_ARCHITECTURE_CONFIG_H\n")
@@ -65,12 +65,12 @@ configure_file(
   ${CMAKE_CURRENT_BINARY_DIR}/include/tapi/Version.inc)
 
 # Check if the linker support -no_inits.
-#check_linker_flag("-Wl,-no_inits" LINKER_SUPPORTS_NO_INITS)
+llvm_check_linker_flag(CXX "-Wl,-no_inits" LINKER_SUPPORTS_NO_INITS)
 
 # MARZIPAN RENAME: We might need to update this. This will also require an
 # update of the linker on the CI bots.
 # Check if the linker has iosmac support.
-#check_linker_flag("-Wl,-iosmac_version_min,13.0" LINKER_SUPPORTS_IOSMAC)
+llvm_check_linker_flag(CXX "-Wl,-iosmac_version_min,13.0" LINKER_SUPPORTS_IOSMAC)
 # MARZIPAN RENAME
 
 # Check if i386 is supported.
@@ -160,6 +160,9 @@ endmacro(add_tapi_library)
 macro(add_tapi_executable name)
   add_llvm_executable(${name} ${ARGN})
   set_target_properties(${name} PROPERTIES FOLDER "Tapi executables")
+  if(APPLE)
+    target_link_options(${name} PRIVATE "-Wl,-no_exported_symbols")
+  endif()
 endmacro(add_tapi_executable)
 
 function(tapi_clang_tablegen)
@@ -188,13 +191,6 @@ option(TAPI_INCLUDE_TESTS "Generate build targets for the TAPI unit tests."
        ${LLVM_INCLUDE_TESTS})
 option(TAPI_INCLUDE_DOCS "Generate build targets for the TAPI docs."
       ${LLVM_INCLUDE_DOCS})
-
-if (NOT DEFINED CLANG_VERSION)
-  set(CLANG_VERSION "${LLVM_VERSION_MAJOR}.${LLVM_VERSION_MINOR}.${LLVM_VERSION_PATCH}")
-endif ()
-if (NOT DEFINED CLANG_TABLEGEN_EXE)
-  set(CLANG_TABLEGEN_EXE "${LLVM_TOOLS_BINARY_DIR}/clang-tblgen")
-endif ()
 
 # Include must go first.
 add_subdirectory(include)

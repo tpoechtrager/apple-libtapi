@@ -1,9 +1,8 @@
 //===- lib/Core/FileManager.cpp - File Manager ------------------*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 ///
@@ -24,17 +23,12 @@ using namespace clang;
 
 TAPI_NAMESPACE_INTERNAL_BEGIN
 
-FileManager::FileManager(
-    const FileSystemOptions &fileSystemOpts,
-    IntrusiveRefCntPtr<FileSystemStatCacheFactory> cacheFactory,
-    IntrusiveRefCntPtr<vfs::FileSystem> fs)
-    : clang::FileManager(fileSystemOpts, fs), cacheFactory(cacheFactory) {
+FileManager::FileManager(const FileSystemOptions &fileSystemOpts,
+                         IntrusiveRefCntPtr<vfs::FileSystem> fs)
+    : clang::FileManager(fileSystemOpts, fs) {
   // Record if initialized with VFS.
   if (fs)
     initWithVFS = true;
-
-  // Inject our stat cache.
-  installStatRecorder();
 }
 
 bool FileManager::exists(StringRef path) {
@@ -48,12 +42,6 @@ bool FileManager::isSymlink(StringRef path) {
   if (initWithVFS)
     return false;
   return sys::fs::is_symlink_file(path);
-}
-
-void FileManager::installStatRecorder() {
-  clearStatCache();
-  if (cacheFactory != nullptr)
-    setStatCache(std::unique_ptr<FileSystemStatCache>(cacheFactory->create()));
 }
 
 TAPI_NAMESPACE_INTERNAL_END

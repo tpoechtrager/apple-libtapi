@@ -13,7 +13,6 @@ add_tapi_library(libtapi
   LINK_LIBS
   tapiCore
   tapiNoInits
-  tapiObjCMetadata
 
   NO_INSTALL_RPATH
   )
@@ -23,13 +22,11 @@ set_target_properties(libtapi
   OUTPUT_NAME "tapi"
   )
 
-if(APPLE)
-
 set(DYLIB_VERSION "${LLVM_VERSION_MAJOR}.${LLVM_VERSION_MINOR}.${LLVM_VERSION_PATCH}")
-set_property(TARGET libtapi APPEND_STRING
-  PROPERTY
-  LINK_FLAGS " -current_version ${DYLIB_VERSION} -compatibility_version 1 " #-allowable_client ld"
-  )
+#set_property(TARGET libtapi APPEND_STRING
+#  PROPERTY
+#  LINK_FLAGS " -current_version ${DYLIB_VERSION} -compatibility_version 1 -allowable_client ld"
+#  )
 
 if(LINKER_SUPPORTS_NO_INITS)
   set_property(TARGET libtapi APPEND_STRING
@@ -37,13 +34,3 @@ if(LINKER_SUPPORTS_NO_INITS)
     LINK_FLAGS " -Wl,-no_inits"
     )
 endif()
-
-else()
-
-set_property(TARGET libtapi APPEND_STRING
-  PROPERTY
-  LINK_FLAGS " -Wl,--allow-multiple-definition"
-  )
-
-endif()
-

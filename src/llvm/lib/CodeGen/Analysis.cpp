@@ -21,12 +21,9 @@
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicInst.h"
-#include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/MathExtras.h"
 #include "llvm/Target/TargetMachine.h"
-#include "llvm/Transforms/Utils/GlobalStatus.h"
 
 using namespace llvm;
 
@@ -43,13 +40,11 @@ unsigned llvm::ComputeLinearIndex(Type *Ty,
 
   // Given a struct type, recursively traverse the elements.
   if (StructType *STy = dyn_cast<StructType>(Ty)) {
-    for (StructType::element_iterator EB = STy->element_begin(),
-                                      EI = EB,
-                                      EE = STy->element_end();
-        EI != EE; ++EI) {
-      if (Indices && *Indices == unsigned(EI - EB))
-        return ComputeLinearIndex(*EI, Indices+1, IndicesEnd, CurIndex);
-      CurIndex = ComputeLinearIndex(*EI, nullptr, nullptr, CurIndex);
+    for (auto I : llvm::enumerate(STy->elements())) {
+      Type *ET = I.value();
+      if (Indices && *Indices == I.index())
+        return ComputeLinearIndex(ET, Indices + 1, IndicesEnd, CurIndex);
+      CurIndex = ComputeLinearIndex(ET, nullptr, nullptr, CurIndex);
     }
     assert(!Indices && "Unexpected out of bound");
     return CurIndex;
@@ -84,23 +79,30 @@ unsigned llvm::ComputeLinearIndex(Type *Ty,
 void llvm::ComputeValueVTs(const TargetLowering &TLI, const DataLayout &DL,
                            Type *Ty, SmallVectorImpl<EVT> &ValueVTs,
                            SmallVectorImpl<EVT> *MemVTs,
-                           SmallVectorImpl<uint64_t> *Offsets,
-                           uint64_t StartingOffset) {
+                           SmallVectorImpl<TypeSize> *Offsets,
+                           TypeSize StartingOffset) {
   // Given a struct type, recursively traverse the elements.
   if (StructType *STy = dyn_cast<StructType>(Ty)) {
-    const StructLayout *SL = DL.getStructLayout(STy);
+    // If the Offsets aren't needed, don't query the struct layout. This allows
+    // us to support structs with scalable vectors for operations that don't
+    // need offsets.
+    const StructLayout *SL = Offsets ? DL.getStructLayout(STy) : nullptr;
     for (StructType::element_iterator EB = STy->element_begin(),
                                       EI = EB,
                                       EE = STy->element_end();
-         EI != EE; ++EI)
+         EI != EE; ++EI) {
+      // Don't compute the element offset if we didn't get a StructLayout above.
+      TypeSize EltOffset = SL ? SL->getElementOffset(EI - EB)
+                              : TypeSize::get(0, StartingOffset.isScalable());
       ComputeValueVTs(TLI, DL, *EI, ValueVTs, MemVTs, Offsets,
-                      StartingOffset + SL->getElementOffset(EI - EB));
+                      StartingOffset + EltOffset);
+    }
     return;
   }
   // Given an array type, recursively traverse the elements.
   if (ArrayType *ATy = dyn_cast<ArrayType>(Ty)) {
     Type *EltTy = ATy->getElementType();
-    uint64_t EltSize = DL.getTypeAllocSize(EltTy);
+    TypeSize EltSize = DL.getTypeAllocSize(EltTy);
     for (unsigned i = 0, e = ATy->getNumElements(); i != e; ++i)
       ComputeValueVTs(TLI, DL, EltTy, ValueVTs, MemVTs, Offsets,
                       StartingOffset + i * EltSize);
@@ -119,10 +121,60 @@ void llvm::ComputeValueVTs(const TargetLowering &TLI, const DataLayout &DL,
 
 void llvm::ComputeValueVTs(const TargetLowering &TLI, const DataLayout &DL,
                            Type *Ty, SmallVectorImpl<EVT> &ValueVTs,
-                           SmallVectorImpl<uint64_t> *Offsets,
-                           uint64_t StartingOffset) {
+                           SmallVectorImpl<TypeSize> *Offsets,
+                           TypeSize StartingOffset) {
   return ComputeValueVTs(TLI, DL, Ty, ValueVTs, /*MemVTs=*/nullptr, Offsets,
                          StartingOffset);
+}
+
+void llvm::ComputeValueVTs(const TargetLowering &TLI, const DataLayout &DL,
+                           Type *Ty, SmallVectorImpl<EVT> &ValueVTs,
+                           SmallVectorImpl<TypeSize> *Offsets,
+                           uint64_t StartingOffset) {
+  TypeSize Offset = TypeSize::get(StartingOffset, Ty->isScalableTy());
+  return ComputeValueVTs(TLI, DL, Ty, ValueVTs, Offsets, Offset);
+}
+
+void llvm::ComputeValueVTs(const TargetLowering &TLI, const DataLayout &DL,
+                           Type *Ty, SmallVectorImpl<EVT> &ValueVTs,
+                           SmallVectorImpl<uint64_t> *FixedOffsets,
+                           uint64_t StartingOffset) {
+  TypeSize Offset = TypeSize::get(StartingOffset, Ty->isScalableTy());
+  SmallVector<TypeSize, 4> Offsets;
+  if (FixedOffsets)
+    ComputeValueVTs(TLI, DL, Ty, ValueVTs, &Offsets, Offset);
+  else
+    ComputeValueVTs(TLI, DL, Ty, ValueVTs, nullptr, Offset);
+
+  if (FixedOffsets)
+    for (TypeSize Offset : Offsets)
+      FixedOffsets->push_back(Offset.getKnownMinValue());
+}
+
+void llvm::ComputeValueVTs(const TargetLowering &TLI, const DataLayout &DL,
+                           Type *Ty, SmallVectorImpl<EVT> &ValueVTs,
+                           SmallVectorImpl<EVT> *MemVTs,
+                           SmallVectorImpl<TypeSize> *Offsets,
+                           uint64_t StartingOffset) {
+  TypeSize Offset = TypeSize::get(StartingOffset, Ty->isScalableTy());
+  return ComputeValueVTs(TLI, DL, Ty, ValueVTs, MemVTs, Offsets, Offset);
+}
+
+void llvm::ComputeValueVTs(const TargetLowering &TLI, const DataLayout &DL,
+                           Type *Ty, SmallVectorImpl<EVT> &ValueVTs,
+                           SmallVectorImpl<EVT> *MemVTs,
+                           SmallVectorImpl<uint64_t> *FixedOffsets,
+                           uint64_t StartingOffset) {
+  TypeSize Offset = TypeSize::get(StartingOffset, Ty->isScalableTy());
+  SmallVector<TypeSize, 4> Offsets;
+  if (FixedOffsets)
+    ComputeValueVTs(TLI, DL, Ty, ValueVTs, MemVTs, &Offsets, Offset);
+  else
+    ComputeValueVTs(TLI, DL, Ty, ValueVTs, MemVTs, nullptr, Offset);
+
+  if (FixedOffsets)
+    for (TypeSize Offset : Offsets)
+      FixedOffsets->push_back(Offset.getKnownMinValue());
 }
 
 void llvm::computeValueLLTs(const DataLayout &DL, Type &Ty,
@@ -131,16 +183,21 @@ void llvm::computeValueLLTs(const DataLayout &DL, Type &Ty,
                             uint64_t StartingOffset) {
   // Given a struct type, recursively traverse the elements.
   if (StructType *STy = dyn_cast<StructType>(&Ty)) {
-    const StructLayout *SL = DL.getStructLayout(STy);
-    for (unsigned I = 0, E = STy->getNumElements(); I != E; ++I)
+    // If the Offsets aren't needed, don't query the struct layout. This allows
+    // us to support structs with scalable vectors for operations that don't
+    // need offsets.
+    const StructLayout *SL = Offsets ? DL.getStructLayout(STy) : nullptr;
+    for (unsigned I = 0, E = STy->getNumElements(); I != E; ++I) {
+      uint64_t EltOffset = SL ? SL->getElementOffset(I) : 0;
       computeValueLLTs(DL, *STy->getElementType(I), ValueTys, Offsets,
-                       StartingOffset + SL->getElementOffset(I));
+                       StartingOffset + EltOffset);
+    }
     return;
   }
   // Given an array type, recursively traverse the elements.
   if (ArrayType *ATy = dyn_cast<ArrayType>(&Ty)) {
     Type *EltTy = ATy->getElementType();
-    uint64_t EltSize = DL.getTypeAllocSize(EltTy);
+    uint64_t EltSize = DL.getTypeAllocSize(EltTy).getFixedValue();
     for (unsigned i = 0, e = ATy->getNumElements(); i != e; ++i)
       computeValueLLTs(DL, *EltTy, ValueTys, Offsets,
                        StartingOffset + i * EltSize);
@@ -212,9 +269,6 @@ ISD::CondCode llvm::getFCmpCodeWithoutNaN(ISD::CondCode CC) {
   }
 }
 
-/// getICmpCondCode - Return the ISD condition code corresponding to
-/// the given LLVM IR integer condition code.
-///
 ISD::CondCode llvm::getICmpCondCode(ICmpInst::Predicate Pred) {
   switch (Pred) {
   case ICmpInst::ICMP_EQ:  return ISD::SETEQ;
@@ -229,6 +283,33 @@ ISD::CondCode llvm::getICmpCondCode(ICmpInst::Predicate Pred) {
   case ICmpInst::ICMP_UGT: return ISD::SETUGT;
   default:
     llvm_unreachable("Invalid ICmp predicate opcode!");
+  }
+}
+
+ICmpInst::Predicate llvm::getICmpCondCode(ISD::CondCode Pred) {
+  switch (Pred) {
+  case ISD::SETEQ:
+    return ICmpInst::ICMP_EQ;
+  case ISD::SETNE:
+    return ICmpInst::ICMP_NE;
+  case ISD::SETLE:
+    return ICmpInst::ICMP_SLE;
+  case ISD::SETULE:
+    return ICmpInst::ICMP_ULE;
+  case ISD::SETGE:
+    return ICmpInst::ICMP_SGE;
+  case ISD::SETUGE:
+    return ICmpInst::ICMP_UGE;
+  case ISD::SETLT:
+    return ICmpInst::ICMP_SLT;
+  case ISD::SETULT:
+    return ICmpInst::ICMP_ULT;
+  case ISD::SETGT:
+    return ICmpInst::ICMP_SGT;
+  case ISD::SETUGT:
+    return ICmpInst::ICMP_UGT;
+  default:
+    llvm_unreachable("Invalid ISD integer condition code!");
   }
 }
 
@@ -289,8 +370,9 @@ static const Value *getNoopInput(const Value *V,
         NoopInput = Op;
     } else if (isa<TruncInst>(I) &&
                TLI.allowTruncateForTailCall(Op->getType(), I->getType())) {
-      DataBits = std::min((uint64_t)DataBits,
-                         I->getType()->getPrimitiveSizeInBits().getFixedSize());
+      DataBits =
+          std::min((uint64_t)DataBits,
+                   I->getType()->getPrimitiveSizeInBits().getFixedValue());
       NoopInput = Op;
     } else if (auto *CB = dyn_cast<CallBase>(I)) {
       const Value *ReturnedOp = CB->getReturnedArgOperand();
@@ -515,16 +597,15 @@ bool llvm::isInTailCallPosition(const CallBase &Call, const TargetMachine &TM) {
     if (&*BBI == &Call)
       break;
     // Debug info intrinsics do not get in the way of tail call optimization.
-    if (isa<DbgInfoIntrinsic>(BBI))
-      continue;
     // Pseudo probe intrinsics do not block tail call optimization either.
-    if (isa<PseudoProbeInst>(BBI))
+    if (BBI->isDebugOrPseudoInst())
       continue;
-    // A lifetime end or assume intrinsic should not stop tail call
-    // optimization.
+    // A lifetime end, assume or noalias.decl intrinsic should not stop tail
+    // call optimization.
     if (const IntrinsicInst *II = dyn_cast<IntrinsicInst>(BBI))
       if (II->getIntrinsicID() == Intrinsic::lifetime_end ||
-          II->getIntrinsicID() == Intrinsic::assume)
+          II->getIntrinsicID() == Intrinsic::assume ||
+          II->getIntrinsicID() == Intrinsic::experimental_noalias_scope_decl)
         continue;
     if (BBI->mayHaveSideEffects() || BBI->mayReadFromMemory() ||
         !isSafeToSpeculativelyExecute(&*BBI))
@@ -545,20 +626,18 @@ bool llvm::attributesPermitTailCall(const Function *F, const Instruction *I,
   bool &ADS = AllowDifferingSizes ? *AllowDifferingSizes : DummyADS;
   ADS = true;
 
-  AttrBuilder CallerAttrs(F->getAttributes(), AttributeList::ReturnIndex);
-  AttrBuilder CalleeAttrs(cast<CallInst>(I)->getAttributes(),
-                          AttributeList::ReturnIndex);
+  AttrBuilder CallerAttrs(F->getContext(), F->getAttributes().getRetAttrs());
+  AttrBuilder CalleeAttrs(F->getContext(),
+                          cast<CallInst>(I)->getAttributes().getRetAttrs());
 
   // Following attributes are completely benign as far as calling convention
   // goes, they shouldn't affect whether the call is a tail call.
-  CallerAttrs.removeAttribute(Attribute::NoAlias);
-  CalleeAttrs.removeAttribute(Attribute::NoAlias);
-  CallerAttrs.removeAttribute(Attribute::NonNull);
-  CalleeAttrs.removeAttribute(Attribute::NonNull);
-  CallerAttrs.removeAttribute(Attribute::Dereferenceable);
-  CalleeAttrs.removeAttribute(Attribute::Dereferenceable);
-  CallerAttrs.removeAttribute(Attribute::DereferenceableOrNull);
-  CalleeAttrs.removeAttribute(Attribute::DereferenceableOrNull);
+  for (const auto &Attr : {Attribute::Alignment, Attribute::Dereferenceable,
+                           Attribute::DereferenceableOrNull, Attribute::NoAlias,
+                           Attribute::NonNull, Attribute::NoUndef}) {
+    CallerAttrs.removeAttribute(Attr);
+    CalleeAttrs.removeAttribute(Attr);
+  }
 
   if (CallerAttrs.contains(Attribute::ZExt)) {
     if (!CalleeAttrs.contains(Attribute::ZExt))
@@ -682,8 +761,8 @@ bool llvm::returnTypeIsEligibleForTailCall(const Function *F,
     // The manipulations performed when we're looking through an insertvalue or
     // an extractvalue would happen at the front of the RetPath list, so since
     // we have to copy it anyway it's more efficient to create a reversed copy.
-    SmallVector<unsigned, 4> TmpRetPath(RetPath.rbegin(), RetPath.rend());
-    SmallVector<unsigned, 4> TmpCallPath(CallPath.rbegin(), CallPath.rend());
+    SmallVector<unsigned, 4> TmpRetPath(llvm::reverse(RetPath));
+    SmallVector<unsigned, 4> TmpCallPath(llvm::reverse(CallPath));
 
     // Finally, we can check whether the value produced by the tail call at this
     // index is compatible with the value we return.
@@ -722,8 +801,7 @@ static void collectEHScopeMembers(
     if (Visiting->isEHScopeReturnBlock())
       continue;
 
-    for (const MachineBasicBlock *Succ : Visiting->successors())
-      Worklist.push_back(Succ);
+    append_range(Worklist, Visiting->successors());
   }
 }
 

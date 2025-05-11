@@ -172,9 +172,8 @@ raw_ostream &operator<<(raw_ostream &OS, const JITSymbolFlags &Flags) {
   return OS;
 }
 
-raw_ostream &operator<<(raw_ostream &OS, const JITEvaluatedSymbol &Sym) {
-  return OS << format("0x%016" PRIx64, Sym.getAddress()) << " "
-            << Sym.getFlags();
+raw_ostream &operator<<(raw_ostream &OS, const ExecutorSymbolDef &Sym) {
+  return OS << Sym.getAddress() << " " << Sym.getFlags();
 }
 
 raw_ostream &operator<<(raw_ostream &OS, const SymbolFlagsMap::value_type &KV) {
@@ -261,8 +260,7 @@ raw_ostream &operator<<(raw_ostream &OS,
            "JITDylibList entries must not be null");
     OS << " (\"" << SearchOrder.front().first->getName() << "\", "
        << SearchOrder.begin()->second << ")";
-    for (auto &KV :
-         make_range(std::next(SearchOrder.begin(), 1), SearchOrder.end())) {
+    for (auto &KV : llvm::drop_begin(SearchOrder)) {
       assert(KV.first && "JITDylibList entries must not be null");
       OS << ", (\"" << KV.first->getName() << "\", " << KV.second << ")";
     }
@@ -296,6 +294,17 @@ raw_ostream &operator<<(raw_ostream &OS, const SymbolState &S) {
     return OS << "Ready";
   }
   llvm_unreachable("Invalid state");
+}
+
+raw_ostream &operator<<(raw_ostream &OS, const SymbolStringPool &SSP) {
+  std::lock_guard<std::mutex> Lock(SSP.PoolMutex);
+  SmallVector<std::pair<StringRef, int>, 0> Vec;
+  for (auto &KV : SSP.Pool)
+    Vec.emplace_back(KV.first(), KV.second);
+  llvm::sort(Vec, less_first());
+  for (auto &[K, V] : Vec)
+    OS << K << ": " << V << "\n";
+  return OS;
 }
 
 DumpObjects::DumpObjects(std::string DumpDir, std::string IdentifierOverride)

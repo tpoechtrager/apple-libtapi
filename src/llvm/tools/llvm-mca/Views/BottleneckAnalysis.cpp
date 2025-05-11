@@ -52,7 +52,7 @@ void PressureTracker::getResourceUsers(uint64_t ResourceMask,
   const MCProcResourceDesc &PRDesc = *SM.getProcResource(ProcResID);
   for (unsigned I = 0, E = PRDesc.NumUnits; I < E; ++I) {
     const User U = getResourceUser(ProcResID, I);
-    if (U.second && IPI.find(U.first) != IPI.end())
+    if (U.second && IPI.contains(U.first))
       Users.emplace_back(U);
   }
 }
@@ -66,12 +66,10 @@ void PressureTracker::onInstructionExecuted(unsigned IID) { IPI.erase(IID); }
 void PressureTracker::handleInstructionIssuedEvent(
     const HWInstructionIssuedEvent &Event) {
   unsigned IID = Event.IR.getSourceIndex();
-  using ResourceRef = HWInstructionIssuedEvent::ResourceRef;
-  using ResourceUse = std::pair<ResourceRef, ResourceCycles>;
   for (const ResourceUse &Use : Event.UsedResources) {
     const ResourceRef &RR = Use.first;
     unsigned Index = ProcResID2ResourceUsersIndex[RR.first];
-    Index += countTrailingZeros(RR.second);
+    Index += llvm::countr_zero(RR.second);
     ResourceUsers[Index] = std::make_pair(IID, Use.second.getNumerator());
   }
 }
@@ -200,8 +198,8 @@ void DependencyGraph::initializeRootSet(
   }
 }
 
-void DependencyGraph::propagateThroughEdges(
-    SmallVectorImpl<unsigned> &RootSet, unsigned Iterations) {
+void DependencyGraph::propagateThroughEdges(SmallVectorImpl<unsigned> &RootSet,
+                                            unsigned Iterations) {
   SmallVector<unsigned, 8> ToVisit;
 
   // A critical sequence is computed as the longest path from a node of the
@@ -223,14 +221,14 @@ void DependencyGraph::propagateThroughEdges(
   // The `unvisited nodes` set initially contains all the nodes from the
   // RootSet.  A node N is added to the `unvisited nodes` if all its
   // predecessors have been visited already.
-  // 
+  //
   // For simplicity, every node tracks the number of unvisited incoming edges in
   // field `NumVisitedPredecessors`.  When the value of that field drops to
   // zero, then the corresponding node is added to a `ToVisit` set.
   //
   // At the end of every iteration of the outer loop, set `ToVisit` becomes our
   // new `unvisited nodes` set.
-  // 
+  //
   // The algorithm terminates when the set of unvisited nodes (i.e. our RootSet)
   // is empty. This algorithm works under the assumption that the graph is
   // acyclic.
@@ -269,16 +267,17 @@ void DependencyGraph::getCriticalSequence(
   // that node is the last instruction of our critical sequence.
   // Field N.Depth would tell us the total length of the sequence.
   //
-  // To obtain the sequence of critical edges, we simply follow the chain of critical
-  // predecessors starting from node N (field DGNode::CriticalPredecessor).
+  // To obtain the sequence of critical edges, we simply follow the chain of
+  // critical predecessors starting from node N (field
+  // DGNode::CriticalPredecessor).
   const auto It = std::max_element(
       Nodes.begin(), Nodes.end(),
       [](const DGNode &Lhs, const DGNode &Rhs) { return Lhs.Cost < Rhs.Cost; });
   unsigned IID = std::distance(Nodes.begin(), It);
   Seq.resize(Nodes[IID].Depth);
-  for (unsigned I = Seq.size(), E = 0; I > E; --I) {
+  for (const DependencyEdge *&DE : llvm::reverse(Seq)) {
     const DGNode &N = Nodes[IID];
-    Seq[I - 1] = &N.CriticalPredecessor;
+    DE = &N.CriticalPredecessor;
     IID = N.CriticalPredecessor.FromIID;
   }
 }
@@ -287,7 +286,6 @@ void BottleneckAnalysis::printInstruction(formatted_raw_ostream &FOS,
                                           const MCInst &MCI,
                                           bool UseDifferentColor) const {
   FOS.PadToColumn(14);
-
   if (UseDifferentColor)
     FOS.changeColor(raw_ostream::CYAN, true, false);
   FOS << printInstructionString(MCI);

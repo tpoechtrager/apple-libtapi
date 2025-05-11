@@ -25,13 +25,12 @@
 //
 //===---------------------------------------------------------------------===//
 
-#ifndef LLVM_INCLUDE_LLVM_OBJECT_RESFILE_H
-#define LLVM_INCLUDE_LLVM_OBJECT_RESFILE_H
+#ifndef LLVM_OBJECT_WINDOWSRESOURCE_H
+#define LLVM_OBJECT_WINDOWSRESOURCE_H
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/BinaryFormat/COFF.h"
 #include "llvm/Object/Binary.h"
-#include "llvm/Object/COFF.h"
 #include "llvm/Object/Error.h"
 #include "llvm/Support/BinaryByteStream.h"
 #include "llvm/Support/BinaryStreamReader.h"
@@ -50,6 +49,7 @@ namespace object {
 
 class WindowsResource;
 class ResourceSectionRef;
+struct coff_resource_dir_table;
 
 const size_t WIN_RES_MAGIC_SIZE = 16;
 const size_t WIN_RES_NULL_ENTRY_SIZE = 16;
@@ -160,10 +160,8 @@ public:
   void cleanUpManifests(std::vector<std::string> &Duplicates);
   void printTree(raw_ostream &OS) const;
   const TreeNode &getTree() const { return Root; }
-  const ArrayRef<std::vector<uint8_t>> getData() const { return Data; }
-  const ArrayRef<std::vector<UTF16>> getStringTable() const {
-    return StringTable;
-  }
+  ArrayRef<std::vector<uint8_t>> getData() const { return Data; }
+  ArrayRef<std::vector<UTF16>> getStringTable() const { return StringTable; }
 
   class TreeNode {
   public:
@@ -236,7 +234,7 @@ public:
   struct StringOrID {
     bool IsString;
     ArrayRef<UTF16> String;
-    uint32_t ID;
+    uint32_t ID = ~0u;
 
     StringOrID(uint32_t ID) : IsString(false), ID(ID) {}
     StringOrID(ArrayRef<UTF16> String) : IsString(true), String(String) {}

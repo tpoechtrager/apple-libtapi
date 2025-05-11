@@ -186,7 +186,7 @@ TEST_F(ValueHandle, AssertingVH_ReducesToPointer) {
   EXPECT_EQ(sizeof(CastInst *), sizeof(AssertingVH<CastInst>));
 }
 
-#else  // !NDEBUG
+#elif LLVM_ENABLE_ABI_BREAKING_CHECKS // && !NDEBUG
 
 #ifdef GTEST_HAS_DEATH_TEST
 
@@ -496,8 +496,8 @@ TEST_F(ValueHandle, AssertingVH_DenseMap) {
   Map.insert({BitcastV.get(), 1});
   Map.insert({ConstantV, 2});
   // These will create a temporary AssertingVH during lookup.
-  EXPECT_TRUE(Map.find(BitcastV.get()) != Map.end());
-  EXPECT_TRUE(Map.find(ConstantV) != Map.end());
+  EXPECT_TRUE(Map.contains(BitcastV.get()));
+  EXPECT_TRUE(Map.contains(ConstantV));
   // These will not create a temporary AssertingVH.
   EXPECT_TRUE(Map.find_as(BitcastV.get()) != Map.end());
   EXPECT_TRUE(Map.find_as(ConstantV) != Map.end());
@@ -508,8 +508,8 @@ TEST_F(ValueHandle, PoisoningVH_DenseMap) {
   Map.insert({BitcastV.get(), 1});
   Map.insert({ConstantV, 2});
   // These will create a temporary PoisoningVH during lookup.
-  EXPECT_TRUE(Map.find(BitcastV.get()) != Map.end());
-  EXPECT_TRUE(Map.find(ConstantV) != Map.end());
+  EXPECT_TRUE(Map.contains(BitcastV.get()));
+  EXPECT_TRUE(Map.contains(ConstantV));
   // These will not create a temporary PoisoningVH.
   EXPECT_TRUE(Map.find_as(BitcastV.get()) != Map.end());
   EXPECT_TRUE(Map.find_as(ConstantV) != Map.end());
@@ -530,6 +530,7 @@ TEST_F(ValueHandle, TrackingVH_Tracks) {
 }
 
 #ifdef GTEST_HAS_DEATH_TEST
+#if LLVM_ENABLE_ABI_BREAKING_CHECKS
 
 TEST_F(ValueHandle, PoisoningVH_Asserts) {
   PoisoningVH<Value> VH(BitcastV.get());
@@ -548,6 +549,8 @@ TEST_F(ValueHandle, PoisoningVH_Asserts) {
 
   // Don't clear anything out here as destroying the handles should be fine.
 }
+
+#endif // LLVM_ENABLE_ABI_BREAKING_CHECKS
 
 TEST_F(ValueHandle, TrackingVH_Asserts) {
   {

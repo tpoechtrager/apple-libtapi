@@ -7,15 +7,16 @@
 //===----------------------------------------------------------------------===//
 
 #include "clang/Driver/Job.h"
-#include "InputInfo.h"
 #include "clang/Basic/LLVM.h"
 #include "clang/Driver/Driver.h"
 #include "clang/Driver/DriverDiagnostic.h"
+#include "clang/Driver/InputInfo.h"
 #include "clang/Driver/Tool.h"
 #include "clang/Driver/ToolChain.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/StringSet.h"
 #include "llvm/ADT/StringSwitch.h"
@@ -38,12 +39,13 @@ using namespace driver;
 Command::Command(const Action &Source, const Tool &Creator,
                  ResponseFileSupport ResponseSupport, const char *Executable,
                  const llvm::opt::ArgStringList &Arguments,
-                 ArrayRef<InputInfo> Inputs, ArrayRef<InputInfo> Outputs)
+                 ArrayRef<InputInfo> Inputs, ArrayRef<InputInfo> Outputs,
+                 const char *PrependArg)
     : Source(Source), Creator(Creator), ResponseSupport(ResponseSupport),
-      Executable(Executable), Arguments(Arguments) {
+      Executable(Executable), PrependArg(PrependArg), Arguments(Arguments) {
   for (const auto &II : Inputs)
     if (II.isFilename())
-      InputFilenames.push_back(II.getFilename());
+      InputInfoList.push_back(II);
   for (const auto &II : Outputs)
     if (II.isFilename())
       OutputFilenames.push_back(II.getFilename());
@@ -148,6 +150,10 @@ void Command::buildArgvForResponseFile(
   for (const auto *InputName : InputFileList)
     Inputs.insert(InputName);
   Out.push_back(Executable);
+
+  if (PrependArg)
+    Out.push_back(PrependArg);
+
   // In a file list, build args vector ignoring parameters that will go in the
   // response file (elements of the InputFileList vector)
   bool FirstInput = true;
@@ -204,6 +210,15 @@ rewriteIncludes(const llvm::ArrayRef<const char *> &Args, size_t Idx,
 
 void Command::Print(raw_ostream &OS, const char *Terminator, bool Quote,
                     CrashReportInfo *CrashInfo) const {
+  // Print the environment to display, if relevant.
+  if (!EnvironmentDisplay.empty()) {
+    OS << " env";
+    for (const char *NameValue : EnvironmentDisplay) {
+      OS << ' ';
+      llvm::sys::printArg(OS, NameValue, /*Quote=*/true);
+    }
+  }
+
   // Always quote the exe.
   OS << ' ';
   llvm::sys::printArg(OS, Executable, /*Quote=*/true);
@@ -213,6 +228,9 @@ void Command::Print(raw_ostream &OS, const char *Terminator, bool Quote,
   if (ResponseFile != nullptr) {
     buildArgvForResponseFile(ArgsRespFile);
     Args = ArrayRef<const char *>(ArgsRespFile).slice(1); // no executable name
+  } else if (PrependArg) {
+    OS << ' ';
+    llvm::sys::printArg(OS, PrependArg, /*Quote=*/true);
   }
 
   bool HaveCrashVFS = CrashInfo && !CrashInfo->VFSPath.empty();
@@ -242,9 +260,10 @@ void Command::Print(raw_ostream &OS, const char *Terminator, bool Quote,
         }
       }
 
-      auto Found = llvm::find_if(InputFilenames,
-                                 [&Arg](StringRef IF) { return IF == Arg; });
-      if (Found != InputFilenames.end() &&
+      auto Found = llvm::find_if(InputInfoList, [&Arg](const InputInfo &II) {
+        return II.getFilename() == Arg;
+      });
+      if (Found != InputInfoList.end() &&
           (i == 0 || StringRef(Args[i - 1]) != "-main-file-name")) {
         // Replace the input file name with the crashinfo's file name.
         OS << ' ';
@@ -323,21 +342,33 @@ void Command::setEnvironment(llvm::ArrayRef<const char *> NewEnvironment) {
   Environment.push_back(nullptr);
 }
 
+void Command::setEnvironmentDisplay(llvm::ArrayRef<const char *> Display) {
+  EnvironmentDisplay.reserve(Display.size());
+  EnvironmentDisplay.assign(Display.begin(), Display.end());
+}
+
+void Command::setRedirectFiles(
+    const std::vector<std::optional<std::string>> &Redirects) {
+  RedirectFiles = Redirects;
+}
+
 void Command::PrintFileNames() const {
   if (PrintInputFilenames) {
-    for (const char *Arg : InputFilenames)
-      llvm::outs() << llvm::sys::path::filename(Arg) << "\n";
+    for (const auto &Arg : InputInfoList)
+      llvm::outs() << llvm::sys::path::filename(Arg.getFilename()) << "\n";
     llvm::outs().flush();
   }
 }
 
-int Command::Execute(ArrayRef<llvm::Optional<StringRef>> Redirects,
+int Command::Execute(ArrayRef<std::optional<StringRef>> Redirects,
                      std::string *ErrMsg, bool *ExecutionFailed) const {
   PrintFileNames();
 
   SmallVector<const char *, 128> Argv;
   if (ResponseFile == nullptr) {
     Argv.push_back(Executable);
+    if (PrependArg)
+      Argv.push_back(PrependArg);
     Argv.append(Arguments.begin(), Arguments.end());
     Argv.push_back(nullptr);
   } else {
@@ -364,16 +395,32 @@ int Command::Execute(ArrayRef<llvm::Optional<StringRef>> Redirects,
     }
   }
 
-  Optional<ArrayRef<StringRef>> Env;
+  std::optional<ArrayRef<StringRef>> Env;
   std::vector<StringRef> ArgvVectorStorage;
   if (!Environment.empty()) {
     assert(Environment.back() == nullptr &&
            "Environment vector should be null-terminated by now");
     ArgvVectorStorage = llvm::toStringRefArray(Environment.data());
-    Env = makeArrayRef(ArgvVectorStorage);
+    Env = ArrayRef(ArgvVectorStorage);
   }
 
   auto Args = llvm::toStringRefArray(Argv.data());
+
+  // Use Job-specific redirect files if they are present.
+  if (!RedirectFiles.empty()) {
+    std::vector<std::optional<StringRef>> RedirectFilesOptional;
+    for (const auto &Ele : RedirectFiles)
+      if (Ele)
+        RedirectFilesOptional.push_back(std::optional<StringRef>(*Ele));
+      else
+        RedirectFilesOptional.push_back(std::nullopt);
+
+    return llvm::sys::ExecuteAndWait(Executable, Args, Env,
+                                     ArrayRef(RedirectFilesOptional),
+                                     /*secondsToWait=*/0, /*memoryLimit=*/0,
+                                     ErrMsg, ExecutionFailed, &ProcStat);
+  }
+
   return llvm::sys::ExecuteAndWait(Executable, Args, Env, Redirects,
                                    /*secondsToWait*/ 0, /*memoryLimit*/ 0,
                                    ErrMsg, ExecutionFailed, &ProcStat);
@@ -383,9 +430,10 @@ CC1Command::CC1Command(const Action &Source, const Tool &Creator,
                        ResponseFileSupport ResponseSupport,
                        const char *Executable,
                        const llvm::opt::ArgStringList &Arguments,
-                       ArrayRef<InputInfo> Inputs, ArrayRef<InputInfo> Outputs)
+                       ArrayRef<InputInfo> Inputs, ArrayRef<InputInfo> Outputs,
+                       const char *PrependArg)
     : Command(Source, Creator, ResponseSupport, Executable, Arguments, Inputs,
-              Outputs) {
+              Outputs, PrependArg) {
   InProcess = true;
 }
 
@@ -396,7 +444,7 @@ void CC1Command::Print(raw_ostream &OS, const char *Terminator, bool Quote,
   Command::Print(OS, Terminator, Quote, CrashInfo);
 }
 
-int CC1Command::Execute(ArrayRef<llvm::Optional<StringRef>> Redirects,
+int CC1Command::Execute(ArrayRef<std::optional<StringRef>> Redirects,
                         std::string *ErrMsg, bool *ExecutionFailed) const {
   // FIXME: Currently, if there're more than one job, we disable
   // -fintegrate-cc1. If we're no longer a integrated-cc1 job, fallback to
@@ -410,6 +458,8 @@ int CC1Command::Execute(ArrayRef<llvm::Optional<StringRef>> Redirects,
   Argv.push_back(getExecutable());
   Argv.append(getArguments().begin(), getArguments().end());
   Argv.push_back(nullptr);
+  Argv.pop_back(); // The terminating null element shall not be part of the
+                   // slice (main() behavior).
 
   // This flag simply indicates that the program couldn't start, which isn't
   // applicable here.
@@ -435,74 +485,6 @@ void CC1Command::setEnvironment(llvm::ArrayRef<const char *> NewEnvironment) {
   // We don't support set a new environment when calling into ExecuteCC1Tool()
   llvm_unreachable(
       "The CC1Command doesn't support changing the environment vars!");
-}
-
-FallbackCommand::FallbackCommand(const Action &Source_, const Tool &Creator_,
-                                 ResponseFileSupport ResponseSupport,
-                                 const char *Executable_,
-                                 const llvm::opt::ArgStringList &Arguments_,
-                                 ArrayRef<InputInfo> Inputs,
-                                 ArrayRef<InputInfo> Outputs,
-                                 std::unique_ptr<Command> Fallback_)
-    : Command(Source_, Creator_, ResponseSupport, Executable_, Arguments_,
-              Inputs, Outputs),
-      Fallback(std::move(Fallback_)) {}
-
-void FallbackCommand::Print(raw_ostream &OS, const char *Terminator,
-                            bool Quote, CrashReportInfo *CrashInfo) const {
-  Command::Print(OS, "", Quote, CrashInfo);
-  OS << " ||";
-  Fallback->Print(OS, Terminator, Quote, CrashInfo);
-}
-
-static bool ShouldFallback(int ExitCode) {
-  // FIXME: We really just want to fall back for internal errors, such
-  // as when some symbol cannot be mangled, when we should be able to
-  // parse something but can't, etc.
-  return ExitCode != 0;
-}
-
-int FallbackCommand::Execute(ArrayRef<llvm::Optional<StringRef>> Redirects,
-                             std::string *ErrMsg, bool *ExecutionFailed) const {
-  int PrimaryStatus = Command::Execute(Redirects, ErrMsg, ExecutionFailed);
-  if (!ShouldFallback(PrimaryStatus))
-    return PrimaryStatus;
-
-  // Clear ExecutionFailed and ErrMsg before falling back.
-  if (ErrMsg)
-    ErrMsg->clear();
-  if (ExecutionFailed)
-    *ExecutionFailed = false;
-
-  const Driver &D = getCreator().getToolChain().getDriver();
-  D.Diag(diag::warn_drv_invoking_fallback) << Fallback->getExecutable();
-
-  int SecondaryStatus = Fallback->Execute(Redirects, ErrMsg, ExecutionFailed);
-  return SecondaryStatus;
-}
-
-ForceSuccessCommand::ForceSuccessCommand(
-    const Action &Source_, const Tool &Creator_,
-    ResponseFileSupport ResponseSupport, const char *Executable_,
-    const llvm::opt::ArgStringList &Arguments_, ArrayRef<InputInfo> Inputs,
-    ArrayRef<InputInfo> Outputs)
-    : Command(Source_, Creator_, ResponseSupport, Executable_, Arguments_,
-              Inputs, Outputs) {}
-
-void ForceSuccessCommand::Print(raw_ostream &OS, const char *Terminator,
-                            bool Quote, CrashReportInfo *CrashInfo) const {
-  Command::Print(OS, "", Quote, CrashInfo);
-  OS << " || (exit 0)" << Terminator;
-}
-
-int ForceSuccessCommand::Execute(ArrayRef<llvm::Optional<StringRef>> Redirects,
-                                 std::string *ErrMsg,
-                                 bool *ExecutionFailed) const {
-  int Status = Command::Execute(Redirects, ErrMsg, ExecutionFailed);
-  (void)Status;
-  if (ExecutionFailed)
-    *ExecutionFailed = false;
-  return 0;
 }
 
 void JobList::Print(raw_ostream &OS, const char *Terminator, bool Quote,

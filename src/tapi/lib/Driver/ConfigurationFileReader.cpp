@@ -1,9 +1,8 @@
 //===- ConfigurationFileReader.cpp - Configuration File Reader --*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 ///
@@ -15,7 +14,6 @@
 #include "tapi/Driver/ConfigurationFileReader.h"
 
 #include "tapi/Core/LLVM.h"
-#include "tapi/Core/TextStubCommon.h"
 #include "tapi/Driver/ConfigurationFile.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Error.h"
@@ -59,6 +57,48 @@ template <> struct ScalarTraits<Macro> {
   }
 };
 
+using PackedVersion = llvm::MachO::PackedVersion;
+template <> struct ScalarTraits<PackedVersion> {
+  static void output(const PackedVersion &value, void *, raw_ostream &os) {
+    os << value;
+  }
+
+  static StringRef input(StringRef scalar, void *, PackedVersion &value) {
+    if (!value.parse32(scalar))
+      return "invalid packed version string.";
+    return {};
+  }
+
+  static QuotingType mustQuote(StringRef) { return QuotingType::None; }
+};
+
+using llvm::MachO::PlatformType;
+template <> struct ScalarEnumerationTraits<PlatformType> {
+  static void enumeration(IO &io, PlatformType &platform) {
+    using namespace llvm::MachO;
+    io.enumCase(platform, "unknown", PLATFORM_UNKNOWN);
+    io.enumCase(platform, "macosx", PLATFORM_MACOS);
+    io.enumCase(platform, "ios", PLATFORM_IOS);
+    io.enumCase(platform, "ios", PLATFORM_IOSSIMULATOR);
+    io.enumCase(platform, "watchos", PLATFORM_WATCHOS);
+    io.enumCase(platform, "watchos", PLATFORM_WATCHOSSIMULATOR);
+    io.enumCase(platform, "tvos", PLATFORM_TVOS);
+    io.enumCase(platform, "tvos", PLATFORM_TVOSSIMULATOR);
+    io.enumCase(platform, "bridgeos", PLATFORM_BRIDGEOS);
+  }
+};
+
+template <> struct ScalarEnumerationTraits<clang::Language> {
+  static void enumeration(IO &io, clang::Language &Lang) {
+    using namespace clang;
+    io.enumCase(Lang, "c", Language::C);
+    io.enumCase(Lang, "cxx", Language::CXX);
+    io.enumCase(Lang, "objective-c", Language::ObjC);
+    io.enumCase(Lang, "objective-cxx", Language::ObjCXX);
+    io.enumCase(Lang, "unknown", Language::Unknown);
+  }
+};
+
 template <> struct MappingTraits<HeaderConfiguration> {
   static void mapping(IO &io, HeaderConfiguration &config) {
     io.mapOptional("umbrella", config.umbrellaHeader);
@@ -79,7 +119,9 @@ template <> struct MappingTraits<FrameworkConfiguration> {
     io.mapOptional("macros", config.macros);
     io.mapOptional("public-header", config.publicHeaderConfiguration);
     io.mapOptional("private-header", config.privateHeaderConfiguration);
-    io.mapOptional("use-overlay", config.useOverlay);
+    io.mapOptional("scan-swift-module", config.scanSwiftModule);
+    io.mapOptional("use-overlay", config.useOverlay, true);
+    io.mapOptional("clang-extra-args", config.clangExtraArgs);
   }
 };
 
@@ -87,22 +129,31 @@ template <> struct MappingTraits<ProjectConfiguration> {
   static void mapping(IO &io, ProjectConfiguration &config) {
     io.mapRequired("name", config.name);
     io.mapOptional("language", config.language, defaultLanguage);
+    io.mapOptional("language-std", config.languageStd);
     io.mapOptional("include-paths", config.includePaths);
     io.mapOptional("framework-paths", config.frameworkPaths);
     io.mapOptional("macros", config.macros);
     io.mapOptional("iosmac", config.isiOSMac);
-    io.mapOptional("use-overlay", config.useOverlay);
+    io.mapOptional("zippered", config.isZippered);
+    io.mapOptional("scan-swift-module", config.scanSwiftModule);
+    io.mapOptional("use-overlay", config.useOverlay, true);
     io.mapOptional("iosmac-umbrella-only", config.useUmbrellaOnly);
-    io.mapOptional("mask-paths", config.maskPaths);
+    io.mapOptional("scan-public-headers-in-sdk-content-root", config.scanPublicHeadersInSDKContentRoot);
+    io.mapOptional("ignore-existing-partial-sdkdbs",
+                   config.ignoreExistingPartialSDKDBs);
+    io.mapOptional("root-mask", config.rootMaskPaths);
+    io.mapOptional("sdk-mask", config.sdkMaskPaths);
     io.mapOptional("public-header", config.publicHeaderConfiguration);
     io.mapOptional("private-header", config.privateHeaderConfiguration);
+    io.mapOptional("use-split-header-dir", config.useSplitHeaderDir);
+    io.mapOptional("clang-extra-args", config.clangExtraArgs);
   }
 };
 
 template <> struct MappingTraits<ConfigurationFile> {
   static void mapping(IO &io, ConfigurationFile &file) {
     io.mapTag("tapi-configuration-v1", true);
-    io.mapOptional("sdk-platform", file.platform, PlatformKind::unknown);
+    io.mapOptional("sdk-platform", file.platform, MachO::PLATFORM_UNKNOWN);
     io.mapOptional("sdk-version", file.version);
     io.mapOptional("sdk-root", file.isysroot);
     io.mapOptional("language", file.language, clang::Language::ObjC);

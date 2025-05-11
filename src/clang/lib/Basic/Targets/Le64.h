@@ -15,14 +15,13 @@
 
 #include "clang/Basic/TargetInfo.h"
 #include "clang/Basic/TargetOptions.h"
-#include "llvm/ADT/Triple.h"
 #include "llvm/Support/Compiler.h"
+#include "llvm/TargetParser/Triple.h"
 
 namespace clang {
 namespace targets {
 
 class LLVM_LIBRARY_VISIBILITY Le64TargetInfo : public TargetInfo {
-  static const Builtin::Info BuiltinInfo[];
 
 public:
   Le64TargetInfo(const llvm::Triple &Triple, const TargetOptions &)
@@ -42,12 +41,14 @@ public:
     return TargetInfo::PNaClABIBuiltinVaList;
   }
 
-  const char *getClobbers() const override { return ""; }
+  std::string_view getClobbers() const override { return ""; }
 
-  ArrayRef<const char *> getGCCRegNames() const override { return None; }
+  ArrayRef<const char *> getGCCRegNames() const override {
+    return std::nullopt;
+  }
 
   ArrayRef<TargetInfo::GCCRegAlias> getGCCRegAliases() const override {
-    return None;
+    return std::nullopt;
   }
 
   bool validateAsmConstraint(const char *&Name,

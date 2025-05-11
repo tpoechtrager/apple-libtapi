@@ -537,10 +537,12 @@ static unsigned long long getContextsForContextKind(
     case CodeCompletionContext::CCC_Other:
     case CodeCompletionContext::CCC_ObjCInterface:
     case CodeCompletionContext::CCC_ObjCImplementation:
+    case CodeCompletionContext::CCC_ObjCClassForwardDecl:
     case CodeCompletionContext::CCC_NewName:
     case CodeCompletionContext::CCC_MacroName:
     case CodeCompletionContext::CCC_PreprocessorExpression:
     case CodeCompletionContext::CCC_PreprocessorDirective:
+    case CodeCompletionContext::CCC_Attribute:
     case CodeCompletionContext::CCC_TypeQualifiers: {
       //Only Clang results should be accepted, so we'll set all of the other
       //context bits to 0 (i.e. the empty set)
@@ -655,14 +657,15 @@ namespace {
     void ProcessOverloadCandidates(Sema &S, unsigned CurrentArg,
                                    OverloadCandidate *Candidates,
                                    unsigned NumCandidates,
-                                   SourceLocation OpenParLoc) override {
+                                   SourceLocation OpenParLoc,
+                                   bool Braced) override {
       StoredResults.reserve(StoredResults.size() + NumCandidates);
       for (unsigned I = 0; I != NumCandidates; ++I) {
-        CodeCompletionString *StoredCompletion
-          = Candidates[I].CreateSignatureString(CurrentArg, S, getAllocator(),
+        CodeCompletionString *StoredCompletion =
+            Candidates[I].CreateSignatureString(CurrentArg, S, getAllocator(),
                                                 getCodeCompletionTUInfo(),
-                                                includeBriefComments());
-        
+                                                includeBriefComments(), Braced);
+
         CXCompletionResult R;
         R.CursorKind = CXCursor_OverloadCandidate;
         R.CompletionString = StoredCompletion;
@@ -868,7 +871,7 @@ CXCodeCompleteResults *clang_codeCompleteAt(CXTranslationUnit TU,
   auto CodeCompleteAtImpl = [=, &result]() {
     result = clang_codeCompleteAt_Impl(
         TU, complete_filename, complete_line, complete_column,
-        llvm::makeArrayRef(unsaved_files, num_unsaved_files), options);
+        llvm::ArrayRef(unsaved_files, num_unsaved_files), options);
   };
 
   llvm::CrashRecoveryContext CRC;
@@ -1027,7 +1030,7 @@ namespace {
       if (XText.empty() || YText.empty())
         return !XText.empty();
             
-      int result = XText.compare_lower(YText);
+      int result = XText.compare_insensitive(YText);
       if (result < 0)
         return true;
       if (result > 0)

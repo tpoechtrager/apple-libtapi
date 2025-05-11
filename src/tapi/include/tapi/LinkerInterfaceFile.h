@@ -1,9 +1,8 @@
 //===-- tapi/LinkerInterfaceFile.h - TAPI File Interface --------*- C++ -*-===*\
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 ///
@@ -34,89 +33,6 @@ TAPI_NAMESPACE_V1_BEGIN
 
 class PackedVersion32;
 class Symbol;
-
-///
-/// \brief Defines a list of supported platforms.
-/// \since 1.0
-/// \deprecated 1.6
-///
-enum class Platform : unsigned {
-  /// \brief Unknown platform
-  /// \since 1.0
-  Unknown = 0,
-
-  /// \brief Mac OS X
-  /// \since 1.0
-  OSX = 1,
-
-  /// \brief iOS
-  /// \since 1.0
-  iOS = 2,
-
-  /// \brief watchOS
-  /// \since 1.0
-  watchOS = 3,
-
-  /// \brief tvOS
-  /// \since 1.0
-  tvOS = 4,
-
-  /// \brief bridgeOS
-  /// \since 1.2
-  bridgeOS = 5,
-
-  /// \brief iOSMac
-  /// \since 1.4
-  iOSMac = 6,
-
-  /// \brief driverKit
-  /// \since 1.5
-  DriverKit = 7,
-
-  zippered = 10
-
-} __attribute__((deprecated));
-
-///
-/// \brief Defines a list of Objective-C constraints.
-/// \since 1.0
-///
-enum class ObjCConstraint : unsigned {
-  /// \brief No constraint.
-  /// \since 1.0
-  None = 0,
-
-  /// \brief Retain/Release.
-  /// \since 1.0
-  Retain_Release = 1,
-
-  /// \brief Retain/Release for Simulator.
-  /// \since 1.0
-  Retain_Release_For_Simulator = 2,
-
-  /// \brief Retain/Release or Garbage Collection.
-  /// \since 1.0
-  Retain_Release_Or_GC = 3,
-
-  /// \brief Garbage Collection.
-  /// \since 1.0
-  GC = 4,
-};
-
-///
-/// \brief Defines the cpu subtype matching mode.
-/// \since 1.0
-///
-enum class CpuSubTypeMatching : unsigned {
-  /// \brief Fall-back to an ABI compatible slice if an exact match cannot be
-  ///        found.
-  /// \since 1.0
-  ABI_Compatible = 0,
-
-  /// \brief Only accept a slice if the sub type matches.
-  /// \since 1.0
-  Exact = 1,
-};
 
 ///
 /// \brief Defines flags that control the parsing of text-based stub files.
@@ -182,12 +98,13 @@ public:
   /// \brief Check if we should prefer the text-based stub file.
   ///
   /// \param[in] path full path to the text-based stub file.
-  /// \returns true if the tex-based stub file should be prefered over any
+  /// \returns true if the text-based stub file should be prefered over any
   ///          dynamic library.
   /// \since 1.0
+  /// \deprecated 2.1
   ///
-  static bool shouldPreferTextBasedStubFile(const std::string &path) noexcept;
-
+  static bool shouldPreferTextBasedStubFile(const std::string &path) noexcept
+      __attribute__((deprecated));
   ///
   /// \brief Check if the text-based stub file and the MachO dynamic library
   ///        file are in sync.
@@ -199,61 +116,10 @@ public:
   /// \param[in] dylibPath full path to the MachO dynamic library file.
   /// \returns true if both files are in sync.
   /// \since 1.0
+  /// \deprecated 2.1
   ///
   static bool areEquivalent(const std::string &tbdPath,
-                            const std::string &dylibPath) noexcept;
-
-  ///
-  /// \brief Create a LinkerInterfaceFile from the provided buffer.
-  ///
-  /// Parses the content of the provided buffer with the given constrains for
-  /// cpu type, cpu sub-type, matching requirement, and minimum deployment
-  /// version.
-  ///
-  /// \param[in] path path to the file (for error message only).
-  /// \param[in] data raw pointer to start of buffer.
-  /// \param[in] size size of the buffer in bytes.
-  /// \param[in] cpuType The cpu type / architecture to check the file for.
-  /// \param[in] cpuSubType The cpu sub type / sub architecture to check the
-  ///            file for.
-  /// \param[in] matchingMode Specified the cpu subtype matching mode.
-  /// \param[in] minOSVersion The minimum OS version / deployment target.
-  /// \param[out] errorMessage holds an error message when the return value is a
-  ///             nullptr.
-  /// \return nullptr on error
-  /// \since 1.0
-  /// \deprecated 1.1
-  ///
-  static LinkerInterfaceFile *
-  create(const std::string &path, const uint8_t *data, size_t size,
-         cpu_type_t cpuType, cpu_subtype_t cpuSubType,
-         CpuSubTypeMatching matchingMode, PackedVersion32 minOSVersion,
-         std::string &errorMessage) noexcept __attribute__((deprecated));
-
-  ///
-  /// \brief Create a LinkerInterfaceFile from the provided buffer.
-  ///
-  /// Parses the content of the provided buffer with the given constrains for
-  /// cpu type, cpu sub-type, flags, and minimum deployment version.
-  ///
-  /// \param[in] path path to the file (for error message only).
-  /// \param[in] data raw pointer to start of buffer.
-  /// \param[in] size size of the buffer in bytes.
-  /// \param[in] cpuType The cpu type / architecture to check the file for.
-  /// \param[in] cpuSubType The cpu sub type / sub architecture to check the
-  ///            file for.
-  /// \param[in] flags Flags that control the parsing behavior.
-  /// \param[in] minOSVersion The minimum OS version / deployment target.
-  /// \param[out] errorMessage holds an error message when the return value is a
-  ///             nullptr.
-  /// \return nullptr on error
-  /// \since 1.1
-  /// \deprecated 1.3
-  ///
-  static LinkerInterfaceFile *
-  create(const std::string &path, const uint8_t *data, size_t size,
-         cpu_type_t cpuType, cpu_subtype_t cpuSubType, ParsingFlags flags,
-         PackedVersion32 minOSVersion, std::string &errorMessage) noexcept
+                            const std::string &dylibPath) noexcept
       __attribute__((deprecated));
 
   ///
@@ -277,21 +143,26 @@ public:
   create(const std::string &path, cpu_type_t cpuType, cpu_subtype_t cpuSubType,
          ParsingFlags flags, PackedVersion32 minOSVersion,
          std::string &errorMessage) noexcept;
-  ///
-  /// \brief Query the platform
-  /// \return Returns the platform supported by the TAPI file.
-  /// \since 1.0
-  /// \deprecated 1.6
-  ///
-  Platform getPlatform() const noexcept __attribute__((deprecated));
 
   ///
   /// \brief Query the supported platforms
   /// \return Returns the set of platforms supported by the TAPI file as
   ///         defined by the MachO load command LC_BUILD_VERSION.
   /// \since 1.6
+  /// \deprecated 2.2
   ///
-  const std::vector<uint32_t> &getPlatformSet() const noexcept;
+  const std::vector<uint32_t> &getPlatformSet() const noexcept
+      __attribute__((deprecated));
+
+  ///
+  /// \brief Query the minimum deployment version for matching platforms.
+  /// \return Returns the set of platforms supported by the TAPI file as
+  ///         defined by the MachO load command LC_BUILD_VERSION and
+  ///         matching minimum deployment version.
+  /// \since 2.2
+  ///
+  const std::vector<std::pair<uint32_t, PackedVersion32>> &
+  getPlatformsAndMinDeployment() const noexcept;
 
   ///
   /// \brief Query the install name.
@@ -330,14 +201,6 @@ public:
   unsigned getSwiftVersion() const noexcept;
 
   ///
-  /// \brief Query the Objective-C Constraint.
-  /// \return Returns always ObjCConstraint::None.
-  /// \since 1.0
-  /// \deprecated 1.6
-  ///
-  ObjCConstraint getObjCConstraint() const noexcept __attribute__((deprecated));
-
-  ///
   /// \brief Query if the library has two level namespace.
   /// \return Returns true if the library has two level namespace.
   /// \since 1.0
@@ -350,6 +213,14 @@ public:
   /// \since 1.0
   ///
   bool isApplicationExtensionSafe() const noexcept;
+
+  ///
+  /// \brief Query if the library has set not_for_dyld_shared_cache.
+  /// Which is only applicable to system libraries.
+  /// \return Returns true if the library is shared cache ineligible.
+  /// \since 2.3
+  ///
+  bool isNotForDyldSharedCache() const noexcept;
 
   ///
   /// \brief Query if the library has any allowable clients.
@@ -393,6 +264,20 @@ public:
   /// \since 1.0
   ///
   const std::vector<std::string> &reexportedLibraries() const noexcept;
+
+  ///
+  /// \brief Obtain the list of run path search paths.
+  /// \return Returns a list of run path search paths.
+  /// \since 2.2
+  ///
+  const std::vector<std::string> &rPaths() const noexcept;
+
+  ///
+  /// \brief Obtain the list of relinked libraries.
+  /// \return Returns a list of relinked libraries.
+  /// \since 2.2
+  ///
+  const std::vector<std::string> &relinkedLibraries() const noexcept;
 
   ///
   /// \brief Obtain a list of all symbols to be ignored.

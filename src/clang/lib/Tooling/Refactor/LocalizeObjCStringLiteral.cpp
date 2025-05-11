@@ -1,9 +1,8 @@
 //===--- LocalizeObjCString.cpp -  ----------------------------------------===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -45,14 +44,14 @@ clang::tooling::initiateLocalizeObjCStringLiteralOperation(
   if (SelectionRange.isValid()) {
     auto SelectedSet = Slice.getSelectedStmtSet();
     if (!SelectedSet)
-      return None;
+      return std::nullopt;
     E = dyn_cast_or_null<ObjCStringLiteral>(
         SelectedSet->containsSelectionRange);
   } else
     E = cast_or_null<ObjCStringLiteral>(
         Slice.nearestStmt(Stmt::ObjCStringLiteralClass));
   if (!E)
-    return None;
+    return std::nullopt;
 
   RefactoringOperationResult Result;
   Result.Initiated = true;

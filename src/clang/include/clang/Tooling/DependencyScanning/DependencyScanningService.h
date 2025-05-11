@@ -6,10 +6,14 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_CLANG_TOOLING_DEPENDENCY_SCANNING_SERVICE_H
-#define LLVM_CLANG_TOOLING_DEPENDENCY_SCANNING_SERVICE_H
+#ifndef LLVM_CLANG_TOOLING_DEPENDENCYSCANNING_DEPENDENCYSCANNINGSERVICE_H
+#define LLVM_CLANG_TOOLING_DEPENDENCYSCANNING_DEPENDENCYSCANNINGSERVICE_H
 
+#include "clang/CAS/CASOptions.h"
+#include "clang/Tooling/DependencyScanning/DependencyScanningCASFilesystem.h"
 #include "clang/Tooling/DependencyScanning/DependencyScanningFilesystem.h"
+#include "llvm/ADT/BitmaskEnum.h"
+#include "llvm/CAS/ActionCache.h"
 
 namespace clang {
 namespace tooling {
@@ -19,15 +23,13 @@ namespace dependencies {
 /// dependencies.
 enum class ScanningMode {
   /// This mode is used to compute the dependencies by running the preprocessor
-  /// over
-  /// the unmodified source files.
+  /// over the source files.
   CanonicalPreprocessing,
 
   /// This mode is used to compute the dependencies by running the preprocessor
-  /// over
-  /// the source files that have been minimized to contents that might affect
-  /// the dependencies.
-  MinimizedSourcePreprocessing
+  /// with special kind of lexing after scanning header and source files to get
+  /// the minimum necessary preprocessor directives for evaluating includes.
+  DependencyDirectivesScan,
 };
 
 /// The format that is output by the dependency scanner.
@@ -37,45 +39,107 @@ enum class ScanningOutputFormat {
   /// intermodule dependency information.
   Make,
 
-  /// This outputs the full module dependency graph suitable for use for
+  /// This outputs the full clang module dependency graph suitable for use for
   /// explicitly building modules.
   Full,
+
+  /// This emits the CAS ID of the scanned files.
+  Tree,
+
+  /// This emits the full dependency graph but with CAS tree embedded as file
+  /// dependency.
+  FullTree,
+
+  /// This emits the CAS ID of the include tree.
+  IncludeTree,
+
+  /// This emits the full dependency graph but with include tree.
+  FullIncludeTree,
+
+  /// This outputs the dependency graph for standard c++ modules in P1689R5
+  /// format.
+  P1689,
 };
 
-/// The dependency scanning service contains the shared state that is used by
-/// the invidual dependency scanning workers.
+#define DSS_LAST_BITMASK_ENUM(Id)                                              \
+  LLVM_MARK_AS_BITMASK_ENUM(Id), All = llvm::NextPowerOf2(Id) - 1
+
+enum class ScanningOptimizations {
+  None = 0,
+
+  /// Remove unused header search paths including header maps.
+  HeaderSearch = 1,
+
+  /// Remove warnings from system modules.
+  SystemWarnings = 2,
+
+  /// Remove unused -ivfsoverlay arguments.
+  VFS = 4,
+
+  /// Canonicalize -D and -U options.
+  Macros = 8,
+
+  DSS_LAST_BITMASK_ENUM(Macros),
+  Default = All,
+  FullIncludeTreeIrrelevant = HeaderSearch | VFS,
+};
+
+#undef DSS_LAST_BITMASK_ENUM
+
+/// The dependency scanning service contains shared configuration and state that
+/// is used by the individual dependency scanning workers.
 class DependencyScanningService {
 public:
-  DependencyScanningService(ScanningMode Mode, ScanningOutputFormat Format,
-                            bool ReuseFileManager = true,
-                            bool SkipExcludedPPRanges = true);
+  DependencyScanningService(
+      ScanningMode Mode, ScanningOutputFormat Format, CASOptions CASOpts,
+      std::shared_ptr<llvm::cas::ObjectStore> CAS,
+      std::shared_ptr<llvm::cas::ActionCache> Cache,
+      IntrusiveRefCntPtr<llvm::cas::CachingOnDiskFileSystem> SharedFS,
+      ScanningOptimizations OptimizeArgs = ScanningOptimizations::Default,
+      bool EagerLoadModules = false);
 
   ScanningMode getMode() const { return Mode; }
 
   ScanningOutputFormat getFormat() const { return Format; }
 
-  bool canReuseFileManager() const { return ReuseFileManager; }
+  ScanningOptimizations getOptimizeArgs() const { return OptimizeArgs; }
 
-  bool canSkipExcludedPPRanges() const { return SkipExcludedPPRanges; }
+  bool shouldEagerLoadModules() const { return EagerLoadModules; }
 
   DependencyScanningFilesystemSharedCache &getSharedCache() {
-    return SharedCache;
+    assert(!SharedFS && "Expected not to have a CASFS");
+    assert(SharedCache && "Expected a shared cache");
+    return *SharedCache;
   }
+
+  const CASOptions &getCASOpts() const { return CASOpts; }
+
+  std::shared_ptr<llvm::cas::ObjectStore> getCAS() const { return CAS; }
+  std::shared_ptr<llvm::cas::ActionCache> getCache() const { return Cache; }
+
+  llvm::cas::CachingOnDiskFileSystem &getSharedFS() { return *SharedFS; }
+
+  bool useCASFS() const { return (bool)SharedFS; }
 
 private:
   const ScanningMode Mode;
   const ScanningOutputFormat Format;
-  const bool ReuseFileManager;
-  /// Set to true to use the preprocessor optimization that skips excluded PP
-  /// ranges by bumping the buffer pointer in the lexer instead of lexing the
-  /// tokens in the range until reaching the corresponding directive.
-  const bool SkipExcludedPPRanges;
+  CASOptions CASOpts;
+  std::shared_ptr<llvm::cas::ObjectStore> CAS;
+  std::shared_ptr<llvm::cas::ActionCache> Cache;
+  /// Whether to optimize the modules' command-line arguments.
+  const ScanningOptimizations OptimizeArgs;
+  /// Whether to set up command-lines to load PCM files eagerly.
+  const bool EagerLoadModules;
+  /// Shared CachingOnDiskFileSystem. Set to nullptr to not use CAS dependency
+  /// scanning.
+  IntrusiveRefCntPtr<llvm::cas::CachingOnDiskFileSystem> SharedFS;
   /// The global file system cache.
-  DependencyScanningFilesystemSharedCache SharedCache;
+  std::optional<DependencyScanningFilesystemSharedCache> SharedCache;
 };
 
 } // end namespace dependencies
 } // end namespace tooling
 } // end namespace clang
 
-#endif // LLVM_CLANG_TOOLING_DEPENDENCY_SCANNING_SERVICE_H
+#endif // LLVM_CLANG_TOOLING_DEPENDENCYSCANNING_DEPENDENCYSCANNINGSERVICE_H

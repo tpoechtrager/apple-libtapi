@@ -6,8 +6,6 @@ pushd "${0%/*}" &>/dev/null
 source tools/tools.sh
 pushd build &>/dev/null
 
-INSTALLPREFIX=$(cat INSTALLPREFIX)
-
 INSTALLTARGETS="install-libtapi install-tapi-headers"
 
 [ -e "bin/tapi" ] && INSTALLTARGETS+=" install-tapi"

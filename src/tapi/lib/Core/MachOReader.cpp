@@ -1,9 +1,8 @@
 //===- lib/Core/MachOReader - TAPI MachO Reader -----------------*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 ///
@@ -13,11 +12,15 @@
 //===----------------------------------------------------------------------===//
 
 #include "tapi/Core/MachOReader.h"
-#include "tapi/ObjCMetadata/ObjCMachOBinary.h"
+#include "tapi/ObjCMetadata/ObjCMetadata.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/BinaryFormat/Magic.h"
+#include "llvm/DebugInfo/DWARF/DWARFCompileUnit.h"
+#include "llvm/DebugInfo/DWARF/DWARFContext.h"
+#include "llvm/Object/Binary.h"
 #include "llvm/Object/MachO.h"
 #include "llvm/Object/MachOUniversal.h"
+#include "llvm/TextAPI/Platform.h"
 #include <iomanip>
 #include <sstream>
 
@@ -156,6 +159,17 @@ static Error readMachOHeader(MachOObjectFile *object, API &api) {
       binaryInfo.uuid = api.copyString(stream.str());
       break;
     }
+    case MachO::LC_RPATH: {
+      auto RPLC = object->getRpathCommand(LCI);
+      binaryInfo.rpaths.emplace_back(api.copyString(LCI.Ptr + RPLC.path));
+      break;
+    }
+    case MachO::LC_SEGMENT_SPLIT_INFO: {
+      auto SSILC = object->getLinkeditDataLoadCommand(LCI);
+      if (SSILC.datasize == 0)
+        binaryInfo.isOSLibNotForSharedCache = true;
+      break;
+    }
     default:
       break;
     }
@@ -188,31 +202,194 @@ static Error readMachOHeader(MachOObjectFile *object, API &api) {
   return Error::success();
 }
 
-static Error readExportedSymbols(MachOObjectFile *object, API &api) {
+static void DWARFErrorHandler(Error err) { /**/
+}
+
+static SymbolToSourceLocMap
+accumulateLocs(MachOObjectFile &obj,
+               const std::unique_ptr<DWARFContext> &diCtx) {
+  SymbolToSourceLocMap locMap;
+  for (const auto &symbol : obj.symbols()) {
+    auto flagsOrErr = symbol.getFlags();
+    if (!flagsOrErr) {
+      consumeError(flagsOrErr.takeError());
+      continue;
+    }
+
+    if (!(*flagsOrErr & SymbolRef::SF_Exported))
+      continue;
+
+    auto addressOrErr = symbol.getAddress();
+    if (!addressOrErr) {
+      consumeError(addressOrErr.takeError());
+      continue;
+    }
+    auto address = *addressOrErr;
+
+    auto typeOrErr = symbol.getType();
+    if (!typeOrErr) {
+      consumeError(typeOrErr.takeError());
+      continue;
+    }
+    const bool isCode = (*typeOrErr & SymbolRef::ST_Function);
+
+    auto *dwarfCU = isCode ? diCtx->getCompileUnitForCodeAddress(address)
+                           : diCtx->getCompileUnitForDataAddress(address);
+    if (!dwarfCU)
+      continue;
+
+    const DWARFDie &die = isCode ? dwarfCU->getSubroutineForAddress(address)
+                                 : dwarfCU->getVariableForAddress(address);
+    const auto file = die.getDeclFile(
+        llvm::DILineInfoSpecifier::FileLineInfoKind::AbsoluteFilePath);
+    const auto line = die.getDeclLine();
+
+    auto nameOrErr = symbol.getName();
+    if (!nameOrErr) {
+      consumeError(nameOrErr.takeError());
+      continue;
+    }
+    auto name = *nameOrErr;
+    auto sym = parseSymbol(name);
+
+    if (!file.empty() && line != 0)
+      locMap[sym.Name.str()] = APILoc(file, line, 0);
+  }
+
+  return locMap;
+}
+
+SymbolToSourceLocMap accumulateSourceLocFromDSYM(const StringRef dSYMFile,
+                                                 const Target &target) {
+  // Find sidecar file.
+  auto dSYMsOrErr = MachOObjectFile::findDsymObjectMembers(dSYMFile);
+  if (!dSYMsOrErr) {
+    consumeError(dSYMsOrErr.takeError());
+    return SymbolToSourceLocMap();
+  }
+  if (dSYMsOrErr->empty())
+    return SymbolToSourceLocMap();
+
+  const StringRef path = dSYMsOrErr->front();
+  ErrorOr<std::unique_ptr<MemoryBuffer>> buffer = MemoryBuffer::getFile(path);
+  if (auto error = buffer.getError())
+    return SymbolToSourceLocMap();
+
+  Expected<std::unique_ptr<Binary>> binOrErr = createBinary(*buffer.get());
+  if (!binOrErr) {
+    consumeError(binOrErr.takeError());
+    return SymbolToSourceLocMap();
+  }
+  // Handle single arch.
+  if (auto *single = dyn_cast<MachOObjectFile>(binOrErr->get())) {
+    auto diCtx = DWARFContext::create(
+        *single, DWARFContext::ProcessDebugRelocations::Process, nullptr, "",
+        DWARFErrorHandler, DWARFErrorHandler);
+
+    return accumulateLocs(*single, diCtx);
+  }
+  // Handle universal companion file.
+  if (auto *fat = dyn_cast<MachOUniversalBinary>(binOrErr->get())) {
+    auto objForArch = fat->getObjectForArch(getArchitectureName(target.Arch));
+    if (!objForArch) {
+      consumeError(objForArch.takeError());
+      return SymbolToSourceLocMap();
+    }
+    auto machOOrErr = objForArch->getAsObjectFile();
+    if (!machOOrErr) {
+      consumeError(machOOrErr.takeError());
+      return SymbolToSourceLocMap();
+    }
+    auto &obj = **machOOrErr;
+    auto diCtx = DWARFContext::create(
+        obj, DWARFContext::ProcessDebugRelocations::Process, nullptr, "",
+        DWARFErrorHandler, DWARFErrorHandler);
+
+    return accumulateLocs(obj, diCtx);
+  }
+  return SymbolToSourceLocMap();
+}
+
+static Error readSymbols(MachOObjectFile *object, API &api,
+                         const MachOParseOption &options) {
   assert(getArchitectureFromCpuType(object->getHeader().cputype,
                                     object->getHeader().cpusubtype) !=
              AK_unknown &&
          "unknown architecture slice");
 
-  Error error = Error::success();
-  for (const auto &symbol : object->exports(error)) {
-    StringRef name = symbol.name();
-    APIFlags flags = APIFlags::None;
-    bool isReexported = (symbol.flags() & MachO::EXPORT_SYMBOL_FLAGS_REEXPORT);
-    switch (symbol.flags() & MachO::EXPORT_SYMBOL_FLAGS_KIND_MASK) {
+  auto parseExport = [](const auto exportFlags,
+                        auto address) -> std::tuple<SymbolFlags, APILinkage> {
+    SymbolFlags flags = SymbolFlags::None;
+    switch (exportFlags & MachO::EXPORT_SYMBOL_FLAGS_KIND_MASK) {
     case MachO::EXPORT_SYMBOL_FLAGS_KIND_REGULAR:
-      if (symbol.flags() & MachO::EXPORT_SYMBOL_FLAGS_WEAK_DEFINITION)
-        flags |= APIFlags::WeakDefined;
+      if (exportFlags & MachO::EXPORT_SYMBOL_FLAGS_WEAK_DEFINITION)
+        flags |= SymbolFlags::WeakDefined;
       break;
     case MachO::EXPORT_SYMBOL_FLAGS_KIND_THREAD_LOCAL:
-      flags |= APIFlags::ThreadLocalValue;
+      flags |= SymbolFlags::ThreadLocalValue;
       break;
     }
-    api.addGlobal(name, flags, APILoc(), AvailabilityInfo(), APIAccess::Unknown,
-                  nullptr, GVKind::Unknown,
-                  isReexported ? APILinkage::Reexported : APILinkage::Exported);
+
+    APILinkage linkage = (exportFlags & MachO::EXPORT_SYMBOL_FLAGS_REEXPORT)
+                             ? APILinkage::Reexported
+                             : APILinkage::Exported;
+
+    return {flags, linkage};
+  };
+
+  Error error = Error::success();
+  std::unordered_map<std::string, std::pair<SymbolFlags, APILinkage>> exports;
+  for (auto &symbol : object->exports(error)) {
+    auto [flags, linkage] = parseExport(symbol.flags(), symbol.address());
+    exports.insert({symbol.name().str(), {flags, linkage}});
+    // FIXME Workaround for: rdar://105047425
+    // Add swift symbols from export trie.
+    if (symbol.name().startswith("_$s") || symbol.name().startswith("_$S"))
+      api.addGlobalFromBinary(symbol.name().str(), flags, APILoc(),
+                              GVKind::Unknown, linkage);
   }
 
+  for (const auto &symbol : object->symbols()) {
+    auto flagsOrErr = symbol.getFlags();
+    if (!flagsOrErr)
+      return flagsOrErr.takeError();
+    auto flags = *flagsOrErr;
+
+    auto nameOrErr = symbol.getName();
+    if (!nameOrErr)
+      return nameOrErr.takeError();
+    auto name = *nameOrErr;
+
+    APILinkage linkage = APILinkage::Unknown;
+    SymbolFlags apiFlags = SymbolFlags::None;
+
+    if (options.parseUndefined && (flags & SymbolRef::SF_Undefined))
+      linkage = APILinkage::External;
+    else if (flags & SymbolRef::SF_Exported) {
+      auto it = exports.find(name.str());
+      if (it == exports.end())
+        continue;
+      std::tie(apiFlags, linkage) = it->second;
+    } else if (flags & SymbolRef::SF_Hidden)
+      linkage = APILinkage::Internal;
+    else
+      continue;
+
+    auto typeOrErr = symbol.getType();
+    if (!typeOrErr)
+      return typeOrErr.takeError();
+    auto type = *typeOrErr;
+
+    GVKind kind =
+        (type & SymbolRef::ST_Function) ? GVKind::Function : GVKind::Variable;
+
+    if (kind == GVKind::Function)
+      apiFlags |= SymbolFlags::Text;
+    else
+      apiFlags |= SymbolFlags::Data;
+
+    api.addGlobalFromBinary(name, apiFlags, APILoc(), kind, linkage);
+  }
   return error;
 }
 
@@ -232,7 +409,7 @@ static ObjCPropertyRecord::AttributeKind getAttributeKind(StringRef attr) {
 
 static Error readObjectiveCMetadata(MachOObjectFile *object, API &api) {
   auto error = Error::success();
-  MachOMetadata metadata(object, error);
+  ObjCMetaDataReader metadata(object, error);
   if (error)
     return std::move(error);
 
@@ -256,9 +433,12 @@ static Error readObjectiveCMetadata(MachOObjectFile *object, API &api) {
     if (!className)
       return className.takeError();
 
+    // FIXME: Re-adding classes should not assume additional attributes.
     auto *objcClass = api.addObjCInterface(
         *className, APILoc(), AvailabilityInfo(), APIAccess::Unknown,
-        APILinkage::Exported, *superClassName, nullptr);
+        APILinkage::Exported, *superClassName, nullptr,
+        ObjCIFSymbolKind::Class | ObjCIFSymbolKind::MetaClass,
+        /*overrideLinkage=*/false);
 
     auto properties = objcClassMeta->properties();
     if (!properties)
@@ -515,31 +695,6 @@ static Error readObjectiveCMetadata(MachOObjectFile *object, API &api) {
   return Error::success();
 }
 
-static Error readUndefinedSymbols(MachOObjectFile *object, API &api) {
-  for (const auto &symbol : object->symbols()) {
-    auto symbolFlags = symbol.getFlags();
-    if (!symbolFlags)
-      return symbolFlags.takeError();
-    if ((*symbolFlags & BasicSymbolRef::SF_Global) == 0)
-      continue;
-    if ((*symbolFlags & BasicSymbolRef::SF_Undefined) == 0)
-      continue;
-    auto symbolName = symbol.getName();
-    if (!symbolName)
-      return symbolName.takeError();
-
-    auto flags = (*symbolFlags & BasicSymbolRef::SF_Weak)
-                     ? APIFlags::WeakReferenced
-                     : APIFlags::None;
-
-    api.addGlobal(*symbolName, flags, APILoc(), AvailabilityInfo(),
-                  APIAccess::Unknown, nullptr, GVKind::Unknown,
-                  APILinkage::External);
-  }
-
-  return Error::success();
-}
-
 static Error load(MachOObjectFile *object, API &api, MachOParseOption &option) {
   if (option.parseMachOHeader) {
     auto error = readMachOHeader(object, api);
@@ -547,19 +702,13 @@ static Error load(MachOObjectFile *object, API &api, MachOParseOption &option) {
       return error;
   }
   if (option.parseSymbolTable) {
-    auto error = readExportedSymbols(object, api);
+    auto error = readSymbols(object, api, option);
     if (error)
       return error;
   }
 
   if (option.parseObjCMetadata) {
     auto error = readObjectiveCMetadata(object, api);
-    if (error)
-      return error;
-  }
-
-  if (option.parseUndefined) {
-    auto error = readUndefinedSymbols(object, api);
     if (error)
       return error;
   }
@@ -650,6 +799,17 @@ std::vector<Triple> constructTripleFromMachO(MachOObjectFile *object) {
       case MachO::PLATFORM_DRIVERKIT:
         triples.emplace_back(arch, "apple", "driverkit" + OSVersion);
         break;
+      case MachO::PLATFORM_XROS:
+        triples.emplace_back(arch, "apple",
+                             Triple::getOSTypeName(Triple::XROS) +
+                             OSVersion);
+        break;
+      case MachO::PLATFORM_XROS_SIMULATOR:
+        triples.emplace_back(arch, "apple",
+                             Triple::getOSTypeName(Triple::XROS) +
+                             OSVersion,
+                             "simulator");
+        break;
       default:
         break; // skip.
       }
@@ -695,8 +855,12 @@ llvm::Expected<MachOParseResult> readMachOFile(MemoryBufferRef memBuffer,
 
     auto triples = constructTripleFromMachO(object);
     for (const auto &target : triples) {
-      results.emplace_back(arch, API{target});
-      auto error = load(object, results.back().second, option);
+      if (mapToPlatformType(target) == PLATFORM_UNKNOWN)
+        return make_error<StringError>(
+            "unknown/unsupported platform",
+            std::make_error_code(std::errc::not_supported));
+      results.emplace_back(arch, std::make_shared<API>(API({target})));
+      auto error = load(object, *results.back().second, option);
       if (error)
         return std::move(error);
     }
@@ -738,8 +902,8 @@ llvm::Expected<MachOParseResult> readMachOFile(MemoryBufferRef memBuffer,
     case MachO::MH_DYLIB:
     case MachO::MH_DYLIB_STUB:
       for (const auto &target : triples) {
-        results.emplace_back(arch, API{target});
-        auto error = load(&object, results.back().second, option);
+        results.emplace_back(arch, std::make_shared<API>(API({target})));
+        auto error = load(&object, *results.back().second, option);
         if (error)
           return std::move(error);
       }

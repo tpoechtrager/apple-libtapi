@@ -1,9 +1,8 @@
 //===- tapi/Driver/DirectoryScanner.h - DirectoryScanner --------*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 ///
@@ -64,14 +63,14 @@ public:
 
   // Access scanner internal.
   void setMode(ScannerMode scanMode) { mode = scanMode; }
-  void setConfiguration(Configuration *conf) { config = conf; }
+  void setSplitHeaderDir(bool splitHeader) { useSplitHeaderDir = splitHeader; }
 
   // Get scanner output.
   std::vector<Framework> takeResult();
 
   using FileMap = std::vector<std::pair<std::string, std::string>>;
   // Get VFS overlay for the scanner result.
-  FileMap getVFSFileMap(StringRef sysroot) const;
+  FileMap getVFSFileMap(StringRef sysroot, ArrayRef<StringRef> rootPaths) const;
 
 private:
   // Private helper functions.
@@ -88,7 +87,7 @@ private:
                                   StringRef path) const;
   bool scanFrameworkDirectory(Framework &framework, StringRef path) const;
   bool scanHeaders(Framework &framework, StringRef path, HeaderType type,
-                   StringRef basePath, bool isDynamicLibrary) const;
+                   StringRef basePath, StringRef parentPath = StringRef()) const;
   bool scanModules(Framework &framework, StringRef path) const;
   bool scanSwiftModules(Framework &framework, StringRef path) const;
   bool scanFrameworkVersionsDirectory(Framework &framework,
@@ -99,6 +98,7 @@ private:
   bool scanSDKContent(StringRef directory);
 
   void addVFSForFramework(FileMap &output, StringRef sysroot,
+                          ArrayRef<StringRef> rootPaths,
                           const Framework &framework) const;
 
 private:
@@ -108,8 +108,8 @@ private:
   StringRef rootPath;
 
   ScannerMode mode;
-  Configuration *config;
   std::vector<Framework> frameworks;
+  bool useSplitHeaderDir = false;
 };
 
 TAPI_NAMESPACE_INTERNAL_END

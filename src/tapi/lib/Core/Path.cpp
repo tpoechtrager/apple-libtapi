@@ -1,9 +1,8 @@
 //===- lib/Core/Path.cpp - Path Operating System Concept --------*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 ///
@@ -77,11 +76,11 @@ Expected<PathSeq> enumerateHeaderFiles(FileManager &fm, StringRef path) {
 }
 
 PathSeq getPathsForPlatform(const PathToPlatformSeq &paths,
-                            PlatformKind platform) {
+                            PlatformType platform) {
   PathSeq result;
 
   for (const auto &path : paths) {
-    if (!path.second.hasValue() || path.second.getValue() == platform)
+    if (!path.second.has_value() || path.second.value() == platform)
       result.push_back(path.first);
   }
 

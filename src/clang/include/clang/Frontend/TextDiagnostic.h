@@ -50,8 +50,7 @@ public:
   /// TextDiagnostic logic requires.
   static void printDiagnosticLevel(raw_ostream &OS,
                                    DiagnosticsEngine::Level Level,
-                                   bool ShowColors,
-                                   bool CLFallbackMode = false);
+                                   bool ShowColors);
 
   /// Pretty-print a diagnostic message to a raw_ostream.
   ///
@@ -104,7 +103,8 @@ private:
                            SmallVectorImpl<CharSourceRange> &Ranges,
                            ArrayRef<FixItHint> Hints);
 
-  void emitSnippet(StringRef SourceLine);
+  void emitSnippet(StringRef SourceLine, unsigned MaxLineNoDisplayWidth,
+                   unsigned LineNo);
 
   void emitParseableFixits(ArrayRef<FixItHint> Hints, const SourceManager &SM);
 };

@@ -13,19 +13,19 @@
 #include "PPCTargetMachine.h"
 #include "MCTargetDesc/PPCMCTargetDesc.h"
 #include "PPC.h"
+#include "PPCMachineFunctionInfo.h"
 #include "PPCMachineScheduler.h"
 #include "PPCMacroFusion.h"
 #include "PPCSubtarget.h"
 #include "PPCTargetObjectFile.h"
 #include "PPCTargetTransformInfo.h"
 #include "TargetInfo/PowerPCTargetInfo.h"
-#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringRef.h"
-#include "llvm/ADT/Triple.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/CodeGen/GlobalISel/IRTranslator.h"
 #include "llvm/CodeGen/GlobalISel/InstructionSelect.h"
+#include "llvm/CodeGen/GlobalISel/InstructionSelector.h"
 #include "llvm/CodeGen/GlobalISel/Legalizer.h"
 #include "llvm/CodeGen/GlobalISel/Localizer.h"
 #include "llvm/CodeGen/GlobalISel/RegBankSelect.h"
@@ -36,15 +36,17 @@
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/Function.h"
 #include "llvm/InitializePasses.h"
+#include "llvm/MC/TargetRegistry.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/CodeGen.h"
 #include "llvm/Support/CommandLine.h"
-#include "llvm/Support/TargetRegistry.h"
 #include "llvm/Target/TargetLoweringObjectFile.h"
 #include "llvm/Target/TargetOptions.h"
+#include "llvm/TargetParser/Triple.h"
 #include "llvm/Transforms/Scalar.h"
 #include <cassert>
 #include <memory>
+#include <optional>
 #include <string>
 
 using namespace llvm;
@@ -97,6 +99,13 @@ static cl::opt<bool>
   ReduceCRLogical("ppc-reduce-cr-logicals",
                   cl::desc("Expand eligible cr-logical binary ops to branches"),
                   cl::init(true), cl::Hidden);
+
+static cl::opt<bool> EnablePPCGenScalarMASSEntries(
+    "enable-ppc-gen-scalar-mass", cl::init(false),
+    cl::desc("Enable lowering math functions to their corresponding MASS "
+             "(scalar) entries"),
+    cl::Hidden);
+
 extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializePowerPCTarget() {
   // Register the targets
   RegisterTargetMachine<PPCTargetMachine> A(getThePPC32Target());
@@ -123,7 +132,15 @@ extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializePowerPCTarget() {
   initializePPCTLSDynamicCallPass(PR);
   initializePPCMIPeepholePass(PR);
   initializePPCLowerMASSVEntriesPass(PR);
+  initializePPCGenScalarMASSEntriesPass(PR);
+  initializePPCExpandAtomicPseudoPass(PR);
   initializeGlobalISel(PR);
+  initializePPCCTRLoopsPass(PR);
+  initializePPCDAGToDAGISelPass(PR);
+}
+
+static bool isLittleEndianTriple(const Triple &T) {
+  return T.getArch() == Triple::ppc64le || T.getArch() == Triple::ppcle;
 }
 
 /// Return the datalayout string of a subtarget.
@@ -132,7 +149,7 @@ static std::string getDataLayoutString(const Triple &T) {
   std::string Ret;
 
   // Most PPC* platforms are big endian, PPC(64)LE is little endian.
-  if (T.getArch() == Triple::ppc64le || T.getArch() == Triple::ppcle)
+  if (isLittleEndianTriple(T))
     Ret = "e";
   else
     Ret = "E";
@@ -143,6 +160,17 @@ static std::string getDataLayoutString(const Triple &T) {
   // pointers.
   if (!is64Bit || T.getOS() == Triple::Lv2)
     Ret += "-p:32:32";
+
+  // If the target ABI uses function descriptors, then the alignment of function
+  // pointers depends on the alignment used to emit the descriptor. Otherwise,
+  // function pointers are aligned to 32 bits because the instructions must be.
+  if ((T.getArch() == Triple::ppc64 && !T.isPPC64ELFv2ABI())) {
+    Ret += "-Fi64";
+  } else if (T.isOSAIX()) {
+    Ret += is64Bit ? "-Fi64" : "-Fi32";
+  } else {
+    Ret += "-Fn32";
+  }
 
   // Note, the alignment values for f64 and i64 on ppc64 in Darwin
   // documentation are wrong; these are correct (i.e. "what gcc does").
@@ -157,9 +185,8 @@ static std::string getDataLayoutString(const Triple &T) {
   // Specify the vector alignment explicitly. For v256i1 and v512i1, the
   // calculated alignment would be 256*alignment(i1) and 512*alignment(i1),
   // which is 256 and 512 bytes - way over aligned.
-  if ((T.getArch() == Triple::ppc64le || T.getArch() == Triple::ppc64) &&
-      (T.isOSAIX() || T.isOSLinux()))
-    Ret += "-v256:256:256-v512:512:512";
+  if (is64Bit && (T.isOSAIX() || T.isOSLinux()))
+    Ret += "-S128-v256:256:256-v512:512:512";
 
   return Ret;
 }
@@ -190,6 +217,13 @@ static std::string computeFSAdditions(StringRef FS, CodeGenOpt::Level OL,
       FullFS = "+invariant-function-descriptors";
   }
 
+  if (TT.isOSAIX()) {
+    if (!FullFS.empty())
+      FullFS = "+aix," + FullFS;
+    else
+      FullFS = "+aix";
+  }
+
   return FullFS;
 }
 
@@ -210,25 +244,25 @@ static PPCTargetMachine::PPCABI computeTargetABI(const Triple &TT,
   assert(Options.MCOptions.getABIName().empty() &&
          "Unknown target-abi option!");
 
-  if (TT.isMacOSX())
-    return PPCTargetMachine::PPC_ABI_UNKNOWN;
-
   switch (TT.getArch()) {
   case Triple::ppc64le:
     return PPCTargetMachine::PPC_ABI_ELFv2;
   case Triple::ppc64:
-    return PPCTargetMachine::PPC_ABI_ELFv1;
+    if (TT.isPPC64ELFv2ABI())
+      return PPCTargetMachine::PPC_ABI_ELFv2;
+    else
+      return PPCTargetMachine::PPC_ABI_ELFv1;
   default:
     return PPCTargetMachine::PPC_ABI_UNKNOWN;
   }
 }
 
 static Reloc::Model getEffectiveRelocModel(const Triple &TT,
-                                           Optional<Reloc::Model> RM) {
-  assert((!TT.isOSAIX() || !RM.hasValue() || *RM == Reloc::PIC_) &&
+                                           std::optional<Reloc::Model> RM) {
+  assert((!TT.isOSAIX() || !RM || *RM == Reloc::PIC_) &&
          "Invalid relocation model for AIX.");
 
-  if (RM.hasValue())
+  if (RM)
     return *RM;
 
   // Big Endian PPC and AIX default to PIC.
@@ -239,9 +273,9 @@ static Reloc::Model getEffectiveRelocModel(const Triple &TT,
   return Reloc::Static;
 }
 
-static CodeModel::Model getEffectivePPCCodeModel(const Triple &TT,
-                                                 Optional<CodeModel::Model> CM,
-                                                 bool JIT) {
+static CodeModel::Model
+getEffectivePPCCodeModel(const Triple &TT, std::optional<CodeModel::Model> CM,
+                         bool JIT) {
   if (CM) {
     if (*CM == CodeModel::Tiny)
       report_fatal_error("Target does not support the tiny CodeModel", false);
@@ -303,15 +337,16 @@ static ScheduleDAGInstrs *createPPCPostMachineScheduler(
 PPCTargetMachine::PPCTargetMachine(const Target &T, const Triple &TT,
                                    StringRef CPU, StringRef FS,
                                    const TargetOptions &Options,
-                                   Optional<Reloc::Model> RM,
-                                   Optional<CodeModel::Model> CM,
+                                   std::optional<Reloc::Model> RM,
+                                   std::optional<CodeModel::Model> CM,
                                    CodeGenOpt::Level OL, bool JIT)
     : LLVMTargetMachine(T, getDataLayoutString(TT), TT, CPU,
                         computeFSAdditions(FS, OL, TT), Options,
                         getEffectiveRelocModel(TT, RM),
                         getEffectivePPCCodeModel(TT, CM, JIT), OL),
       TLOF(createTLOF(getTargetTriple())),
-      TargetABI(computeTargetABI(TT, Options)) {
+      TargetABI(computeTargetABI(TT, Options)),
+      Endianness(isLittleEndianTriple(TT) ? Endian::LITTLE : Endian::BIG) {
   initAsmInfo();
 }
 
@@ -320,10 +355,13 @@ PPCTargetMachine::~PPCTargetMachine() = default;
 const PPCSubtarget *
 PPCTargetMachine::getSubtargetImpl(const Function &F) const {
   Attribute CPUAttr = F.getFnAttribute("target-cpu");
+  Attribute TuneAttr = F.getFnAttribute("tune-cpu");
   Attribute FSAttr = F.getFnAttribute("target-features");
 
   std::string CPU =
       CPUAttr.isValid() ? CPUAttr.getValueAsString().str() : TargetCPU;
+  std::string TuneCPU =
+      TuneAttr.isValid() ? TuneAttr.getValueAsString().str() : CPU;
   std::string FS =
       FSAttr.isValid() ? FSAttr.getValueAsString().str() : TargetFS;
 
@@ -332,21 +370,20 @@ PPCTargetMachine::getSubtargetImpl(const Function &F) const {
   // function before we can generate a subtarget. We also need to use
   // it as a key for the subtarget since that can be the only difference
   // between two functions.
-  bool SoftFloat =
-      F.getFnAttribute("use-soft-float").getValueAsString() == "true";
+  bool SoftFloat = F.getFnAttribute("use-soft-float").getValueAsBool();
   // If the soft float attribute is set on the function turn on the soft float
   // subtarget feature.
   if (SoftFloat)
     FS += FS.empty() ? "-hard-float" : ",-hard-float";
 
-  auto &I = SubtargetMap[CPU + FS];
+  auto &I = SubtargetMap[CPU + TuneCPU + FS];
   if (!I) {
     // This needs to be done before we create a new subtarget since any
     // creation will depend on the TM and the code generation flags on the
     // function that reside in TargetOptions.
     resetTargetOptions(F);
     I = std::make_unique<PPCSubtarget>(
-        TargetTriple, CPU,
+        TargetTriple, CPU, TuneCPU,
         // FIXME: It would be good to have the subtarget additions here
         // not necessary. Anything that turns them on/off (overrides) ends
         // up being put at the end of the feature string, but the defaults
@@ -387,6 +424,7 @@ public:
   void addPreRegAlloc() override;
   void addPreSched2() override;
   void addPreEmitPass() override;
+  void addPreEmitPass2() override;
   // GlobalISEL
   bool addIRTranslator() override;
   bool addLegalizeMachineIR() override;
@@ -417,6 +455,14 @@ void PPCPassConfig::addIRPasses() {
   // Lower generic MASSV routines to PowerPC subtarget-specific entries.
   addPass(createPPCLowerMASSVEntriesPass());
 
+  // Generate PowerPC target-specific entries for scalar math functions
+  // that are available in IBM MASS (scalar) library.
+  if (TM->getOptLevel() == CodeGenOpt::Aggressive &&
+      EnablePPCGenScalarMASSEntries) {
+    TM->Options.PPCGenScalarMASSEntries = EnablePPCGenScalarMASSEntries;
+    addPass(createPPCGenScalarMASSEntriesPass());
+  }
+
   // If explicitly requested, add explicit data prefetch intrinsics.
   if (EnablePrefetch.getNumOccurrences() > 0)
     addPass(createLoopDataPrefetchPass());
@@ -442,7 +488,7 @@ bool PPCPassConfig::addPreISel() {
     addPass(createPPCLoopInstrFormPrepPass(getPPCTargetMachine()));
 
   if (!DisableCTRLoops && getOptLevel() != CodeGenOpt::None)
-    addPass(createHardwareLoopsPass());
+    addPass(createHardwareLoopsLegacyPass());
 
   return false;
 }
@@ -470,6 +516,11 @@ bool PPCPassConfig::addInstSelector() {
 }
 
 void PPCPassConfig::addMachineSSAOptimization() {
+  // Run CTR loops pass before any cfg modification pass to prevent the
+  // canonical form of hardware loop from being destroied.
+  if (!DisableCTRLoops && getOptLevel() != CodeGenOpt::None)
+    addPass(createPPCCTRLoopsPass());
+
   // PPCBranchCoalescingPass need to be done before machine sinking
   // since it merges empty blocks.
   if (EnableBranchCoalescing && getOptLevel() != CodeGenOpt::None)
@@ -525,13 +576,32 @@ void PPCPassConfig::addPreEmitPass() {
 
   if (getOptLevel() != CodeGenOpt::None)
     addPass(createPPCEarlyReturnPass());
+}
+
+void PPCPassConfig::addPreEmitPass2() {
+  // Schedule the expansion of AMOs at the last possible moment, avoiding the
+  // possibility for other passes to break the requirements for forward
+  // progress in the LL/SC block.
+  addPass(createPPCExpandAtomicPseudoPass());
   // Must run branch selection immediately preceding the asm printer.
   addPass(createPPCBranchSelectionPass());
 }
 
 TargetTransformInfo
-PPCTargetMachine::getTargetTransformInfo(const Function &F) {
+PPCTargetMachine::getTargetTransformInfo(const Function &F) const {
   return TargetTransformInfo(PPCTTIImpl(this, F));
+}
+
+bool PPCTargetMachine::isLittleEndian() const {
+  assert(Endianness != Endian::NOT_DETECTED &&
+         "Unable to determine endianness");
+  return Endianness == Endian::LITTLE;
+}
+
+MachineFunctionInfo *PPCTargetMachine::createMachineFunctionInfo(
+    BumpPtrAllocator &Allocator, const Function &F,
+    const TargetSubtargetInfo *STI) const {
+  return PPCFunctionInfo::create<PPCFunctionInfo>(Allocator, F, STI);
 }
 
 static MachineSchedRegistry
@@ -561,6 +631,6 @@ bool PPCPassConfig::addRegBankSelect() {
 }
 
 bool PPCPassConfig::addGlobalInstructionSelect() {
-  addPass(new InstructionSelect());
+  addPass(new InstructionSelect(getOptLevel()));
   return false;
 }

@@ -54,10 +54,10 @@ public:
   CrossWindowsToolChain(const Driver &D, const llvm::Triple &T,
                         const llvm::opt::ArgList &Args);
 
-  bool IsIntegratedAssemblerDefault() const override { return true; }
-  bool IsUnwindTablesDefault(const llvm::opt::ArgList &Args) const override;
+  UnwindTableLevel
+  getDefaultUnwindTableLevel(const llvm::opt::ArgList &Args) const override;
   bool isPICDefault() const override;
-  bool isPIEDefault() const override;
+  bool isPIEDefault(const llvm::opt::ArgList &Args) const override;
   bool isPICDefaultForced() const override;
 
   LangOptions::StackProtectorMode

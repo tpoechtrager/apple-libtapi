@@ -13,5 +13,6 @@ add_tapi_library(tapiFrontend
 
   LINK_LIBS
   clangFrontend
+  clangIndex
   tapiDiagnostics
   )

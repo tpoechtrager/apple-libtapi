@@ -9,8 +9,8 @@
 #include "MSP430.h"
 #include "CommonArgs.h"
 #include "Gnu.h"
-#include "InputInfo.h"
 #include "clang/Driver/Compilation.h"
+#include "clang/Driver/InputInfo.h"
 #include "clang/Driver/Multilib.h"
 #include "clang/Driver/Options.h"
 #include "llvm/Option/ArgList.h"
@@ -101,7 +101,7 @@ void msp430::getMSP430TargetFeatures(const Driver &D, const ArgList &Args,
     Features.push_back("+hwmultf5");
   } else {
     D.Diag(clang::diag::err_drv_unsupported_option_argument)
-        << HWMultArg->getAsString(Args) << HWMult;
+        << HWMultArg->getSpelling() << HWMult;
   }
 }
 
@@ -280,7 +280,6 @@ void msp430::Linker::ConstructJob(Compilation &C, const JobAction &JA,
     CmdArgs.push_back("--gc-sections");
 
   Args.AddAllArgs(CmdArgs, {
-                               options::OPT_e,
                                options::OPT_n,
                                options::OPT_s,
                                options::OPT_t,

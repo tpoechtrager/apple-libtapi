@@ -15,18 +15,27 @@
 
 #include "clang-c/Index.h"
 #include "clang/Basic/LLVM.h"
-#include <memory>
-#include <vector>
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/StringRef.h"
 #include <assert.h>
+#include <memory>
+#include <optional>
+#include <vector>
 
 namespace clang {
 
 class LangOptions;
 class StoredDiagnostic;
 class CXDiagnosticImpl;
-  
+
 class CXDiagnosticSetImpl {
+  struct CXSourceFileContents {
+    StringRef Contents;
+    CXSourceRange OriginalSourceRange;
+  };
+
   std::vector<std::unique_ptr<CXDiagnosticImpl>> Diagnostics;
+  llvm::DenseMap<CXFile, CXSourceFileContents> FileContents;
   const bool IsExternallyManaged;
 public:
   CXDiagnosticSetImpl(bool isManaged = false)
@@ -44,6 +53,19 @@ public:
   }
 
   void appendDiagnostic(std::unique_ptr<CXDiagnosticImpl> D);
+
+  void recordSourceFileContents(
+      CXFile file, StringRef contents, CXSourceRange originalSourceRange);
+
+  std::optional<StringRef> getSourceFileContents(
+      CXFile file, CXSourceRange &originalSourceRange) {
+    auto found = FileContents.find(file);
+    if (found == FileContents.end())
+      return std::nullopt;
+
+    originalSourceRange = found->second.OriginalSourceRange;
+    return found->second.Contents;
+  }
 
   bool empty() const {
     return Diagnostics.empty();

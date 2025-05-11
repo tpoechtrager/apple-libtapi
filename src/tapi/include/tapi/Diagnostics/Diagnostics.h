@@ -1,15 +1,15 @@
 //===--- Diagnostic.h - TAPI Diagnostics Handling ---------------*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 
 #ifndef TAPI_CORE_DIAGNOSTIC_H
 #define TAPI_CORE_DIAGNOSTIC_H
 
+#include "tapi/Core/APICommon.h"
 #include "tapi/Core/LLVM.h"
 #include "tapi/Defines.h"
 #include "clang/Basic/Diagnostic.h"
@@ -30,8 +30,8 @@ using Severity = clang::diag::Severity;
 
 enum {
   DIAG_START_TAPI = clang::diag::DIAG_UPPER_LIMIT,
-#define DIAG(ENUM, FLAGS, DEFAULT_MAPPING, DESC, GROUP, SFINAE, CATEGORY,      \
-             NOWERROR, SHOWINSYSHEADER, DEFERRABLE)                                        \
+#define DIAG(ENUM, FLAGS, DEFAULT_MAPPING, DESC, GROUP, SFINAE, NOWERROR,      \
+             SHOWINSYSHEADER, SHOWINSYSMACRO, DEFERRABLE, CATEGORY)            \
   ENUM,
 #include "tapi/Diagnostics/DiagnosticTAPIKinds.inc"
 #undef DIAG
@@ -50,9 +50,11 @@ public:
   ~DiagnosticsEngine();
   void operator=(const DiagnosticsEngine &) = delete;
 
-  clang::DiagnosticBuilder report(unsigned diagID) {
-    return report(clang::SourceLocation(), diagID);
+  clang::DiagnosticBuilder
+  report(unsigned diagID, clang::SourceLocation loc = clang::SourceLocation()) {
+    return report(loc, diagID);
   }
+  clang::DiagnosticBuilder report(unsigned diagID, const APILoc &loc);
   clang::DiagnosticBuilder report(clang::SourceLocation loc, unsigned diagID);
   void setWarningsAsErrors(bool value) { warningsAsErrors = value; }
   void setErrorLimit(unsigned value) { diag->setErrorLimit(value); }
@@ -60,7 +62,8 @@ public:
 
   void setupLogDiagnostics(raw_ostream &os,
                            std::unique_ptr<raw_ostream> streamOwner);
-  void setupDiagnosticsFile(StringRef output);
+
+  void setupDiagnosticsFile(StringRef output, bool serialize = false);
 
   void setSourceManager(clang::SourceManager *sourceMgr) {
     diag->setSourceManager(sourceMgr);
@@ -100,6 +103,9 @@ private:
   clang::LangOptions langOpts;
   bool warningsAsErrors = false;
   llvm::DenseMap<unsigned, clang::DiagnosticIDs::Level> diagLevelMap;
+
+  void setupSerializedDiagnostics(StringRef output,
+                                  std::unique_ptr<raw_ostream> streamOwner);
 };
 
 TAPI_NAMESPACE_INTERNAL_END

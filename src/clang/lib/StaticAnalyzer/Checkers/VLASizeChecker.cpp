@@ -13,17 +13,18 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "Taint.h"
 #include "clang/AST/CharUnits.h"
 #include "clang/StaticAnalyzer/Checkers/BuiltinCheckerRegistration.h"
+#include "clang/StaticAnalyzer/Checkers/Taint.h"
 #include "clang/StaticAnalyzer/Core/BugReporter/BugType.h"
 #include "clang/StaticAnalyzer/Core/Checker.h"
 #include "clang/StaticAnalyzer/Core/CheckerManager.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/CheckerContext.h"
-#include "clang/StaticAnalyzer/Core/PathSensitive/DynamicSize.h"
+#include "clang/StaticAnalyzer/Core/PathSensitive/DynamicExtent.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/Support/raw_ostream.h"
+#include <optional>
 
 using namespace clang;
 using namespace ento;
@@ -34,13 +35,8 @@ class VLASizeChecker
     : public Checker<check::PreStmt<DeclStmt>,
                      check::PreStmt<UnaryExprOrTypeTraitExpr>> {
   mutable std::unique_ptr<BugType> BT;
-  enum VLASize_Kind {
-    VLA_Garbage,
-    VLA_Zero,
-    VLA_Tainted,
-    VLA_Negative,
-    VLA_Overflow
-  };
+  mutable std::unique_ptr<BugType> TaintBT;
+  enum VLASize_Kind { VLA_Garbage, VLA_Zero, VLA_Negative, VLA_Overflow };
 
   /// Check a VLA for validity.
   /// Every dimension of the array and the total size is checked for validity.
@@ -54,8 +50,10 @@ class VLASizeChecker
                                     const Expr *SizeE) const;
 
   void reportBug(VLASize_Kind Kind, const Expr *SizeE, ProgramStateRef State,
-                 CheckerContext &C,
-                 std::unique_ptr<BugReporterVisitor> Visitor = nullptr) const;
+                 CheckerContext &C) const;
+
+  void reportTaintBug(const Expr *SizeE, ProgramStateRef State,
+                      CheckerContext &C, SVal TaintedSVal) const;
 
 public:
   void checkPreStmt(const DeclStmt *DS, CheckerContext &C) const;
@@ -166,8 +164,7 @@ ProgramStateRef VLASizeChecker::checkVLAIndexSize(CheckerContext &C,
 
   // Check if the size is tainted.
   if (isTainted(State, SizeV)) {
-    reportBug(VLA_Tainted, SizeE, nullptr, C,
-              std::make_unique<TaintBugVisitor>(SizeV));
+    reportTaintBug(SizeE, State, C, SizeV);
     return nullptr;
   }
 
@@ -192,7 +189,7 @@ ProgramStateRef VLASizeChecker::checkVLAIndexSize(CheckerContext &C,
   DefinedOrUnknownSVal Zero = SVB.makeZeroVal(SizeTy);
 
   SVal LessThanZeroVal = SVB.evalBinOp(State, BO_LT, SizeD, Zero, SizeTy);
-  if (Optional<DefinedSVal> LessThanZeroDVal =
+  if (std::optional<DefinedSVal> LessThanZeroDVal =
           LessThanZeroVal.getAs<DefinedSVal>()) {
     ConstraintManager &CM = C.getConstraintManager();
     ProgramStateRef StatePos, StateNeg;
@@ -208,17 +205,44 @@ ProgramStateRef VLASizeChecker::checkVLAIndexSize(CheckerContext &C,
   return State;
 }
 
-void VLASizeChecker::reportBug(
-    VLASize_Kind Kind, const Expr *SizeE, ProgramStateRef State,
-    CheckerContext &C, std::unique_ptr<BugReporterVisitor> Visitor) const {
+void VLASizeChecker::reportTaintBug(const Expr *SizeE, ProgramStateRef State,
+                                    CheckerContext &C, SVal TaintedSVal) const {
+  // Generate an error node.
+  ExplodedNode *N = C.generateErrorNode(State);
+  if (!N)
+    return;
+
+  if (!TaintBT)
+    TaintBT.reset(
+        new BugType(this, "Dangerous variable-length array (VLA) declaration",
+                    categories::TaintedData));
+
+  SmallString<256> buf;
+  llvm::raw_svector_ostream os(buf);
+  os << "Declared variable-length array (VLA) ";
+  os << "has tainted size";
+
+  auto report = std::make_unique<PathSensitiveBugReport>(*TaintBT, os.str(), N);
+  report->addRange(SizeE->getSourceRange());
+  bugreporter::trackExpressionValue(N, SizeE, *report);
+  // The vla size may be a complex expression where multiple memory locations
+  // are tainted.
+  for (auto Sym : getTaintedSymbols(State, TaintedSVal))
+    report->markInteresting(Sym);
+  C.emitReport(std::move(report));
+}
+
+void VLASizeChecker::reportBug(VLASize_Kind Kind, const Expr *SizeE,
+                               ProgramStateRef State, CheckerContext &C) const {
   // Generate an error node.
   ExplodedNode *N = C.generateErrorNode(State);
   if (!N)
     return;
 
   if (!BT)
-    BT.reset(new BuiltinBug(
-        this, "Dangerous variable-length array (VLA) declaration"));
+    BT.reset(new BugType(this,
+                         "Dangerous variable-length array (VLA) declaration",
+                         categories::LogicError));
 
   SmallString<256> buf;
   llvm::raw_svector_ostream os(buf);
@@ -230,9 +254,6 @@ void VLASizeChecker::reportBug(
   case VLA_Zero:
     os << "has zero size";
     break;
-  case VLA_Tainted:
-    os << "has tainted size";
-    break;
   case VLA_Negative:
     os << "has negative size";
     break;
@@ -242,7 +263,6 @@ void VLASizeChecker::reportBug(
   }
 
   auto report = std::make_unique<PathSensitiveBugReport>(*BT, os.str(), N);
-  report->addVisitor(std::move(Visitor));
   report->addRange(SizeE->getSourceRange());
   bugreporter::trackExpressionValue(N, SizeE, *report);
   C.emitReport(std::move(report));
@@ -278,28 +298,17 @@ void VLASizeChecker::checkPreStmt(const DeclStmt *DS, CheckerContext &C) const {
   if (!State)
     return;
 
-  auto ArraySizeNL = ArraySize.getAs<NonLoc>();
-  if (!ArraySizeNL) {
+  if (!isa<NonLoc>(ArraySize)) {
     // Array size could not be determined but state may contain new assumptions.
     C.addTransition(State);
     return;
   }
 
-  // VLASizeChecker is responsible for defining the extent of the array being
-  // declared. We do this by multiplying the array length by the element size,
-  // then matching that with the array region's extent symbol.
-
+  // VLASizeChecker is responsible for defining the extent of the array.
   if (VD) {
-    // Assume that the array's size matches the region size.
-    const LocationContext *LC = C.getLocationContext();
-    DefinedOrUnknownSVal DynSize =
-        getDynamicSize(State, State->getRegion(VD, LC), SVB);
-
-    DefinedOrUnknownSVal SizeIsKnown = SVB.evalEQ(State, DynSize, *ArraySizeNL);
-    State = State->assume(SizeIsKnown, true);
-
-    // Assume should not fail at this point.
-    assert(State);
+    State =
+        setDynamicExtent(State, State->getRegion(VD, C.getLocationContext()),
+                         ArraySize.castAs<NonLoc>(), SVB);
   }
 
   // Remember our assumptions!

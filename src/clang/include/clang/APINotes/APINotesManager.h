@@ -1,9 +1,8 @@
 //===--- APINotesManager.h - Manage API Notes Files -------------*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -47,8 +46,7 @@ class APINotesReader;
 /// operation is \c findAPINotes(), which finds the API notes reader that
 /// provides information about the declarations at that location.
 class APINotesManager {
-  typedef llvm::PointerUnion<const DirectoryEntry *, APINotesReader *>
-    ReaderEntry;
+  using ReaderEntry = llvm::PointerUnion<DirectoryEntryRef, APINotesReader *>;
 
   SourceManager &SourceMgr;
 
@@ -78,6 +76,13 @@ class APINotesManager {
   /// a failure.
   std::unique_ptr<APINotesReader> loadAPINotes(const FileEntry *apiNotesFile);
 
+  /// Load the API notes associated with the given buffer, whether it is
+  /// the binary or source form of API notes.
+  ///
+  /// \returns the API notes reader for this file, or null if there is
+  /// a failure.
+  std::unique_ptr<APINotesReader> loadAPINotes(StringRef Buffer);
+
   /// Load the given API notes file for the given header directory.
   ///
   /// \param HeaderDir The directory at which we
@@ -89,9 +94,8 @@ class APINotesManager {
   /// Look for API notes in the given directory.
   ///
   /// This might find either a binary or source API notes.
-  const FileEntry *findAPINotesFile(const DirectoryEntry *directory,
-                                    StringRef filename,
-                                    bool wantPublic = true);
+  const FileEntry *findAPINotesFile(DirectoryEntryRef directory,
+                                    StringRef filename, bool wantPublic = true);
 
   /// Attempt to load API notes for the given framework.
   ///
@@ -102,9 +106,9 @@ class APINotesManager {
   /// \returns the header directory entry (e.g., for Headers or PrivateHeaders)
   /// for which the API notes were successfully loaded, or NULL if API notes
   /// could not be loaded for any reason.
-  const DirectoryEntry *loadFrameworkAPINotes(llvm::StringRef FrameworkPath,
-                                              llvm::StringRef FrameworkName,
-                                              bool Public);
+  OptionalDirectoryEntryRef loadFrameworkAPINotes(llvm::StringRef FrameworkPath,
+                                                  llvm::StringRef FrameworkName,
+                                                  bool Public);
 
 public:
   APINotesManager(SourceManager &sourceMgr, const LangOptions &langOpts);
@@ -127,11 +131,30 @@ public:
                                  bool lookInModule,
                                  ArrayRef<std::string> searchPaths);
 
+  /// Get FileEntry for the APINotes of the current module.
+  ///
+  /// \param module The current module.
+  /// \param lookInModule Whether to look inside the module itself.
+  /// \param searchPaths The paths in which we should search for API notes
+  /// for the current module.
+  ///
+  /// \returns a vector of FileEntry where APINotes files are.
+  llvm::SmallVector<const FileEntry *, 2>
+  getCurrentModuleAPINotes(Module *module, bool lookInModule,
+                           ArrayRef<std::string> searchPaths);
+
+  /// Load Compiled API notes for current module.
+  ///
+  /// \param Buffers Array of compiled API notes.
+  ///
+  /// \returns true if API notes were successfully loaded, \c false otherwise.
+  bool loadCurrentModuleAPINotesFromBuffer(ArrayRef<StringRef> Buffers);
+
   /// Retrieve the set of API notes readers for the current module.
   ArrayRef<APINotesReader *> getCurrentModuleReaders() const {
     unsigned numReaders = static_cast<unsigned>(CurrentModuleReaders[0] != nullptr) +
       static_cast<unsigned>(CurrentModuleReaders[1] != nullptr);
-    return llvm::makeArrayRef(CurrentModuleReaders).slice(0, numReaders);
+    return ArrayRef(CurrentModuleReaders).slice(0, numReaders);
   }
 
   /// Find the API notes readers that correspond to the given source location.

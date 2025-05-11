@@ -21,25 +21,24 @@
 #include "CodeGenDAGPatterns.h"
 #include "CodeGenInstruction.h"
 #include "CodeGenTarget.h"
-#include "TableGenBackends.h"
 #include "llvm/TableGen/Record.h"
+#include "llvm/TableGen/TableGenBackend.h"
 #include <string>
 #include <vector>
 
 using namespace llvm;
 
-namespace llvm {
-
-void writeTitle(StringRef Str, raw_ostream &OS, char Kind = '-') {
-  OS << std::string(Str.size(), Kind) << "\n" << Str << "\n"
+static void writeTitle(StringRef Str, raw_ostream &OS, char Kind = '-') {
+  OS << std::string(Str.size(), Kind) << "\n"
+     << Str << "\n"
      << std::string(Str.size(), Kind) << "\n";
 }
 
-void writeHeader(StringRef Str, raw_ostream &OS, char Kind = '-') {
+static void writeHeader(StringRef Str, raw_ostream &OS, char Kind = '-') {
   OS << Str << "\n" << std::string(Str.size(), Kind) << "\n";
 }
 
-std::string escapeForRST(StringRef Str) {
+static std::string escapeForRST(StringRef Str) {
   std::string Result;
   Result.reserve(Str.size() + 4);
   for (char C : Str) {
@@ -55,7 +54,7 @@ std::string escapeForRST(StringRef Str) {
   return Result;
 }
 
-void EmitInstrDocs(RecordKeeper &RK, raw_ostream &OS) {
+static void EmitInstrDocs(RecordKeeper &RK, raw_ostream &OS) {
   CodeGenDAGPatterns CDP(RK);
   CodeGenTarget &Target = CDP.getTargetInfo();
   unsigned VariantCount = Target.getAsmParserVariantCount();
@@ -141,13 +140,9 @@ void EmitInstrDocs(RecordKeeper &RK, raw_ostream &OS) {
     FLAG(isAuthenticated)
     if (!FlagStrings.empty()) {
       OS << "Flags: ";
-      bool IsFirst = true;
-      for (auto FlagString : FlagStrings) {
-        if (!IsFirst)
-          OS << ", ";
-        OS << "``" << FlagString << "``";
-        IsFirst = false;
-      }
+      ListSeparator LS;
+      for (auto FlagString : FlagStrings)
+        OS << LS << "``" << FlagString << "``";
       OS << "\n\n";
     }
 
@@ -192,26 +187,18 @@ void EmitInstrDocs(RecordKeeper &RK, raw_ostream &OS) {
     // Implicit definitions.
     if (!II->ImplicitDefs.empty()) {
       OS << "Implicit defs: ";
-      bool IsFirst = true;
-      for (Record *Def : II->ImplicitDefs) {
-        if (!IsFirst)
-          OS << ", ";
-        OS << "``" << Def->getName() << "``";
-        IsFirst = false;
-      }
+      ListSeparator LS;
+      for (Record *Def : II->ImplicitDefs)
+        OS << LS << "``" << Def->getName() << "``";
       OS << "\n\n";
     }
 
     // Implicit uses.
     if (!II->ImplicitUses.empty()) {
       OS << "Implicit uses: ";
-      bool IsFirst = true;
-      for (Record *Use : II->ImplicitUses) {
-        if (!IsFirst)
-          OS << ", ";
-        OS << "``" << Use->getName() << "``";
-        IsFirst = false;
-      }
+      ListSeparator LS;
+      for (Record *Use : II->ImplicitUses)
+        OS << LS << "``" << Use->getName() << "``";
       OS << "\n\n";
     }
 
@@ -220,16 +207,13 @@ void EmitInstrDocs(RecordKeeper &RK, raw_ostream &OS) {
         II->TheDef->getValueAsListOfDefs("Predicates");
     if (!Predicates.empty()) {
       OS << "Predicates: ";
-      bool IsFirst = true;
-      for (Record *P : Predicates) {
-        if (!IsFirst)
-          OS << ", ";
-        OS << "``" << P->getName() << "``";
-        IsFirst = false;
-      }
+      ListSeparator LS;
+      for (Record *P : Predicates)
+        OS << LS << "``" << P->getName() << "``";
       OS << "\n\n";
     }
   }
 }
 
-} // end namespace llvm
+static TableGen::Emitter::Opt X("gen-instr-docs", EmitInstrDocs,
+                                "Generate instruction documentation");

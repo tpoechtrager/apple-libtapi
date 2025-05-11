@@ -13,30 +13,16 @@
 #include "clang-c/Driver.h"
 
 #include "CIndexDiagnostic.h"
+#include "CXDiagnosticSetDiagnosticConsumer.h"
 
 #include "clang/Driver/Compilation.h"
 #include "clang/Driver/Driver.h"
 #include "clang/Driver/DriverDiagnostic.h"
 #include "clang/Frontend/CompilerInstance.h"
 #include "llvm/ADT/ArrayRef.h"
-#include "llvm/Support/Host.h"
+#include "llvm/TargetParser/Host.h"
 
 using namespace clang;
-
-class CXDiagnosticSetDiagnosticConsumer : public DiagnosticConsumer {
-  SmallVector<StoredDiagnostic, 4> Errors;
-public:
-
-  void HandleDiagnostic(DiagnosticsEngine::Level level,
-  const Diagnostic &Info) override {
-    if (level >= DiagnosticsEngine::Error)
-      Errors.push_back(StoredDiagnostic(level, Info));
-  }
-
-  CXDiagnosticSet getDiagnosticSet() {
-    return cxdiag::createStoredDiags(Errors, LangOptions());
-  }
-};
 
 CXExternalActionList *
 clang_Driver_getExternalActionsForCommand_v0(int ArgC, const char **ArgV,
@@ -55,7 +41,8 @@ clang_Driver_getExternalActionsForCommand_v0(int ArgC, const char **ArgV,
     return nullptr;
 
   CXDiagnosticSetDiagnosticConsumer DiagConsumer;
-  auto Diags = CompilerInstance::createDiagnostics(new DiagnosticOptions,
+  auto DiagOpts = CreateAndPopulateDiagOpts(ArrayRef(ArgV, ArgC));
+  auto Diags = CompilerInstance::createDiagnostics(DiagOpts.release(),
                                                    &DiagConsumer, false);
 
   // Use createPhysicalFileSystem instead of getRealFileSystem so that
@@ -77,8 +64,8 @@ clang_Driver_getExternalActionsForCommand_v0(int ArgC, const char **ArgV,
                            VFS.release());
   TheDriver.setCheckInputsExist(false);
   std::unique_ptr<driver::Compilation> C(
-      TheDriver.BuildCompilation(llvm::makeArrayRef(ArgV, ArgC)));
-  if (!C) {
+      TheDriver.BuildCompilation(ArrayRef(ArgV, ArgC)));
+  if (!C || Diags->hasErrorOccurred()) {
     if (OutDiags)
       *OutDiags = DiagConsumer.getDiagnosticSet();
     return nullptr;

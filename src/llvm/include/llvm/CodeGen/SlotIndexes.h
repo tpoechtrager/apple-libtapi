@@ -28,7 +28,6 @@
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/CodeGen/MachineInstrBundle.h"
-#include "llvm/Pass.h"
 #include "llvm/Support/Allocator.h"
 #include <algorithm>
 #include <cassert>
@@ -109,9 +108,6 @@ class raw_ostream;
 
     PointerIntPair<IndexListEntry*, 2, unsigned> lie;
 
-    SlotIndex(IndexListEntry *entry, unsigned slot)
-      : lie(entry, slot) {}
-
     IndexListEntry* listEntry() const {
       assert(isValid() && "Attempt to compare reserved index.");
 #ifdef EXPENSIVE_CHECKS
@@ -139,6 +135,11 @@ class raw_ostream;
 
     /// Construct an invalid index.
     SlotIndex() = default;
+
+    // Creates a SlotIndex from an IndexListEntry and a slot. Generally should
+    // not be used. This method is only public to facilitate writing certain
+    // unit tests.
+    SlotIndex(IndexListEntry *entry, unsigned slot) : lie(entry, slot) {}
 
     // Construct a new slot index from the given one, and set the slot.
     SlotIndex(const SlotIndex &li, Slot s) : lie(li.listEntry(), unsigned(s)) {
@@ -216,8 +217,12 @@ class raw_ostream;
     }
 
     /// Return the scaled distance from this index to the given one, where all
-    /// slots on the same instruction have zero distance.
-    int getInstrDistance(SlotIndex other) const {
+    /// slots on the same instruction have zero distance, assuming that the slot
+    /// indices are packed as densely as possible. There are normally gaps
+    /// between instructions, so this assumption often doesn't hold. This
+    /// results in this function often returning a value greater than the actual
+    /// instruction distance.
+    int getApproxInstrDistance(SlotIndex other) const {
       return (other.listEntry()->getIndex() - listEntry()->getIndex())
         / Slot_Count;
     }
@@ -319,7 +324,7 @@ class raw_ostream;
     using IndexList = ilist<IndexListEntry>;
     IndexList indexList;
 
-    MachineFunction *mf;
+    MachineFunction *mf = nullptr;
 
     using Mi2IndexMap = DenseMap<const MachineInstr *, SlotIndex>;
     Mi2IndexMap mi2iMap;
@@ -535,7 +540,7 @@ class raw_ostream;
     SlotIndex insertMachineInstrInMaps(MachineInstr &MI, bool Late = false) {
       assert(!MI.isInsideBundle() &&
              "Instructions inside bundles should use bundle start's slot.");
-      assert(mi2iMap.find(&MI) == mi2iMap.end() && "Instr already indexed.");
+      assert(!mi2iMap.contains(&MI) && "Instr already indexed.");
       // Numbering debug instructions could cause code generation to be
       // affected by debug information.
       assert(!MI.isDebugInstr() && "Cannot number debug instructions.");
@@ -604,38 +609,27 @@ class raw_ostream;
     }
 
     /// Add the given MachineBasicBlock into the maps.
-    /// If \p InsertionPoint is specified then the block will be placed
-    /// before the given machine instr, otherwise it will be placed
-    /// before the next block in MachineFunction insertion order.
-    void insertMBBInMaps(MachineBasicBlock *mbb,
-                         MachineInstr *InsertionPoint = nullptr) {
-      MachineFunction::iterator nextMBB =
-        std::next(MachineFunction::iterator(mbb));
+    /// If it contains any instructions then they must already be in the maps.
+    /// This is used after a block has been split by moving some suffix of its
+    /// instructions into a newly created block.
+    void insertMBBInMaps(MachineBasicBlock *mbb) {
+      assert(mbb != &mbb->getParent()->front() &&
+             "Can't insert a new block at the beginning of a function.");
+      auto prevMBB = std::prev(MachineFunction::iterator(mbb));
 
-      IndexListEntry *startEntry = nullptr;
-      IndexListEntry *endEntry = nullptr;
-      IndexList::iterator newItr;
-      if (InsertionPoint) {
-        startEntry = createEntry(nullptr, 0);
-        endEntry = getInstructionIndex(*InsertionPoint).listEntry();
-        newItr = indexList.insert(endEntry->getIterator(), startEntry);
-      } else if (nextMBB == mbb->getParent()->end()) {
-        startEntry = &indexList.back();
-        endEntry = createEntry(nullptr, 0);
-        newItr = indexList.insertAfter(startEntry->getIterator(), endEntry);
-      } else {
-        startEntry = createEntry(nullptr, 0);
-        endEntry = getMBBStartIdx(&*nextMBB).listEntry();
-        newItr = indexList.insert(endEntry->getIterator(), startEntry);
-      }
+      // Create a new entry to be used for the start of mbb and the end of
+      // prevMBB.
+      IndexListEntry *startEntry = createEntry(nullptr, 0);
+      IndexListEntry *endEntry = getMBBEndIdx(&*prevMBB).listEntry();
+      IndexListEntry *insEntry =
+          mbb->empty() ? endEntry
+                       : getInstructionIndex(mbb->front()).listEntry();
+      IndexList::iterator newItr =
+          indexList.insert(insEntry->getIterator(), startEntry);
 
       SlotIndex startIdx(startEntry, SlotIndex::Slot_Block);
       SlotIndex endIdx(endEntry, SlotIndex::Slot_Block);
 
-      MachineFunction::iterator prevMBB(mbb);
-      assert(prevMBB != mbb->getParent()->end() &&
-             "Can't insert a new block at the beginning of a function.");
-      --prevMBB;
       MBBRanges[prevMBB->getNumber()].second = startIdx;
 
       assert(unsigned(mbb->getNumber()) == MBBRanges.size() &&

@@ -1,9 +1,8 @@
 //===- lib/Driver/ArchiveDriver.cpp - TAPI Archive Driver -------*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 ///
@@ -12,16 +11,15 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "tapi/Core/InterfaceFileManager.h"
 #include "tapi/Core/Registry.h"
-#include "tapi/Core/TapiError.h"
-#include "tapi/Core/Utils.h"
 #include "tapi/Defines.h"
 #include "tapi/Diagnostics/Diagnostics.h"
 #include "tapi/Driver/Driver.h"
 #include "tapi/Driver/Options.h"
-#include "tapi/Driver/Snapshot.h"
 #include "clang/Driver/DriverDiagnostic.h"
-#include "llvm/TextAPI/MachO/Architecture.h"
+#include "llvm/TextAPI/Architecture.h"
+#include "llvm/TextAPI/TextAPIError.h"
 
 using namespace llvm;
 using namespace llvm::MachO;
@@ -31,6 +29,8 @@ TAPI_NAMESPACE_INTERNAL_BEGIN
 /// \brief Merge or thin text-based stub files.
 bool Driver::Archive::run(DiagnosticsEngine &diag, Options &opts) {
   auto &fm = opts.getFileManager();
+  const InterfaceFileManager manager(fm,
+                                     /*isVolatile=*/opts.tapiOptions.isBnI);
 
   // Handle input files.
   if (opts.driverOptions.inputs.empty()) {
@@ -69,6 +69,8 @@ bool Driver::Archive::run(DiagnosticsEngine &diag, Options &opts) {
   Registry registry;
   registry.addYAMLReaders();
   registry.addYAMLWriters();
+  registry.addJSONReaders();
+  registry.addJSONWriters();
 
   std::vector<std::unique_ptr<InterfaceFile>> inputs;
   for (const auto &path : opts.driverOptions.inputs) {
@@ -78,14 +80,14 @@ bool Driver::Archive::run(DiagnosticsEngine &diag, Options &opts) {
       return false;
     }
 
-    auto file = registry.readFile(std::move(bufferOr.get()));
+    auto file = registry.readTextFile(std::move(bufferOr.get()));
     if (!file) {
       diag.report(diag::err_cannot_read_file)
           << path << toString(file.takeError());
       return false;
     }
 
-    if (file.get()->getFileType() != FileType::TBD) {
+    if (file.get()->getFileType() == FileType::Invalid) {
       diag.report(diag::err_unsupported_file_type);
       return false;
     }
@@ -119,8 +121,8 @@ bool Driver::Archive::run(DiagnosticsEngine &diag, Options &opts) {
     auto file = inputs.front()->remove(opts.archiveOptions.arch);
     file = handleExpected(
         std::move(file), [&]() { return std::move(inputs.front()); },
-        [&](std::unique_ptr<TapiError> error) -> Error {
-          if (error->ec != TapiErrorCode::NoSuchArchitecture)
+        [&](std::unique_ptr<TextAPIError> error) -> Error {
+          if (error->EC != TextAPIErrorCode::NoSuchArchitecture)
             return Error(std::move(error));
           diag.report(diag::warn)
               << ("file doesn't have architecture '" +
@@ -161,29 +163,20 @@ bool Driver::Archive::run(DiagnosticsEngine &diag, Options &opts) {
     break;
   }
   case ArchiveAction::ListSymbols: {
-    assert(inputs.size() == 1 && "expecting exactly one input file");
-    // Only allow one architecture.
-    if (opts.frontendOptions.targets.size() > 1) {
-      diag.report(diag::err_one_target);
-      return false;
-    }
-    inputs.front()->printSymbols(
-        mapToArchitectureSet(opts.frontendOptions.targets));
+    llvm_unreachable("unimplemented");
     break;
   }
   }
 
   if (output) {
-    auto result = registry.writeFile(opts.driverOptions.outputPath,
-                                     output.get(), output.get()->getFileType());
+    auto result = manager.writeFile(opts.driverOptions.outputPath, output.get(),
+                                    output.get()->getFileType());
     if (result) {
       diag.report(diag::err_cannot_write_file)
           << opts.driverOptions.outputPath << toString(std::move(result));
       return false;
     }
   }
-  if (output)
-    globalSnapshot->recordFile(opts.driverOptions.outputPath);
 
   return true;
 }

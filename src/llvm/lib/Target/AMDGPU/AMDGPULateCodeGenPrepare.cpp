@@ -14,17 +14,14 @@
 
 #include "AMDGPU.h"
 #include "llvm/Analysis/AssumptionCache.h"
-#include "llvm/Analysis/LegacyDivergenceAnalysis.h"
+#include "llvm/Analysis/UniformityAnalysis.h"
 #include "llvm/Analysis/ValueTracking.h"
-#include "llvm/CodeGen/Passes.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/InstVisitor.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/KnownBits.h"
 #include "llvm/Transforms/Utils/Local.h"
-#include <cassert>
-#include <iterator>
 
 #define DEBUG_TYPE "amdgpu-late-codegenprepare"
 
@@ -49,7 +46,7 @@ class AMDGPULateCodeGenPrepare
   const DataLayout *DL = nullptr;
 
   AssumptionCache *AC = nullptr;
-  LegacyDivergenceAnalysis *DA = nullptr;
+  UniformityInfo *UA = nullptr;
 
 public:
   static char ID;
@@ -62,7 +59,7 @@ public:
 
   void getAnalysisUsage(AnalysisUsage &AU) const override {
     AU.addRequired<AssumptionCacheTracker>();
-    AU.addRequired<LegacyDivergenceAnalysis>();
+    AU.addRequired<UniformityInfoWrapperPass>();
     AU.setPreservesAll();
   }
 
@@ -94,14 +91,12 @@ bool AMDGPULateCodeGenPrepare::runOnFunction(Function &F) {
     return false;
 
   AC = &getAnalysis<AssumptionCacheTracker>().getAssumptionCache(F);
-  DA = &getAnalysis<LegacyDivergenceAnalysis>();
+  UA = &getAnalysis<UniformityInfoWrapperPass>().getUniformityInfo();
 
   bool Changed = false;
   for (auto &BB : F)
-    for (auto BI = BB.begin(), BE = BB.end(); BI != BE; /*EMPTY*/) {
-      Instruction *I = &*BI++;
-      Changed |= visit(*I);
-    }
+    for (Instruction &I : llvm::make_early_inc_range(BB))
+      Changed |= visit(I);
 
   return Changed;
 }
@@ -127,7 +122,7 @@ bool AMDGPULateCodeGenPrepare::canWidenScalarExtLoad(LoadInst &LI) const {
   if (LI.getAlign() < DL->getABITypeAlign(Ty))
     return false;
   // It should be uniform, i.e. a scalar load.
-  return DA->isUniform(&LI);
+  return UA->isUniform(&LI);
 }
 
 bool AMDGPULateCodeGenPrepare::visitLoadInst(LoadInst &LI) {
@@ -161,17 +156,15 @@ bool AMDGPULateCodeGenPrepare::visitLoadInst(LoadInst &LI) {
   IRBuilder<> IRB(&LI);
   IRB.SetCurrentDebugLocation(LI.getDebugLoc());
 
-  unsigned AS = LI.getPointerAddressSpace();
-  unsigned LdBits = DL->getTypeStoreSize(LI.getType()) * 8;
+  unsigned LdBits = DL->getTypeStoreSizeInBits(LI.getType());
   auto IntNTy = Type::getIntNTy(LI.getContext(), LdBits);
 
-  PointerType *Int32PtrTy = Type::getInt32PtrTy(LI.getContext(), AS);
-  PointerType *Int8PtrTy = Type::getInt8PtrTy(LI.getContext(), AS);
-  auto *NewPtr = IRB.CreateBitCast(
-      IRB.CreateConstGEP1_64(IRB.CreateBitCast(Base, Int8PtrTy),
-                             Offset - Adjust),
-      Int32PtrTy);
-  LoadInst *NewLd = IRB.CreateAlignedLoad(NewPtr, Align(4));
+  auto *NewPtr = IRB.CreateConstGEP1_64(
+      IRB.getInt8Ty(),
+      IRB.CreateAddrSpaceCast(Base, LI.getPointerOperand()->getType()),
+      Offset - Adjust);
+
+  LoadInst *NewLd = IRB.CreateAlignedLoad(IRB.getInt32Ty(), NewPtr, Align(4));
   NewLd->copyMetadata(LI);
   NewLd->setMetadata(LLVMContext::MD_range, nullptr);
 
@@ -187,7 +180,7 @@ bool AMDGPULateCodeGenPrepare::visitLoadInst(LoadInst &LI) {
 INITIALIZE_PASS_BEGIN(AMDGPULateCodeGenPrepare, DEBUG_TYPE,
                       "AMDGPU IR late optimizations", false, false)
 INITIALIZE_PASS_DEPENDENCY(AssumptionCacheTracker)
-INITIALIZE_PASS_DEPENDENCY(LegacyDivergenceAnalysis)
+INITIALIZE_PASS_DEPENDENCY(UniformityInfoWrapperPass)
 INITIALIZE_PASS_END(AMDGPULateCodeGenPrepare, DEBUG_TYPE,
                     "AMDGPU IR late optimizations", false, false)
 

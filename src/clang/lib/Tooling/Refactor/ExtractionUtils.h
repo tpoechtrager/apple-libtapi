@@ -1,9 +1,8 @@
 //===--- ExtractionUtils.h - Extraction helper functions ------------------===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 
@@ -24,7 +23,7 @@ namespace extract {
 
 /// Returns a good name for an extracted variable based on the declaration
 /// that's used in the given expression \p E.
-Optional<StringRef> nameForExtractedVariable(const Expr *E);
+std::optional<StringRef> nameForExtractedVariable(const Expr *E);
 
 /// Returns an appropriate location for a variable declaration that will be
 /// visible to all the given expressions.

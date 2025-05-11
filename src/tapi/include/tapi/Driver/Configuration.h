@@ -1,9 +1,8 @@
 //===- tapi/Driver/Configuration.h - Configuration --------------*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 ///
@@ -15,14 +14,14 @@
 #ifndef TAPI_CORE_CONFIGURATION_H
 #define TAPI_CORE_CONFIGURATION_H
 
-#include "tapi/Core/PackedVersion.h"
 #include "tapi/Core/Path.h"
 #include "tapi/Defines.h"
 #include "tapi/Driver/ConfigurationFile.h"
 #include "clang/Frontend/FrontendOptions.h"
 #include "llvm/ADT/StringRef.h"
-#include "llvm/ADT/Triple.h"
-#include "llvm/TextAPI/MachO/ArchitectureSet.h"
+#include "llvm/TargetParser/Triple.h"
+#include "llvm/TextAPI/ArchitectureSet.h"
+#include "llvm/TextAPI/PackedVersion.h"
 #include <map>
 #include <string>
 
@@ -75,6 +74,7 @@ public:
   void setRootPath(StringRef root) { rootPath = root.str(); }
 
   clang::Language getLanguage(StringRef path) const;
+  std::string getLanguageStd() const;
   std::vector<Macro> getMacros(StringRef path) const;
   PathSeq getIncludePaths(StringRef path) const;
   PathSeq getFrameworkPaths(StringRef path) const;
@@ -83,13 +83,19 @@ public:
   PathSeq getExcludedHeaders(StringRef path, HeaderType type) const;
   std::string getUmbrellaHeader(StringRef path, HeaderType type) const;
   bool isiOSMacProject() const;
+  bool isZipperedProject() const;
   bool isDriverKitProject() const {
     return isDriverKit;
   }
   bool useOverlay(StringRef path) const;
   bool useUmbrellaOnly() const;
+  bool useSplitHeaderDir() const;
   bool isPromotedToPublicDylib(StringRef installName) const;
-  PathSeq getMaskPaths() const;
+  bool scanPublicHeadersInSDKContentRoot() const;
+  bool ignoreExistingPartialSDKDBs() const;
+  PathSeq getSDKMaskPaths() const;
+  PathSeq getRootMaskPaths() const;
+  std::vector<std::string> getClangExtraArgs(StringRef path) const;
 
   void setProjectName(StringRef name) { projectName = name.str(); }
 

@@ -8,6 +8,7 @@
 
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/TypedPointerType.h"
 #include "gtest/gtest.h"
 using namespace llvm;
 
@@ -32,6 +33,27 @@ TEST(TypesTest, LayoutIdenticalEmptyStructs) {
   StructType *Foo = StructType::create(C, "Foo");
   StructType *Bar = StructType::create(C, "Bar");
   EXPECT_TRUE(Foo->isLayoutIdentical(Bar));
+}
+
+TEST(TypesTest, TargetExtType) {
+  LLVMContext Context;
+  Type *A = TargetExtType::get(Context, "typea");
+  Type *Aparam = TargetExtType::get(Context, "typea", {}, {0, 1});
+  Type *Aparam2 = TargetExtType::get(Context, "typea", {}, {0, 1});
+  // Opaque types with same parameters are identical...
+  EXPECT_EQ(Aparam, Aparam2);
+  // ... but just having the same name is not enough.
+  EXPECT_NE(A, Aparam);
+}
+
+TEST(TypedPointerType, PrintTest) {
+  std::string Buffer;
+  LLVMContext Context;
+  raw_string_ostream OS(Buffer);
+
+  Type *I8Ptr = TypedPointerType::get(Type::getInt8Ty(Context), 0);
+  I8Ptr->print(OS);
+  EXPECT_EQ(StringRef(Buffer), ("typedptr(i8, 0)"));
 }
 
 }  // end anonymous namespace

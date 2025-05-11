@@ -1,9 +1,8 @@
 //===--- FillInMissingMethodStubsFromAbstractClasses.cpp -  ---------------===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -57,12 +56,12 @@ clang::tooling::initiateFillInMissingMethodStubsFromAbstractClassesOperation(
     ASTSlice &Slice, ASTContext &Context, SourceLocation Location,
     SourceRange SelectionRange, bool CreateOperation) {
   auto SelectedDecl = Slice.innermostSelectedDecl(
-      llvm::makeArrayRef(Decl::CXXRecord), ASTSlice::InnermostDeclOnly);
+      ArrayRef(Decl::CXXRecord), ASTSlice::InnermostDeclOnly);
   if (!SelectedDecl)
-    return None;
+    return std::nullopt;
   const auto *Class = cast<CXXRecordDecl>(SelectedDecl->getDecl());
   if (Class->isUnion() || !Class->isThisDeclarationADefinition())
-    return None;
+    return std::nullopt;
   if (!hasAbstractBases(Class))
     return RefactoringOperationResult("The class has no abstract bases");
   if (!Class->isDependentType() && !Class->isAbstract())

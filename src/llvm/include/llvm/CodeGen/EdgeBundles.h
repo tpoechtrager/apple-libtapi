@@ -8,7 +8,7 @@
 //
 // The EdgeBundles analysis forms equivalence classes of CFG edges such that all
 // edges leaving a machine basic block are in the same bundle, and all edges
-// leaving a basic block are in the same bundle.
+// entering a machine basic block are in the same bundle.
 //
 //===----------------------------------------------------------------------===//
 
@@ -22,7 +22,7 @@
 namespace llvm {
 
 class EdgeBundles : public MachineFunctionPass {
-  const MachineFunction *MF;
+  const MachineFunction *MF = nullptr;
 
   /// EC - Each edge bundle is an equivalence class. The keys are:
   ///   2*BB->getNumber()   -> Ingoing bundle.

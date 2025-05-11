@@ -15,14 +15,14 @@
 ///
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_CODEGEN_PHYSICALREGISTERUSAGEINFO_H
-#define LLVM_CODEGEN_PHYSICALREGISTERUSAGEINFO_H
+#ifndef LLVM_CODEGEN_REGISTERUSAGEINFO_H
+#define LLVM_CODEGEN_REGISTERUSAGEINFO_H
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
-#include "llvm/IR/Instructions.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
+#include "llvm/PassRegistry.h"
 #include <cstdint>
 #include <vector>
 
@@ -63,9 +63,9 @@ private:
   /// and 1 means content of register will be preserved around function call.
   DenseMap<const Function *, std::vector<uint32_t>> RegMasks;
 
-  const LLVMTargetMachine *TM;
+  const LLVMTargetMachine *TM = nullptr;
 };
 
 } // end namespace llvm
 
-#endif // LLVM_CODEGEN_PHYSICALREGISTERUSAGEINFO_H
+#endif // LLVM_CODEGEN_REGISTERUSAGEINFO_H

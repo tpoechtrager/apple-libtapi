@@ -1,9 +1,8 @@
 //===- tapi/SDKDB/PartailSDKDB.cpp - TAPI PartialSDKDB ----------*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 ///
@@ -20,6 +19,17 @@ using namespace llvm;
 TAPI_NAMESPACE_INTERNAL_BEGIN
 
 const char *PartialSDKDB::version = "1.0";
+
+static void overwriteProjectNames(PartialSDKDB &result, StringRef name) {
+  for (auto &api : result.binaryInterfaces) {
+    if (api.getProjectName().empty())
+      api.setProjectName(name);
+  }
+  for (auto &api : result.headerInterfaces) {
+    if (api.getProjectName().empty())
+      api.setProjectName(name);
+  }
+}
 
 Expected<PartialSDKDB>
 PartialSDKDB::createPublicAPIsFromJSON(json::Object &input) {
@@ -52,8 +62,11 @@ PartialSDKDB::createPublicAPIsFromJSON(json::Object &input) {
     else
       return result.takeError();
   }
-  if (auto projectName = input.getString("projectName"))
+
+  if (auto projectName = input.getString("projectName")) {
     output.project = projectName->str();
+    overwriteProjectNames(output, *projectName);
+  }
 
   if (auto hasError = input.getBoolean("error"))
     output.hasError = true;
@@ -106,8 +119,10 @@ PartialSDKDB::createPrivateAPIsFromJSON(json::Object &input) {
       return result.takeError();
   }
 
-  if (auto projectName = input.getString("projectName"))
+  if (auto projectName = input.getString("projectName")) {
     output.project = projectName->str();
+    overwriteProjectNames(output, *projectName);
+  }
 
   if (auto hasError = input.getBoolean("error"))
     output.hasError = true;
@@ -127,12 +142,14 @@ Error PartialSDKDB::serialize(
   json::Object root;
   // Runtime Root.
   json::Array binaryInterfacesList;
-  APIJSONOption options{/*compact*/ false,
-                        /*noUUID*/ true,
-                        /*noTarget*/ false,
-                        /*external*/ false,
-                        /*publicOnly*/ false,
-                        /*ignore line and col*/ true};
+  APIJSONOption options{
+      /*compact*/ false,
+      /*noUUID*/ true,
+      /*noTarget*/ false,
+      /*noHiddenGlobal*/ true,
+      /*publicOnly*/ false,
+      /*ignore line and col*/ true,
+  };
   for (const auto &api : binaryInterfaces) {
     APIJSONSerializer serializer(api, options);
     binaryInterfacesList.emplace_back(serializer.getJSONObject());
@@ -141,7 +158,7 @@ Error PartialSDKDB::serialize(
   // SDKContentRoot Root.
   json::Array internalSDKInterfacesList;
   for (const auto &result : privateHeaderContext) {
-    APIJSONSerializer serializer(result.api, options);
+    APIJSONSerializer serializer(*result.api, options);
     internalSDKInterfacesList.emplace_back(serializer.getJSONObject());
   }
   for (const auto &api : privateHeaderAPIs) {
@@ -152,7 +169,7 @@ Error PartialSDKDB::serialize(
   // PublicSDKContentRoot Root.
   json::Array publicSDKInterfacesList;
   for (const auto &result : publicHeaderContext) {
-    APIJSONSerializer serializer(result.api, options);
+    APIJSONSerializer serializer(*result.api, options);
     publicSDKInterfacesList.emplace_back(serializer.getJSONObject());
   }
   for (const auto &api : publicHeaderAPIs) {

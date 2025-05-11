@@ -11,6 +11,7 @@
 
 #include "SnippetRepetitor.h"
 #include "Target.h"
+#include "llvm/ADT/Sequence.h"
 #include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
 
@@ -24,9 +25,11 @@ public:
 
   // Repeats the snippet until there are at least MinInstructions in the
   // resulting code.
-  FillFunction Repeat(ArrayRef<MCInst> Instructions,
-                      unsigned MinInstructions) const override {
-    return [Instructions, MinInstructions](FunctionFiller &Filler) {
+  FillFunction Repeat(ArrayRef<MCInst> Instructions, unsigned MinInstructions,
+                      unsigned LoopBodySize,
+                      bool CleanupMemory) const override {
+    return [this, Instructions, MinInstructions,
+            CleanupMemory](FunctionFiller &Filler) {
       auto Entry = Filler.getEntry();
       if (!Instructions.empty()) {
         // Add the whole snippet at least once.
@@ -35,7 +38,7 @@ public:
           Entry.addInstruction(Instructions[I % Instructions.size()]);
         }
       }
-      Entry.addReturn();
+      Entry.addReturn(State.getExegesisTarget(), CleanupMemory);
     };
   }
 
@@ -53,17 +56,38 @@ public:
             State.getTargetMachine().getTargetTriple())) {}
 
   // Loop over the snippet ceil(MinInstructions / Instructions.Size()) times.
-  FillFunction Repeat(ArrayRef<MCInst> Instructions,
-                      unsigned MinInstructions) const override {
-    return [this, Instructions, MinInstructions](FunctionFiller &Filler) {
+  FillFunction Repeat(ArrayRef<MCInst> Instructions, unsigned MinInstructions,
+                      unsigned LoopBodySize,
+                      bool CleanupMemory) const override {
+    return [this, Instructions, MinInstructions, LoopBodySize,
+            CleanupMemory](FunctionFiller &Filler) {
       const auto &ET = State.getExegesisTarget();
       auto Entry = Filler.getEntry();
+
+      // We can not use loop snippet repetitor for terminator instructions.
+      for (const MCInst &Inst : Instructions) {
+        const unsigned Opcode = Inst.getOpcode();
+        const MCInstrDesc &MCID = Filler.MCII->get(Opcode);
+        if (!MCID.isTerminator())
+          continue;
+        Entry.addReturn(State.getExegesisTarget(), CleanupMemory);
+        return;
+      }
+
       auto Loop = Filler.addBasicBlock();
       auto Exit = Filler.addBasicBlock();
 
+      const unsigned LoopUnrollFactor =
+          LoopBodySize <= Instructions.size()
+              ? 1
+              : divideCeil(LoopBodySize, Instructions.size());
+      assert(LoopUnrollFactor >= 1 && "Should end up with at least 1 snippet.");
+
       // Set loop counter to the right value:
-      const APInt LoopCount(32, (MinInstructions + Instructions.size() - 1) /
-                                    Instructions.size());
+      const APInt LoopCount(
+          32,
+          divideCeil(MinInstructions, LoopUnrollFactor * Instructions.size()));
+      assert(LoopCount.uge(1) && "Trip count should be at least 1.");
       for (const MCInst &Inst :
            ET.setRegTo(State.getSubtargetInfo(), LoopCounter, LoopCount))
         Entry.addInstruction(Inst);
@@ -71,20 +95,27 @@ public:
       // Set up the loop basic block.
       Entry.MBB->addSuccessor(Loop.MBB, BranchProbability::getOne());
       Loop.MBB->addSuccessor(Loop.MBB, BranchProbability::getOne());
-      // The live ins are: the loop counter, the registers that were setup by
-      // the entry block, and entry block live ins.
-      Loop.MBB->addLiveIn(LoopCounter);
-      for (unsigned Reg : Filler.getRegistersSetUp())
-        Loop.MBB->addLiveIn(Reg);
-      for (const auto &LiveIn : Entry.MBB->liveins())
-        Loop.MBB->addLiveIn(LiveIn);
-      Loop.addInstructions(Instructions);
+      // If the snippet setup completed, then we can track liveness.
+      if (Loop.MF.getProperties().hasProperty(
+              MachineFunctionProperties::Property::TracksLiveness)) {
+        // The live ins are: the loop counter, the registers that were setup by
+        // the entry block, and entry block live ins.
+        Loop.MBB->addLiveIn(LoopCounter);
+        for (unsigned Reg : Filler.getRegistersSetUp())
+          Loop.MBB->addLiveIn(Reg);
+        for (const auto &LiveIn : Entry.MBB->liveins())
+          Loop.MBB->addLiveIn(LiveIn);
+      }
+      for (auto _ : seq(0U, LoopUnrollFactor)) {
+        (void)_;
+        Loop.addInstructions(Instructions);
+      }
       ET.decrementLoopCounterAndJump(*Loop.MBB, *Loop.MBB,
                                      State.getInstrInfo());
 
       // Set up the exit basic block.
       Loop.MBB->addSuccessor(Exit.MBB, BranchProbability::getZero());
-      Exit.addReturn();
+      Exit.addReturn(State.getExegesisTarget(), CleanupMemory);
     };
   }
 
@@ -103,14 +134,14 @@ private:
 SnippetRepetitor::~SnippetRepetitor() {}
 
 std::unique_ptr<const SnippetRepetitor>
-SnippetRepetitor::Create(InstructionBenchmark::RepetitionModeE Mode,
+SnippetRepetitor::Create(Benchmark::RepetitionModeE Mode,
                          const LLVMState &State) {
   switch (Mode) {
-  case InstructionBenchmark::Duplicate:
+  case Benchmark::Duplicate:
     return std::make_unique<DuplicateSnippetRepetitor>(State);
-  case InstructionBenchmark::Loop:
+  case Benchmark::Loop:
     return std::make_unique<LoopSnippetRepetitor>(State);
-  case InstructionBenchmark::AggregateMin:
+  case Benchmark::AggregateMin:
     break;
   }
   llvm_unreachable("Unknown RepetitionModeE enum");

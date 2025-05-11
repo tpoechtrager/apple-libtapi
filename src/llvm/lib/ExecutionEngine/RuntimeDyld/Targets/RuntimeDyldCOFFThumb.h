@@ -14,6 +14,7 @@
 #define LLVM_LIB_EXECUTIONENGINE_RUNTIMEDYLD_TARGETS_RUNTIMEDYLDCOFFTHUMB_H
 
 #include "../RuntimeDyldCOFF.h"
+#include "llvm/ADT/SmallString.h"
 #include "llvm/BinaryFormat/COFF.h"
 #include "llvm/Object/COFF.h"
 
@@ -29,8 +30,7 @@ static bool isThumbFunc(object::symbol_iterator Symbol,
     std::string Buf;
     raw_string_ostream OS(Buf);
     logAllUnhandledErrors(SymTypeOrErr.takeError(), OS);
-    OS.flush();
-    report_fatal_error(Buf);
+    report_fatal_error(Twine(OS.str()));
   }
 
   if (*SymTypeOrErr != object::SymbolRef::ST_Function)
@@ -54,7 +54,7 @@ public:
     return 16; // 8-byte load instructions, 4-byte jump, 4-byte padding
   }
 
-  unsigned getStubAlignment() override { return 1; }
+  Align getStubAlignment() override { return Align(1); }
 
   Expected<object::relocation_iterator>
   processRelocationRef(unsigned SectionID,

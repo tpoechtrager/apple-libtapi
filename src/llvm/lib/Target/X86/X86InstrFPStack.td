@@ -24,6 +24,15 @@ def SDTX86Fild      : SDTypeProfile<1, 1, [SDTCisFP<0>, SDTCisPtrTy<1>]>;
 def SDTX86Fist      : SDTypeProfile<0, 2, [SDTCisFP<0>, SDTCisPtrTy<1>]>;
 
 def SDTX86CwdStore  : SDTypeProfile<0, 1, [SDTCisPtrTy<0>]>;
+def SDTX86CwdLoad   : SDTypeProfile<0, 1, [SDTCisPtrTy<0>]>;
+def SDTX86FPEnv     : SDTypeProfile<0, 1, [SDTCisPtrTy<0>]>;
+
+def X86fp80_add     : SDNode<"X86ISD::FP80_ADD", SDTFPBinOp, [SDNPCommutative]>;
+def X86strict_fp80_add : SDNode<"X86ISD::STRICT_FP80_ADD", SDTFPBinOp,
+                        [SDNPHasChain,SDNPCommutative]>;
+def any_X86fp80_add : PatFrags<(ops node:$lhs, node:$rhs),
+                               [(X86strict_fp80_add node:$lhs, node:$rhs),
+                                (X86fp80_add node:$lhs, node:$rhs)]>;
 
 def X86fld          : SDNode<"X86ISD::FLD", SDTX86Fld,
                              [SDNPHasChain, SDNPMayLoad, SDNPMemOperand]>;
@@ -37,6 +46,15 @@ def X86fp_to_mem : SDNode<"X86ISD::FP_TO_INT_IN_MEM", SDTX86Fst,
                           [SDNPHasChain, SDNPMayStore, SDNPMemOperand]>;
 def X86fp_cwd_get16 : SDNode<"X86ISD::FNSTCW16m",          SDTX86CwdStore,
                              [SDNPHasChain, SDNPMayStore, SDNPSideEffect,
+                              SDNPMemOperand]>;
+def X86fp_cwd_set16 : SDNode<"X86ISD::FLDCW16m",           SDTX86CwdLoad,
+                             [SDNPHasChain, SDNPMayLoad, SDNPSideEffect,
+                              SDNPMemOperand]>;
+def X86fpenv_get    : SDNode<"X86ISD::FNSTENVm",           SDTX86FPEnv,
+                             [SDNPHasChain, SDNPMayStore, SDNPSideEffect,
+                              SDNPMemOperand]>;
+def X86fpenv_set    : SDNode<"X86ISD::FLDENVm",            SDTX86FPEnv,
+                             [SDNPHasChain, SDNPMayLoad, SDNPSideEffect,
                               SDNPMemOperand]>;
 
 def X86fstf32 : PatFrag<(ops node:$val, node:$ptr),
@@ -137,6 +155,14 @@ let usesCustomInserter = 1, hasNoSchedulingInfo = 1, Defs = [EFLAGS] in {
                               [(X86fp_to_i32mem RFP80:$src, addr:$dst)]>;
   def FP80_TO_INT64_IN_MEM : PseudoI<(outs), (ins i64mem:$dst, RFP80:$src),
                               [(X86fp_to_i64mem RFP80:$src, addr:$dst)]>;
+
+  def FP80_ADDr : PseudoI<(outs RFP80:$dst), (ins RFP80:$src1, RFP80:$src2),
+                          [(set RFP80:$dst,
+                                (any_X86fp80_add  RFP80:$src1, RFP80:$src2))]>;
+  def FP80_ADDm32 : PseudoI<(outs RFP80:$dst), (ins RFP80:$src1, f32mem:$src2),
+                            [(set RFP80:$dst,
+                                  (any_X86fp80_add RFP80:$src1,
+                                                   (f80 (extloadf32 addr:$src2))))]>;
 }
 
 // All FP Stack operations are represented with four instructions here.  The
@@ -168,7 +194,7 @@ class FpIf64<dag outs, dag ins, FPFormat fp, list<dag> pattern> :
              FpI_<outs, ins, fp, pattern>, Requires<[FPStackf64]>;
 
 // Factoring for arithmetic.
-multiclass FPBinary_rr<SDNode OpNode> {
+multiclass FPBinary_rr<SDPatternOperator OpNode> {
 // Register op register -> register
 // These are separated out because they have no reversed form.
 def _Fp32 : FpIf32<(outs RFP32:$dst), (ins RFP32:$src1, RFP32:$src2), TwoArgFP,
@@ -181,7 +207,7 @@ def _Fp80 : FpI_<(outs RFP80:$dst), (ins RFP80:$src1, RFP80:$src2), TwoArgFP,
 // The FopST0 series are not included here because of the irregularities
 // in where the 'r' goes in assembly output.
 // These instructions cannot address 80-bit memory.
-multiclass FPBinary<SDNode OpNode, Format fp, string asmstring,
+multiclass FPBinary<SDPatternOperator OpNode, Format fp, string asmstring,
                     bit Forward = 1> {
 // ST(0) = ST(0) + [mem]
 def _Fp32m  : FpIf32<(outs RFP32:$dst),
@@ -343,7 +369,7 @@ def DIVR_FPrST0 : FPrST0PInst<MRM6r, "fdiv{|r}p\t{%st, $op|$op, st}">;
 } // SchedRW
 
 // Unary operations.
-multiclass FPUnary<SDNode OpNode, Format fp, string asmstring> {
+multiclass FPUnary<SDPatternOperator OpNode, Format fp, string asmstring> {
 def _Fp32  : FpIf32<(outs RFP32:$dst), (ins RFP32:$src), OneArgFPRW,
                  [(set RFP32:$dst, (OpNode RFP32:$src))]>;
 def _Fp64  : FpIf64<(outs RFP64:$dst), (ins RFP64:$src), OneArgFPRW,
@@ -373,6 +399,13 @@ def TST_F  : FPI<0xD9, MRM_E4, (outs), (ins), "ftst">;
 } // SchedRW
 } // Uses = [FPCW], mayRaiseFPException = 1
 
+let SchedRW = [WriteFTest], Defs = [FPSW] in {
+def XAM_Fp32  : FpIf32<(outs), (ins RFP32:$src), OneArgFP, []>;
+def XAM_Fp64  : FpIf64<(outs), (ins RFP64:$src), OneArgFP, []>;
+def XAM_Fp80  : FpI_<(outs), (ins RFP80:$src), OneArgFP, []>;
+def XAM_F     : FPI<0xD9, MRM_E5, (outs), (ins), "fxam">;
+} // SchedRW
+
 // Versions of FP instructions that take a single memory operand.  Added for the
 //   disassembler; remove as they are included with patterns elsewhere.
 let SchedRW = [WriteFComLd], Uses = [FPCW], mayRaiseFPException = 1,
@@ -392,13 +425,17 @@ def FICOMP32m: FPI<0xDA, MRM3m, (outs), (ins i32mem:$src), "ficomp{l}\t$src">;
 
 let SchedRW = [WriteMicrocoded] in {
 let Defs = [FPSW, FPCW], mayLoad = 1 in {
-def FLDENVm  : FPI<0xD9, MRM4m, (outs), (ins anymem:$src), "fldenv\t$src">;
 def FRSTORm  : FPI<0xDD, MRM4m, (outs), (ins anymem:$src), "frstor\t$src">;
+let Predicates = [HasX87] in
+def FLDENVm  : I<0xD9, MRM4m, (outs), (ins anymem:$src), "fldenv\t$src",
+                 [(X86fpenv_set addr:$src)]>;
 }
 
 let Defs = [FPSW, FPCW], Uses = [FPSW, FPCW], mayStore = 1 in {
-def FSTENVm  : FPI<0xD9, MRM6m, (outs), (ins anymem:$dst), "fnstenv\t$dst">;
 def FSAVEm   : FPI<0xDD, MRM6m, (outs), (ins anymem:$dst), "fnsave\t$dst">;
+let Predicates = [HasX87] in
+def FSTENVm  : I<0xD9, MRM6m, (outs), (ins anymem:$dst), "fnstenv\t$dst",
+                 [(X86fpenv_get addr:$dst)]>;
 }
 
 let Uses = [FPSW], mayStore = 1 in
@@ -412,9 +449,9 @@ def FBSTPm   : FPI<0xDF, MRM6m, (outs), (ins f80mem:$dst), "fbstp\t$dst">;
 
 // Floating point cmovs.
 class FpIf32CMov<dag outs, dag ins, FPFormat fp, list<dag> pattern> :
-  FpI_<outs, ins, fp, pattern>, Requires<[FPStackf32, HasCMov]>;
+  FpI_<outs, ins, fp, pattern>, Requires<[FPStackf32, HasCMOV]>;
 class FpIf64CMov<dag outs, dag ins, FPFormat fp, list<dag> pattern> :
-  FpI_<outs, ins, fp, pattern>, Requires<[FPStackf64, HasCMov]>;
+  FpI_<outs, ins, fp, pattern>, Requires<[FPStackf64, HasCMOV]>;
 
 multiclass FPCMov<PatLeaf cc> {
   def _Fp32  : FpIf32CMov<(outs RFP32:$dst), (ins RFP32:$src1, RFP32:$src2),
@@ -429,7 +466,7 @@ multiclass FPCMov<PatLeaf cc> {
                      CondMovFP,
                      [(set RFP80:$dst, (X86cmov RFP80:$src1, RFP80:$src2,
                                         cc, EFLAGS))]>,
-                                        Requires<[HasCMov]>;
+                                        Requires<[HasCMOV]>;
 }
 
 let SchedRW = [WriteFCMOV] in {
@@ -444,7 +481,7 @@ defm CMOVNE : FPCMov<X86_COND_NE>;
 defm CMOVNP : FPCMov<X86_COND_NP>;
 } // Uses = [EFLAGS], Constraints = "$src1 = $dst"
 
-let Predicates = [HasCMov] in {
+let Predicates = [HasCMOV] in {
 // These are not factored because there's no clean way to pass DA/DB.
 def CMOVB_F  : FPI<0xDA, MRM0r, (outs), (ins RSTi:$op),
                   "fcmovb\t{$op, %st|st, $op}">;
@@ -462,7 +499,7 @@ def CMOVNE_F : FPI<0xDB, MRM1r, (outs), (ins RSTi:$op),
                   "fcmovne\t{$op, %st|st, $op}">;
 def CMOVNP_F : FPI<0xDB, MRM3r, (outs), (ins RSTi:$op),
                   "fcmovnu\t{$op, %st|st, $op}">;
-} // Predicates = [HasCMov]
+} // Predicates = [HasCMOV]
 } // SchedRW
 
 let mayRaiseFPException = 1 in {
@@ -653,22 +690,22 @@ let SchedRW = [WriteFCom], mayRaiseFPException = 1 in {
 let Defs = [EFLAGS, FPSW], Uses = [FPCW] in {
 def UCOM_FpIr32: FpI_<(outs), (ins RFP32:$lhs, RFP32:$rhs), CompareFP,
                   [(set EFLAGS, (X86any_fcmp RFP32:$lhs, RFP32:$rhs))]>,
-                  Requires<[FPStackf32, HasCMov]>;
+                  Requires<[FPStackf32, HasCMOV]>;
 def UCOM_FpIr64: FpI_<(outs), (ins RFP64:$lhs, RFP64:$rhs), CompareFP,
                   [(set EFLAGS, (X86any_fcmp RFP64:$lhs, RFP64:$rhs))]>,
-                  Requires<[FPStackf64, HasCMov]>;
+                  Requires<[FPStackf64, HasCMOV]>;
 def UCOM_FpIr80: FpI_<(outs), (ins RFP80:$lhs, RFP80:$rhs), CompareFP,
                   [(set EFLAGS, (X86any_fcmp RFP80:$lhs, RFP80:$rhs))]>,
-                  Requires<[HasCMov]>;
+                  Requires<[HasCMOV]>;
 def COM_FpIr32: FpI_<(outs), (ins RFP32:$lhs, RFP32:$rhs), CompareFP,
                   [(set EFLAGS, (X86strict_fcmps RFP32:$lhs, RFP32:$rhs))]>,
-                  Requires<[FPStackf32, HasCMov]>;
+                  Requires<[FPStackf32, HasCMOV]>;
 def COM_FpIr64: FpI_<(outs), (ins RFP64:$lhs, RFP64:$rhs), CompareFP,
                   [(set EFLAGS, (X86strict_fcmps RFP64:$lhs, RFP64:$rhs))]>,
-                  Requires<[FPStackf64, HasCMov]>;
+                  Requires<[FPStackf64, HasCMOV]>;
 def COM_FpIr80: FpI_<(outs), (ins RFP80:$lhs, RFP80:$rhs), CompareFP,
                   [(set EFLAGS, (X86strict_fcmps RFP80:$lhs, RFP80:$rhs))]>,
-                  Requires<[HasCMov]>;
+                  Requires<[HasCMOV]>;
 }
 
 let Uses = [ST0, FPCW] in {
@@ -705,7 +742,8 @@ def FNSTCW16m : I<0xD9, MRM7m,                   // [mem16] = X87 control world
 } // SchedRW
 let Defs = [FPSW,FPCW], mayLoad = 1 in
 def FLDCW16m  : I<0xD9, MRM5m,                   // X87 control world = [mem16]
-                  (outs), (ins i16mem:$dst), "fldcw\t$dst", []>,
+                  (outs), (ins i16mem:$dst), "fldcw\t$dst",
+                  [(X86fp_cwd_set16 addr:$dst)]>,
                 Sched<[WriteLoad]>;
 
 // FPU control instructions
@@ -727,7 +765,6 @@ def FNOP : I<0xD9, MRM_D0, (outs), (ins), "fnop", []>, Sched<[WriteNop]>;
 let SchedRW = [WriteMicrocoded] in {
 let Defs = [FPSW] in {
 def WAIT : I<0x9B, RawFrm, (outs), (ins), "wait", []>;
-def FXAM : I<0xD9, MRM_E5, (outs), (ins), "fxam", []>;
 def FDECSTP : I<0xD9, MRM_F6, (outs), (ins), "fdecstp", []>;
 def FINCSTP : I<0xD9, MRM_F7, (outs), (ins), "fincstp", []>;
 let Uses = [FPCW], mayRaiseFPException = 1 in {

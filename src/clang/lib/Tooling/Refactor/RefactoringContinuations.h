@@ -1,9 +1,8 @@
 //===--- RefactoringContinuations.h - Defines refactoring continuations ---===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 
@@ -267,9 +266,9 @@ private:
   ConsumerFn Consumer;
   std::unique_ptr<ASTQueryType> ASTQuery;
   /// Inputs store state that's dependent on the original TU.
-  llvm::Optional<std::tuple<QueryOrState...>> Inputs;
+  std::optional<std::tuple<QueryOrState...>> Inputs;
   /// State contains TU-independent values.
-  llvm::Optional<
+  std::optional<
       std::tuple<typename StateTraits<QueryOrState>::PersistentType...>>
       State;
 
@@ -350,7 +349,7 @@ public:
     ASTQuery->invalidateTUSpecificState();
     State =
         convertToPersistentImpl(std::index_sequence_for<QueryOrState...>());
-    Inputs = None;
+    Inputs = std::nullopt;
   }
 
   /// The state is converted to the AST representation in the given ASTContext

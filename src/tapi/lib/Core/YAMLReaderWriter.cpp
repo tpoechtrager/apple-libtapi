@@ -1,9 +1,8 @@
 //===- tapi/Core/YAMLReaderWriter.cpp - YAML Reader/Writer ------*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 ///
@@ -18,51 +17,141 @@
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/YAMLTraits.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/TextAPI/InterfaceFile.h"
+#include "llvm/TextAPI/TextAPIReader.h"
 
 using namespace llvm;
 using namespace llvm::yaml;
 using namespace tapi::internal;
 
-namespace llvm {
-namespace yaml {
-
-template <> struct DocumentListTraits<std::vector<const InterfaceFile *>> {
-  static size_t size(IO &io, std::vector<const InterfaceFile *> &seq) {
-    return seq.size();
-  }
-  static const InterfaceFile *&
-  element(IO &io, std::vector<const InterfaceFile *> &seq, size_t index) {
-    if (index >= seq.size())
-      seq.resize(index + 1);
-    return seq[index];
-  }
-};
-
-template <> struct MappingTraits<const InterfaceFile *> {
-  static void mapping(IO &io, const InterfaceFile *&file) {
-    auto ctx = reinterpret_cast<YAMLContext *>(io.getContext());
-    assert(ctx != nullptr);
-    ctx->base.handleDocument(io, file);
-  }
-};
-} // namespace yaml
-} // namespace llvm
-
 TAPI_NAMESPACE_INTERNAL_BEGIN
 
-static void DiagHandler(const SMDiagnostic &diag, void *context) {
-  auto *file = static_cast<YAMLContext *>(context);
-  SmallString<1024> message;
-  raw_svector_ostream s(message);
+namespace stub::v1 {
+bool YAMLDocumentHandler::canRead(MemoryBufferRef memBufferRef,
+                                  FileType types) const {
+  if (!(types & FileType::TBD_V1))
+    return false;
 
-  SMDiagnostic newdiag(*diag.getSourceMgr(), diag.getLoc(), file->path,
-                       diag.getLineNo(), diag.getColumnNo(), diag.getKind(),
-                       diag.getMessage(), diag.getLineContents(),
-                       diag.getRanges(), diag.getFixIts());
-
-  newdiag.print(nullptr, s);
-  file->errorMessage = message.str().str();
+  auto result = TextAPIReader::canRead(memBufferRef);
+  if (!result) {
+    consumeError(result.takeError());
+    return false;
+  }
+  return *result == FileType::TBD_V1;
 }
+
+FileType YAMLDocumentHandler::getFileType(MemoryBufferRef memBufferRef) const {
+  if (canRead(memBufferRef))
+    return FileType::TBD_V1;
+
+  return FileType::Invalid;
+}
+
+bool YAMLDocumentHandler::canWrite(const InterfaceFile *file,
+                                   FileType fileType) const {
+  if (fileType != FileType::TBD_V1)
+    return false;
+
+  // TODO: report reason.
+  if (!file->isApplicationExtensionSafe() || !file->isTwoLevelNamespace())
+    return false;
+
+  return true;
+}
+} // end namespace stub::v1
+
+namespace stub::v2 {
+
+bool YAMLDocumentHandler::canRead(MemoryBufferRef memBufferRef,
+                                  FileType types) const {
+  if (!(types & FileType::TBD_V2))
+    return false;
+
+  auto result = TextAPIReader::canRead(memBufferRef);
+  if (!result) {
+    consumeError(result.takeError());
+    return false;
+  }
+  return *result == FileType::TBD_V2;
+}
+
+FileType YAMLDocumentHandler::getFileType(MemoryBufferRef memBufferRef) const {
+  if (canRead(memBufferRef))
+    return FileType::TBD_V2;
+
+  return FileType::Invalid;
+}
+
+bool YAMLDocumentHandler::canWrite(const InterfaceFile *file,
+                                   FileType fileType) const {
+  if (fileType != FileType::TBD_V2)
+    return false;
+
+  return true;
+}
+} // end namespace stub::v2
+
+namespace stub::v3 {
+bool YAMLDocumentHandler::canRead(MemoryBufferRef memBufferRef,
+                                  FileType types) const {
+  if (!(types & FileType::TBD_V3))
+    return false;
+
+  auto result = TextAPIReader::canRead(memBufferRef);
+  if (!result) {
+    consumeError(result.takeError());
+    return false;
+  }
+  return *result == FileType::TBD_V3;
+}
+
+FileType YAMLDocumentHandler::getFileType(MemoryBufferRef memBufferRef) const {
+  if (canRead(memBufferRef))
+    return FileType::TBD_V3;
+
+  return FileType::Invalid;
+}
+
+bool YAMLDocumentHandler::canWrite(const InterfaceFile *file,
+                                   FileType fileType) const {
+  if (fileType != FileType::TBD_V3)
+    return false;
+
+  return true;
+}
+
+} // end namespace stub::v3
+
+namespace stub::v4 {
+
+bool YAMLDocumentHandler::canRead(MemoryBufferRef memBufferRef,
+                                  FileType types) const {
+  if (!(types & FileType::TBD_V4))
+    return false;
+
+  auto result = TextAPIReader::canRead(memBufferRef);
+  if (!result) {
+    consumeError(result.takeError());
+    return false;
+  }
+  return *result == FileType::TBD_V4;
+}
+
+FileType YAMLDocumentHandler::getFileType(MemoryBufferRef memBufferRef) const {
+  if (canRead(memBufferRef))
+    return FileType::TBD_V4;
+
+  return FileType::Invalid;
+}
+
+bool YAMLDocumentHandler::canWrite(const InterfaceFile *file,
+                                   FileType fileType) const {
+  if (fileType != FileType::TBD_V4)
+    return false;
+
+  return true;
+}
+} // end namespace stub::v4
 
 bool YAMLBase::canRead(MemoryBufferRef memBufferRef, FileType types) const {
   for (const auto &handler : _documentHandlers) {
@@ -72,8 +161,7 @@ bool YAMLBase::canRead(MemoryBufferRef memBufferRef, FileType types) const {
   return false;
 }
 
-bool YAMLBase::canWrite(const InterfaceFile *file,
-                        VersionedFileType fileType) const {
+bool YAMLBase::canWrite(const InterfaceFile *file, FileType fileType) const {
   for (const auto &handler : _documentHandlers) {
     if (handler->canWrite(file, fileType))
       return true;
@@ -90,9 +178,10 @@ FileType YAMLBase::getFileType(MemoryBufferRef bufferRef) const {
   return FileType::Invalid;
 }
 
-bool YAMLBase::handleDocument(IO &io, const InterfaceFile *&file) const {
+bool YAMLBase::writeFile(raw_ostream &os, const InterfaceFile *file,
+                         FileType fileType) const {
   for (const auto &handler : _documentHandlers) {
-    if (handler->handleDocument(io, file))
+    if (handler->writeFile(os, file, fileType))
       return true;
   }
   return false;
@@ -108,62 +197,127 @@ Expected<FileType> YAMLReader::getFileType(file_magic magic,
   return YAMLBase::getFileType(memBufferRef);
 }
 
-Expected<std::unique_ptr<InterfaceFile>>
-YAMLReader::readFile(std::unique_ptr<MemoryBuffer> memBuffer,
-                     ReadFlags readFlags,
-                     llvm::MachO::ArchitectureSet arches) const {
-  // Create YAML Input Reader.
-  YAMLContext ctx(*this);
-  ctx.path = std::string(memBuffer->getBufferIdentifier());
-  ctx.readFlags = readFlags;
-  llvm::yaml::Input yin(memBuffer->getBuffer(), &ctx, DiagHandler, &ctx);
+void addInterfaceFileToAPIs(APIs &apis, const InterfaceFile *interface) {
+  for (auto target : interface->targets()) {
+    auto api = std::make_shared<API>(API(Triple(getTargetTripleName(target))));
+    auto &binaryInfo = api->getBinaryInfo();
+    binaryInfo.fileType = interface->getFileType();
+    binaryInfo.currentVersion = interface->getCurrentVersion();
+    binaryInfo.compatibilityVersion = interface->getCompatibilityVersion();
+    binaryInfo.swiftABIVersion = interface->getSwiftABIVersion();
+    binaryInfo.isTwoLevelNamespace = interface->isTwoLevelNamespace();
+    binaryInfo.isAppExtensionSafe = interface->isApplicationExtensionSafe();
+    binaryInfo.isOSLibNotForSharedCache = interface->isOSLibNotForSharedCache();
+    binaryInfo.path = api->copyString(interface->getPath());
+    binaryInfo.installName = api->copyString(interface->getInstallName());
 
-  // Fill vector with File objects created by parsing yaml.
-  std::vector<const InterfaceFile *> files;
-  yin >> files;
+    // Per target info.
+    for (const auto &client : interface->allowableClients())
+      if (client.hasTarget(target))
+        binaryInfo.allowableClients.emplace_back(
+            api->copyString(client.getInstallName()));
+    for (const auto &reexport : interface->reexportedLibraries())
+      if (reexport.hasTarget(target))
+        binaryInfo.reexportedLibraries.emplace_back(
+            api->copyString(reexport.getInstallName()));
+    for (const auto &[targ, parent] : interface->umbrellas()) {
+      if (targ == target) {
+        binaryInfo.parentUmbrella = api->copyString(parent);
+        break;
+      }
+    }
 
-  if (yin.error())
-    return make_error<StringError>("malformed file\n" + ctx.errorMessage,
-                                   yin.error());
-
-  if (files.empty())
-    return errorCodeToError(std::make_error_code(std::errc::not_supported));
-
-  auto *file = const_cast<InterfaceFile *>(files.front());
-  file->setMemoryBuffer(std::move(memBuffer));
-
-  for (auto it = std::next(files.begin()); it != files.end(); ++it) {
-    auto *document = const_cast<InterfaceFile *>(*it);
-    file->addDocument(std::unique_ptr<InterfaceFile>(document));
+    apis.emplace_back(std::move(api));
   }
 
-  return std::unique_ptr<InterfaceFile>(file);
+  // Because API relates ivar symbols to their owned class,
+  // iterate through symbols in sorted order.
+  std::vector<const MachO::Symbol *> orderedSyms(interface->symbols().begin(),
+                                                 interface->symbols().end());
+  llvm::sort(orderedSyms,
+             [](const auto *lhs, const auto *rhs) { return *lhs < *rhs; });
+
+  for (const auto &sym : orderedSyms) {
+    for (auto &target : sym->targets()) {
+      auto *api = find_if(apis, [&target, &interface](const auto &api) {
+        auto nameOr = api->getInstallName();
+        return target == api->getTarget() &&
+               (nameOr && nameOr == interface->getInstallName());
+      });
+      if (api == apis.end())
+        continue;
+
+      const AvailabilityInfo avail;
+      const APIAccess access{0};
+      // Linkage from Text files can only be three possible linkages.
+      APILinkage linkage;
+      if (sym->isReexported())
+        linkage = APILinkage::Reexported;
+      else if (sym->isUndefined())
+        linkage = APILinkage::External;
+      else
+        linkage = APILinkage::Exported;
+
+      switch (sym->getKind()) {
+      case EncodeKind::GlobalSymbol:
+        (*api)->addGlobal(sym->getName(), sym->getFlags(), APILoc(), avail,
+                          access, nullptr, GVKind::Unknown, linkage);
+        continue;
+      case EncodeKind::ObjectiveCClass:
+        (*api)->addObjCInterface(
+            sym->getName(), APILoc(), avail, access, linkage, {}, nullptr,
+            ObjCIFSymbolKind::Class | ObjCIFSymbolKind::MetaClass);
+        continue;
+      case EncodeKind::ObjectiveCClassEHType: {
+        (*api)->addObjCInterface(
+            sym->getName(), APILoc(), avail, access, linkage, {}, nullptr,
+            ObjCIFSymbolKind::Class | ObjCIFSymbolKind::MetaClass |
+                ObjCIFSymbolKind::EHType);
+        continue;
+      }
+      case EncodeKind::ObjectiveCInstanceVariable: {
+        // Attempt to find super class.
+        ObjCContainerRecord *container = (*api)->findContainer(sym->getName());
+        auto [superClassName, ivar] = sym->getName().split('.');
+
+        // If not found, create extension since there is no mapped class symbol.
+        if (container == nullptr)
+          container =
+              (*api)->addObjCCategory(superClassName, {}, APILoc(),
+                                      AvailabilityInfo(), access, nullptr);
+        (*api)->addObjCInstanceVariable(
+            container, ivar, APILoc(), avail, access,
+            ObjCInstanceVariableRecord::AccessControl::None, linkage, nullptr);
+      }
+      }
+    }
+  }
 }
 
-bool YAMLWriter::canWrite(const InterfaceFile *file,
-                          VersionedFileType fileType) const {
+Expected<APIs> YAMLReader::readFile(std::unique_ptr<MemoryBuffer> memBuffer,
+                                    ReadFlags readFlags,
+                                    llvm::MachO::ArchitectureSet arches) const {
+  auto interfaceOrErr = TextAPIReader::get(memBuffer->getMemBufferRef());
+  if (!interfaceOrErr)
+    return interfaceOrErr.takeError();
+  auto interface = std::move(*interfaceOrErr);
+
+  APIs apis;
+  addInterfaceFileToAPIs(apis, interface.get());
+  for (auto &doc : interface->documents())
+    addInterfaceFileToAPIs(apis, doc.get());
+  return std::move(apis);
+}
+
+bool YAMLWriter::canWrite(const InterfaceFile *file, FileType fileType) const {
   return YAMLBase::canWrite(file, fileType);
 }
 
 Error YAMLWriter::writeFile(raw_ostream &os, const InterfaceFile *file,
-                            VersionedFileType fileType) const {
+                            FileType fileType) const {
   if (file == nullptr)
     return errorCodeToError(std::make_error_code(std::errc::invalid_argument));
-
-  YAMLContext ctx(*this);
-  ctx.path = file->getPath();
-  ctx.fileType = fileType;
-  llvm::yaml::Output yout(os, &ctx, /*WrapColumn=*/80);
-
-  std::vector<const InterfaceFile *> files;
-  files.emplace_back(file);
-
-  for (auto &it : file->_documents)
-    files.emplace_back(it.get());
-
-  // Stream out yaml.
-  yout << files;
-
+  YAMLBase::writeFile(os, file, fileType);
   return Error::success();
 }
 

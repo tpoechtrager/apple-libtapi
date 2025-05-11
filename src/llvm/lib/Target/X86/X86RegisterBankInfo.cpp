@@ -12,9 +12,9 @@
 
 #include "X86RegisterBankInfo.h"
 #include "X86InstrInfo.h"
-#include "llvm/CodeGen/GlobalISel/RegisterBank.h"
-#include "llvm/CodeGen/GlobalISel/RegisterBankInfo.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
+#include "llvm/CodeGen/RegisterBank.h"
+#include "llvm/CodeGen/RegisterBankInfo.h"
 #include "llvm/CodeGen/TargetRegisterInfo.h"
 
 #define GET_TARGET_REGBANK_IMPL
@@ -25,8 +25,7 @@ using namespace llvm;
 #define GET_TARGET_REGBANK_INFO_IMPL
 #include "X86GenRegisterBankInfo.def"
 
-X86RegisterBankInfo::X86RegisterBankInfo(const TargetRegisterInfo &TRI)
-    : X86GenRegisterBankInfo() {
+X86RegisterBankInfo::X86RegisterBankInfo(const TargetRegisterInfo &TRI) {
 
   // validate RegBank initialization.
   const RegisterBank &RBGPR = getRegBank(X86::GPRRegBankID);
@@ -37,7 +36,8 @@ X86RegisterBankInfo::X86RegisterBankInfo(const TargetRegisterInfo &TRI)
   // GR64 + its subclasses.
   assert(RBGPR.covers(*TRI.getRegClass(X86::GR64RegClassID)) &&
          "Subclass not added?");
-  assert(RBGPR.getSize() == 64 && "GPRs should hold up to 64-bit");
+  assert(getMaximumSize(RBGPR.getID()) == 64 &&
+         "GPRs should hold up to 64-bit");
 }
 
 const RegisterBank &
@@ -115,7 +115,7 @@ void X86RegisterBankInfo::getInstrPartialMappingIdxs(
   unsigned NumOperands = MI.getNumOperands();
   for (unsigned Idx = 0; Idx < NumOperands; ++Idx) {
     auto &MO = MI.getOperand(Idx);
-    if (!MO.isReg())
+    if (!MO.isReg() || !MO.getReg())
       OpRegBankIdx[Idx] = PMI_None;
     else
       OpRegBankIdx[Idx] = getPartialMappingIdx(MRI.getType(MO.getReg()), isFP);
@@ -130,6 +130,8 @@ bool X86RegisterBankInfo::getInstrValueMapping(
   unsigned NumOperands = MI.getNumOperands();
   for (unsigned Idx = 0; Idx < NumOperands; ++Idx) {
     if (!MI.getOperand(Idx).isReg())
+      continue;
+    if (!MI.getOperand(Idx).getReg())
       continue;
 
     auto Mapping = getValueMapping(OpRegBankIdx[Idx], 1);

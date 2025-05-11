@@ -11,6 +11,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/ObjectYAML/ELFYAML.h"
+#include "llvm/ADT/APInt.h"
 #include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/BinaryFormat/ELF.h"
@@ -22,17 +23,22 @@
 #include "llvm/Support/WithColor.h"
 #include <cassert>
 #include <cstdint>
+#include <optional>
 
 namespace llvm {
 
 ELFYAML::Chunk::~Chunk() = default;
 
 namespace ELFYAML {
+ELF_ELFOSABI Object::getOSAbi() const { return Header.OSABI; }
+
 unsigned Object::getMachine() const {
   if (Header.Machine)
     return *Header.Machine;
   return llvm::ELF::EM_NONE;
 }
+
+constexpr StringRef SectionHeaderTable::TypeStr;
 } // namespace ELFYAML
 
 namespace yaml {
@@ -64,6 +70,121 @@ void ScalarEnumerationTraits<ELFYAML::ELF_PT>::enumeration(
   ECase(PT_GNU_STACK);
   ECase(PT_GNU_RELRO);
   ECase(PT_GNU_PROPERTY);
+#undef ECase
+  IO.enumFallback<Hex32>(Value);
+}
+
+void ScalarEnumerationTraits<ELFYAML::ELF_NT>::enumeration(
+    IO &IO, ELFYAML::ELF_NT &Value) {
+#define ECase(X) IO.enumCase(Value, #X, ELF::X)
+  // Generic note types.
+  ECase(NT_VERSION);
+  ECase(NT_ARCH);
+  ECase(NT_GNU_BUILD_ATTRIBUTE_OPEN);
+  ECase(NT_GNU_BUILD_ATTRIBUTE_FUNC);
+  // Core note types.
+  ECase(NT_PRSTATUS);
+  ECase(NT_FPREGSET);
+  ECase(NT_PRPSINFO);
+  ECase(NT_TASKSTRUCT);
+  ECase(NT_AUXV);
+  ECase(NT_PSTATUS);
+  ECase(NT_FPREGS);
+  ECase(NT_PSINFO);
+  ECase(NT_LWPSTATUS);
+  ECase(NT_LWPSINFO);
+  ECase(NT_WIN32PSTATUS);
+  ECase(NT_PPC_VMX);
+  ECase(NT_PPC_VSX);
+  ECase(NT_PPC_TAR);
+  ECase(NT_PPC_PPR);
+  ECase(NT_PPC_DSCR);
+  ECase(NT_PPC_EBB);
+  ECase(NT_PPC_PMU);
+  ECase(NT_PPC_TM_CGPR);
+  ECase(NT_PPC_TM_CFPR);
+  ECase(NT_PPC_TM_CVMX);
+  ECase(NT_PPC_TM_CVSX);
+  ECase(NT_PPC_TM_SPR);
+  ECase(NT_PPC_TM_CTAR);
+  ECase(NT_PPC_TM_CPPR);
+  ECase(NT_PPC_TM_CDSCR);
+  ECase(NT_386_TLS);
+  ECase(NT_386_IOPERM);
+  ECase(NT_X86_XSTATE);
+  ECase(NT_S390_HIGH_GPRS);
+  ECase(NT_S390_TIMER);
+  ECase(NT_S390_TODCMP);
+  ECase(NT_S390_TODPREG);
+  ECase(NT_S390_CTRS);
+  ECase(NT_S390_PREFIX);
+  ECase(NT_S390_LAST_BREAK);
+  ECase(NT_S390_SYSTEM_CALL);
+  ECase(NT_S390_TDB);
+  ECase(NT_S390_VXRS_LOW);
+  ECase(NT_S390_VXRS_HIGH);
+  ECase(NT_S390_GS_CB);
+  ECase(NT_S390_GS_BC);
+  ECase(NT_ARM_VFP);
+  ECase(NT_ARM_TLS);
+  ECase(NT_ARM_HW_BREAK);
+  ECase(NT_ARM_HW_WATCH);
+  ECase(NT_ARM_SVE);
+  ECase(NT_ARM_PAC_MASK);
+  ECase(NT_ARM_SSVE);
+  ECase(NT_ARM_ZA);
+  ECase(NT_ARM_ZT);
+  ECase(NT_FILE);
+  ECase(NT_PRXFPREG);
+  ECase(NT_SIGINFO);
+  // LLVM-specific notes.
+  ECase(NT_LLVM_HWASAN_GLOBALS);
+  // GNU note types
+  ECase(NT_GNU_ABI_TAG);
+  ECase(NT_GNU_HWCAP);
+  ECase(NT_GNU_BUILD_ID);
+  ECase(NT_GNU_GOLD_VERSION);
+  ECase(NT_GNU_PROPERTY_TYPE_0);
+  // FreeBSD note types.
+  ECase(NT_FREEBSD_ABI_TAG);
+  ECase(NT_FREEBSD_NOINIT_TAG);
+  ECase(NT_FREEBSD_ARCH_TAG);
+  ECase(NT_FREEBSD_FEATURE_CTL);
+  // FreeBSD core note types.
+  ECase(NT_FREEBSD_THRMISC);
+  ECase(NT_FREEBSD_PROCSTAT_PROC);
+  ECase(NT_FREEBSD_PROCSTAT_FILES);
+  ECase(NT_FREEBSD_PROCSTAT_VMMAP);
+  ECase(NT_FREEBSD_PROCSTAT_GROUPS);
+  ECase(NT_FREEBSD_PROCSTAT_UMASK);
+  ECase(NT_FREEBSD_PROCSTAT_RLIMIT);
+  ECase(NT_FREEBSD_PROCSTAT_OSREL);
+  ECase(NT_FREEBSD_PROCSTAT_PSSTRINGS);
+  ECase(NT_FREEBSD_PROCSTAT_AUXV);
+  // NetBSD core note types.
+  ECase(NT_NETBSDCORE_PROCINFO);
+  ECase(NT_NETBSDCORE_AUXV);
+  ECase(NT_NETBSDCORE_LWPSTATUS);
+  // OpenBSD core note types.
+  ECase(NT_OPENBSD_PROCINFO);
+  ECase(NT_OPENBSD_AUXV);
+  ECase(NT_OPENBSD_REGS);
+  ECase(NT_OPENBSD_FPREGS);
+  ECase(NT_OPENBSD_XFPREGS);
+  ECase(NT_OPENBSD_WCOOKIE);
+  // AMD specific notes. (Code Object V2)
+  ECase(NT_AMD_HSA_CODE_OBJECT_VERSION);
+  ECase(NT_AMD_HSA_HSAIL);
+  ECase(NT_AMD_HSA_ISA_VERSION);
+  ECase(NT_AMD_HSA_METADATA);
+  ECase(NT_AMD_HSA_ISA_NAME);
+  ECase(NT_AMD_PAL_METADATA);
+  // AMDGPU specific notes. (Code Object V3)
+  ECase(NT_AMDGPU_METADATA);
+  // Android specific notes.
+  ECase(NT_ANDROID_TYPE_IDENT);
+  ECase(NT_ANDROID_TYPE_KUSER);
+  ECase(NT_ANDROID_TYPE_MEMTAG);
 #undef ECase
   IO.enumFallback<Hex32>(Value);
 }
@@ -215,6 +336,7 @@ void ScalarEnumerationTraits<ELFYAML::ELF_EM>::enumeration(
   ECase(EM_STM8);
   ECase(EM_TILE64);
   ECase(EM_TILEPRO);
+  ECase(EM_MICROBLAZE);
   ECase(EM_CUDA);
   ECase(EM_TILEGX);
   ECase(EM_CLOUDSHIELD);
@@ -232,6 +354,7 @@ void ScalarEnumerationTraits<ELFYAML::ELF_EM>::enumeration(
   ECase(EM_BPF);
   ECase(EM_VE);
   ECase(EM_CSKY);
+  ECase(EM_LOONGARCH);
 #undef ECase
   IO.enumFallback<Hex16>(Value);
 }
@@ -305,6 +428,7 @@ void ScalarBitSetTraits<ELFYAML::ELF_EF>::bitset(IO &IO,
     BCaseMask(EF_ARM_EABI_VER3, EF_ARM_EABIMASK);
     BCaseMask(EF_ARM_EABI_VER4, EF_ARM_EABIMASK);
     BCaseMask(EF_ARM_EABI_VER5, EF_ARM_EABIMASK);
+    BCaseMask(EF_ARM_BE8, EF_ARM_BE8);
     break;
   case ELF::EM_MIPS:
     BCase(EF_MIPS_NOREORDER);
@@ -352,46 +476,64 @@ void ScalarBitSetTraits<ELFYAML::ELF_EF>::bitset(IO &IO,
     BCaseMask(EF_MIPS_ARCH_64R6, EF_MIPS_ARCH);
     break;
   case ELF::EM_HEXAGON:
-    BCase(EF_HEXAGON_MACH_V2);
-    BCase(EF_HEXAGON_MACH_V3);
-    BCase(EF_HEXAGON_MACH_V4);
-    BCase(EF_HEXAGON_MACH_V5);
-    BCase(EF_HEXAGON_MACH_V55);
-    BCase(EF_HEXAGON_MACH_V60);
-    BCase(EF_HEXAGON_MACH_V62);
-    BCase(EF_HEXAGON_MACH_V65);
-    BCase(EF_HEXAGON_MACH_V66);
-    BCase(EF_HEXAGON_MACH_V67);
-    BCase(EF_HEXAGON_MACH_V67T);
-    BCase(EF_HEXAGON_ISA_V2);
-    BCase(EF_HEXAGON_ISA_V3);
-    BCase(EF_HEXAGON_ISA_V4);
-    BCase(EF_HEXAGON_ISA_V5);
-    BCase(EF_HEXAGON_ISA_V55);
-    BCase(EF_HEXAGON_ISA_V60);
-    BCase(EF_HEXAGON_ISA_V62);
-    BCase(EF_HEXAGON_ISA_V65);
-    BCase(EF_HEXAGON_ISA_V66);
-    BCase(EF_HEXAGON_ISA_V67);
+    BCaseMask(EF_HEXAGON_MACH_V2, EF_HEXAGON_MACH);
+    BCaseMask(EF_HEXAGON_MACH_V3, EF_HEXAGON_MACH);
+    BCaseMask(EF_HEXAGON_MACH_V4, EF_HEXAGON_MACH);
+    BCaseMask(EF_HEXAGON_MACH_V5, EF_HEXAGON_MACH);
+    BCaseMask(EF_HEXAGON_MACH_V55, EF_HEXAGON_MACH);
+    BCaseMask(EF_HEXAGON_MACH_V60, EF_HEXAGON_MACH);
+    BCaseMask(EF_HEXAGON_MACH_V62, EF_HEXAGON_MACH);
+    BCaseMask(EF_HEXAGON_MACH_V65, EF_HEXAGON_MACH);
+    BCaseMask(EF_HEXAGON_MACH_V66, EF_HEXAGON_MACH);
+    BCaseMask(EF_HEXAGON_MACH_V67, EF_HEXAGON_MACH);
+    BCaseMask(EF_HEXAGON_MACH_V67T, EF_HEXAGON_MACH);
+    BCaseMask(EF_HEXAGON_MACH_V68, EF_HEXAGON_MACH);
+    BCaseMask(EF_HEXAGON_MACH_V69, EF_HEXAGON_MACH);
+    BCaseMask(EF_HEXAGON_MACH_V71, EF_HEXAGON_MACH);
+    BCaseMask(EF_HEXAGON_MACH_V71T, EF_HEXAGON_MACH);
+    BCaseMask(EF_HEXAGON_MACH_V73, EF_HEXAGON_MACH);
+    BCaseMask(EF_HEXAGON_ISA_V2, EF_HEXAGON_ISA);
+    BCaseMask(EF_HEXAGON_ISA_V3, EF_HEXAGON_ISA);
+    BCaseMask(EF_HEXAGON_ISA_V4, EF_HEXAGON_ISA);
+    BCaseMask(EF_HEXAGON_ISA_V5, EF_HEXAGON_ISA);
+    BCaseMask(EF_HEXAGON_ISA_V55, EF_HEXAGON_ISA);
+    BCaseMask(EF_HEXAGON_ISA_V60, EF_HEXAGON_ISA);
+    BCaseMask(EF_HEXAGON_ISA_V62, EF_HEXAGON_ISA);
+    BCaseMask(EF_HEXAGON_ISA_V65, EF_HEXAGON_ISA);
+    BCaseMask(EF_HEXAGON_ISA_V66, EF_HEXAGON_ISA);
+    BCaseMask(EF_HEXAGON_ISA_V67, EF_HEXAGON_ISA);
+    BCaseMask(EF_HEXAGON_ISA_V68, EF_HEXAGON_ISA);
+    BCaseMask(EF_HEXAGON_ISA_V69, EF_HEXAGON_ISA);
+    BCaseMask(EF_HEXAGON_ISA_V71, EF_HEXAGON_ISA);
+    BCaseMask(EF_HEXAGON_ISA_V73, EF_HEXAGON_ISA);
     break;
   case ELF::EM_AVR:
-    BCase(EF_AVR_ARCH_AVR1);
-    BCase(EF_AVR_ARCH_AVR2);
-    BCase(EF_AVR_ARCH_AVR25);
-    BCase(EF_AVR_ARCH_AVR3);
-    BCase(EF_AVR_ARCH_AVR31);
-    BCase(EF_AVR_ARCH_AVR35);
-    BCase(EF_AVR_ARCH_AVR4);
-    BCase(EF_AVR_ARCH_AVR51);
-    BCase(EF_AVR_ARCH_AVR6);
-    BCase(EF_AVR_ARCH_AVRTINY);
-    BCase(EF_AVR_ARCH_XMEGA1);
-    BCase(EF_AVR_ARCH_XMEGA2);
-    BCase(EF_AVR_ARCH_XMEGA3);
-    BCase(EF_AVR_ARCH_XMEGA4);
-    BCase(EF_AVR_ARCH_XMEGA5);
-    BCase(EF_AVR_ARCH_XMEGA6);
-    BCase(EF_AVR_ARCH_XMEGA7);
+    BCaseMask(EF_AVR_ARCH_AVR1, EF_AVR_ARCH_MASK);
+    BCaseMask(EF_AVR_ARCH_AVR2, EF_AVR_ARCH_MASK);
+    BCaseMask(EF_AVR_ARCH_AVR25, EF_AVR_ARCH_MASK);
+    BCaseMask(EF_AVR_ARCH_AVR3, EF_AVR_ARCH_MASK);
+    BCaseMask(EF_AVR_ARCH_AVR31, EF_AVR_ARCH_MASK);
+    BCaseMask(EF_AVR_ARCH_AVR35, EF_AVR_ARCH_MASK);
+    BCaseMask(EF_AVR_ARCH_AVR4, EF_AVR_ARCH_MASK);
+    BCaseMask(EF_AVR_ARCH_AVR5, EF_AVR_ARCH_MASK);
+    BCaseMask(EF_AVR_ARCH_AVR51, EF_AVR_ARCH_MASK);
+    BCaseMask(EF_AVR_ARCH_AVR6, EF_AVR_ARCH_MASK);
+    BCaseMask(EF_AVR_ARCH_AVRTINY, EF_AVR_ARCH_MASK);
+    BCaseMask(EF_AVR_ARCH_XMEGA1, EF_AVR_ARCH_MASK);
+    BCaseMask(EF_AVR_ARCH_XMEGA2, EF_AVR_ARCH_MASK);
+    BCaseMask(EF_AVR_ARCH_XMEGA3, EF_AVR_ARCH_MASK);
+    BCaseMask(EF_AVR_ARCH_XMEGA4, EF_AVR_ARCH_MASK);
+    BCaseMask(EF_AVR_ARCH_XMEGA5, EF_AVR_ARCH_MASK);
+    BCaseMask(EF_AVR_ARCH_XMEGA6, EF_AVR_ARCH_MASK);
+    BCaseMask(EF_AVR_ARCH_XMEGA7, EF_AVR_ARCH_MASK);
+    BCase(EF_AVR_LINKRELAX_PREPARED);
+    break;
+  case ELF::EM_LOONGARCH:
+    BCaseMask(EF_LOONGARCH_ABI_SOFT_FLOAT, EF_LOONGARCH_ABI_MODIFIER_MASK);
+    BCaseMask(EF_LOONGARCH_ABI_SINGLE_FLOAT, EF_LOONGARCH_ABI_MODIFIER_MASK);
+    BCaseMask(EF_LOONGARCH_ABI_DOUBLE_FLOAT, EF_LOONGARCH_ABI_MODIFIER_MASK);
+    BCaseMask(EF_LOONGARCH_OBJABI_V0, EF_LOONGARCH_OBJABI_MASK);
+    BCaseMask(EF_LOONGARCH_OBJABI_V1, EF_LOONGARCH_OBJABI_MASK);
     break;
   case ELF::EM_RISCV:
     BCase(EF_RISCV_RVC);
@@ -400,6 +542,12 @@ void ScalarBitSetTraits<ELFYAML::ELF_EF>::bitset(IO &IO,
     BCaseMask(EF_RISCV_FLOAT_ABI_DOUBLE, EF_RISCV_FLOAT_ABI);
     BCaseMask(EF_RISCV_FLOAT_ABI_QUAD, EF_RISCV_FLOAT_ABI);
     BCase(EF_RISCV_RVE);
+    BCase(EF_RISCV_TSO);
+    break;
+  case ELF::EM_XTENSA:
+    BCase(EF_XTENSA_XT_INSN);
+    BCaseMask(EF_XTENSA_MACH_NONE, EF_XTENSA_MACH);
+    BCase(EF_XTENSA_XT_LIT);
     break;
   case ELF::EM_AMDGPU:
     BCaseMask(EF_AMDGPU_MACH_NONE, EF_AMDGPU_MACH);
@@ -439,16 +587,56 @@ void ScalarBitSetTraits<ELFYAML::ELF_EF>::bitset(IO &IO,
     BCaseMask(EF_AMDGPU_MACH_AMDGCN_GFX906, EF_AMDGPU_MACH);
     BCaseMask(EF_AMDGPU_MACH_AMDGCN_GFX908, EF_AMDGPU_MACH);
     BCaseMask(EF_AMDGPU_MACH_AMDGCN_GFX909, EF_AMDGPU_MACH);
+    BCaseMask(EF_AMDGPU_MACH_AMDGCN_GFX90A, EF_AMDGPU_MACH);
     BCaseMask(EF_AMDGPU_MACH_AMDGCN_GFX90C, EF_AMDGPU_MACH);
+    BCaseMask(EF_AMDGPU_MACH_AMDGCN_GFX940, EF_AMDGPU_MACH);
+    BCaseMask(EF_AMDGPU_MACH_AMDGCN_GFX941, EF_AMDGPU_MACH);
+    BCaseMask(EF_AMDGPU_MACH_AMDGCN_GFX942, EF_AMDGPU_MACH);
     BCaseMask(EF_AMDGPU_MACH_AMDGCN_GFX1010, EF_AMDGPU_MACH);
     BCaseMask(EF_AMDGPU_MACH_AMDGCN_GFX1011, EF_AMDGPU_MACH);
     BCaseMask(EF_AMDGPU_MACH_AMDGCN_GFX1012, EF_AMDGPU_MACH);
+    BCaseMask(EF_AMDGPU_MACH_AMDGCN_GFX1013, EF_AMDGPU_MACH);
     BCaseMask(EF_AMDGPU_MACH_AMDGCN_GFX1030, EF_AMDGPU_MACH);
     BCaseMask(EF_AMDGPU_MACH_AMDGCN_GFX1031, EF_AMDGPU_MACH);
     BCaseMask(EF_AMDGPU_MACH_AMDGCN_GFX1032, EF_AMDGPU_MACH);
     BCaseMask(EF_AMDGPU_MACH_AMDGCN_GFX1033, EF_AMDGPU_MACH);
-    BCase(EF_AMDGPU_XNACK);
-    BCase(EF_AMDGPU_SRAM_ECC);
+    BCaseMask(EF_AMDGPU_MACH_AMDGCN_GFX1034, EF_AMDGPU_MACH);
+    BCaseMask(EF_AMDGPU_MACH_AMDGCN_GFX1035, EF_AMDGPU_MACH);
+    BCaseMask(EF_AMDGPU_MACH_AMDGCN_GFX1036, EF_AMDGPU_MACH);
+    BCaseMask(EF_AMDGPU_MACH_AMDGCN_GFX1100, EF_AMDGPU_MACH);
+    BCaseMask(EF_AMDGPU_MACH_AMDGCN_GFX1101, EF_AMDGPU_MACH);
+    BCaseMask(EF_AMDGPU_MACH_AMDGCN_GFX1102, EF_AMDGPU_MACH);
+    BCaseMask(EF_AMDGPU_MACH_AMDGCN_GFX1103, EF_AMDGPU_MACH);
+    BCaseMask(EF_AMDGPU_MACH_AMDGCN_GFX1150, EF_AMDGPU_MACH);
+    BCaseMask(EF_AMDGPU_MACH_AMDGCN_GFX1151, EF_AMDGPU_MACH);
+    switch (Object->Header.ABIVersion) {
+    default:
+      // ELFOSABI_AMDGPU_PAL, ELFOSABI_AMDGPU_MESA3D support *_V3 flags.
+      [[fallthrough]];
+    case ELF::ELFABIVERSION_AMDGPU_HSA_V3:
+      BCase(EF_AMDGPU_FEATURE_XNACK_V3);
+      BCase(EF_AMDGPU_FEATURE_SRAMECC_V3);
+      break;
+    case ELF::ELFABIVERSION_AMDGPU_HSA_V4:
+    case ELF::ELFABIVERSION_AMDGPU_HSA_V5:
+      BCaseMask(EF_AMDGPU_FEATURE_XNACK_UNSUPPORTED_V4,
+                EF_AMDGPU_FEATURE_XNACK_V4);
+      BCaseMask(EF_AMDGPU_FEATURE_XNACK_ANY_V4,
+                EF_AMDGPU_FEATURE_XNACK_V4);
+      BCaseMask(EF_AMDGPU_FEATURE_XNACK_OFF_V4,
+                EF_AMDGPU_FEATURE_XNACK_V4);
+      BCaseMask(EF_AMDGPU_FEATURE_XNACK_ON_V4,
+                EF_AMDGPU_FEATURE_XNACK_V4);
+      BCaseMask(EF_AMDGPU_FEATURE_SRAMECC_UNSUPPORTED_V4,
+                EF_AMDGPU_FEATURE_SRAMECC_V4);
+      BCaseMask(EF_AMDGPU_FEATURE_SRAMECC_ANY_V4,
+                EF_AMDGPU_FEATURE_SRAMECC_V4);
+      BCaseMask(EF_AMDGPU_FEATURE_SRAMECC_OFF_V4,
+                EF_AMDGPU_FEATURE_SRAMECC_V4);
+      BCaseMask(EF_AMDGPU_FEATURE_SRAMECC_ON_V4,
+                EF_AMDGPU_FEATURE_SRAMECC_V4);
+      break;
+    }
     break;
   default:
     break;
@@ -492,7 +680,10 @@ void ScalarEnumerationTraits<ELFYAML::ELF_SHT>::enumeration(
   ECase(SHT_LLVM_SYMPART);
   ECase(SHT_LLVM_PART_EHDR);
   ECase(SHT_LLVM_PART_PHDR);
+  ECase(SHT_LLVM_BB_ADDR_MAP_V0);
   ECase(SHT_LLVM_BB_ADDR_MAP);
+  ECase(SHT_LLVM_OFFLOADING);
+  ECase(SHT_LLVM_LTO);
   ECase(SHT_GNU_ATTRIBUTES);
   ECase(SHT_GNU_HASH);
   ECase(SHT_GNU_verdef);
@@ -520,6 +711,13 @@ void ScalarEnumerationTraits<ELFYAML::ELF_SHT>::enumeration(
     break;
   case ELF::EM_RISCV:
     ECase(SHT_RISCV_ATTRIBUTES);
+    break;
+  case ELF::EM_MSP430:
+    ECase(SHT_MSP430_ATTRIBUTES);
+    break;
+  case ELF::EM_AARCH64:
+    ECase(SHT_AARCH64_MEMTAG_GLOBALS_STATIC);
+    ECase(SHT_AARCH64_MEMTAG_GLOBALS_DYNAMIC);
     break;
   default:
     // Nothing to do.
@@ -553,6 +751,14 @@ void ScalarBitSetTraits<ELFYAML::ELF_SHF>::bitset(IO &IO,
   BCase(SHF_GROUP);
   BCase(SHF_TLS);
   BCase(SHF_COMPRESSED);
+  switch (Object->getOSAbi()) {
+  case ELF::ELFOSABI_SOLARIS:
+    BCase(SHF_SUNW_NODISCARD);
+    break;
+  default:
+    BCase(SHF_GNU_RETAIN);
+    break;
+  }
   switch (Object->getMachine()) {
   case ELF::EM_ARM:
     BCase(SHF_ARM_PURECODE);
@@ -582,6 +788,8 @@ void ScalarBitSetTraits<ELFYAML::ELF_SHF>::bitset(IO &IO,
 
 void ScalarEnumerationTraits<ELFYAML::ELF_SHN>::enumeration(
     IO &IO, ELFYAML::ELF_SHN &Value) {
+  const auto *Object = static_cast<ELFYAML::Object *>(IO.getContext());
+  assert(Object && "The IO context is not initialized");
 #define ECase(X) IO.enumCase(Value, #X, ELF::X)
   ECase(SHN_UNDEF);
   ECase(SHN_LORESERVE);
@@ -594,6 +802,15 @@ void ScalarEnumerationTraits<ELFYAML::ELF_SHN>::enumeration(
   ECase(SHN_XINDEX);
   ECase(SHN_HIRESERVE);
   ECase(SHN_AMDGPU_LDS);
+
+  if (!IO.outputting() || Object->getMachine() == ELF::EM_MIPS) {
+    ECase(SHN_MIPS_ACOMMON);
+    ECase(SHN_MIPS_TEXT);
+    ECase(SHN_MIPS_DATA);
+    ECase(SHN_MIPS_SCOMMON);
+    ECase(SHN_MIPS_SUNDEFINED);
+  }
+
   ECase(SHN_HEXAGON_SCOMMON);
   ECase(SHN_HEXAGON_SCOMMON_1);
   ECase(SHN_HEXAGON_SCOMMON_2);
@@ -686,8 +903,20 @@ void ScalarEnumerationTraits<ELFYAML::ELF_REL>::enumeration(
   case ELF::EM_CSKY:
 #include "llvm/BinaryFormat/ELFRelocs/CSKY.def"
     break;
+  case ELF::EM_PPC:
+#include "llvm/BinaryFormat/ELFRelocs/PowerPC.def"
+    break;
   case ELF::EM_PPC64:
 #include "llvm/BinaryFormat/ELFRelocs/PowerPC64.def"
+    break;
+  case ELF::EM_68K:
+#include "llvm/BinaryFormat/ELFRelocs/M68k.def"
+    break;
+  case ELF::EM_LOONGARCH:
+#include "llvm/BinaryFormat/ELFRelocs/LoongArch.def"
+    break;
+  case ELF::EM_XTENSA:
+#include "llvm/BinaryFormat/ELFRelocs/Xtensa.def"
     break;
   default:
     // Nothing to do.
@@ -748,6 +977,13 @@ void ScalarEnumerationTraits<ELFYAML::ELF_DYNTAG>::enumeration(
 #include "llvm/BinaryFormat/DynamicTags.def"
 #undef PPC64_DYNAMIC_TAG
 #define PPC64_DYNAMIC_TAG(name, value)
+    break;
+  case ELF::EM_RISCV:
+#undef RISCV_DYNAMIC_TAG
+#define RISCV_DYNAMIC_TAG(name, value) DYNAMIC_TAG(name, value)
+#include "llvm/BinaryFormat/DynamicTags.def"
+#undef RISCV_DYNAMIC_TAG
+#define RISCV_DYNAMIC_TAG(name, value)
     break;
   default:
 #include "llvm/BinaryFormat/DynamicTags.def"
@@ -860,23 +1096,6 @@ void MappingTraits<ELFYAML::SectionHeader>::mapping(
   IO.mapRequired("Name", SHdr.Name);
 }
 
-void MappingTraits<ELFYAML::SectionHeaderTable>::mapping(
-    IO &IO, ELFYAML::SectionHeaderTable &SectionHeader) {
-  IO.mapOptional("Sections", SectionHeader.Sections);
-  IO.mapOptional("Excluded", SectionHeader.Excluded);
-  IO.mapOptional("NoHeaders", SectionHeader.NoHeaders);
-}
-
-std::string MappingTraits<ELFYAML::SectionHeaderTable>::validate(
-    IO &IO, ELFYAML::SectionHeaderTable &SecHdrTable) {
-  if (SecHdrTable.NoHeaders && (SecHdrTable.Sections || SecHdrTable.Excluded))
-    return "NoHeaders can't be used together with Sections/Excluded";
-  if (!SecHdrTable.NoHeaders && !SecHdrTable.Sections && !SecHdrTable.Excluded)
-    return "SectionHeaderTable can't be empty. Use 'NoHeaders' key to drop the "
-           "section header table";
-  return "";
-}
-
 void MappingTraits<ELFYAML::FileHeader>::mapping(IO &IO,
                                                  ELFYAML::FileHeader &FileHdr) {
   IO.mapRequired("Class", FileHdr.Class);
@@ -887,6 +1106,7 @@ void MappingTraits<ELFYAML::FileHeader>::mapping(IO &IO,
   IO.mapOptional("Machine", FileHdr.Machine);
   IO.mapOptional("Flags", FileHdr.Flags, ELFYAML::ELF_EF(0));
   IO.mapOptional("Entry", FileHdr.Entry, Hex64(0));
+  IO.mapOptional("SectionHeaderStringTable", FileHdr.SectionHeaderStringTable);
 
   // obj2yaml does not dump these fields.
   assert(!IO.outputting() ||
@@ -961,7 +1181,7 @@ namespace {
 
 struct NormalizedOther {
   NormalizedOther(IO &IO) : YamlIO(IO) {}
-  NormalizedOther(IO &IO, Optional<uint8_t> Original) : YamlIO(IO) {
+  NormalizedOther(IO &IO, std::optional<uint8_t> Original) : YamlIO(IO) {
     assert(Original && "This constructor is only used for outputting YAML and "
                        "assumes a non-empty Original");
     std::vector<StOtherPiece> Ret;
@@ -1001,9 +1221,9 @@ struct NormalizedOther {
     return 0;
   }
 
-  Optional<uint8_t> denormalize(IO &) {
+  std::optional<uint8_t> denormalize(IO &) {
     if (!Other)
-      return None;
+      return std::nullopt;
     uint8_t Ret = 0;
     for (StOtherPiece &Val : *Other)
       Ret |= toValue(Val);
@@ -1043,11 +1263,13 @@ struct NormalizedOther {
 
     if (EMachine == ELF::EM_AARCH64)
       Map["STO_AARCH64_VARIANT_PCS"] = ELF::STO_AARCH64_VARIANT_PCS;
+    if (EMachine == ELF::EM_RISCV)
+      Map["STO_RISCV_VARIANT_CC"] = ELF::STO_RISCV_VARIANT_CC;
     return Map;
   }
 
   IO &YamlIO;
-  Optional<std::vector<StOtherPiece>> Other;
+  std::optional<std::vector<StOtherPiece>> Other;
   std::string UnknownFlagsHolder;
 };
 
@@ -1097,11 +1319,11 @@ void MappingTraits<ELFYAML::Symbol>::mapping(IO &IO, ELFYAML::Symbol &Symbol) {
 
   // Symbol's Other field is a bit special. It is usually a field that
   // represents st_other and holds the symbol visibility. However, on some
-  // platforms, it can contain bit fields and regular values, or even sometimes a
-  // crazy mix of them (see comments for NormalizedOther). Because of this, we
+  // platforms, it can contain bit fields and regular values, or even sometimes
+  // a crazy mix of them (see comments for NormalizedOther). Because of this, we
   // need special handling.
-  MappingNormalization<NormalizedOther, Optional<uint8_t>> Keys(IO,
-                                                                Symbol.Other);
+  MappingNormalization<NormalizedOther, std::optional<uint8_t>> Keys(
+      IO, Symbol.Other);
   IO.mapOptional("Other", Keys->Other);
 }
 
@@ -1149,7 +1371,7 @@ static void sectionMapping(IO &IO, ELFYAML::RawContentSection &Section) {
 
   // We also support reading a content as array of bytes using the ContentArray
   // key. obj2yaml never prints this field.
-  assert(!IO.outputting() || !Section.ContentBuf.hasValue());
+  assert(!IO.outputting() || !Section.ContentBuf);
   IO.mapOptional("ContentArray", Section.ContentBuf);
   if (Section.ContentBuf) {
     if (Section.Content)
@@ -1178,8 +1400,7 @@ static void sectionMapping(IO &IO, ELFYAML::HashSection &Section) {
 
   // obj2yaml does not dump these fields. They can be used to override nchain
   // and nbucket values for creating broken sections.
-  assert(!IO.outputting() ||
-         (!Section.NBucket.hasValue() && !Section.NChain.hasValue()));
+  assert(!IO.outputting() || (!Section.NBucket && !Section.NChain));
   IO.mapOptional("NChain", Section.NChain);
   IO.mapOptional("NBucket", Section.NBucket);
 }
@@ -1203,7 +1424,7 @@ static void sectionMapping(IO &IO, ELFYAML::NoBitsSection &Section) {
 
 static void sectionMapping(IO &IO, ELFYAML::VerdefSection &Section) {
   commonSectionMapping(IO, Section);
-  IO.mapRequired("Info", Section.Info);
+  IO.mapOptional("Info", Section.Info);
   IO.mapOptional("Entries", Section.Entries);
 }
 
@@ -1214,7 +1435,7 @@ static void sectionMapping(IO &IO, ELFYAML::SymverSection &Section) {
 
 static void sectionMapping(IO &IO, ELFYAML::VerneedSection &Section) {
   commonSectionMapping(IO, Section);
-  IO.mapRequired("Info", Section.Info);
+  IO.mapOptional("Info", Section.Info);
   IO.mapOptional("Dependencies", Section.VerneedV);
 }
 
@@ -1250,6 +1471,14 @@ static void fillMapping(IO &IO, ELFYAML::Fill &Fill) {
   IO.mapOptional("Pattern", Fill.Pattern);
   IO.mapOptional("Offset", Fill.Offset);
   IO.mapRequired("Size", Fill.Size);
+}
+
+static void sectionHeaderTableMapping(IO &IO,
+                                      ELFYAML::SectionHeaderTable &SHT) {
+  IO.mapOptional("Offset", SHT.Offset);
+  IO.mapOptional("Sections", SHT.Sections);
+  IO.mapOptional("Excluded", SHT.Excluded);
+  IO.mapOptional("NoHeaders", SHT.NoHeaders);
 }
 
 static void sectionMapping(IO &IO, ELFYAML::LinkerOptionsSection &Section) {
@@ -1304,22 +1533,48 @@ static StringRef getStringValue(IO &IO, const char *Key) {
   return Val;
 }
 
+static void setStringValue(IO &IO, const char *Key, StringRef Val) {
+  IO.mapRequired(Key, Val);
+}
+
+static bool isInteger(StringRef Val) {
+  APInt Tmp;
+  return !Val.getAsInteger(0, Tmp);
+}
+
 void MappingTraits<std::unique_ptr<ELFYAML::Chunk>>::mapping(
     IO &IO, std::unique_ptr<ELFYAML::Chunk> &Section) {
   ELFYAML::ELF_SHT Type;
+  StringRef TypeStr;
   if (IO.outputting()) {
-    Type = cast<ELFYAML::Section>(Section.get())->Type;
+    if (auto *S = dyn_cast<ELFYAML::Section>(Section.get()))
+      Type = S->Type;
+    else if (auto *SHT = dyn_cast<ELFYAML::SectionHeaderTable>(Section.get()))
+      TypeStr = SHT->TypeStr;
   } else {
     // When the Type string does not have a "SHT_" prefix, we know it is not a
-    // description of a regular ELF output section. Currently, we have one
-    // special type named "Fill". See comments for Fill.
-    if (getStringValue(IO, "Type") == "Fill") {
-      Section.reset(new ELFYAML::Fill());
-      fillMapping(IO, *cast<ELFYAML::Fill>(Section.get()));
-      return;
-    }
+    // description of a regular ELF output section.
+    TypeStr = getStringValue(IO, "Type");
+    if (TypeStr.startswith("SHT_") || isInteger(TypeStr))
+      IO.mapRequired("Type", Type);
+  }
 
-    IO.mapRequired("Type", Type);
+  if (TypeStr == "Fill") {
+    assert(!IO.outputting()); // We don't dump fills currently.
+    Section.reset(new ELFYAML::Fill());
+    fillMapping(IO, *cast<ELFYAML::Fill>(Section.get()));
+    return;
+  }
+
+  if (TypeStr == ELFYAML::SectionHeaderTable::TypeStr) {
+    if (IO.outputting())
+      setStringValue(IO, "Type", TypeStr);
+    else
+      Section.reset(new ELFYAML::SectionHeaderTable(/*IsImplicit=*/false));
+
+    sectionHeaderTableMapping(
+        IO, *cast<ELFYAML::SectionHeaderTable>(Section.get()));
+    return;
   }
 
   const auto &Obj = *static_cast<ELFYAML::Object *>(IO.getContext());
@@ -1420,6 +1675,7 @@ void MappingTraits<std::unique_ptr<ELFYAML::Chunk>>::mapping(
       Section.reset(new ELFYAML::CallGraphProfileSection());
     sectionMapping(IO, *cast<ELFYAML::CallGraphProfileSection>(Section.get()));
     break;
+  case ELF::SHT_LLVM_BB_ADDR_MAP_V0:
   case ELF::SHT_LLVM_BB_ADDR_MAP:
     if (!IO.outputting())
       Section.reset(new ELFYAML::BBAddrMapSection());
@@ -1449,6 +1705,12 @@ std::string MappingTraits<std::unique_ptr<ELFYAML::Chunk>>::validate(
   if (const auto *F = dyn_cast<ELFYAML::Fill>(C.get())) {
     if (F->Pattern && F->Pattern->binary_size() != 0 && !F->Size)
       return "\"Size\" can't be 0 when \"Pattern\" is not empty";
+    return "";
+  }
+
+  if (const auto *SHT = dyn_cast<ELFYAML::SectionHeaderTable>(C.get())) {
+    if (SHT->NoHeaders && (SHT->Sections || SHT->Excluded || SHT->Offset))
+      return "NoHeaders can't be used together with Offset/Sections/Excluded";
     return "";
   }
 
@@ -1543,13 +1805,17 @@ void MappingTraits<ELFYAML::StackSizeEntry>::mapping(
 void MappingTraits<ELFYAML::BBAddrMapEntry>::mapping(
     IO &IO, ELFYAML::BBAddrMapEntry &E) {
   assert(IO.getContext() && "The IO context is not initialized");
+  IO.mapRequired("Version", E.Version);
+  IO.mapOptional("Feature", E.Feature, Hex8(0));
   IO.mapOptional("Address", E.Address, Hex64(0));
+  IO.mapOptional("NumBlocks", E.NumBlocks);
   IO.mapOptional("BBEntries", E.BBEntries);
 }
 
 void MappingTraits<ELFYAML::BBAddrMapEntry::BBEntry>::mapping(
     IO &IO, ELFYAML::BBAddrMapEntry::BBEntry &E) {
   assert(IO.getContext() && "The IO context is not initialized");
+  IO.mapOptional("ID", E.ID);
   IO.mapRequired("AddressOffset", E.AddressOffset);
   IO.mapRequired("Size", E.Size);
   IO.mapRequired("Metadata", E.Metadata);
@@ -1584,10 +1850,10 @@ void MappingTraits<ELFYAML::VerdefEntry>::mapping(IO &IO,
                                                   ELFYAML::VerdefEntry &E) {
   assert(IO.getContext() && "The IO context is not initialized");
 
-  IO.mapRequired("Version", E.Version);
-  IO.mapRequired("Flags", E.Flags);
-  IO.mapRequired("VersionNdx", E.VersionNdx);
-  IO.mapRequired("Hash", E.Hash);
+  IO.mapOptional("Version", E.Version);
+  IO.mapOptional("Flags", E.Flags);
+  IO.mapOptional("VersionNdx", E.VersionNdx);
+  IO.mapOptional("Hash", E.Hash);
   IO.mapRequired("Names", E.VerNames);
 }
 
@@ -1656,7 +1922,6 @@ void MappingTraits<ELFYAML::Object>::mapping(IO &IO, ELFYAML::Object &Object) {
   IO.mapOptional("Symbols", Object.Symbols);
   IO.mapOptional("DynamicSymbols", Object.DynamicSymbols);
   IO.mapOptional("DWARF", Object.DWARF);
-  IO.mapOptional("SectionHeaderTable", Object.SectionHeaders);
   if (Object.DWARF) {
     Object.DWARF->IsLittleEndian =
         Object.Header.Data == ELFYAML::ELF_ELFDATA(ELF::ELFDATA2LSB);
@@ -1673,11 +1938,9 @@ void MappingTraits<ELFYAML::LinkerOption>::mapping(IO &IO,
   IO.mapRequired("Value", Opt.Value);
 }
 
-void MappingTraits<ELFYAML::CallGraphEntry>::mapping(
-    IO &IO, ELFYAML::CallGraphEntry &E) {
+void MappingTraits<ELFYAML::CallGraphEntryWeight>::mapping(
+    IO &IO, ELFYAML::CallGraphEntryWeight &E) {
   assert(IO.getContext() && "The IO context is not initialized");
-  IO.mapRequired("From", E.From);
-  IO.mapRequired("To", E.To);
   IO.mapRequired("Weight", E.Weight);
 }
 

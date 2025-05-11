@@ -1,9 +1,8 @@
 //===- lib/Core/FileSystem.cpp - File System --------------------*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 ///
@@ -14,6 +13,7 @@
 
 #include "tapi/Core/FileSystem.h"
 #include "tapi/Core/LLVM.h"
+#include "tapi/Core/Utils.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/Support/Errc.h"
 #include "llvm/Support/FileSystem.h"
@@ -37,7 +37,7 @@ std::error_code realpath(SmallVectorImpl<char> &path) {
     return {errno, std::generic_category()};
 
   assert(ptr == result.data() && "Unexpected pointer");
-  result.set_size(strlen(result.data()));
+  result.resize_for_overwrite(strlen(result.data()));
   path.swap(result);
   return {};
 }
@@ -51,7 +51,7 @@ std::error_code read_link(const Twine &path, SmallVectorImpl<char> &linkPath) {
   if ((len = ::readlink(p.data(), result.data(), PATH_MAX)) == -1)
     return {errno, std::generic_category()};
 
-  result.set_size(len);
+  result.resize_for_overwrite(len);
   linkPath.swap(result);
 
   return {};
@@ -99,7 +99,7 @@ std::error_code make_relative(StringRef from, StringRef to,
     return ec;
 
   SmallString<PATH_MAX> result;
-  src = sys::path::parent_path(src);
+  src = sys::path::parent_path(from);
   auto it1 = sys::path::begin(src), it2 = sys::path::begin(dst),
        ie1 = sys::path::end(src), ie2 = sys::path::end(dst);
   // ignore the common part.
@@ -123,38 +123,76 @@ std::error_code make_relative(StringRef from, StringRef to,
 }
 
 MaskingOverlayFileSystem::MaskingOverlayFileSystem(
-    IntrusiveRefCntPtr<FileSystem> base, StringRef root)
-    : OverlayFileSystem(base), sysroot(root.data(), root.size()) {}
+    IntrusiveRefCntPtr<FileSystem> base)
+    : OverlayFileSystem(base) {}
 
 ErrorOr<vfs::Status> MaskingOverlayFileSystem::status(const Twine &path) {
+  if (pathMasked(path))
+    return llvm::errc::no_such_file_or_directory;
+
+  return OverlayFileSystem::status(path);
+}
+vfs::directory_iterator
+MaskingOverlayFileSystem::dir_begin(const Twine &dir, std::error_code &ec) {
+  if (pathMasked(dir)) {
+    ec = llvm::errc::no_such_file_or_directory;
+    return vfs::directory_iterator();
+  }
+
+  return OverlayFileSystem::dir_begin(dir, ec);
+}
+
+std::error_code
+MaskingOverlayFileSystem::setCurrentWorkingDirectory(const Twine &path) {
+  if (pathMasked(path))
+    return llvm::errc::no_such_file_or_directory;
+
+  return OverlayFileSystem::setCurrentWorkingDirectory(path);
+}
+
+std::error_code MaskingOverlayFileSystem::isLocal(const Twine &path,
+                                                  bool &result) {
+  if (pathMasked(path))
+    return llvm::errc::no_such_file_or_directory;
+
+  return OverlayFileSystem::isLocal(path, result);
+}
+
+ErrorOr<std::unique_ptr<vfs::File>>
+MaskingOverlayFileSystem::openFileForRead(const Twine &path) {
+  if (pathMasked(path))
+    return llvm::errc::no_such_file_or_directory;
+
+  return OverlayFileSystem::openFileForRead(path);
+}
+
+PathMaskingOverlayFileSystem::PathMaskingOverlayFileSystem(
+    IntrusiveRefCntPtr<FileSystem> base)
+    : MaskingOverlayFileSystem(base) {}
+
+bool PathMaskingOverlayFileSystem::pathMasked(const Twine &path) const {
+  SmallString<PATH_MAX> realPath;
+  auto p = path.toStringRef(realPath);
+  for (auto &mask : extraMaskingPath) {
+    if (p.startswith(mask))
+      return true;
+  }
+  return false;
+}
+
+PublicSDKOverlayFileSystem::PublicSDKOverlayFileSystem(
+    IntrusiveRefCntPtr<FileSystem> base, StringRef sysroot)
+    : MaskingOverlayFileSystem(base), sysroot(sysroot.data(), sysroot.size()) {}
+
+bool PublicSDKOverlayFileSystem::pathMasked(const Twine &path) const {
   SmallString<PATH_MAX> realPath;
   auto p = path.toStringRef(realPath);
   // If the path is from sysroot, try to test if that is a public location.
   // This is a looser check than strict public location check for now.
-  if (p.consume_front(sysroot)) {
-    // Remove the iOSSupport/DriverKit prefix to identify public locations
-    // inside the iOSSupport/DriverKit directory.
-    p.consume_front("/System/iOSSupport");
-    p.consume_front("/System/DriverKit");
-    // Apply extra masks first.
-    for (auto &mask : extraMaskingPath) {
-      if (p.startswith(mask))
-        return llvm::errc::no_such_file_or_directory;
-    }
-    if (p.consume_front("/usr/local") ||
-        p.consume_front("/System/Library/PrivateFrameworks"))
-      return llvm::errc::no_such_file_or_directory;
-    if (p.consume_front("/System/Library/Frameworks/")) {
-      // Exclude everything from PrivateHeaders.
-      while (!p.empty()) {
-        auto split = p.split('/');
-        if (split.first == "PrivateHeaders")
-          return llvm::errc::no_such_file_or_directory;
-        p = split.second;
-      }
-    }
-  }
-  return OverlayFileSystem::status(path);
+  if (p.consume_front(sysroot))
+    return !isWithinPublicLocation(p);
+
+  return false;
 }
 
 TAPI_NAMESPACE_INTERNAL_END

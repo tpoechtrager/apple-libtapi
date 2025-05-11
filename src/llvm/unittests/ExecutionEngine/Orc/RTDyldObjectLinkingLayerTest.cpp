@@ -15,43 +15,43 @@
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/LLVMContext.h"
 #include "gtest/gtest.h"
+#include <string>
 
 using namespace llvm;
 using namespace llvm::orc;
 
 namespace {
 
-class RTDyldObjectLinkingLayerExecutionTest : public testing::Test,
-                                               public OrcExecutionTest {};
-
-// Adds an object with a debug section to RuntimeDyld and then returns whether
-// the debug section was passed to the memory manager.
+// Returns whether a non-alloc section was passed to the memory manager.
 static bool testSetProcessAllSections(std::unique_ptr<MemoryBuffer> Obj,
                                       bool ProcessAllSections) {
   class MemoryManagerWrapper : public SectionMemoryManager {
   public:
-    MemoryManagerWrapper(bool &DebugSeen) : DebugSeen(DebugSeen) {}
+    MemoryManagerWrapper(bool &NonAllocSeen) : NonAllocSeen(NonAllocSeen) {}
     uint8_t *allocateDataSection(uintptr_t Size, unsigned Alignment,
                                  unsigned SectionID, StringRef SectionName,
                                  bool IsReadOnly) override {
-      if (SectionName == ".debug_str")
-        DebugSeen = true;
+      // We check for ".note.GNU-stack" here because it is currently the only
+      // non-alloc section seen in the module. If this changes in future any
+      // other non-alloc section would do here.
+      if (SectionName == ".note.GNU-stack")
+        NonAllocSeen = true;
       return SectionMemoryManager::allocateDataSection(
           Size, Alignment, SectionID, SectionName, IsReadOnly);
     }
 
   private:
-    bool &DebugSeen;
+    bool &NonAllocSeen;
   };
 
-  bool DebugSectionSeen = false;
+  bool NonAllocSectionSeen = false;
 
-  ExecutionSession ES;
+  ExecutionSession ES(std::make_unique<UnsupportedExecutorProcessControl>());
   auto &JD = ES.createBareJITDylib("main");
   auto Foo = ES.intern("foo");
 
-  RTDyldObjectLinkingLayer ObjLayer(ES, [&DebugSectionSeen]() {
-    return std::make_unique<MemoryManagerWrapper>(DebugSectionSeen);
+  RTDyldObjectLinkingLayer ObjLayer(ES, [&NonAllocSectionSeen]() {
+    return std::make_unique<MemoryManagerWrapper>(NonAllocSectionSeen);
   });
 
   auto OnResolveDoNothing = [](Expected<SymbolMap> R) {
@@ -67,13 +67,16 @@ static bool testSetProcessAllSections(std::unique_ptr<MemoryBuffer> Obj,
   if (auto Err = ES.endSession())
     ES.reportError(std::move(Err));
 
-  return DebugSectionSeen;
+  return NonAllocSectionSeen;
 }
 
 TEST(RTDyldObjectLinkingLayerTest, TestSetProcessAllSections) {
   LLVMContext Context;
   auto M = std::make_unique<Module>("", Context);
   M->setTargetTriple("x86_64-unknown-linux-gnu");
+
+  // These values are only here to ensure that the module is non-empty.
+  // They are no longer relevant to the test.
   Constant *StrConstant = ConstantDataArray::getString(Context, "forty-two");
   auto *GV =
       new GlobalVariable(*M, StrConstant->getType(), true,
@@ -81,23 +84,21 @@ TEST(RTDyldObjectLinkingLayerTest, TestSetProcessAllSections) {
   GV->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
   GV->setAlignment(Align(1));
 
-  GV->setSection(".debug_str");
-
   // Initialize the native target in case this is the first unit test
   // to try to build a TM.
   OrcNativeTarget::initialize();
   std::unique_ptr<TargetMachine> TM(EngineBuilder().selectTarget(
       Triple(M->getTargetTriple()), "", "", SmallVector<std::string, 1>()));
   if (!TM)
-    return;
+    GTEST_SKIP();
 
   auto Obj = cantFail(SimpleCompiler(*TM)(*M));
 
   EXPECT_FALSE(testSetProcessAllSections(
       MemoryBuffer::getMemBufferCopy(Obj->getBuffer()), false))
-      << "Debug section seen despite ProcessAllSections being false";
+      << "Non-alloc section seen despite ProcessAllSections being false";
   EXPECT_TRUE(testSetProcessAllSections(std::move(Obj), true))
-      << "Expected to see debug section when ProcessAllSections is true";
+      << "Expected to see non-alloc section when ProcessAllSections is true";
 }
 
 TEST(RTDyldObjectLinkingLayerTest, TestOverrideObjectFlags) {
@@ -109,7 +110,7 @@ TEST(RTDyldObjectLinkingLayerTest, TestOverrideObjectFlags) {
                                    SmallVector<std::string, 1>()));
 
   if (!TM)
-    return;
+    GTEST_SKIP();
 
   // Our compiler is going to modify symbol visibility settings without telling
   // ORC. This will test our ability to override the flags later.
@@ -152,7 +153,7 @@ TEST(RTDyldObjectLinkingLayerTest, TestOverrideObjectFlags) {
   }
 
   // Create a simple stack and set the override flags option.
-  ExecutionSession ES;
+  ExecutionSession ES{std::make_unique<UnsupportedExecutorProcessControl>()};
   auto &JD = ES.createBareJITDylib("main");
   auto Foo = ES.intern("foo");
   RTDyldObjectLinkingLayer ObjLayer(
@@ -182,7 +183,7 @@ TEST(RTDyldObjectLinkingLayerTest, TestAutoClaimResponsibilityForSymbols) {
                                    SmallVector<std::string, 1>()));
 
   if (!TM)
-    return;
+    GTEST_SKIP();
 
   // Our compiler is going to add a new symbol without telling ORC.
   // This will test our ability to auto-claim responsibility later.
@@ -222,7 +223,7 @@ TEST(RTDyldObjectLinkingLayerTest, TestAutoClaimResponsibilityForSymbols) {
   }
 
   // Create a simple stack and set the override flags option.
-  ExecutionSession ES;
+  ExecutionSession ES{std::make_unique<UnsupportedExecutorProcessControl>()};
   auto &JD = ES.createBareJITDylib("main");
   auto Foo = ES.intern("foo");
   RTDyldObjectLinkingLayer ObjLayer(

@@ -1,9 +1,8 @@
 //===- tapi/SDKDB/BitcodeReader.cpp - TAPI SDKDB Bitcode Reader -*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 ///
@@ -120,6 +119,9 @@ private:
       OnDiskIterableChainedHashTable<LibraryTableInfo>;
 
   // helper functions.
+  // TODO: handle newly added fields in BitCode:
+  //   - USR
+  //   - docComment
   Error validateSDKDB();
   Error readTripleFromSDKDB(BitstreamCursor &cursor);
   Error readSignature(BitstreamCursor &cursor) const;
@@ -139,6 +141,10 @@ private:
                               ObjCContainerRecord &container) const;
   Error readObjCInstanceVarBlock(BitstreamCursor &cursor, API &api,
                                  ObjCContainerRecord &container) const;
+  Error readEnumBlock(BitstreamCursor &cursor, API &api) const;
+  Error readEnumConstantBlock(BitstreamCursor &cursor, API &api,
+                              EnumRecord *record) const;
+  Error readTypedefBlock(BitstreamCursor &cursor, API &api) const;
 
   Expected<StringRef> readStringFromTable(unsigned offset, unsigned size) const;
   Expected<APIRecord> readAPIRecordFromScratch() const;
@@ -423,9 +429,12 @@ Error SDKDBBitcodeReader::Implementation::readTripleFromSDKDB(
     switch (kind) {
     case sdkdb_block::TARGET_TRIPLE: {
       Triple triple(tripleStr);
-      assert(llvm::find(triples, triple) == triples.end() &&
+      assert(llvm::find_if(triples,
+                           [&](const Triple &target) {
+                             return SDKDB::areCompatibleTargets(triple, target);
+                           }) == triples.end() &&
              "Triples are not unqiue in SDKDB");
-      triples.push_back(triple);
+      triples.emplace_back(triple);
       break;
     }
 
@@ -570,6 +579,15 @@ SDKDBBitcodeReader::Implementation::readAPIBlock(BitstreamCursor &cursor,
           return sym.takeError();
         continue;
       }
+      case api_block::PROJECT_NAME: {
+        unsigned offset = scratch[0];
+        unsigned size = scratch[1];
+        if (auto sym = readStringFromTable(offset, size))
+          api.setProjectName(*sym);
+        else
+          return sym.takeError();
+        continue;
+      }
       default:
         // Unknown record, possibly for use by a future version of the  format.
         continue;
@@ -599,6 +617,14 @@ SDKDBBitcodeReader::Implementation::readAPIBlock(BitstreamCursor &cursor,
         if (auto err = readObjCProtocolBlock(cursor, api))
           return std::move(err);
         continue;
+      case ENUM_BLOCK_ID:
+        if (auto err = readEnumBlock(cursor, api))
+          return std::move(err);
+        continue;
+      case TYPEDEF_BLOCK_ID:
+        if (auto err = readTypedefBlock(cursor, api))
+          return std::move(err);
+        continue;
       default:
         if (auto err = cursor.SkipBlock())
           return std::move(err);
@@ -620,13 +646,15 @@ SDKDBBitcodeReader::Implementation::readAPIRecordFromScratch() const {
                                    inconvertibleErrorCode());
 
   // Default values for APIRecord.
-  APIRecord record{"",
-                   APILoc(),
-                   /*Decl=*/nullptr,
-                   AvailabilityInfo(),
-                   APILinkage::Unknown,
-                   APIFlags::None,
-                   APIAccess::Unknown};
+  APIRecord record{
+      "",
+      APILoc(),
+      /*Decl=*/nullptr,
+      AvailabilityInfo(),
+      APILinkage::Unknown,
+      SymbolFlags::None,
+      APIAccess::Unknown,
+  };
 
   unsigned offset = scratch[0];
   unsigned size = scratch[1];
@@ -637,7 +665,7 @@ SDKDBBitcodeReader::Implementation::readAPIRecordFromScratch() const {
 
   record.access = (APIAccess)scratch[2];
   record.linkage = (APILinkage)scratch[3];
-  record.flags = (APIFlags)scratch[4];
+  record.flags = (SymbolFlags)scratch[4];
   return record;
 }
 
@@ -647,8 +675,8 @@ Error SDKDBBitcodeReader::Implementation::readAvailabilityInfoFromScratch(
     return make_error<StringError>(
         "scratch entry is too small for availability",
         inconvertibleErrorCode());
-  record.availability = {scratch[0], scratch[1], (bool)scratch[2],
-                         (bool)scratch[3]};
+  record.availability = {scratch[0],       0,     scratch[1],
+                         (bool)scratch[2], false, (bool)scratch[3]};
 
   return Error::success();
 }
@@ -780,10 +808,17 @@ Error SDKDBBitcodeReader::Implementation::readObjCClassBlock(
         auto superName = readStringFromTable(offset, size);
         if (!superName)
           return superName.takeError();
-        record = api.addObjCInterface(
-            apiRecord->name, apiRecord->loc, apiRecord->availability,
-            apiRecord->access, apiRecord->linkage, *superName,
-            /*Decl=*/nullptr);
+        ObjCIFSymbolKind symType =
+            ObjCIFSymbolKind::Class | ObjCIFSymbolKind::MetaClass;
+        // Old format might not have the exception attribute.
+        bool hasExceptionAttribute =
+            scratch.size() < 8 ? false : (bool)scratch[7];
+        if (hasExceptionAttribute)
+          symType |= ObjCIFSymbolKind::EHType;
+        record = api.addObjCInterface(apiRecord->name, apiRecord->loc,
+                                      apiRecord->availability,
+                                      apiRecord->access, apiRecord->linkage,
+                                      *superName, /*Decl=*/nullptr, symType);
         continue;
       }
       case objc_class_block::AVAILABILITY: {
@@ -804,7 +839,7 @@ Error SDKDBBitcodeReader::Implementation::readObjCClassBlock(
       case objc_class_block::PROTOCOL: {
         if (auto protocol = readStringFromTable(scratch[0], scratch[1])) {
           auto str = api.copyString(*protocol);
-          record->protocols.push_back(str);
+          record->protocols.emplace_back(str);
         } else
           return protocol.takeError();
         continue;
@@ -907,7 +942,7 @@ Error SDKDBBitcodeReader::Implementation::readObjCCategoryBlock(
       case objc_category_block::PROTOCOL: {
         if (auto protocol = readStringFromTable(scratch[0], scratch[1])) {
           auto str = api.copyString(*protocol);
-          record->protocols.push_back(str);
+          record->protocols.emplace_back(str);
         } else
           return protocol.takeError();
         continue;
@@ -1004,7 +1039,7 @@ Error SDKDBBitcodeReader::Implementation::readObjCProtocolBlock(
       case objc_protocol_block::PROTOCOL: {
         if (auto protocol = readStringFromTable(scratch[0], scratch[1])) {
           auto str = api.copyString(*protocol);
-          record->protocols.push_back(str);
+          record->protocols.emplace_back(str);
         } else
           return protocol.takeError();
         continue;
@@ -1222,12 +1257,16 @@ Error SDKDBBitcodeReader::Implementation::readObjCInstanceVarBlock(
         auto apiRecord = readAPIRecordFromScratch();
         if (!apiRecord)
           return apiRecord.takeError();
+        // Do not emit an error, because old SDKDB formats are broken and don't
+        // have all required fields. Use an default for AccessControl instead.
+        ObjCInstanceVariableRecord::AccessControl control =
+            scratch.size() < 6
+                ? ObjCInstanceVariableRecord::AccessControl::None
+                : (ObjCInstanceVariableRecord::AccessControl)scratch[5];
         record = api.addObjCInstanceVariable(
             &container, apiRecord->name, apiRecord->loc,
-            apiRecord->availability, apiRecord->access,
-            (ObjCInstanceVariableRecord::AccessControl)scratch[5],
-            apiRecord->linkage,
-            /*Decl=*/nullptr);
+            apiRecord->availability, apiRecord->access, control,
+            apiRecord->linkage, /*Decl=*/nullptr);
         continue;
       }
       case objc_ivar_block::AVAILABILITY: {
@@ -1241,6 +1280,225 @@ Error SDKDBBitcodeReader::Implementation::readObjCInstanceVarBlock(
         continue;
       }
       case objc_ivar_block::LOCATION: {
+        if (auto err = readSourceLocationFromScratch(*record))
+          return err;
+        continue;
+      }
+      default:
+        // Unknown record, possibly for use by a future version of the format.
+        continue;
+      }
+      continue;
+    }
+    case BitstreamEntry::SubBlock: {
+      if (auto err = cursor.SkipBlock())
+        return err;
+      continue;
+    }
+    case BitstreamEntry::EndBlock:
+      return Error::success();
+    }
+  }
+}
+
+Error SDKDBBitcodeReader::Implementation::readEnumBlock(BitstreamCursor &cursor,
+                                                        API &api) const {
+  if (auto err = cursor.EnterSubBlock(ENUM_BLOCK_ID))
+    return err;
+
+  EnumRecord *record = nullptr;
+  while (true) {
+    auto maybeEntry = cursor.advance();
+    if (!maybeEntry)
+      return maybeEntry.takeError();
+    auto entry = maybeEntry.get();
+
+    switch (entry.Kind) {
+    case BitstreamEntry::Error:
+      return make_error<StringError>("error malformed entry",
+                                     inconvertibleErrorCode());
+    case BitstreamEntry::Record: {
+      scratch.clear();
+      auto maybeKind = cursor.readRecord(entry.ID, scratch);
+      if (!maybeKind)
+        return maybeKind.takeError();
+      unsigned kind = maybeKind.get();
+      if (kind != enum_block::INFO && !record)
+        return make_error<StringError>("wrong record ordering in enum block",
+                                       inconvertibleErrorCode());
+      switch (kind) {
+      case enum_block::INFO: {
+        auto apiRecord = readAPIRecordFromScratch();
+        if (!apiRecord)
+          return apiRecord.takeError();
+        unsigned offset = scratch[5];
+        unsigned size = scratch[6];
+        if (auto usrStr = readStringFromTable(offset, size))
+          record = api.addEnum(apiRecord->name, *usrStr, apiRecord->loc,
+                               apiRecord->availability, apiRecord->access,
+                               /*Decl=*/nullptr);
+        else
+          return usrStr.takeError();
+
+        continue;
+      }
+      case enum_block::AVAILABILITY: {
+        if (auto err = readAvailabilityInfoFromScratch(*record))
+          return err;
+        continue;
+      }
+      case enum_block::FILENAME: {
+        if (auto err = readFilenameFromScratch(*record))
+          return err;
+        continue;
+      }
+      case enum_block::LOCATION: {
+        if (auto err = readSourceLocationFromScratch(*record))
+          return err;
+        continue;
+      }
+      default:
+        // Unknown record, possibly for use by a future version of the format.
+        continue;
+      }
+      continue;
+    }
+    case BitstreamEntry::SubBlock: {
+      if (!record)
+        return make_error<StringError>("wrong ordering in enum block",
+                                       inconvertibleErrorCode());
+      switch (maybeEntry->ID) {
+      case ENUM_CONSTANT_BLOCK_ID: {
+        if (auto err = readEnumConstantBlock(cursor, api, record))
+          return err;
+        continue;
+      }
+      default:
+        if (auto err = cursor.SkipBlock())
+          return err;
+        continue;
+      }
+    }
+    case BitstreamEntry::EndBlock:
+      return Error::success();
+    }
+  }
+}
+
+Error SDKDBBitcodeReader::Implementation::readEnumConstantBlock(
+    BitstreamCursor &cursor, API &api, EnumRecord *parent) const {
+  if (auto err = cursor.EnterSubBlock(ENUM_CONSTANT_BLOCK_ID))
+    return err;
+
+  APIRecord *record = nullptr;
+  while (true) {
+    auto maybeEntry = cursor.advance();
+    if (!maybeEntry)
+      return maybeEntry.takeError();
+    auto entry = maybeEntry.get();
+
+    switch (entry.Kind) {
+    case BitstreamEntry::Error:
+      return make_error<StringError>("error malformed entry",
+                                     inconvertibleErrorCode());
+    case BitstreamEntry::Record: {
+      scratch.clear();
+      auto maybeKind = cursor.readRecord(entry.ID, scratch);
+      if (!maybeKind)
+        return maybeKind.takeError();
+      unsigned kind = maybeKind.get();
+      if (kind != enum_constant_block::INFO && !record)
+        return make_error<StringError>(
+            "wrong record ordering in enum constant block",
+            inconvertibleErrorCode());
+      switch (kind) {
+      case enum_constant_block::INFO: {
+        auto apiRecord = readAPIRecordFromScratch();
+        if (!apiRecord)
+          return apiRecord.takeError();
+        record = api.addEnumConstant(parent, apiRecord->name, apiRecord->loc,
+                                     apiRecord->availability, apiRecord->access,
+                                     /*Decl=*/nullptr);
+        continue;
+      }
+      case enum_constant_block::AVAILABILITY: {
+        if (auto err = readAvailabilityInfoFromScratch(*record))
+          return err;
+        continue;
+      }
+      case enum_constant_block::FILENAME: {
+        if (auto err = readFilenameFromScratch(*record))
+          return err;
+        continue;
+      }
+      case enum_constant_block::LOCATION: {
+        if (auto err = readSourceLocationFromScratch(*record))
+          return err;
+        continue;
+      }
+      default:
+        // Unknown record, possibly for use by a future version of the format.
+        continue;
+      }
+      continue;
+    }
+    case BitstreamEntry::SubBlock: {
+      if (auto err = cursor.SkipBlock())
+        return err;
+      continue;
+    }
+    case BitstreamEntry::EndBlock:
+      return Error::success();
+    }
+  }
+}
+
+Error SDKDBBitcodeReader::Implementation::readTypedefBlock(
+    BitstreamCursor &cursor, API &api) const {
+  if (auto err = cursor.EnterSubBlock(TYPEDEF_BLOCK_ID))
+    return err;
+
+  APIRecord *record = nullptr;
+  while (true) {
+    auto maybeEntry = cursor.advance();
+    if (!maybeEntry)
+      return maybeEntry.takeError();
+    auto entry = maybeEntry.get();
+
+    switch (entry.Kind) {
+    case BitstreamEntry::Error:
+      return make_error<StringError>("error malformed entry",
+                                     inconvertibleErrorCode());
+    case BitstreamEntry::Record: {
+      scratch.clear();
+      auto maybeKind = cursor.readRecord(entry.ID, scratch);
+      if (!maybeKind)
+        return maybeKind.takeError();
+      unsigned kind = maybeKind.get();
+      if (kind != typedef_block::INFO && !record)
+        return make_error<StringError>("wrong record ordering in typedef block",
+                                       inconvertibleErrorCode());
+      switch (kind) {
+      case typedef_block::INFO: {
+        auto apiRecord = readAPIRecordFromScratch();
+        if (!apiRecord)
+          return apiRecord.takeError();
+        record = api.addTypeDef(apiRecord->name, apiRecord->loc,
+                                apiRecord->availability, apiRecord->access,
+                                /*Decl=*/nullptr);
+        continue;
+      }
+      case typedef_block::AVAILABILITY: {
+        if (auto err = readAvailabilityInfoFromScratch(*record))
+          return err;
+        continue;
+      }
+      case typedef_block::FILENAME: {
+        if (auto err = readFilenameFromScratch(*record))
+          return err;
+        continue;
+      }
+      case typedef_block::LOCATION: {
         if (auto err = readSourceLocationFromScratch(*record))
           return err;
         continue;
@@ -1296,7 +1554,9 @@ Error SDKDBBitcodeReader::Implementation::readSDKDBBlock(
       case sdkdb_block::TARGET_TRIPLE: {
         Triple triple(tripleStr);
         if (option.targets.size() &&
-            llvm::find(option.targets, triple) == option.targets.end())
+            llvm::find_if(option.targets, [&](const Triple &target) {
+              return SDKDB::areCompatibleTargets(triple, target);
+            }) == option.targets.end())
           skipBlock = true;
         else
           db = &builder.getSDKDBForTarget(triple);

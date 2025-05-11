@@ -10,7 +10,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "LLLexer.h"
+#include "llvm/AsmParser/LLLexer.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringExtras.h"
@@ -158,8 +158,7 @@ static const char *isLabelTail(const char *CurPtr) {
 
 LLLexer::LLLexer(StringRef StartBuf, SourceMgr &SM, SMDiagnostic &Err,
                  LLVMContext &C)
-    : CurBuf(StartBuf), ErrorInfo(Err), SM(SM), Context(C), APFloatVal(0.0),
-      IgnoreColonInIdentifiers(false) {
+    : CurBuf(StartBuf), ErrorInfo(Err), SM(SM), Context(C) {
   CurPtr = CurBuf.begin();
 }
 
@@ -543,7 +542,6 @@ lltok::Kind LLLexer::LexIdentifier() {
   KEYWORD(triple);
   KEYWORD(source_filename);
   KEYWORD(unwind);
-  KEYWORD(deplibs);             // FIXME: Remove in 4.0.
   KEYWORD(datalayout);
   KEYWORD(volatile);
   KEYWORD(atomic);
@@ -568,7 +566,6 @@ lltok::Kind LLLexer::LexIdentifier() {
   KEYWORD(exact);
   KEYWORD(inbounds);
   KEYWORD(inrange);
-  KEYWORD(align);
   KEYWORD(addrspace);
   KEYWORD(section);
   KEYWORD(partition);
@@ -577,11 +574,14 @@ lltok::Kind LLLexer::LexIdentifier() {
   KEYWORD(module);
   KEYWORD(asm);
   KEYWORD(sideeffect);
-  KEYWORD(alignstack);
   KEYWORD(inteldialect);
   KEYWORD(gc);
   KEYWORD(prefix);
   KEYWORD(prologue);
+
+  KEYWORD(no_sanitize_address);
+  KEYWORD(no_sanitize_hwaddress);
+  KEYWORD(sanitize_address_dyninit);
 
   KEYWORD(ccc);
   KEYWORD(fastcc);
@@ -596,6 +596,8 @@ lltok::Kind LLLexer::LexIdentifier() {
   KEYWORD(arm_aapcs_vfpcc);
   KEYWORD(aarch64_vector_pcs);
   KEYWORD(aarch64_sve_vector_pcs);
+  KEYWORD(aarch64_sme_preservemost_from_x0);
+  KEYWORD(aarch64_sme_preservemost_from_x2);
   KEYWORD(msp430_intrcc);
   KEYWORD(avr_intrcc);
   KEYWORD(avr_signalcc);
@@ -625,6 +627,8 @@ lltok::Kind LLLexer::LexIdentifier() {
   KEYWORD(amdgpu_gs);
   KEYWORD(amdgpu_ps);
   KEYWORD(amdgpu_cs);
+  KEYWORD(amdgpu_cs_chain);
+  KEYWORD(amdgpu_cs_chain_preserve);
   KEYWORD(amdgpu_kernel);
   KEYWORD(amdgpu_gfx);
   KEYWORD(tailcc);
@@ -633,77 +637,40 @@ lltok::Kind LLLexer::LexIdentifier() {
   KEYWORD(c);
 
   KEYWORD(attributes);
+  KEYWORD(sync);
+  KEYWORD(async);
 
-  KEYWORD(alwaysinline);
-  KEYWORD(allocsize);
+#define GET_ATTR_NAMES
+#define ATTRIBUTE_ENUM(ENUM_NAME, DISPLAY_NAME) \
+  KEYWORD(DISPLAY_NAME);
+#include "llvm/IR/Attributes.inc"
+
+  KEYWORD(read);
+  KEYWORD(write);
+  KEYWORD(readwrite);
+  KEYWORD(argmem);
+  KEYWORD(inaccessiblemem);
   KEYWORD(argmemonly);
-  KEYWORD(builtin);
-  KEYWORD(byval);
-  KEYWORD(inalloca);
-  KEYWORD(cold);
-  KEYWORD(convergent);
-  KEYWORD(dereferenceable);
-  KEYWORD(dereferenceable_or_null);
   KEYWORD(inaccessiblememonly);
   KEYWORD(inaccessiblemem_or_argmemonly);
-  KEYWORD(inlinehint);
-  KEYWORD(inreg);
-  KEYWORD(jumptable);
-  KEYWORD(minsize);
-  KEYWORD(naked);
-  KEYWORD(nest);
-  KEYWORD(noalias);
-  KEYWORD(nobuiltin);
-  KEYWORD(nocallback);
-  KEYWORD(nocapture);
-  KEYWORD(noduplicate);
-  KEYWORD(nofree);
-  KEYWORD(noimplicitfloat);
-  KEYWORD(noinline);
-  KEYWORD(norecurse);
-  KEYWORD(nonlazybind);
-  KEYWORD(nomerge);
-  KEYWORD(nonnull);
-  KEYWORD(noredzone);
-  KEYWORD(noreturn);
-  KEYWORD(nosync);
-  KEYWORD(nocf_check);
-  KEYWORD(noundef);
-  KEYWORD(nounwind);
-  KEYWORD(null_pointer_is_valid);
-  KEYWORD(optforfuzzing);
-  KEYWORD(optnone);
-  KEYWORD(optsize);
-  KEYWORD(preallocated);
-  KEYWORD(readnone);
-  KEYWORD(readonly);
-  KEYWORD(returned);
-  KEYWORD(returns_twice);
-  KEYWORD(signext);
-  KEYWORD(speculatable);
-  KEYWORD(sret);
-  KEYWORD(ssp);
-  KEYWORD(sspreq);
-  KEYWORD(sspstrong);
-  KEYWORD(strictfp);
-  KEYWORD(safestack);
-  KEYWORD(shadowcallstack);
-  KEYWORD(sanitize_address);
-  KEYWORD(sanitize_hwaddress);
-  KEYWORD(sanitize_memtag);
-  KEYWORD(sanitize_thread);
-  KEYWORD(sanitize_memory);
-  KEYWORD(speculative_load_hardening);
-  KEYWORD(swifterror);
-  KEYWORD(swiftself);
-  KEYWORD(swiftasync);
-  KEYWORD(uwtable);
-  KEYWORD(willreturn);
-  KEYWORD(writeonly);
-  KEYWORD(zeroext);
-  KEYWORD(immarg);
-  KEYWORD(byref);
-  KEYWORD(mustprogress);
+
+  // nofpclass attribute
+  KEYWORD(all);
+  KEYWORD(nan);
+  KEYWORD(snan);
+  KEYWORD(qnan);
+  KEYWORD(inf);
+  // ninf already a keyword
+  KEYWORD(pinf);
+  KEYWORD(norm);
+  KEYWORD(nnorm);
+  KEYWORD(pnorm);
+  // sub already a keyword
+  KEYWORD(nsub);
+  KEYWORD(psub);
+  KEYWORD(zero);
+  KEYWORD(nzero);
+  KEYWORD(pzero);
 
   KEYWORD(type);
   KEYWORD(opaque);
@@ -714,7 +681,7 @@ lltok::Kind LLLexer::LexIdentifier() {
   KEYWORD(any);
   KEYWORD(exactmatch);
   KEYWORD(largest);
-  KEYWORD(noduplicates);
+  KEYWORD(nodeduplicate);
   KEYWORD(samesize);
 
   KEYWORD(eq); KEYWORD(ne); KEYWORD(slt); KEYWORD(sgt); KEYWORD(sle);
@@ -723,12 +690,15 @@ lltok::Kind LLLexer::LexIdentifier() {
   KEYWORD(oge); KEYWORD(ord); KEYWORD(uno); KEYWORD(ueq); KEYWORD(une);
 
   KEYWORD(xchg); KEYWORD(nand); KEYWORD(max); KEYWORD(min); KEYWORD(umax);
-  KEYWORD(umin);
+  KEYWORD(umin); KEYWORD(fmax); KEYWORD(fmin);
+  KEYWORD(uinc_wrap);
+  KEYWORD(udec_wrap);
 
   KEYWORD(vscale);
   KEYWORD(x);
   KEYWORD(blockaddress);
   KEYWORD(dso_local_equivalent);
+  KEYWORD(no_cfi);
 
   // Metadata types.
   KEYWORD(distinct);
@@ -752,6 +722,7 @@ lltok::Kind LLLexer::LexIdentifier() {
   KEYWORD(flags);
   KEYWORD(blockcount);
   KEYWORD(linkage);
+  KEYWORD(visibility);
   KEYWORD(notEligibleToImport);
   KEYWORD(live);
   KEYWORD(dsoLocal);
@@ -765,13 +736,16 @@ lltok::Kind LLLexer::LexIdentifier() {
   KEYWORD(returnDoesNotAlias);
   KEYWORD(noInline);
   KEYWORD(alwaysInline);
+  KEYWORD(noUnwind);
+  KEYWORD(mayThrow);
+  KEYWORD(hasUnknownCall);
+  KEYWORD(mustBeUnreachable);
   KEYWORD(calls);
   KEYWORD(callee);
   KEYWORD(params);
   KEYWORD(param);
   KEYWORD(hotness);
   KEYWORD(unknown);
-  KEYWORD(hot);
   KEYWORD(critical);
   KEYWORD(relbf);
   KEYWORD(variable);
@@ -819,6 +793,13 @@ lltok::Kind LLLexer::LexIdentifier() {
   KEYWORD(byte);
   KEYWORD(bit);
   KEYWORD(varFlags);
+  KEYWORD(callsites);
+  KEYWORD(clones);
+  KEYWORD(stackIds);
+  KEYWORD(allocs);
+  KEYWORD(versions);
+  KEYWORD(memProf);
+  KEYWORD(notcold);
 
 #undef KEYWORD
 
@@ -844,6 +825,7 @@ lltok::Kind LLLexer::LexIdentifier() {
   TYPEKEYWORD("x86_mmx",   Type::getX86_MMXTy(Context));
   TYPEKEYWORD("x86_amx",   Type::getX86_AMXTy(Context));
   TYPEKEYWORD("token",     Type::getTokenTy(Context));
+  TYPEKEYWORD("ptr",       PointerType::getUnqual(Context));
 
 #undef TYPEKEYWORD
 
@@ -956,7 +938,8 @@ lltok::Kind LLLexer::LexIdentifier() {
     return lltok::EmissionKind;
   }
 
-  if (Keyword == "GNU" || Keyword == "None" || Keyword == "Default") {
+  if (Keyword == "GNU" || Keyword == "Apple" || Keyword == "None" ||
+      Keyword == "Default") {
     StrVal.assign(Keyword.begin(), Keyword.end());
     return lltok::NameTableKind;
   }

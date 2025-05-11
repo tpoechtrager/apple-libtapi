@@ -1,0 +1,207 @@
+.TH tapi\-tbdv4 1 2023-03-08 Darwin "TAPI TBD Version 4 Format Documentation"
+.SH NAME
+tbd \- Text Based Dynamic Library Stub
+
+.SH DESCRIPTION
+.PP
+TAPI both generates and operates over text based stub files (.tbd). 
+These files are a textual, human readable representation of Mach\-O dynamic libraries (dylib) 
+holding properties needed to resolve static link time dependencies including the same exported symbols
+as the original dynamic library. Format versions 1 - 4 were represented in YAML.
+.RE
+
+.SH REQUIRED KEYS 
+.PP
+tbd\-version: <int>
+.RS 4
+Specifies the TBD file version. The only supported version is 4.
+.RE
+.PP
+install-name: <path>
+.RS 4
+Specifies the install name of the dylib. This key is part of the
+LC_ID_DYLIB load command in the Mach-O format.
+.RE
+.PP
+targets: <array>
+.RS 4
+Specifies the list of supported architecture/platform tuples. 
+The following platform identifiers are supported: macos, maccatalyst, ios, ios-simulator,
+tvos, tvos-simulator, watchos, watchos-simulator.
+.RE
+
+.SH OPTIONAL KEYS 
+.PP
+parent-umbrella: <section>
+.RS 4
+Specifies the parent umbrella of the dynamic library, if applicable. This key is equivalent to 
+the LC_SUB_FRAMEWORK load command in the Mach-O format.
+The \fIsection\fR contains an array of targets and its associated umbrella name.
+.RE
+.PP
+allowable-clients: <section>
+.RS 4
+Specifies the allowable clients that are permitted to link against the dynamic library file. 
+This key is equivalent to the LC_SUB_CLIENT load command in the Mach-O format.
+The \fIsection\fR contains an array of targets and its associated list of client names.
+.RE
+.PP
+reexported-libraries: <section>
+.RS 4
+Specifies a list of reexported libraries. This key is equivalent to 
+the LC_REEXPORT_DYLIB load command in the Mach-O format.
+The \fIsection\fR contains an array of targets and its associated list of
+reexported library names.
+.RE
+.PP
+flags: <array>
+.RS 4
+Specifies the flags of the dylib.
+.br
+Valid flags are: flat_namespace and not_app_extension_safe.
+flat_namespace is deprecated, but there are still some old binaries around on
+macOS that depend on flat namespace linking. The default is two level
+namespace linking. not_app_extension_safe indicates that the library is not safe
+to be used in an Application Extension.
+.RE
+.PP
+current-version: <version>
+.RS 4
+Specifies the current version of the dynamic library file. 
+The default value is 1.0 if not specified. This key is part of the 
+LC_ID_DYLIB load command in the Mach-O format.
+.RE
+.PP
+compatibility-version: <version>
+.RS 4
+Specifies the compatibility version of the dynamic library file. 
+The default value is 1.0 if not specified. This key is part of the LC_ID_DYLIB 
+load command in the Mach-O format.
+.RE
+.PP
+swift-abi-version: <int>
+.RS 4
+Specifies the Swift ABI version the dynamic library file was compiled with. 
+The default value is 0 if not specified. The Swift ABI version is encoded 
+in the Objective-C image section.
+.RE
+.PP
+exports: <section>
+.RS 4
+Specifies the regular exported symbol sections.
+The \fIsection\fR contains an array of targets and its associated list of symbol names.
+.RE
+.PP
+re-exports: <section>
+.RS 4
+Specifies the exported symbol sections not defined in the library itself, 
+but coming from a different library instead. 
+The \fIsection\fR contains an array of targets and its associated list of symbol names.
+.RE
+.PP
+undefineds: <section>
+.RS 4
+Specifies the undefined symbol sections which are only used for flat address space libraries. 
+The \fIsection\fR contains an array of targets and its associated list of symbol names.
+.RE
+.PP
+objc-classes: <array>
+.RS 4
+Specifies the list of exported, re-exported, or undefined Objective-C class names.
+.RE
+.PP
+objc-eh-types: <array>
+.RS 4
+Specifies the list of exported, re-exported, or undefined Objective-C class exception type names.
+.RE
+.PP
+objc-ivars: <array>
+.RS 4
+Specifies the list of exported, re-exported, or undefined Objective-C instance variable names.
+.RE
+.PP
+weak-symbols: <array>
+.RS 4
+Specifies the names of weak defined symbols for exported symbol sections or weak referenced symbols 
+for undefined symbol sections. 
+.RE
+.PP
+thread-local-symbols: <array>
+.RS 4
+Specifies the symbol name of thread local exports. 
+.RE
+
+.SH Examples
+.br
+.RS 1
+--- !tapi-tbd  
+.br
+tbd-version: 4
+.br
+targets: [ arm64-macos, x86_64-macos, x86_64-maccatalyst ]
+.br
+flags: [ flat_namespace ]
+.br
+install-name: /usr/lib/libc.dylib
+.br
+current-version: 1.2.3
+.br
+compatibility-version: 1.1
+.br
+swift-abi-version: 5
+.br
+parent-umbrella:
+.br
+.RS 1
+  - targets: [ arm64-macos, x86_64-macos, x86_64-maccatalyst ]
+    umbrella: System
+.RE
+allowable-clients:
+.RS 1
+  - targets: [ arm64-macos, x86_64-macos, x86_64-maccatalyst ]
+    clients: [ ClientA, ClientB ]
+.RE
+reexported-libraries:
+.RS 1
+  - targets: [ x86_64-macos, x86_64-maccatalyst]
+    library: [ /System/Library/Frameworks/Foo.framework/Foo ]
+  - targets: [ arm64-macos]
+    library: [ /System/Library/Frameworks/Bar.framework/Bar ]
+.RE
+exports:
+.RS 1
+  - targets: [ x86_64-macos ]
+    symbols: [ _symA ]
+    objc-classes: []
+    objc-eh-types: []
+    objc-ivars: []
+    weak-symbols: []
+    thread-local-symbols: []
+  - targets: [ x86_64-maccatalyst ]
+    symbols: [ _symB ]
+  - targets: [ x86_64-macos, x86_64-maccatalyst ]
+    symbols: [ _symAB ]
+.RE
+re-exports:
+.RS 1
+  - targets: [ arm64-macos ]
+    symbols: [ _symC ]
+    objc-classes: []
+    objc-eh-types: []
+    objc-ivars: []
+    weak-symbols: []
+    thread-local-symbols: []
+.RE
+undefineds:
+.RS 1
+  - targets: [ arm64-macos ]
+    symbols: [ _symD ]
+    objc-classes: []
+    objc-eh-types: []
+    objc-ivars: []
+    weak-symbols: []
+    thread-local-symbols: []
+.RE
+
+.SH SEE ALSO
+tapi(1), tapi\-tbdv5(1), ld(1), Mach\-O(5)

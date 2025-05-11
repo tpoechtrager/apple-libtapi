@@ -1,5 +1,3 @@
-set(LLVM_EXPORTED_SYMBOL_FILE ${CMAKE_CURRENT_SOURCE_DIR}/tapi-binary-reader.exports)
-
 set(LLVM_LINK_COMPONENTS
   Support
   )
@@ -11,7 +9,6 @@ add_tapi_executable(tapi-binary-reader
 target_link_libraries(tapi-binary-reader
   PRIVATE
   tapiCore
-  tapiObjCMetadata
   )
 
 install(TARGETS tapi-binary-reader

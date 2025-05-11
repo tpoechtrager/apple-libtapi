@@ -13,7 +13,7 @@
 #ifndef LLVM_LIB_TARGET_MIPS_MIPSREGISTERBANKINFO_H
 #define LLVM_LIB_TARGET_MIPS_MIPSREGISTERBANKINFO_H
 
-#include "llvm/CodeGen/GlobalISel/RegisterBankInfo.h"
+#include "llvm/CodeGen/RegisterBankInfo.h"
 
 #define GET_REGBANK_DECLARATIONS
 #include "MipsGenRegisterBank.inc"
@@ -150,7 +150,7 @@ private:
 
   class TypeInfoForMF {
     /// MachineFunction name is used to recognise when MF changes.
-    std::string MFName = "";
+    std::string MFName;
     /// <key, value> : value is vector of all MachineInstrs that are waiting for
     /// key to figure out type of some of its ambiguous operands.
     DenseMap<const MachineInstr *, SmallVector<const MachineInstr *, 2>>

@@ -1,9 +1,8 @@
 //===- tapi-sdkdb/tapi-sdkdb.cpp --------------------------------*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 ///
@@ -17,9 +16,10 @@
 #include "tapi/Core/APIPrinter.h"
 #include "tapi/Core/MachOReader.h"
 #include "tapi/Diagnostics/Diagnostics.h"
-#include "tapi/SDKDB/SDKDB.h"
 #include "tapi/SDKDB/BitcodeReader.h"
 #include "tapi/SDKDB/BitcodeWriter.h"
+#include "tapi/SDKDB/CompareConfigFileReader.h"
+#include "tapi/SDKDB/SDKDB.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Format.h"
 #include "llvm/Support/ManagedStatic.h"
@@ -80,6 +80,35 @@ static cl::opt<std::string> baselineFile("baseline",
                                          cl::desc("<baseline SDKDB>"),
                                          cl::cat(compareCategory));
 
+static cl::opt<bool> newAPIAsError("error-new-api",
+                                   cl::desc("Treat new APIs in SDKDB as error"),
+                                   cl::cat(compareCategory));
+
+static cl::opt<bool> noNewAPI("no-new-api", cl::desc("Do not report new APIs"),
+                              cl::cat(compareCategory));
+
+static cl::opt<std::string> diagOut("diagnostic-file",
+                                    cl::desc("Output file for diagnostics"),
+                                    cl::cat(compareCategory));
+
+// TODO: generalize the option to control whether to include frontend APIs for
+// all kinds of actions.
+static cl::opt<bool>
+    compareFrontendAPI("compare-frontend-api",
+                       cl::desc("Compare frontend APIs (enums and typedefs)"),
+                       cl::Hidden, cl::cat(compareCategory));
+
+static cl::opt<std::string>
+    compareConfigFile("config-file",
+                      cl::desc("Configuration file for comparing SDKDB"),
+                      cl::cat(compareCategory));
+
+static cl::opt<std::string>
+    comparePlatform("platform",
+                    cl::desc("base platform (macos, ios, tvos, watchos, xros) "
+                             "for comparing SDKDB\n"),
+                    cl::cat(compareCategory));
+
 static cl::opt<std::string> sdkdbFile(cl::Positional, cl::desc("<SDKDB>"),
                                       cl::Required, cl::cat(tapiCategory));
 
@@ -91,6 +120,10 @@ static cl::opt<bool>
 static cl::opt<bool> removeBundles("remove-bundles",
                                    cl::desc("Remove Bundles from SDKDB output"),
                                    cl::cat(extractCategory));
+
+static cl::opt<bool> simplifiedSDKDB("simplified",
+                                     cl::desc("Output simplified SDKDB"),
+                                     cl::cat(extractCategory));
 
 int main(int argc, const char *argv[]) {
   // Standard set up, so program fails gracefully.
@@ -195,6 +228,11 @@ int main(int argc, const char *argv[]) {
       errs() << "cannot read SDKDB: " << toString(std::move(err)) << "\n";
       return 1;
     }
+    if (simplifiedSDKDB) {
+      builder.setRemoveObjCMetadata();
+      builder.setRemoveBundles();
+      builder.setRemoveEnumTypes();
+    }
     if (removeObjCMetadata)
       builder.setRemoveObjCMetadata();
     if (removeBundles)
@@ -251,6 +289,9 @@ int main(int argc, const char *argv[]) {
 
     // materialize SDKDBs.
     DiagnosticsEngine diag(errs());
+    if (!diagOut.empty())
+      diag.setupDiagnosticsFile(diagOut);
+
     SDKDBBuilder builder(diag);
     if (auto err = reader->materialize(builder)) {
       errs() << "cannot read SDKDB: " << toString(std::move(err)) << "\n";
@@ -262,7 +303,36 @@ int main(int argc, const char *argv[]) {
              << "\n";
       return 1;
     }
-    if (!builder.compare(baseline))
+
+    // Read config file if provided
+    if (!compareConfigFile.empty()) {
+      auto configFile =
+          MemoryBuffer::getFile(compareConfigFile, /*IsText=*/true);
+      if (!configFile) {
+        errs() << "cannot open configuration file '" << compareConfigFile
+               << "': " << configFile.getError().message() << "\n";
+        return 1;
+      }
+      auto reader = CompareConfigFileReader::get(std::move(configFile.get()));
+      if (!reader) {
+        errs() << "cannot read configuration file: "
+               << toString(reader.takeError()) << "\n";
+        return 1;
+      }
+      builder.setCompareConfigFileReader(std::move(reader.get()));
+    }
+
+    if (!comparePlatform.empty()) {
+      if (!builder.setFilteredPlatforms(comparePlatform)) {
+        errs() << "invalid platform type: " << comparePlatform << "\n";
+        return 1;
+      }
+    }
+
+    builder.setNoNewAPI(noNewAPI);
+    builder.setReportNewAPIasError(newAPIAsError);
+    builder.setDiagnoseFrontendAPI(compareFrontendAPI);
+    if (!builder.diagnoseDifferences(baseline))
       return 1;
 
     break;

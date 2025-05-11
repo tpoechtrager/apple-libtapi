@@ -129,7 +129,7 @@ static bool checkForMigration(StringRef resourcesPath,
     return true;
   }
 
-  if (!CI.getLangOpts()->ObjC)
+  if (!CI.getLangOpts().ObjC)
     return false;
 
   arcmt::checkForManualIssues(CI, CI.getFrontendOpts().Inputs[0],
@@ -167,14 +167,14 @@ static bool performTransformations(StringRef resourcesPath,
     return true;
   }
 
-  if (!origCI.getLangOpts()->ObjC)
+  if (!origCI.getLangOpts().ObjC)
     return false;
 
   MigrationProcess migration(origCI, std::make_shared<PCHContainerOperations>(),
                              DiagClient);
 
   std::vector<TransformFn>
-    transforms = arcmt::getAllTransformations(origCI.getLangOpts()->getGC(),
+    transforms = arcmt::getAllTransformations(origCI.getLangOpts().getGC(),
                                  origCI.getMigratorOpts().NoFinalizeRemoval);
   assert(!transforms.empty());
 
@@ -207,11 +207,13 @@ static bool performTransformations(StringRef resourcesPath,
 static bool filesCompareEqual(StringRef fname1, StringRef fname2) {
   using namespace llvm;
 
-  ErrorOr<std::unique_ptr<MemoryBuffer>> file1 = MemoryBuffer::getFile(fname1);
+  ErrorOr<std::unique_ptr<MemoryBuffer>> file1 =
+      MemoryBuffer::getFile(fname1, /*IsText=*/true);
   if (!file1)
     return false;
 
-  ErrorOr<std::unique_ptr<MemoryBuffer>> file2 = MemoryBuffer::getFile(fname2);
+  ErrorOr<std::unique_ptr<MemoryBuffer>> file2 =
+      MemoryBuffer::getFile(fname2, /*IsText=*/true);
   if (!file2)
     return false;
 
@@ -240,7 +242,7 @@ static bool verifyTransformedFiles(ArrayRef<std::string> resultFiles) {
   if (RemappingsFile.empty())
     inputBuf = MemoryBuffer::getSTDIN();
   else
-    inputBuf = MemoryBuffer::getFile(RemappingsFile);
+    inputBuf = MemoryBuffer::getFile(RemappingsFile, /*IsText=*/true);
   if (!inputBuf) {
     errs() << "error: could not read remappings input\n";
     return true;

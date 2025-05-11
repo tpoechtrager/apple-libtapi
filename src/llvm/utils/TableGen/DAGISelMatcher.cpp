@@ -8,6 +8,8 @@
 
 #include "DAGISelMatcher.h"
 #include "CodeGenDAGPatterns.h"
+#include "CodeGenInstruction.h"
+#include "CodeGenRegisters.h"
 #include "CodeGenTarget.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/TableGen/Record.h"
@@ -290,7 +292,7 @@ void EmitNodeXFormMatcher::printImpl(raw_ostream &OS, unsigned indent) const {
 void EmitNodeMatcherCommon::printImpl(raw_ostream &OS, unsigned indent) const {
   OS.indent(indent);
   OS << (isa<MorphNodeToMatcher>(this) ? "MorphNodeTo: " : "EmitNode: ")
-     << OpcodeName << ": <todo flags> ";
+     << CGI.Namespace << "::" << CGI.TheDef->getName() << ": <todo flags> ";
 
   for (unsigned i = 0, e = VTs.size(); i != e; ++i)
     OS << ' ' << getEnumName(VTs[i]);
@@ -315,10 +317,9 @@ bool CheckOpcodeMatcher::isEqualImpl(const Matcher *M) const {
 
 bool EmitNodeMatcherCommon::isEqualImpl(const Matcher *m) const {
   const EmitNodeMatcherCommon *M = cast<EmitNodeMatcherCommon>(m);
-  return M->OpcodeName == OpcodeName && M->VTs == VTs &&
-         M->Operands == Operands && M->HasChain == HasChain &&
-         M->HasInGlue == HasInGlue && M->HasOutGlue == HasOutGlue &&
-         M->HasMemRefs == HasMemRefs &&
+  return &M->CGI == &CGI && M->VTs == VTs && M->Operands == Operands &&
+         M->HasChain == HasChain && M->HasInGlue == HasInGlue &&
+         M->HasOutGlue == HasOutGlue && M->HasMemRefs == HasMemRefs &&
          M->NumFixedArityOperands == NumFixedArityOperands;
 }
 
@@ -420,4 +421,16 @@ bool CheckImmAllOnesVMatcher::isContradictoryImpl(const Matcher *M) const {
 bool CheckImmAllZerosVMatcher::isContradictoryImpl(const Matcher *M) const {
   // AllOnes is contradictory.
   return isa<CheckImmAllOnesVMatcher>(M);
+}
+
+bool CheckCondCodeMatcher::isContradictoryImpl(const Matcher *M) const {
+  if (const auto *CCCM = dyn_cast<CheckCondCodeMatcher>(M))
+    return CCCM->getCondCodeName() != getCondCodeName();
+  return false;
+}
+
+bool CheckChild2CondCodeMatcher::isContradictoryImpl(const Matcher *M) const {
+  if (const auto *CCCCM = dyn_cast<CheckChild2CondCodeMatcher>(M))
+    return CCCCM->getCondCodeName() != getCondCodeName();
+  return false;
 }

@@ -13,6 +13,7 @@
 #include "TableGenBackends.h" // Declares all backends.
 #include "ASTTableGen.h"
 #include "llvm/Support/CommandLine.h"
+#include "llvm/Support/ManagedStatic.h"
 #include "llvm/Support/PrettyStackTrace.h"
 #include "llvm/Support/Signals.h"
 #include "llvm/TableGen/Error.h"
@@ -30,9 +31,11 @@ enum ActionType {
   GenClangAttrSubjectMatchRulesParserStringSwitches,
   GenClangAttrImpl,
   GenClangAttrList,
+  GenClangAttrDocTable,
   GenClangAttrSubjectMatchRuleList,
   GenClangAttrPCHRead,
   GenClangAttrPCHWrite,
+  GenClangAttrTokenKinds,
   GenClangAttrHasAttributeImpl,
   GenClangAttrSpellingListIndex,
   GenClangAttrASTVisitor,
@@ -63,6 +66,8 @@ enum ActionType {
   GenClangCommentCommandInfo,
   GenClangCommentCommandList,
   GenClangOpenCLBuiltins,
+  GenClangOpenCLBuiltinHeader,
+  GenClangOpenCLBuiltinTests,
   GenArmNeon,
   GenArmFP16,
   GenArmBF16,
@@ -78,11 +83,22 @@ enum ActionType {
   GenArmSveBuiltinCG,
   GenArmSveTypeFlags,
   GenArmSveRangeChecks,
+  GenArmSmeHeader,
+  GenArmSmeBuiltins,
+  GenArmSmeBuiltinCG,
+  GenArmSmeRangeChecks,
   GenArmCdeHeader,
   GenArmCdeBuiltinDef,
   GenArmCdeBuiltinSema,
   GenArmCdeBuiltinCG,
   GenArmCdeBuiltinAliases,
+  GenRISCVVectorHeader,
+  GenRISCVVectorBuiltins,
+  GenRISCVVectorBuiltinCG,
+  GenRISCVVectorBuiltinSema,
+  GenRISCVSiFiveVectorBuiltins,
+  GenRISCVSiFiveVectorBuiltinCG,
+  GenRISCVSiFiveVectorBuiltinSema,
   GenAttrDocs,
   GenDiagDocs,
   GenOptDocs,
@@ -111,6 +127,8 @@ cl::opt<ActionType> Action(
                    "Generate clang attribute implementations"),
         clEnumValN(GenClangAttrList, "gen-clang-attr-list",
                    "Generate a clang attribute list"),
+        clEnumValN(GenClangAttrDocTable, "gen-clang-attr-doc-table",
+                   "Generate a table of attribute documentation"),
         clEnumValN(GenClangAttrSubjectMatchRuleList,
                    "gen-clang-attr-subject-match-rule-list",
                    "Generate a clang attribute subject match rule list"),
@@ -118,6 +136,8 @@ cl::opt<ActionType> Action(
                    "Generate clang PCH attribute reader"),
         clEnumValN(GenClangAttrPCHWrite, "gen-clang-attr-pch-write",
                    "Generate clang PCH attribute writer"),
+        clEnumValN(GenClangAttrTokenKinds, "gen-clang-attr-token-kinds",
+                   "Generate a list of attribute-related clang tokens"),
         clEnumValN(GenClangAttrHasAttributeImpl,
                    "gen-clang-attr-has-attribute-impl",
                    "Generate a clang attribute spelling list"),
@@ -191,6 +211,11 @@ cl::opt<ActionType> Action(
                    "documentation comments"),
         clEnumValN(GenClangOpenCLBuiltins, "gen-clang-opencl-builtins",
                    "Generate OpenCL builtin declaration handlers"),
+        clEnumValN(GenClangOpenCLBuiltinHeader,
+                   "gen-clang-opencl-builtin-header",
+                   "Generate OpenCL builtin header"),
+        clEnumValN(GenClangOpenCLBuiltinTests, "gen-clang-opencl-builtin-tests",
+                   "Generate OpenCL builtin declaration tests"),
         clEnumValN(GenArmNeon, "gen-arm-neon", "Generate arm_neon.h for clang"),
         clEnumValN(GenArmFP16, "gen-arm-fp16", "Generate arm_fp16.h for clang"),
         clEnumValN(GenArmBF16, "gen-arm-bf16", "Generate arm_bf16.h for clang"),
@@ -208,6 +233,14 @@ cl::opt<ActionType> Action(
                    "Generate arm_sve_typeflags.inc for clang"),
         clEnumValN(GenArmSveRangeChecks, "gen-arm-sve-sema-rangechecks",
                    "Generate arm_sve_sema_rangechecks.inc for clang"),
+        clEnumValN(GenArmSmeHeader, "gen-arm-sme-header",
+                   "Generate arm_sme.h for clang"),
+        clEnumValN(GenArmSmeBuiltins, "gen-arm-sme-builtins",
+                   "Generate arm_sme_builtins.inc for clang"),
+        clEnumValN(GenArmSmeBuiltinCG, "gen-arm-sme-builtin-codegen",
+                   "Generate arm_sme_builtin_cg_map.inc for clang"),
+        clEnumValN(GenArmSmeRangeChecks, "gen-arm-sme-sema-rangechecks",
+                   "Generate arm_sme_sema_rangechecks.inc for clang"),
         clEnumValN(GenArmMveHeader, "gen-arm-mve-header",
                    "Generate arm_mve.h for clang"),
         clEnumValN(GenArmMveBuiltinDef, "gen-arm-mve-builtin-def",
@@ -228,6 +261,20 @@ cl::opt<ActionType> Action(
                    "Generate ARM CDE builtin code-generator for clang"),
         clEnumValN(GenArmCdeBuiltinAliases, "gen-arm-cde-builtin-aliases",
                    "Generate list of valid ARM CDE builtin aliases for clang"),
+        clEnumValN(GenRISCVVectorHeader, "gen-riscv-vector-header",
+                   "Generate riscv_vector.h for clang"),
+        clEnumValN(GenRISCVVectorBuiltins, "gen-riscv-vector-builtins",
+                   "Generate riscv_vector_builtins.inc for clang"),
+        clEnumValN(GenRISCVVectorBuiltinCG, "gen-riscv-vector-builtin-codegen",
+                   "Generate riscv_vector_builtin_cg.inc for clang"),
+        clEnumValN(GenRISCVVectorBuiltinSema, "gen-riscv-vector-builtin-sema",
+                   "Generate riscv_vector_builtin_sema.inc for clang"),
+        clEnumValN(GenRISCVSiFiveVectorBuiltins, "gen-riscv-sifive-vector-builtins",
+                   "Generate riscv_sifive_vector_builtins.inc for clang"),
+        clEnumValN(GenRISCVSiFiveVectorBuiltinCG, "gen-riscv-sifive-vector-builtin-codegen",
+                   "Generate riscv_sifive_vector_builtin_cg.inc for clang"),
+        clEnumValN(GenRISCVSiFiveVectorBuiltinSema, "gen-riscv-sifive-vector-builtin-sema",
+                   "Generate riscv_sifive_vector_builtin_sema.inc for clang"),
         clEnumValN(GenAttrDocs, "gen-attr-docs",
                    "Generate attribute documentation"),
         clEnumValN(GenDiagDocs, "gen-diag-docs",
@@ -268,6 +315,9 @@ bool ClangTableGenMain(raw_ostream &OS, RecordKeeper &Records) {
   case GenClangAttrList:
     EmitClangAttrList(Records, OS);
     break;
+  case GenClangAttrDocTable:
+    EmitClangAttrDocTable(Records, OS);
+    break;
   case GenClangAttrSubjectMatchRuleList:
     EmitClangAttrSubjectMatchRuleList(Records, OS);
     break;
@@ -276,6 +326,9 @@ bool ClangTableGenMain(raw_ostream &OS, RecordKeeper &Records) {
     break;
   case GenClangAttrPCHWrite:
     EmitClangAttrPCHWrite(Records, OS);
+    break;
+  case GenClangAttrTokenKinds:
+    EmitClangAttrTokenKinds(Records, OS);
     break;
   case GenClangAttrHasAttributeImpl:
     EmitClangAttrHasAttrImpl(Records, OS);
@@ -362,6 +415,12 @@ bool ClangTableGenMain(raw_ostream &OS, RecordKeeper &Records) {
   case GenClangOpenCLBuiltins:
     EmitClangOpenCLBuiltins(Records, OS);
     break;
+  case GenClangOpenCLBuiltinHeader:
+    EmitClangOpenCLBuiltinHeader(Records, OS);
+    break;
+  case GenClangOpenCLBuiltinTests:
+    EmitClangOpenCLBuiltinTests(Records, OS);
+    break;
   case GenClangSyntaxNodeList:
     EmitClangSyntaxNodeList(Records, OS);
     break;
@@ -413,6 +472,18 @@ bool ClangTableGenMain(raw_ostream &OS, RecordKeeper &Records) {
   case GenArmSveRangeChecks:
     EmitSveRangeChecks(Records, OS);
     break;
+  case GenArmSmeHeader:
+    EmitSmeHeader(Records, OS);
+    break;
+  case GenArmSmeBuiltins:
+    EmitSmeBuiltins(Records, OS);
+    break;
+  case GenArmSmeBuiltinCG:
+    EmitSmeBuiltinCG(Records, OS);
+    break;
+  case GenArmSmeRangeChecks:
+    EmitSmeRangeChecks(Records, OS);
+    break;
   case GenArmCdeHeader:
     EmitCdeHeader(Records, OS);
     break;
@@ -427,6 +498,27 @@ bool ClangTableGenMain(raw_ostream &OS, RecordKeeper &Records) {
     break;
   case GenArmCdeBuiltinAliases:
     EmitCdeBuiltinAliases(Records, OS);
+    break;
+  case GenRISCVVectorHeader:
+    EmitRVVHeader(Records, OS);
+    break;
+  case GenRISCVVectorBuiltins:
+    EmitRVVBuiltins(Records, OS);
+    break;
+  case GenRISCVVectorBuiltinCG:
+    EmitRVVBuiltinCG(Records, OS);
+    break;
+  case GenRISCVVectorBuiltinSema:
+    EmitRVVBuiltinSema(Records, OS);
+    break;
+  case GenRISCVSiFiveVectorBuiltins:
+    EmitRVVBuiltins(Records, OS);
+    break;
+  case GenRISCVSiFiveVectorBuiltinCG:
+    EmitRVVBuiltinCG(Records, OS);
+    break;
+  case GenRISCVSiFiveVectorBuiltinSema:
+    EmitRVVBuiltinSema(Records, OS);
     break;
   case GenAttrDocs:
     EmitClangAttrDocs(Records, OS);

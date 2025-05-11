@@ -15,10 +15,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "llvm/IR/Instructions.h"
-#include "llvm/InitializePasses.h"
-#define AA_NAME "alignment-from-assumptions"
-#define DEBUG_TYPE AA_NAME
 #include "llvm/Transforms/Scalar/AlignmentFromAssumptions.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/Statistic.h"
@@ -28,15 +24,14 @@
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/ScalarEvolutionExpressions.h"
 #include "llvm/Analysis/ValueTracking.h"
-#include "llvm/IR/Constant.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/Instruction.h"
+#include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicInst.h"
-#include "llvm/IR/Intrinsics.h"
-#include "llvm/IR/Module.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Transforms/Scalar.h"
+
+#define DEBUG_TYPE "alignment-from-assumptions"
 using namespace llvm;
 
 STATISTIC(NumLoadAlignChanged,
@@ -45,46 +40,6 @@ STATISTIC(NumStoreAlignChanged,
   "Number of stores changed by alignment assumptions");
 STATISTIC(NumMemIntAlignChanged,
   "Number of memory intrinsics changed by alignment assumptions");
-
-namespace {
-struct AlignmentFromAssumptions : public FunctionPass {
-  static char ID; // Pass identification, replacement for typeid
-  AlignmentFromAssumptions() : FunctionPass(ID) {
-    initializeAlignmentFromAssumptionsPass(*PassRegistry::getPassRegistry());
-  }
-
-  bool runOnFunction(Function &F) override;
-
-  void getAnalysisUsage(AnalysisUsage &AU) const override {
-    AU.addRequired<AssumptionCacheTracker>();
-    AU.addRequired<ScalarEvolutionWrapperPass>();
-    AU.addRequired<DominatorTreeWrapperPass>();
-
-    AU.setPreservesCFG();
-    AU.addPreserved<AAResultsWrapperPass>();
-    AU.addPreserved<GlobalsAAWrapperPass>();
-    AU.addPreserved<LoopInfoWrapperPass>();
-    AU.addPreserved<DominatorTreeWrapperPass>();
-    AU.addPreserved<ScalarEvolutionWrapperPass>();
-  }
-
-  AlignmentFromAssumptionsPass Impl;
-};
-}
-
-char AlignmentFromAssumptions::ID = 0;
-static const char aip_name[] = "Alignment from assumptions";
-INITIALIZE_PASS_BEGIN(AlignmentFromAssumptions, AA_NAME,
-                      aip_name, false, false)
-INITIALIZE_PASS_DEPENDENCY(AssumptionCacheTracker)
-INITIALIZE_PASS_DEPENDENCY(DominatorTreeWrapperPass)
-INITIALIZE_PASS_DEPENDENCY(ScalarEvolutionWrapperPass)
-INITIALIZE_PASS_END(AlignmentFromAssumptions, AA_NAME,
-                    aip_name, false, false)
-
-FunctionPass *llvm::createAlignmentFromAssumptionsPass() {
-  return new AlignmentFromAssumptions();
-}
 
 // Given an expression for the (constant) alignment, AlignSCEV, and an
 // expression for the displacement between a pointer and the aligned address,
@@ -118,7 +73,7 @@ static MaybeAlign getNewAlignmentDiff(const SCEV *DiffSCEV,
       return Align(DiffUnitsAbs);
   }
 
-  return None;
+  return std::nullopt;
 }
 
 // There is an address given by an offset OffSCEV from AASCEV which has an
@@ -134,6 +89,8 @@ static Align getNewAlignment(const SCEV *AASCEV, const SCEV *AlignSCEV,
   PtrSCEV = SE->getTruncateOrZeroExtend(
       PtrSCEV, SE->getEffectiveSCEVType(AASCEV->getType()));
   const SCEV *DiffSCEV = SE->getMinusSCEV(PtrSCEV, AASCEV);
+  if (isa<SCEVCouldNotCompute>(DiffSCEV))
+    return Align(1);
 
   // On 32-bit platforms, DiffSCEV might now have type i32 -- we've always
   // sign-extended OffSCEV to i64, so make sure they agree again.
@@ -141,7 +98,7 @@ static Align getNewAlignment(const SCEV *AASCEV, const SCEV *AlignSCEV,
 
   // What we really want to know is the overall offset to the aligned
   // address. This address is displaced by the provided offset.
-  DiffSCEV = SE->getMinusSCEV(DiffSCEV, OffSCEV);
+  DiffSCEV = SE->getAddExpr(DiffSCEV, OffSCEV);
 
   LLVM_DEBUG(dbgs() << "AFI: alignment of " << *Ptr << " relative to "
                     << *AlignSCEV << " and offset " << *OffSCEV
@@ -218,6 +175,10 @@ bool AlignmentFromAssumptionsPass::extractAlignmentInfo(CallInst *I,
   AAPtr = AAPtr->stripPointerCastsSameRepresentation();
   AlignSCEV = SE->getSCEV(AlignOB.Inputs[1].get());
   AlignSCEV = SE->getTruncateOrZeroExtend(AlignSCEV, Int64Ty);
+  if (!isa<SCEVConstant>(AlignSCEV))
+    // Added to suppress a crash because consumer doesn't expect non-constant
+    // alignments in the assume bundle.  TODO: Consider generalizing caller.
+    return false;
   if (AlignOB.Inputs.size() == 3)
     OffSCEV = SE->getSCEV(AlignOB.Inputs[2].get());
   else
@@ -313,17 +274,6 @@ bool AlignmentFromAssumptionsPass::processAssumption(CallInst *ACall,
   return true;
 }
 
-bool AlignmentFromAssumptions::runOnFunction(Function &F) {
-  if (skipFunction(F))
-    return false;
-
-  auto &AC = getAnalysis<AssumptionCacheTracker>().getAssumptionCache(F);
-  ScalarEvolution *SE = &getAnalysis<ScalarEvolutionWrapperPass>().getSE();
-  DominatorTree *DT = &getAnalysis<DominatorTreeWrapperPass>().getDomTree();
-
-  return Impl.runImpl(F, AC, SE, DT);
-}
-
 bool AlignmentFromAssumptionsPass::runImpl(Function &F, AssumptionCache &AC,
                                            ScalarEvolution *SE_,
                                            DominatorTree *DT_) {
@@ -352,8 +302,6 @@ AlignmentFromAssumptionsPass::run(Function &F, FunctionAnalysisManager &AM) {
 
   PreservedAnalyses PA;
   PA.preserveSet<CFGAnalyses>();
-  PA.preserve<AAManager>();
   PA.preserve<ScalarEvolutionAnalysis>();
-  PA.preserve<GlobalsAA>();
   return PA;
 }

@@ -1,9 +1,8 @@
 //===- tapi/Core/APIJSONSerializer.h - TAPI API JSON Serializer -*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 ///
@@ -15,10 +14,10 @@
 #define TAPI_CORE_APIJSONSERIALIZER_H
 
 #include "tapi/Core/APIVisitor.h"
-#include "llvm/ADT/Triple.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/TargetParser/Triple.h"
 
 TAPI_NAMESPACE_INTERNAL_BEGIN
 
@@ -26,7 +25,7 @@ struct APIJSONOption {
   bool compact;
   bool noUUID;
   bool noTarget;
-  bool externalOnly;
+  bool noHiddenGlobal;
   bool publicOnly;
   bool ignoreLineCol;
 };
@@ -42,7 +41,7 @@ public:
   void serialize(raw_ostream &os) const;
 
   // static method to parse JSON into API.
-  static llvm::Expected<API> parse(StringRef JSON);
+  static llvm::Expected<API> parse(StringRef json);
   static llvm::Expected<API> parse(llvm::json::Object *root,
                                    bool publicOnly = false,
                                    llvm::Triple *triple = nullptr);
@@ -54,16 +53,16 @@ private:
 
 class APIJSONError : public llvm::ErrorInfo<llvm::json::ParseError> {
 public:
-  APIJSONError(Twine ErrorMsg) : Msg(ErrorMsg.str()) {}
+  APIJSONError(Twine errorMsg) : msg(errorMsg.str()) {}
 
   void log(llvm::raw_ostream &os) const override {
-    os << Msg << "\n";
+    os << msg << "\n";
   }
   std::error_code convertToErrorCode() const override {
     return llvm::inconvertibleErrorCode();
   }
 private:
-  std::string Msg;
+  std::string msg;
 };
 
 TAPI_NAMESPACE_INTERNAL_END

@@ -15,6 +15,7 @@ namespace phases {
   /// ID - Ordered values for successive stages in the
   /// compilation process which interact with user options.
   enum ID {
+    Depscan,
     Preprocess,
     Precompile,
     Compile,
@@ -22,11 +23,10 @@ namespace phases {
     Assemble,
     Link,
     IfsMerge,
-    LastPhase = IfsMerge,
   };
 
   enum {
-    MaxNumberOfPhases = LastPhase + 1
+    MaxNumberOfPhases = IfsMerge + 1
   };
 
   const char *getPhaseName(ID Id);

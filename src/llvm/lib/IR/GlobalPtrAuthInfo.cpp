@@ -66,12 +66,12 @@ Expected<GlobalPtrAuthInfo> GlobalPtrAuthInfo::tryAnalyze(const Value *V) {
   return GlobalPtrAuthInfo(GV);
 }
 
-Optional<GlobalPtrAuthInfo> GlobalPtrAuthInfo::analyze(const Value *V) {
+std::optional<GlobalPtrAuthInfo> GlobalPtrAuthInfo::analyze(const Value *V) {
   if (auto PAIOrErr = tryAnalyze(V)) {
     return *PAIOrErr;
   } else {
     consumeError(PAIOrErr.takeError());
-    return None;
+    return std::nullopt;
   }
 }
 
@@ -146,7 +146,7 @@ Constant *GlobalPtrAuthInfo::create(Module &M, Constant *Pointer,
 
   auto Result = ConstantExpr::getBitCast(GV, Pointer->getType());
 
-  assert(analyze(Result).hasValue() && "invalid ptrauth constant");
+  assert(analyze(Result).has_value() && "invalid ptrauth constant");
 
   return Result;
 }

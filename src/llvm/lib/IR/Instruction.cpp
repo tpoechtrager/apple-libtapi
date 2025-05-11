@@ -11,12 +11,14 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/IR/Instruction.h"
-#include "llvm/IR/IntrinsicInst.h"
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/IR/AttributeMask.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Instructions.h"
-#include "llvm/IR/MDBuilder.h"
+#include "llvm/IR/IntrinsicInst.h"
+#include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/Operator.h"
+#include "llvm/IR/ProfDataUtils.h"
 #include "llvm/IR/Type.h"
 using namespace llvm;
 
@@ -28,7 +30,7 @@ Instruction::Instruction(Type *ty, unsigned it, Use *Ops, unsigned NumOps,
   if (InsertBefore) {
     BasicBlock *BB = InsertBefore->getParent();
     assert(BB && "Instruction to insert before is not in a basic block!");
-    BB->getInstList().insert(InsertBefore->getIterator(), this);
+    insertInto(BB, InsertBefore->getIterator());
   }
 }
 
@@ -38,7 +40,7 @@ Instruction::Instruction(Type *ty, unsigned it, Use *Ops, unsigned NumOps,
 
   // append this instruction into the basic block
   assert(InsertAtEnd && "Basic block to append to may not be NULL!");
-  InsertAtEnd->getInstList().push_back(this);
+  insertInto(InsertAtEnd, InsertAtEnd->end());
 }
 
 Instruction::~Instruction() {
@@ -55,6 +57,10 @@ Instruction::~Instruction() {
   //   instructions in a BasicBlock are deleted).
   if (isUsedByMetadata())
     ValueAsMetadata::handleRAUW(this, UndefValue::get(getType()));
+
+  // Explicitly remove DIAssignID metadata to clear up ID -> Instruction(s)
+  // mapping in LLVMContext.
+  setMetadata(LLVMContext::MD_DIAssignID, nullptr);
 }
 
 
@@ -81,14 +87,21 @@ iplist<Instruction>::iterator Instruction::eraseFromParent() {
 /// Insert an unlinked instruction into a basic block immediately before the
 /// specified instruction.
 void Instruction::insertBefore(Instruction *InsertPos) {
-  InsertPos->getParent()->getInstList().insert(InsertPos->getIterator(), this);
+  insertInto(InsertPos->getParent(), InsertPos->getIterator());
 }
 
 /// Insert an unlinked instruction into a basic block immediately after the
 /// specified instruction.
 void Instruction::insertAfter(Instruction *InsertPos) {
-  InsertPos->getParent()->getInstList().insertAfter(InsertPos->getIterator(),
-                                                    this);
+  insertInto(InsertPos->getParent(), std::next(InsertPos->getIterator()));
+}
+
+BasicBlock::iterator Instruction::insertInto(BasicBlock *ParentBB,
+                                             BasicBlock::iterator It) {
+  assert(getParent() == nullptr && "Expected detached instruction");
+  assert((It == ParentBB->end() || It->getParent() == ParentBB) &&
+         "It not in ParentBB");
+  return ParentBB->getInstList().insert(It, this);
 }
 
 /// Unlink this instruction from its current basic block and insert it into the
@@ -104,7 +117,7 @@ void Instruction::moveAfter(Instruction *MovePos) {
 void Instruction::moveBefore(BasicBlock &BB,
                              SymbolTableList<Instruction>::iterator I) {
   assert(I == BB.end() || I->getParent() == &BB);
-  BB.getInstList().splice(I, getParent()->getInstList(), getIterator());
+  BB.splice(I, getParent(), getIterator());
 }
 
 bool Instruction::comesBefore(const Instruction *Other) const {
@@ -114,6 +127,37 @@ bool Instruction::comesBefore(const Instruction *Other) const {
   if (!Parent->isInstrOrderValid())
     Parent->renumberInstructions();
   return Order < Other->Order;
+}
+
+Instruction *Instruction::getInsertionPointAfterDef() {
+  assert(!getType()->isVoidTy() && "Instruction must define result");
+  BasicBlock *InsertBB;
+  BasicBlock::iterator InsertPt;
+  if (auto *PN = dyn_cast<PHINode>(this)) {
+    InsertBB = PN->getParent();
+    InsertPt = InsertBB->getFirstInsertionPt();
+  } else if (auto *II = dyn_cast<InvokeInst>(this)) {
+    InsertBB = II->getNormalDest();
+    InsertPt = InsertBB->getFirstInsertionPt();
+  } else if (isa<CallBrInst>(this)) {
+    // Def is available in multiple successors, there's no single dominating
+    // insertion point.
+    return nullptr;
+  } else {
+    assert(!isTerminator() && "Only invoke/callbr terminators return value");
+    InsertBB = getParent();
+    InsertPt = std::next(getIterator());
+  }
+
+  // catchswitch blocks don't have any legal insertion point (because they
+  // are both an exception pad and a terminator).
+  if (InsertPt == InsertBB->end())
+    return nullptr;
+  return &*InsertPt;
+}
+
+bool Instruction::isOnlyUserOfAnyOperand() {
+  return any_of(operands(), [](Value *V) { return V->hasOneUser(); });
 }
 
 void Instruction::setHasNoUnsignedWrap(bool b) {
@@ -134,6 +178,10 @@ bool Instruction::hasNoUnsignedWrap() const {
 
 bool Instruction::hasNoSignedWrap() const {
   return cast<OverflowingBinaryOperator>(this)->hasNoSignedWrap();
+}
+
+bool Instruction::hasPoisonGeneratingFlags() const {
+  return cast<Operator>(this)->hasPoisonGeneratingFlags();
 }
 
 void Instruction::dropPoisonGeneratingFlags() {
@@ -157,9 +205,54 @@ void Instruction::dropPoisonGeneratingFlags() {
     cast<GetElementPtrInst>(this)->setIsInBounds(false);
     break;
   }
-  // TODO: FastMathFlags!
+  if (isa<FPMathOperator>(this)) {
+    setHasNoNaNs(false);
+    setHasNoInfs(false);
+  }
+
+  assert(!hasPoisonGeneratingFlags() && "must be kept in sync");
 }
 
+bool Instruction::hasPoisonGeneratingMetadata() const {
+  return hasMetadata(LLVMContext::MD_range) ||
+         hasMetadata(LLVMContext::MD_nonnull) ||
+         hasMetadata(LLVMContext::MD_align);
+}
+
+void Instruction::dropPoisonGeneratingMetadata() {
+  eraseMetadata(LLVMContext::MD_range);
+  eraseMetadata(LLVMContext::MD_nonnull);
+  eraseMetadata(LLVMContext::MD_align);
+}
+
+void Instruction::dropUBImplyingAttrsAndUnknownMetadata(
+    ArrayRef<unsigned> KnownIDs) {
+  dropUnknownNonDebugMetadata(KnownIDs);
+  auto *CB = dyn_cast<CallBase>(this);
+  if (!CB)
+    return;
+  // For call instructions, we also need to drop parameter and return attributes
+  // that are can cause UB if the call is moved to a location where the
+  // attribute is not valid.
+  AttributeList AL = CB->getAttributes();
+  if (AL.isEmpty())
+    return;
+  AttributeMask UBImplyingAttributes =
+      AttributeFuncs::getUBImplyingAttributes();
+  for (unsigned ArgNo = 0; ArgNo < CB->arg_size(); ArgNo++)
+    CB->removeParamAttrs(ArgNo, UBImplyingAttributes);
+  CB->removeRetAttrs(UBImplyingAttributes);
+}
+
+void Instruction::dropUBImplyingAttrsAndMetadata() {
+  // !annotation metadata does not impact semantics.
+  // !range, !nonnull and !align produce poison, so they are safe to speculate.
+  // !noundef and various AA metadata must be dropped, as it generally produces
+  // immediate undefined behavior.
+  unsigned KnownIDs[] = {LLVMContext::MD_annotation, LLVMContext::MD_range,
+                         LLVMContext::MD_nonnull, LLVMContext::MD_align};
+  dropUBImplyingAttrsAndUnknownMetadata(KnownIDs);
+}
 
 bool Instruction::isExact() const {
   return cast<PossiblyExactOperator>(this)->isExact();
@@ -285,20 +378,20 @@ void Instruction::copyIRFlags(const Value *V, bool IncludeWrapFlags) {
 
   if (auto *SrcGEP = dyn_cast<GetElementPtrInst>(V))
     if (auto *DestGEP = dyn_cast<GetElementPtrInst>(this))
-      DestGEP->setIsInBounds(SrcGEP->isInBounds() | DestGEP->isInBounds());
+      DestGEP->setIsInBounds(SrcGEP->isInBounds() || DestGEP->isInBounds());
 }
 
 void Instruction::andIRFlags(const Value *V) {
   if (auto *OB = dyn_cast<OverflowingBinaryOperator>(V)) {
     if (isa<OverflowingBinaryOperator>(this)) {
-      setHasNoSignedWrap(hasNoSignedWrap() & OB->hasNoSignedWrap());
-      setHasNoUnsignedWrap(hasNoUnsignedWrap() & OB->hasNoUnsignedWrap());
+      setHasNoSignedWrap(hasNoSignedWrap() && OB->hasNoSignedWrap());
+      setHasNoUnsignedWrap(hasNoUnsignedWrap() && OB->hasNoUnsignedWrap());
     }
   }
 
   if (auto *PE = dyn_cast<PossiblyExactOperator>(V))
     if (isa<PossiblyExactOperator>(this))
-      setIsExact(isExact() & PE->isExact());
+      setIsExact(isExact() && PE->isExact());
 
   if (auto *FP = dyn_cast<FPMathOperator>(V)) {
     if (isa<FPMathOperator>(this)) {
@@ -310,7 +403,7 @@ void Instruction::andIRFlags(const Value *V) {
 
   if (auto *SrcGEP = dyn_cast<GetElementPtrInst>(V))
     if (auto *DestGEP = dyn_cast<GetElementPtrInst>(this))
-      DestGEP->setIsInBounds(SrcGEP->isInBounds() & DestGEP->isInBounds());
+      DestGEP->setIsInBounds(SrcGEP->isInBounds() && DestGEP->isInBounds());
 }
 
 const char *Instruction::getOpcodeName(unsigned OpCode) {
@@ -398,27 +491,27 @@ const char *Instruction::getOpcodeName(unsigned OpCode) {
   }
 }
 
-/// Return true if both instructions have the same special state. This must be
-/// kept in sync with FunctionComparator::cmpOperations in
+/// This must be kept in sync with FunctionComparator::cmpOperations in
 /// lib/Transforms/IPO/MergeFunctions.cpp.
-static bool haveSameSpecialState(const Instruction *I1, const Instruction *I2,
-                                 bool IgnoreAlignment = false) {
+bool Instruction::hasSameSpecialState(const Instruction *I2,
+                                      bool IgnoreAlignment) const {
+  auto I1 = this;
   assert(I1->getOpcode() == I2->getOpcode() &&
          "Can not compare special state of different instructions");
 
   if (const AllocaInst *AI = dyn_cast<AllocaInst>(I1))
     return AI->getAllocatedType() == cast<AllocaInst>(I2)->getAllocatedType() &&
-           (AI->getAlignment() == cast<AllocaInst>(I2)->getAlignment() ||
+           (AI->getAlign() == cast<AllocaInst>(I2)->getAlign() ||
             IgnoreAlignment);
   if (const LoadInst *LI = dyn_cast<LoadInst>(I1))
     return LI->isVolatile() == cast<LoadInst>(I2)->isVolatile() &&
-           (LI->getAlignment() == cast<LoadInst>(I2)->getAlignment() ||
+           (LI->getAlign() == cast<LoadInst>(I2)->getAlign() ||
             IgnoreAlignment) &&
            LI->getOrdering() == cast<LoadInst>(I2)->getOrdering() &&
            LI->getSyncScopeID() == cast<LoadInst>(I2)->getSyncScopeID();
   if (const StoreInst *SI = dyn_cast<StoreInst>(I1))
     return SI->isVolatile() == cast<StoreInst>(I2)->isVolatile() &&
-           (SI->getAlignment() == cast<StoreInst>(I2)->getAlignment() ||
+           (SI->getAlign() == cast<StoreInst>(I2)->getAlign() ||
             IgnoreAlignment) &&
            SI->getOrdering() == cast<StoreInst>(I2)->getOrdering() &&
            SI->getSyncScopeID() == cast<StoreInst>(I2)->getSyncScopeID();
@@ -461,6 +554,9 @@ static bool haveSameSpecialState(const Instruction *I1, const Instruction *I2,
   if (const ShuffleVectorInst *SVI = dyn_cast<ShuffleVectorInst>(I1))
     return SVI->getShuffleMask() ==
            cast<ShuffleVectorInst>(I2)->getShuffleMask();
+  if (const GetElementPtrInst *GEP = dyn_cast<GetElementPtrInst>(I1))
+    return GEP->getSourceElementType() ==
+           cast<GetElementPtrInst>(I2)->getSourceElementType();
 
   return true;
 }
@@ -478,7 +574,7 @@ bool Instruction::isIdenticalToWhenDefined(const Instruction *I) const {
 
   // If both instructions have no operands, they are identical.
   if (getNumOperands() == 0 && I->getNumOperands() == 0)
-    return haveSameSpecialState(this, I);
+    return this->hasSameSpecialState(I);
 
   // We have two instructions of identical opcode and #operands.  Check to see
   // if all operands are the same.
@@ -492,7 +588,7 @@ bool Instruction::isIdenticalToWhenDefined(const Instruction *I) const {
                       otherPHI->block_begin());
   }
 
-  return haveSameSpecialState(this, I);
+  return this->hasSameSpecialState(I);
 }
 
 // Keep this in sync with FunctionComparator::cmpOperations in
@@ -518,7 +614,7 @@ bool Instruction::isSameOperationAs(const Instruction *I,
         getOperand(i)->getType() != I->getOperand(i)->getType())
       return false;
 
-  return haveSameSpecialState(this, I, IgnoreAlignment);
+  return this->hasSameSpecialState(I, IgnoreAlignment);
 }
 
 bool Instruction::isUsedOutsideOfBlock(const BasicBlock *BB) const {
@@ -553,7 +649,7 @@ bool Instruction::mayReadFromMemory() const {
   case Instruction::Call:
   case Instruction::Invoke:
   case Instruction::CallBr:
-    return !cast<CallBase>(this)->doesNotReadMemory();
+    return !cast<CallBase>(this)->onlyWritesMemory();
   case Instruction::Store:
     return !cast<StoreInst>(this)->isUnordered();
   }
@@ -618,27 +714,159 @@ bool Instruction::hasAtomicStore() const {
   }
 }
 
-bool Instruction::mayThrow() const {
-  if (const CallInst *CI = dyn_cast<CallInst>(this))
-    return !CI->doesNotThrow();
-  if (const auto *CRI = dyn_cast<CleanupReturnInst>(this))
-    return CRI->unwindsToCaller();
-  if (const auto *CatchSwitch = dyn_cast<CatchSwitchInst>(this))
-    return CatchSwitch->unwindsToCaller();
-  return isa<ResumeInst>(this);
+bool Instruction::isVolatile() const {
+  switch (getOpcode()) {
+  default:
+    return false;
+  case Instruction::AtomicRMW:
+    return cast<AtomicRMWInst>(this)->isVolatile();
+  case Instruction::Store:
+    return cast<StoreInst>(this)->isVolatile();
+  case Instruction::Load:
+    return cast<LoadInst>(this)->isVolatile();
+  case Instruction::AtomicCmpXchg:
+    return cast<AtomicCmpXchgInst>(this)->isVolatile();
+  case Instruction::Call:
+  case Instruction::Invoke:
+    // There are a very limited number of intrinsics with volatile flags.
+    if (auto *II = dyn_cast<IntrinsicInst>(this)) {
+      if (auto *MI = dyn_cast<MemIntrinsic>(II))
+        return MI->isVolatile();
+      switch (II->getIntrinsicID()) {
+      default: break;
+      case Intrinsic::matrix_column_major_load:
+        return cast<ConstantInt>(II->getArgOperand(2))->isOne();
+      case Intrinsic::matrix_column_major_store:
+        return cast<ConstantInt>(II->getArgOperand(3))->isOne();
+      }
+    }
+    return false;
+  }
+}
+
+Type *Instruction::getAccessType() const {
+  switch (getOpcode()) {
+  case Instruction::Store:
+    return cast<StoreInst>(this)->getValueOperand()->getType();
+  case Instruction::Load:
+  case Instruction::AtomicRMW:
+    return getType();
+  case Instruction::AtomicCmpXchg:
+    return cast<AtomicCmpXchgInst>(this)->getNewValOperand()->getType();
+  case Instruction::Call:
+  case Instruction::Invoke:
+    if (const IntrinsicInst *II = dyn_cast<IntrinsicInst>(this)) {
+      switch (II->getIntrinsicID()) {
+      case Intrinsic::masked_load:
+      case Intrinsic::masked_gather:
+      case Intrinsic::masked_expandload:
+      case Intrinsic::vp_load:
+      case Intrinsic::vp_gather:
+      case Intrinsic::experimental_vp_strided_load:
+        return II->getType();
+      case Intrinsic::masked_store:
+      case Intrinsic::masked_scatter:
+      case Intrinsic::masked_compressstore:
+      case Intrinsic::vp_store:
+      case Intrinsic::vp_scatter:
+      case Intrinsic::experimental_vp_strided_store:
+        return II->getOperand(0)->getType();
+      default:
+        break;
+      }
+    }
+  }
+
+  return nullptr;
+}
+
+static bool canUnwindPastLandingPad(const LandingPadInst *LP,
+                                    bool IncludePhaseOneUnwind) {
+  // Because phase one unwinding skips cleanup landingpads, we effectively
+  // unwind past this frame, and callers need to have valid unwind info.
+  if (LP->isCleanup())
+    return IncludePhaseOneUnwind;
+
+  for (unsigned I = 0; I < LP->getNumClauses(); ++I) {
+    Constant *Clause = LP->getClause(I);
+    // catch ptr null catches all exceptions.
+    if (LP->isCatch(I) && isa<ConstantPointerNull>(Clause))
+      return false;
+    // filter [0 x ptr] catches all exceptions.
+    if (LP->isFilter(I) && Clause->getType()->getArrayNumElements() == 0)
+      return false;
+  }
+
+  // May catch only some subset of exceptions, in which case other exceptions
+  // will continue unwinding.
+  return true;
+}
+
+bool Instruction::mayThrow(bool IncludePhaseOneUnwind) const {
+  switch (getOpcode()) {
+  case Instruction::Call:
+    return !cast<CallInst>(this)->doesNotThrow();
+  case Instruction::CleanupRet:
+    return cast<CleanupReturnInst>(this)->unwindsToCaller();
+  case Instruction::CatchSwitch:
+    return cast<CatchSwitchInst>(this)->unwindsToCaller();
+  case Instruction::Resume:
+    return true;
+  case Instruction::Invoke: {
+    // Landingpads themselves don't unwind -- however, an invoke of a skipped
+    // landingpad may continue unwinding.
+    BasicBlock *UnwindDest = cast<InvokeInst>(this)->getUnwindDest();
+    Instruction *Pad = UnwindDest->getFirstNonPHI();
+    if (auto *LP = dyn_cast<LandingPadInst>(Pad))
+      return canUnwindPastLandingPad(LP, IncludePhaseOneUnwind);
+    return false;
+  }
+  case Instruction::CleanupPad:
+    // Treat the same as cleanup landingpad.
+    return IncludePhaseOneUnwind;
+  default:
+    return false;
+  }
+}
+
+bool Instruction::mayHaveSideEffects() const {
+  return mayWriteToMemory() || mayThrow() || !willReturn();
 }
 
 bool Instruction::isSafeToRemove() const {
   return (!isa<CallInst>(this) || !this->mayHaveSideEffects()) &&
-         !this->isTerminator();
+         !this->isTerminator() && !this->isEHPad();
+}
+
+bool Instruction::willReturn() const {
+  // Volatile store isn't guaranteed to return; see LangRef.
+  if (auto *SI = dyn_cast<StoreInst>(this))
+    return !SI->isVolatile();
+
+  if (const auto *CB = dyn_cast<CallBase>(this))
+    return CB->hasFnAttr(Attribute::WillReturn);
+  return true;
 }
 
 bool Instruction::isLifetimeStartOrEnd() const {
-  auto II = dyn_cast<IntrinsicInst>(this);
+  auto *II = dyn_cast<IntrinsicInst>(this);
   if (!II)
     return false;
   Intrinsic::ID ID = II->getIntrinsicID();
   return ID == Intrinsic::lifetime_start || ID == Intrinsic::lifetime_end;
+}
+
+bool Instruction::isLaunderOrStripInvariantGroup() const {
+  auto *II = dyn_cast<IntrinsicInst>(this);
+  if (!II)
+    return false;
+  Intrinsic::ID ID = II->getIntrinsicID();
+  return ID == Intrinsic::launder_invariant_group ||
+         ID == Intrinsic::strip_invariant_group;
+}
+
+bool Instruction::isDebugOrPseudoInst() const {
+  return isa<DbgInfoIntrinsic>(this) || isa<PseudoProbeInst>(this);
 }
 
 const Instruction *
@@ -727,13 +955,8 @@ Instruction *Instruction::cloneImpl() const {
 }
 
 void Instruction::swapProfMetadata() {
-  MDNode *ProfileData = getMetadata(LLVMContext::MD_prof);
-  if (!ProfileData || ProfileData->getNumOperands() != 3 ||
-      !isa<MDString>(ProfileData->getOperand(0)))
-    return;
-
-  MDString *MDName = cast<MDString>(ProfileData->getOperand(0));
-  if (MDName->getString() != "branch_weights")
+  MDNode *ProfileData = getBranchWeightMDNode(*this);
+  if (!ProfileData || ProfileData->getNumOperands() != 3)
     return;
 
   // The first operand is the name. Fetch them backwards and build a new one.

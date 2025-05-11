@@ -10,14 +10,11 @@
 //
 //===----------------------------------------------------------------------===//
 
-#if defined(__linux__) && !defined(_LARGEFILE64_SOURCE)
-#define _LARGEFILE64_SOURCE
-#endif
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Config/config.h"
 #include "llvm/Support/Compiler.h"
+#include "llvm/Support/Duration.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Format.h"
@@ -27,10 +24,8 @@
 #include "llvm/Support/Process.h"
 #include "llvm/Support/Program.h"
 #include <algorithm>
-#include <cctype>
 #include <cerrno>
 #include <cstdio>
-#include <iterator>
 #include <sys/stat.h>
 
 // <fcntl.h> may provide O_BINARY.
@@ -61,6 +56,7 @@
 
 #ifdef _WIN32
 #include "llvm/Support/ConvertUTF.h"
+#include "llvm/Support/Signals.h"
 #include "llvm/Support/Windows/WindowsSupport.h"
 #endif
 
@@ -88,8 +84,15 @@ raw_ostream::~raw_ostream() {
 }
 
 size_t raw_ostream::preferred_buffer_size() const {
+#ifdef _WIN32
+  // On Windows BUFSIZ is only 512 which results in more calls to write. This
+  // overhead can cause significant performance degradation. Therefore use a
+  // better default.
+  return (16 * 1024);
+#else
   // BUFSIZ is intended to be a reasonable default.
   return BUFSIZ;
+#endif
 }
 
 void raw_ostream::SetBuffered() {
@@ -188,7 +191,7 @@ raw_ostream &raw_ostream::write_escaped(StringRef Str,
       // Write out the escaped representation.
       if (UseHexEscapes) {
         *this << '\\' << 'x';
-        *this << hexdigit((c >> 4 & 0xF));
+        *this << hexdigit((c >> 4) & 0xF);
         *this << hexdigit((c >> 0) & 0xF);
       } else {
         // Always use a full 3-character octal escape.
@@ -289,10 +292,10 @@ void raw_ostream::copy_to_buffer(const char *Ptr, size_t Size) {
   // Handle short strings specially, memcpy isn't very good at very short
   // strings.
   switch (Size) {
-  case 4: OutBufCur[3] = Ptr[3]; LLVM_FALLTHROUGH;
-  case 3: OutBufCur[2] = Ptr[2]; LLVM_FALLTHROUGH;
-  case 2: OutBufCur[1] = Ptr[1]; LLVM_FALLTHROUGH;
-  case 1: OutBufCur[0] = Ptr[0]; LLVM_FALLTHROUGH;
+  case 4: OutBufCur[3] = Ptr[3]; [[fallthrough]];
+  case 3: OutBufCur[2] = Ptr[2]; [[fallthrough]];
+  case 2: OutBufCur[1] = Ptr[1]; [[fallthrough]];
+  case 1: OutBufCur[0] = Ptr[0]; [[fallthrough]];
   case 0: break;
   default:
     memcpy(OutBufCur, Ptr, Size);
@@ -412,7 +415,7 @@ raw_ostream &raw_ostream::operator<<(const FormattedBytes &FB) {
   const size_t Size = Bytes.size();
   HexPrintStyle HPS = FB.Upper ? HexPrintStyle::Upper : HexPrintStyle::Lower;
   uint64_t OffsetWidth = 0;
-  if (FB.FirstByteOffset.hasValue()) {
+  if (FB.FirstByteOffset) {
     // Figure out how many nibbles are needed to print the largest offset
     // represented by this data set, so that we can align the offset field
     // to the right width.
@@ -432,8 +435,8 @@ raw_ostream &raw_ostream::operator<<(const FormattedBytes &FB) {
   while (!Bytes.empty()) {
     indent(FB.IndentLevel);
 
-    if (FB.FirstByteOffset.hasValue()) {
-      uint64_t Offset = FB.FirstByteOffset.getValue();
+    if (FB.FirstByteOffset) {
+      uint64_t Offset = *FB.FirstByteOffset;
       llvm::write_hex(*this, Offset + LineIndex, HPS, OffsetWidth);
       *this << ": ";
     }
@@ -484,12 +487,11 @@ static raw_ostream &write_padding(raw_ostream &OS, unsigned NumChars) {
                                C, C, C, C, C, C, C, C, C, C, C, C, C, C, C, C};
 
   // Usually the indentation is small, handle it with a fastpath.
-  if (NumChars < array_lengthof(Chars))
+  if (NumChars < std::size(Chars))
     return OS.write(Chars, NumChars);
 
   while (NumChars) {
-    unsigned NumToWrite = std::min(NumChars,
-                                   (unsigned)array_lengthof(Chars)-1);
+    unsigned NumToWrite = std::min(NumChars, (unsigned)std::size(Chars) - 1);
     OS.write(Chars, NumToWrite);
     NumChars -= NumToWrite;
   }
@@ -577,10 +579,8 @@ static int getFD(StringRef Filename, std::error_code &EC,
   // the owner of stdout and may set the "binary" flag globally based on Flags.
   if (Filename == "-") {
     EC = std::error_code();
-    // If user requested binary then put stdout into binary mode if
-    // possible.
-    if (!(Flags & sys::fs::OF_Text))
-      sys::ChangeStdoutToBinary();
+    // Change stdout's text/binary mode based on the Flags.
+    sys::ChangeStdoutMode(Flags);
     return STDOUT_FILENO;
   }
 
@@ -648,13 +648,14 @@ raw_fd_ostream::raw_fd_ostream(int fd, bool shouldClose, bool unbuffered,
 
   // Get the starting position.
   off_t loc = ::lseek(FD, 0, SEEK_CUR);
-#ifdef _WIN32
-  // MSVCRT's _lseek(SEEK_CUR) doesn't return -1 for pipes.
   sys::fs::file_status Status;
   std::error_code EC = status(FD, Status);
-  SupportsSeeking = !EC && Status.type() == sys::fs::file_type::regular_file;
+  IsRegularFile = Status.type() == sys::fs::file_type::regular_file;
+#ifdef _WIN32
+  // MSVCRT's _lseek(SEEK_CUR) doesn't return -1 for pipes.
+  SupportsSeeking = !EC && IsRegularFile;
 #else
-  SupportsSeeking = loc != (off_t)-1;
+  SupportsSeeking = !EC && loc != (off_t)-1;
 #endif
   if (!SupportsSeeking)
     pos = 0;
@@ -683,34 +684,10 @@ raw_fd_ostream::~raw_fd_ostream() {
   // to avoid report_fatal_error calls should check for errors with
   // has_error() and clear the error flag with clear_error() before
   // destructing raw_ostream objects which may have errors.
-  if (has_error()) {
-    // The following is a workaround for a Swift compiler issue wherein the
-    // compiler occassionally crashes in this destructor with no meaningful
-    // error diagnostic being emitted. This is possibly due to Swift's
-    // installed error handler relying on standard output/error streams,
-    // which may in fact be the ones causing the error here.
-    //
-    // In order to get a richer diagnostic signal than a stack trace indicating
-    // this as a point of failure, let's try blasting the error to stderr
-    // without relying on things like errs(), in the hope that these error
-    // messages can help yield actionable bug reports.
-    //
-    // Also, as a part of this temporary workaround, we can try to minimize
-    // the impact of the crash by avoiding `report_fatal_error` and its
-    // subsequent call to `abort()`.
-    {
-      SmallVector<char, 256> Buffer;
-      raw_svector_ostream OS(Buffer);
-      OS << "Error encountered during compilation; ";
-      OS << "please submit a bug report (https://swift.org/contributing/#reporting-bugs) and include the project\n";
-      OS << "File Descriptor close failed on FD: " << FD << "\n";
-      OS << "Error: " << error().message() << "\n";
-      StringRef MessageStr = OS.str();
-      ::write(STDERR_FILENO, MessageStr.data(), MessageStr.size());
-    }
-    // report_fatal_error("IO failure on output stream: " + error().message(),
-    //                    /*gen_crash_diag=*/false);
-  }
+  if (has_error())
+    report_fatal_error(Twine("IO failure on output stream: ") +
+                           error().message(),
+                       /*gen_crash_diag=*/false);
 }
 
 #if defined(_WIN32)
@@ -806,6 +783,15 @@ void raw_fd_ostream::write_impl(const char *Ptr, size_t Size) {
           )
         continue;
 
+#ifdef _WIN32
+      // Windows equivalents of SIGPIPE/EPIPE.
+      DWORD WinLastError = GetLastError();
+      if (WinLastError == ERROR_BROKEN_PIPE ||
+          (WinLastError == ERROR_NO_DATA && errno == EINVAL)) {
+        llvm::sys::CallOneShotPipeSignalHandler();
+        errno = EPIPE;
+      }
+#endif
       // Otherwise it's a non-recoverable error. Note it and quit.
       error_detected(std::error_code(errno, std::generic_category()));
       break;
@@ -833,8 +819,6 @@ uint64_t raw_fd_ostream::seek(uint64_t off) {
   flush();
 #ifdef _WIN32
   pos = ::_lseeki64(FD, off, SEEK_SET);
-#elif defined(HAVE_LSEEK64)
-  pos = ::lseek64(FD, off, SEEK_SET);
 #else
   pos = ::lseek(FD, off, SEEK_SET);
 #endif
@@ -898,8 +882,8 @@ Expected<sys::fs::FileLocker> raw_fd_ostream::lock() {
 }
 
 Expected<sys::fs::FileLocker>
-raw_fd_ostream::tryLockFor(std::chrono::milliseconds Timeout) {
-  std::error_code EC = sys::fs::tryLockFile(FD, Timeout);
+raw_fd_ostream::tryLockFor(Duration const& Timeout) {
+  std::error_code EC = sys::fs::tryLockFile(FD, Timeout.getDuration());
   if (!EC)
     return sys::fs::FileLocker(FD);
   return errorCodeToError(EC);
@@ -943,8 +927,7 @@ raw_fd_stream::raw_fd_stream(StringRef Filename, std::error_code &EC)
   if (EC)
     return;
 
-  // Do not support non-seekable files.
-  if (!supportsSeeking())
+  if (!isRegularFile())
     EC = std::make_error_code(std::errc::invalid_argument);
 }
 
@@ -965,10 +948,6 @@ bool raw_fd_stream::classof(const raw_ostream *OS) {
 //===----------------------------------------------------------------------===//
 //  raw_string_ostream
 //===----------------------------------------------------------------------===//
-
-raw_string_ostream::~raw_string_ostream() {
-  flush();
-}
 
 void raw_string_ostream::write_impl(const char *Ptr, size_t Size) {
   OS.append(Ptr, Size);
@@ -1015,3 +994,33 @@ void raw_null_ostream::pwrite_impl(const char *Ptr, size_t Size,
 void raw_pwrite_stream::anchor() {}
 
 void buffer_ostream::anchor() {}
+
+void buffer_unique_ostream::anchor() {}
+
+Error llvm::writeToOutput(StringRef OutputFileName,
+                          std::function<Error(raw_ostream &)> Write) {
+  if (OutputFileName == "-")
+    return Write(outs());
+
+  if (OutputFileName == "/dev/null") {
+    raw_null_ostream Out;
+    return Write(Out);
+  }
+
+  unsigned Mode = sys::fs::all_read | sys::fs::all_write;
+  Expected<sys::fs::TempFile> Temp =
+      sys::fs::TempFile::create(OutputFileName + ".temp-stream-%%%%%%", Mode);
+  if (!Temp)
+    return createFileError(OutputFileName, Temp.takeError());
+
+  raw_fd_ostream Out(Temp->FD, false);
+
+  if (Error E = Write(Out)) {
+    if (Error DiscardError = Temp->discard())
+      return joinErrors(std::move(E), std::move(DiscardError));
+    return E;
+  }
+  Out.flush();
+
+  return Temp->keep(OutputFileName);
+}

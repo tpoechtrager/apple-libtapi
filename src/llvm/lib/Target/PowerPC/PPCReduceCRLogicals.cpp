@@ -206,9 +206,9 @@ static bool splitMBB(BlockSplitInfo &BSI) {
   NewMBB->splice(NewMBB->end(), ThisMBB, InsertPoint, ThisMBB->end());
   NewMBB->transferSuccessors(ThisMBB);
   if (!ProbOrigTarget.isUnknown()) {
-    auto MBBI = std::find(NewMBB->succ_begin(), NewMBB->succ_end(), OrigTarget);
+    auto MBBI = find(NewMBB->successors(), OrigTarget);
     NewMBB->setSuccProbability(MBBI, ProbOrigTarget);
-    MBBI = std::find(NewMBB->succ_begin(), NewMBB->succ_end(), OrigFallThrough);
+    MBBI = find(NewMBB->successors(), OrigFallThrough);
     NewMBB->setSuccProbability(MBBI, ProbOrigFallThrough);
   }
 
@@ -390,9 +390,10 @@ private:
   static bool isCRLogical(MachineInstr &MI) {
     unsigned Opc = MI.getOpcode();
     return Opc == PPC::CRAND || Opc == PPC::CRNAND || Opc == PPC::CROR ||
-      Opc == PPC::CRXOR || Opc == PPC::CRNOR || Opc == PPC::CREQV ||
-      Opc == PPC::CRANDC || Opc == PPC::CRORC || Opc == PPC::CRSET ||
-      Opc == PPC::CRUNSET || Opc == PPC::CR6SET || Opc == PPC::CR6UNSET;
+           Opc == PPC::CRXOR || Opc == PPC::CRNOR || Opc == PPC::CRNOT ||
+           Opc == PPC::CREQV || Opc == PPC::CRANDC || Opc == PPC::CRORC ||
+           Opc == PPC::CRSET || Opc == PPC::CRUNSET || Opc == PPC::CR6SET ||
+           Opc == PPC::CR6UNSET;
   }
   bool simplifyCode() {
     bool Changed = false;
@@ -544,7 +545,7 @@ MachineInstr *PPCReduceCRLogicals::lookThroughCRCopy(unsigned Reg,
     return Copy;
   Register CopySrc = Copy->getOperand(1).getReg();
   Subreg = Copy->getOperand(1).getSubReg();
-  if (!Register::isVirtualRegister(CopySrc)) {
+  if (!CopySrc.isVirtual()) {
     const TargetRegisterInfo *TRI = &TII->getRegisterInfo();
     // Set the Subreg
     if (CopySrc == PPC::CR0EQ || CopySrc == PPC::CR6EQ)

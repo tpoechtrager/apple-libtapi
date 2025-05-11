@@ -115,6 +115,7 @@ namespace X86 {
     Cmp,
     // AND
     And,
+    // FIXME: Zen 3 support branch fusion for OR/XOR.
     // ADD, SUB
     AddSub,
     // INC, DEC
@@ -183,6 +184,7 @@ namespace X86 {
     case X86::AND8rr:
     case X86::AND8rr_REV:
       return FirstMacroFusionInstKind::And;
+    // FIXME: Zen 3 support branch fusion for OR/XOR.
     // CMP
     case X86::CMP16i16:
     case X86::CMP16mr:
@@ -439,6 +441,11 @@ namespace X86II {
     ///    SYMBOL_LABEL @GOTPCREL
     MO_GOTPCREL,
 
+    /// MO_GOTPCREL_NORELAX - Same as MO_GOTPCREL except that R_X86_64_GOTPCREL
+    /// relocations are guaranteed to be emitted by the integrated assembler
+    /// instead of the relaxable R_X86_64[_REX]_GOTPCRELX relocations.
+    MO_GOTPCREL_NORELAX,
+
     /// MO_PLT - On a symbol operand this indicates that the immediate is
     /// offset to the PLT entry of symbol name from the current code location.
     ///
@@ -623,6 +630,11 @@ namespace X86II {
     /// byte like data16 or rep.
     PrefixByte = 10,
 
+    /// MRMDestMem4VOp3CC - This form is used for instructions that use the Mod/RM
+    /// byte to specify a destination which in this case is memory and operand 3
+    /// with VEX.VVVV, and also encodes a condition code.
+    MRMDestMem4VOp3CC = 20,
+
     /// MRM[0-7][rm] - These forms are used to represent instructions that use
     /// a Mod/RM byte, and use the middle field to hold extended opcode
     /// information.  In the intel manual these are represented as /0, /1, ...
@@ -788,7 +800,7 @@ namespace X86II {
     // belongs to. i.e. one-byte, two-byte, 0x0f 0x38, 0x0f 0x3a, etc.
     //
     OpMapShift = OpPrefixShift + 2,
-    OpMapMask  = 0x7 << OpMapShift,
+    OpMapMask  = 0xF << OpMapShift,
 
     // OB - OneByte - Set if this instruction has a one byte opcode.
     OB = 0 << OpMapShift,
@@ -817,13 +829,17 @@ namespace X86II {
     /// this flag to indicate that the encoder should do the wacky 3DNow! thing.
     ThreeDNow = 7 << OpMapShift,
 
+    // MAP5, MAP6 - Prefix after the 0x0F prefix.
+    T_MAP5 = 8 << OpMapShift,
+    T_MAP6 = 9 << OpMapShift,
+
     //===------------------------------------------------------------------===//
     // REX_W - REX prefixes are instruction prefixes used in 64-bit mode.
     // They are used to specify GPRs and SSE registers, 64-bit operand size,
     // etc. We only cares about REX.W and REX.R bits and only the former is
     // statically determined.
     //
-    REXShift    = OpMapShift + 3,
+    REXShift    = OpMapShift + 4,
     REX_W       = 1 << REXShift,
 
     //===------------------------------------------------------------------===//
@@ -908,15 +924,10 @@ namespace X86II {
     // Opcode
     OpcodeShift   = EncodingShift + 2,
 
-    /// VEX_W - Has a opcode specific functionality, but is used in the same
-    /// way as REX_W is for regular SSE instructions.
-    VEX_WShift  = OpcodeShift + 8,
-    VEX_W       = 1ULL << VEX_WShift,
-
     /// VEX_4V - Used to specify an additional AVX/SSE register. Several 2
     /// address instructions in SSE are represented as 3 address ones in AVX
     /// and the additional register is encoded in VEX_VVVV prefix.
-    VEX_4VShift = VEX_WShift + 1,
+    VEX_4VShift = OpcodeShift + 8,
     VEX_4V      = 1ULL << VEX_4VShift,
 
     /// VEX_L - Stands for a bit in the VEX opcode prefix meaning the current
@@ -944,10 +955,10 @@ namespace X86II {
 
     // The scaling factor for the AVX512's 8-bit compressed displacement.
     CD8_Scale_Shift = EVEX_BShift + 1,
-    CD8_Scale_Mask = 127ULL << CD8_Scale_Shift,
+    CD8_Scale_Mask = 7ULL << CD8_Scale_Shift,
 
     /// Explicitly specified rounding control
-    EVEX_RCShift = CD8_Scale_Shift + 7,
+    EVEX_RCShift = CD8_Scale_Shift + 3,
     EVEX_RC = 1ULL << EVEX_RCShift,
 
     // NOTRACK prefix
@@ -1114,6 +1125,7 @@ namespace X86II {
       // Skip registers encoded in reg, VEX_VVVV, and I8IMM.
       return 3;
     case X86II::MRMSrcMemCC:
+    case X86II::MRMDestMem4VOp3CC:
       // Start from 1, skip any registers encoded in VEX_VVVV or I8IMM, or a
       // mask register.
       return 1;

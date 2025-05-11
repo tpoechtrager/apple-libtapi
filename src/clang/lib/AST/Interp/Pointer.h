@@ -26,24 +26,47 @@ namespace clang {
 namespace interp {
 class Block;
 class DeadBlock;
-class Context;
-class InterpState;
 class Pointer;
-class Function;
 enum PrimType : unsigned;
 
 /// A pointer to a memory block, live or dead.
 ///
 /// This object can be allocated into interpreter stack frames. If pointing to
 /// a live block, it is a link in the chain of pointers pointing to the block.
+///
+/// In the simplest form, a Pointer has a Block* (the pointee) and both Base
+/// and Offset are 0, which means it will point to raw data.
+///
+/// The Base field is used to access metadata about the data. For primitive
+/// arrays, the Base is followed by an InitMap. In a variety of cases, the
+/// Base is preceded by an InlineDescriptor, which is used to track the
+/// initialization state, among other things.
+///
+/// The Offset field is used to access the actual data. In other words, the
+/// data the pointer decribes can be found at
+/// Pointee->rawData() + Pointer.Offset.
+///
+///
+/// Pointee                      Offset
+/// │                              │
+/// │                              │
+/// ▼                              ▼
+/// ┌───────┬────────────┬─────────┬────────────────────────────┐
+/// │ Block │ InlineDesc │ InitMap │ Actual Data                │
+/// └───────┴────────────┴─────────┴────────────────────────────┘
+///                      ▲
+///                      │
+///                      │
+///                     Base
 class Pointer {
 private:
-  static constexpr unsigned PastEndMark = (unsigned)-1;
-  static constexpr unsigned RootPtrMark = (unsigned)-1;
+  static constexpr unsigned PastEndMark = ~0u;
+  static constexpr unsigned RootPtrMark = ~0u;
 
 public:
   Pointer() {}
   Pointer(Block *B);
+  Pointer(Block *B, unsigned BaseAndOffset);
   Pointer(const Pointer &P);
   Pointer(Pointer &&P);
   ~Pointer();
@@ -177,6 +200,8 @@ public:
   /// Returns the type of the innermost field.
   QualType getType() const { return getFieldDesc()->getType(); }
 
+  Pointer getDeclPtr() const { return Pointer(Pointee); }
+
   /// Returns the element size of the innermost field.
   size_t elemSize() const {
     if (Base == RootPtrMark)
@@ -202,6 +227,10 @@ public:
     return Offset - Base - Adjust;
   }
 
+  /// Whether this array refers to an array, but not
+  /// to the first element.
+  bool isArrayRoot() const { return inArray() && Offset == Base; }
+
   /// Checks if the innermost field is an array.
   bool inArray() const { return getFieldDesc()->IsArray; }
   /// Checks if the structure is a primitive array.
@@ -218,7 +247,11 @@ public:
   }
 
   /// Returns the record descriptor of a class.
-  Record *getRecord() const { return getFieldDesc()->ElemRecord; }
+  const Record *getRecord() const { return getFieldDesc()->ElemRecord; }
+  /// Returns the element record type, if this is a non-primive array.
+  const Record *getElemRecord() const {
+    return getFieldDesc()->ElemDesc->ElemRecord;
+  }
   /// Returns the field information.
   const FieldDecl *getField() const { return getFieldDesc()->asFieldDecl(); }
 
@@ -235,7 +268,9 @@ public:
   bool isStaticTemporary() const { return isStatic() && isTemporary(); }
 
   /// Checks if the field is mutable.
-  bool isMutable() const { return Base != 0 && getInlineDesc()->IsMutable; }
+  bool isMutable() const {
+    return Base != 0 && getInlineDesc()->IsFieldMutable;
+  }
   /// Checks if an object was initialized.
   bool isInitialized() const;
   /// Checks if the object is active.
@@ -249,7 +284,7 @@ public:
   }
 
   /// Returns the declaration ID.
-  llvm::Optional<unsigned> getDeclID() const { return Pointee->getDeclID(); }
+  std::optional<unsigned> getDeclID() const { return Pointee->getDeclID(); }
 
   /// Returns the byte offset from the start.
   unsigned getByteOffset() const {
@@ -258,6 +293,8 @@ public:
 
   /// Returns the number of elements.
   unsigned getNumElems() const { return getSize() / elemSize(); }
+
+  const Block *block() const { return Pointee; }
 
   /// Returns the index into an array.
   int64_t getIndex() const {
@@ -279,12 +316,17 @@ public:
   /// Dereferences the pointer, if it's live.
   template <typename T> T &deref() const {
     assert(isLive() && "Invalid pointer");
-    return *reinterpret_cast<T *>(Pointee->data() + Offset);
+    if (isArrayRoot())
+      return *reinterpret_cast<T *>(Pointee->rawData() + Base +
+                                    sizeof(InitMap *));
+
+    return *reinterpret_cast<T *>(Pointee->rawData() + Offset);
   }
 
   /// Dereferences a primitive element.
   template <typename T> T &elem(unsigned I) const {
-    return reinterpret_cast<T *>(Pointee->data())[I];
+    assert(I < getNumElems());
+    return reinterpret_cast<T *>(Pointee->data() + sizeof(InitMap *))[I];
   }
 
   /// Initializes a field.
@@ -301,7 +343,7 @@ public:
 
   /// Prints the pointer.
   void print(llvm::raw_ostream &OS) const {
-    OS << "{" << Base << ", " << Offset << ", ";
+    OS << Pointee << " {" << Base << ", " << Offset << ", ";
     if (Pointee)
       OS << Pointee->getSize();
     else
@@ -321,12 +363,13 @@ private:
   /// Returns a descriptor at a given offset.
   InlineDescriptor *getDescriptor(unsigned Offset) const {
     assert(Offset != 0 && "Not a nested pointer");
-    return reinterpret_cast<InlineDescriptor *>(Pointee->data() + Offset) - 1;
+    return reinterpret_cast<InlineDescriptor *>(Pointee->rawData() + Offset) -
+           1;
   }
 
   /// Returns a reference to the pointer which stores the initialization map.
   InitMap *&getInitMap() const {
-    return *reinterpret_cast<InitMap **>(Pointee->data() + Base);
+    return *reinterpret_cast<InitMap **>(Pointee->rawData() + Base);
   }
 
   /// The block the pointer is pointing to.

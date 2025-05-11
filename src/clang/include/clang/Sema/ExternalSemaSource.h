@@ -26,11 +26,9 @@ template <class T, unsigned n> class SmallSetVector;
 namespace clang {
 
 class CXXConstructorDecl;
-class CXXDeleteExpr;
 class CXXRecordDecl;
 class DeclaratorDecl;
 class LookupResult;
-struct ObjCMethodList;
 class Scope;
 class Sema;
 class TypedefNameDecl;
@@ -199,8 +197,8 @@ public:
   /// and variable decls which may cause deferred diags. Note that this routine
   /// may be invoked multiple times; the external source should take care not to
   /// introduce the same declarations repeatedly.
-  virtual void ReadDeclsToCheckForDeferredDiags(
-      llvm::SmallVector<Decl *, 4> &Decls) {}
+  virtual void
+  ReadDeclsToCheckForDeferredDiags(llvm::SmallSetVector<Decl *, 4> &Decls) {}
 
   /// \copydoc Sema::CorrectTypo
   /// \note LookupKind must correspond to a valid Sema::LookupNameKind
@@ -231,6 +229,11 @@ public:
                                                 QualType T) {
     return false;
   }
+
+  /// Notify the external source that a lambda was assigned a mangling number.
+  /// This enables the external source to track the correspondence between
+  /// lambdas and mangling numbers if necessary.
+  virtual void AssignedLambdaNumbering(const CXXRecordDecl *Lambda) {}
 
   /// LLVM-style RTTI.
   /// \{

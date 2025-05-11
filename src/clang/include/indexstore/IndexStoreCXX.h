@@ -1,9 +1,8 @@
 //===--- IndexStoreCXX.h - C++ wrapper for the Index Store C API. ---------===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -15,14 +14,13 @@
 #define LLVM_CLANG_INDEXSTORE_INDEXSTORECXX_H
 
 #include "indexstore/indexstore.h"
+#include "clang/Basic/PathRemapper.h"
 #include "llvm/ADT/ArrayRef.h"
-#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallString.h"
 
 namespace indexstore {
   using llvm::ArrayRef;
-  using llvm::Optional;
   using llvm::StringRef;
 
 static inline StringRef stringFromIndexStoreStringRef(indexstore_string_ref_t str) {
@@ -102,10 +100,16 @@ class IndexStore {
   friend class IndexUnitReader;
 
 public:
-  IndexStore(StringRef path, std::string &error) {
+  IndexStore(StringRef path, const clang::PathRemapper &remapper,
+             std::string &error) {
     llvm::SmallString<64> buf = path;
     indexstore_error_t c_err = nullptr;
-    obj = indexstore_store_create(buf.c_str(), &c_err);
+    indexstore_creation_options_t options = indexstore_creation_options_create();
+    for (const auto &Mapping : remapper.getMappings())
+      indexstore_creation_options_add_prefix_mapping(options, Mapping.first.c_str(), Mapping.second.c_str());
+
+    obj = indexstore_store_create_with_options(buf.c_str(), options, &c_err);
+    indexstore_creation_options_dispose(options);
     if (c_err) {
       error = indexstore_error_get_description(c_err);
       indexstore_error_dispose(c_err);
@@ -120,8 +124,9 @@ public:
     indexstore_store_dispose(obj);
   }
 
-  static IndexStoreRef create(StringRef path, std::string &error) {
-    auto storeRef = std::make_shared<IndexStore>(path, error);
+  static IndexStoreRef create(StringRef path, clang::PathRemapper remapper,
+                              std::string &error) {
+    auto storeRef = std::make_shared<IndexStore>(path, remapper, error);
     if (storeRef->isInvalid())
       return nullptr;
     return storeRef;
@@ -129,6 +134,10 @@ public:
 
   static unsigned formatVersion() {
     return indexstore_format_version();
+  }
+
+  static unsigned version() {
+    return indexstore_version();
   }
 
   bool isValid() const { return obj; }

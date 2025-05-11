@@ -1,9 +1,12 @@
-set( LLVM_LINK_COMPONENTS
+set (LLVM_LINK_COMPONENTS 
   Object
-  BinaryFormat
+  Support
   )
 
+
 add_tapi_library(tapiObjCMetadata
-  ObjCMachOBinary.cpp
   ObjCMetadata.cpp
+
+  DEPENDS
+  intrinsics_gen
   )

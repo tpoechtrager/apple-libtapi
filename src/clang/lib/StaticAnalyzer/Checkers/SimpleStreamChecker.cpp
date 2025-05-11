@@ -17,6 +17,7 @@
 #include "clang/StaticAnalyzer/Checkers/BuiltinCheckerRegistration.h"
 #include "clang/StaticAnalyzer/Core/BugReporter/BugType.h"
 #include "clang/StaticAnalyzer/Core/Checker.h"
+#include "clang/StaticAnalyzer/Core/PathSensitive/CallDescription.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/CallEvent.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/CheckerContext.h"
 #include <utility>
@@ -88,22 +89,8 @@ public:
 /// state. Let's store it in the ProgramState.
 REGISTER_MAP_WITH_PROGRAMSTATE(StreamMap, SymbolRef, StreamState)
 
-namespace {
-class StopTrackingCallback final : public SymbolVisitor {
-  ProgramStateRef state;
-public:
-  StopTrackingCallback(ProgramStateRef st) : state(std::move(st)) {}
-  ProgramStateRef getState() const { return state; }
-
-  bool VisitSymbol(SymbolRef sym) override {
-    state = state->remove<StreamMap>(sym);
-    return true;
-  }
-};
-} // end anonymous namespace
-
 SimpleStreamChecker::SimpleStreamChecker()
-    : OpenFn("fopen"), CloseFn("fclose", 1) {
+    : OpenFn({"fopen"}), CloseFn({"fclose"}, 1) {
   // Initialize the bug types.
   DoubleCloseBugType.reset(
       new BugType(this, "Double fclose", "Unix Stream API Error"));
@@ -119,7 +106,7 @@ void SimpleStreamChecker::checkPostCall(const CallEvent &Call,
   if (!Call.isGlobalCFunction())
     return;
 
-  if (!Call.isCalled(OpenFn))
+  if (!OpenFn.matches(Call))
     return;
 
   // Get the symbolic value corresponding to the file handle.
@@ -138,7 +125,7 @@ void SimpleStreamChecker::checkPreCall(const CallEvent &Call,
   if (!Call.isGlobalCFunction())
     return;
 
-  if (!Call.isCalled(CloseFn))
+  if (!CloseFn.matches(Call))
     return;
 
   // Get the symbolic value corresponding to the file handle.
@@ -176,13 +163,11 @@ void SimpleStreamChecker::checkDeadSymbols(SymbolReaper &SymReaper,
   ProgramStateRef State = C.getState();
   SymbolVector LeakedStreams;
   StreamMapTy TrackedStreams = State->get<StreamMap>();
-  for (StreamMapTy::iterator I = TrackedStreams.begin(),
-                             E = TrackedStreams.end(); I != E; ++I) {
-    SymbolRef Sym = I->first;
+  for (auto [Sym, StreamStatus] : TrackedStreams) {
     bool IsSymDead = SymReaper.isDead(Sym);
 
     // Collect leaked symbols.
-    if (isLeaked(Sym, I->second, IsSymDead, State))
+    if (isLeaked(Sym, StreamStatus, IsSymDead, State))
       LeakedStreams.push_back(Sym);
 
     // Remove the dead symbol from the streams map.
@@ -254,11 +239,7 @@ SimpleStreamChecker::checkPointerEscape(ProgramStateRef State,
     return State;
   }
 
-  for (InvalidatedSymbols::const_iterator I = Escaped.begin(),
-                                          E = Escaped.end();
-                                          I != E; ++I) {
-    SymbolRef Sym = *I;
-
+  for (SymbolRef Sym : Escaped) {
     // The symbol escaped. Optimistically, assume that the corresponding file
     // handle will be closed somewhere else.
     State = State->remove<StreamMap>(Sym);

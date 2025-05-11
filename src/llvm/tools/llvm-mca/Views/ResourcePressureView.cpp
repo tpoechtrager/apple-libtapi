@@ -57,9 +57,9 @@ void ResourcePressureView::onEvent(const HWInstructionEvent &Event) {
   for (const std::pair<ResourceRef, ResourceCycles> &Use :
        IssueEvent.UsedResources) {
     const ResourceRef &RR = Use.first;
-    assert(Resource2VecIndex.find(RR.first) != Resource2VecIndex.end());
+    assert(Resource2VecIndex.contains(RR.first));
     unsigned R2VIndex = Resource2VecIndex[RR.first];
-    R2VIndex += countTrailingZeros(RR.second);
+    R2VIndex += llvm::countr_zero(RR.second);
     ResourceUsage[R2VIndex + NumResourceUnits * SourceIdx] += Use.second;
     ResourceUsage[R2VIndex + NumResourceUnits * Source.size()] += Use.second;
   }
@@ -170,6 +170,31 @@ void ResourcePressureView::printResourcePressurePerInst(raw_ostream &OS) const {
 
     ++InstrIndex;
   }
+}
+
+json::Value ResourcePressureView::toJSON() const {
+  // We're dumping the instructions and the ResourceUsage array.
+  json::Array ResourcePressureInfo;
+
+  // The ResourceUsage matrix is sparse, so we only consider
+  // non-zero values.
+  ArrayRef<llvm::MCInst> Source = getSource();
+  const unsigned Executions = LastInstructionIdx / Source.size() + 1;
+  for (const auto &R : enumerate(ResourceUsage)) {
+    const ResourceCycles &RU = R.value();
+    if (RU.getNumerator() == 0)
+      continue;
+    unsigned InstructionIndex = R.index() / NumResourceUnits;
+    unsigned ResourceIndex = R.index() % NumResourceUnits;
+    double Usage = RU / Executions;
+    ResourcePressureInfo.push_back(
+        json::Object({{"InstructionIndex", InstructionIndex},
+                      {"ResourceIndex", ResourceIndex},
+                      {"ResourceUsage", Usage}}));
+  }
+
+  json::Object JO({{"ResourcePressureInfo", std::move(ResourcePressureInfo)}});
+  return JO;
 }
 } // namespace mca
 } // namespace llvm

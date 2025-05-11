@@ -11,10 +11,11 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "llvm/ProfileData/InstrProf.h"
 #include "llvm/ProfileData/Coverage/CoverageMappingWriter.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringExtras.h"
+#include "llvm/ProfileData/InstrProf.h"
 #include "llvm/Support/Compression.h"
 #include "llvm/Support/LEB128.h"
 #include "llvm/Support/raw_ostream.h"
@@ -27,7 +28,7 @@ using namespace llvm;
 using namespace coverage;
 
 CoverageFilenamesSectionWriter::CoverageFilenamesSectionWriter(
-    ArrayRef<StringRef> Filenames)
+    ArrayRef<std::string> Filenames)
     : Filenames(Filenames) {
 #ifndef NDEBUG
   StringSet<> NameSet;
@@ -46,15 +47,13 @@ void CoverageFilenamesSectionWriter::write(raw_ostream &OS, bool Compress) {
     }
   }
 
-  SmallString<128> CompressedStr;
-  bool doCompression =
-      Compress && zlib::isAvailable() && DoInstrProfNameCompression;
-  if (doCompression) {
-    auto E =
-        zlib::compress(FilenamesStr, CompressedStr, zlib::BestSizeCompression);
-    if (E)
-      report_bad_alloc_error("Failed to zlib compress coverage data");
-  }
+  SmallVector<uint8_t, 128> CompressedStr;
+  bool doCompression = Compress && compression::zlib::isAvailable() &&
+                       DoInstrProfNameCompression;
+  if (doCompression)
+    compression::zlib::compress(arrayRefFromStringRef(FilenamesStr),
+                                CompressedStr,
+                                compression::zlib::BestSizeCompression);
 
   // ::= <num-filenames>
   //     <uncompressed-len>
@@ -63,7 +62,7 @@ void CoverageFilenamesSectionWriter::write(raw_ostream &OS, bool Compress) {
   encodeULEB128(Filenames.size(), OS);
   encodeULEB128(FilenamesStr.size(), OS);
   encodeULEB128(doCompression ? CompressedStr.size() : 0U, OS);
-  OS << (doCompression ? StringRef(CompressedStr) : StringRef(FilenamesStr));
+  OS << (doCompression ? toStringRef(CompressedStr) : StringRef(FilenamesStr));
 }
 
 namespace {

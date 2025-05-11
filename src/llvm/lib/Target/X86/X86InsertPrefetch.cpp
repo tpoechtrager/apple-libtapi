@@ -23,10 +23,12 @@
 #include "X86InstrInfo.h"
 #include "X86MachineFunctionInfo.h"
 #include "X86Subtarget.h"
+#include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachineModuleInfo.h"
 #include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/ProfileData/SampleProf.h"
 #include "llvm/ProfileData/SampleProfReader.h"
+#include "llvm/Support/VirtualFileSystem.h"
 #include "llvm/Transforms/IPO/SampleProfile.h"
 using namespace llvm;
 using namespace sampleprof;
@@ -158,8 +160,10 @@ bool X86InsertPrefetch::doInitialization(Module &M) {
     return false;
 
   LLVMContext &Ctx = M.getContext();
+  // TODO: Propagate virtual file system into LLVM targets.
+  auto FS = vfs::getRealFileSystem();
   ErrorOr<std::unique_ptr<SampleProfileReader>> ReaderOrErr =
-      SampleProfileReader::create(Filename, Ctx);
+      SampleProfileReader::create(Filename, Ctx, *FS);
   if (std::error_code EC = ReaderOrErr.getError()) {
     std::string Msg = "Could not open profile: " + EC.message();
     Ctx.diagnose(DiagnosticInfoSampleProfile(Filename, Msg,
@@ -214,10 +218,10 @@ bool X86InsertPrefetch::runOnMachineFunction(MachineFunction &MF) {
             MF.CreateMachineInstr(Desc, Current->getDebugLoc(), true);
         MachineInstrBuilder MIB(MF, PFetch);
 
-        assert(X86::AddrBaseReg == 0 && X86::AddrScaleAmt == 1 &&
-               X86::AddrIndexReg == 2 && X86::AddrDisp == 3 &&
-               X86::AddrSegmentReg == 4 &&
-               "Unexpected change in X86 operand offset order.");
+        static_assert(X86::AddrBaseReg == 0 && X86::AddrScaleAmt == 1 &&
+                          X86::AddrIndexReg == 2 && X86::AddrDisp == 3 &&
+                          X86::AddrSegmentReg == 4,
+                      "Unexpected change in X86 operand offset order.");
 
         // This assumes X86::AddBaseReg = 0, {...}ScaleAmt = 1, etc.
         // FIXME(mtrofin): consider adding a:

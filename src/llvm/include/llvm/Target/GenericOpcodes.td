@@ -23,7 +23,7 @@ class GenericInstruction : StandardPseudoInstruction {
 // different instruction flags. This is intended to provide a
 // convenient way to define strict floating point variants of ordinary
 // floating point instructions.
-class ConstrainedIntruction<GenericInstruction baseInst> :
+class ConstrainedInstruction<GenericInstruction baseInst> :
   GenericInstruction {
   let OutOperandList = baseInst.OutOperandList;
   let InOperandList =  baseInst.InOperandList;
@@ -101,6 +101,12 @@ def G_FRAME_INDEX : GenericInstruction {
 }
 
 def G_GLOBAL_VALUE : GenericInstruction {
+  let OutOperandList = (outs type0:$dst);
+  let InOperandList = (ins unknown:$src);
+  let hasSideEffects = false;
+}
+
+def G_CONSTANT_POOL : GenericInstruction {
   let OutOperandList = (outs type0:$dst);
   let InOperandList = (ins unknown:$src);
   let hasSideEffects = false;
@@ -225,6 +231,18 @@ def G_FREEZE : GenericInstruction {
   let hasSideEffects = false;
 }
 
+def G_LROUND: GenericInstruction {
+  let OutOperandList = (outs type0:$dst);
+  let InOperandList = (ins type1:$src);
+  let hasSideEffects = false;
+}
+
+def G_LLROUND: GenericInstruction {
+  let OutOperandList = (outs type0:$dst);
+  let InOperandList = (ins type1:$src);
+  let hasSideEffects = false;
+}
+
 //------------------------------------------------------------------------------
 // Binary ops.
 //------------------------------------------------------------------------------
@@ -280,6 +298,22 @@ def G_SREM : GenericInstruction {
 // Generic unsigned remainder.
 def G_UREM : GenericInstruction {
   let OutOperandList = (outs type0:$dst);
+  let InOperandList = (ins type0:$src1, type0:$src2);
+  let hasSideEffects = false;
+  let isCommutable = false;
+}
+
+// Generic signed division and remainder.
+def G_SDIVREM : GenericInstruction {
+  let OutOperandList = (outs type0:$div, type0:$rem);
+  let InOperandList = (ins type0:$src1, type0:$src2);
+  let hasSideEffects = false;
+  let isCommutable = false;
+}
+
+// Generic unsigned division and remainder.
+def G_UDIVREM : GenericInstruction {
+  let OutOperandList = (outs type0:$div, type0:$rem);
   let InOperandList = (ins type0:$src1, type0:$src2);
   let hasSideEffects = false;
   let isCommutable = false;
@@ -346,6 +380,20 @@ def G_FSHR : GenericInstruction {
   let hasSideEffects = false;
 }
 
+/// Rotate bits right.
+def G_ROTR : GenericInstruction {
+  let OutOperandList = (outs type0:$dst);
+  let InOperandList = (ins type0:$src1, type1:$src2);
+  let hasSideEffects = false;
+}
+
+/// Rotate bits left.
+def G_ROTL : GenericInstruction {
+  let OutOperandList = (outs type0:$dst);
+  let InOperandList = (ins type0:$src1, type1:$src2);
+  let hasSideEffects = false;
+}
+
 // Generic integer comparison.
 def G_ICMP : GenericInstruction {
   let OutOperandList = (outs type0:$dst);
@@ -369,8 +417,8 @@ def G_SELECT : GenericInstruction {
 
 // Generic pointer offset.
 def G_PTR_ADD : GenericInstruction {
-  let OutOperandList = (outs type0:$dst);
-  let InOperandList = (ins type0:$src1, type1:$src2);
+  let OutOperandList = (outs ptype0:$dst);
+  let InOperandList = (ins ptype0:$src1, type1:$src2);
   let hasSideEffects = false;
 }
 
@@ -703,6 +751,13 @@ def G_FCANONICALIZE : GenericInstruction {
   let hasSideEffects = false;
 }
 
+// Generic opcode equivalent to the llvm.is_fpclass intrinsic.
+def G_IS_FPCLASS: GenericInstruction {
+  let OutOperandList = (outs type0:$dst);
+  let InOperandList = (ins type1:$src, unknown:$test);
+  let hasSideEffects = false;
+}
+
 // FMINNUM/FMAXNUM - Perform floating-point minimum or maximum on two
 // values.
 //
@@ -868,6 +923,20 @@ def G_FLOG10 : GenericInstruction {
   let hasSideEffects = false;
 }
 
+// Floating point x * 2^n
+def G_FLDEXP : GenericInstruction {
+  let OutOperandList = (outs type0:$dst);
+  let InOperandList = (ins type0:$src0, type1:$src1);
+  let hasSideEffects = false;
+}
+
+// Floating point frexp
+def G_FFREXP : GenericInstruction {
+  let OutOperandList = (outs type0:$dst0, type1:$dst1);
+  let InOperandList = (ins type0:$src0);
+  let hasSideEffects = false;
+}
+
 // Floating point ceiling of a value.
 def G_FCEIL : GenericInstruction {
   let OutOperandList = (outs type0:$dst);
@@ -923,6 +992,12 @@ def G_FNEARBYINT : GenericInstruction {
 //------------------------------------------------------------------------------
 // Opcodes for LLVM Intrinsics
 //------------------------------------------------------------------------------
+def G_INTRINSIC_FPTRUNC_ROUND : GenericInstruction {
+  let OutOperandList = (outs type0:$dst);
+  let InOperandList = (ins type1:$src1, i32imm:$round_mode);
+  let hasSideEffects = false;
+}
+
 def G_INTRINSIC_TRUNC : GenericInstruction {
   let OutOperandList = (outs type0:$dst);
   let InOperandList = (ins type0:$src1);
@@ -1071,6 +1146,10 @@ def G_ATOMICRMW_UMAX : G_ATOMICRMW_OP;
 def G_ATOMICRMW_UMIN : G_ATOMICRMW_OP;
 def G_ATOMICRMW_FADD : G_ATOMICRMW_OP;
 def G_ATOMICRMW_FSUB : G_ATOMICRMW_OP;
+def G_ATOMICRMW_FMAX : G_ATOMICRMW_OP;
+def G_ATOMICRMW_FMIN : G_ATOMICRMW_OP;
+def G_ATOMICRMW_UINC_WRAP : G_ATOMICRMW_OP;
+def G_ATOMICRMW_UDEC_WRAP : G_ATOMICRMW_OP;
 
 def G_FENCE : GenericInstruction {
   let OutOperandList = (outs);
@@ -1213,6 +1292,15 @@ def G_BRJT : GenericInstruction {
   let isIndirectBranch = true;
 }
 
+// A marker to signal the following code is an invoke region, that may throw
+// an exception and therefore not return.
+def G_INVOKE_REGION_START : GenericInstruction {
+  let OutOperandList = (outs);
+  let InOperandList = (ins);
+  let isTerminator = true; // This must be a terminator.
+  let hasSideEffects = false;
+}
+
 def G_READ_REGISTER : GenericInstruction {
   let OutOperandList = (outs type0:$dst);
   let InOperandList = (ins unknown:$register);
@@ -1303,13 +1391,14 @@ def G_VECREDUCE_UMIN : VectorReduction;
 // Constrained floating point ops
 //------------------------------------------------------------------------------
 
-def G_STRICT_FADD : ConstrainedIntruction<G_FADD>;
-def G_STRICT_FSUB : ConstrainedIntruction<G_FSUB>;
-def G_STRICT_FMUL : ConstrainedIntruction<G_FMUL>;
-def G_STRICT_FDIV : ConstrainedIntruction<G_FDIV>;
-def G_STRICT_FREM : ConstrainedIntruction<G_FREM>;
-def G_STRICT_FMA : ConstrainedIntruction<G_FMA>;
-def G_STRICT_FSQRT : ConstrainedIntruction<G_FSQRT>;
+def G_STRICT_FADD : ConstrainedInstruction<G_FADD>;
+def G_STRICT_FSUB : ConstrainedInstruction<G_FSUB>;
+def G_STRICT_FMUL : ConstrainedInstruction<G_FMUL>;
+def G_STRICT_FDIV : ConstrainedInstruction<G_FDIV>;
+def G_STRICT_FREM : ConstrainedInstruction<G_FREM>;
+def G_STRICT_FMA : ConstrainedInstruction<G_FMA>;
+def G_STRICT_FSQRT : ConstrainedInstruction<G_FSQRT>;
+def G_STRICT_FLDEXP : ConstrainedInstruction<G_FLDEXP>;
 
 //------------------------------------------------------------------------------
 // Memory intrinsics
@@ -1318,6 +1407,14 @@ def G_STRICT_FSQRT : ConstrainedIntruction<G_FSQRT>;
 def G_MEMCPY : GenericInstruction {
   let OutOperandList = (outs);
   let InOperandList = (ins ptype0:$dst_addr, ptype1:$src_addr, type2:$size, untyped_imm_0:$tailcall);
+  let hasSideEffects = false;
+  let mayLoad = true;
+  let mayStore = true;
+}
+
+def G_MEMCPY_INLINE : GenericInstruction {
+  let OutOperandList = (outs);
+  let InOperandList = (ins ptype0:$dst_addr, ptype1:$src_addr, type2:$size);
   let hasSideEffects = false;
   let mayLoad = true;
   let mayStore = true;
@@ -1336,4 +1433,65 @@ def G_MEMSET : GenericInstruction {
   let InOperandList = (ins ptype0:$dst_addr, type1:$value, type2:$size, untyped_imm_0:$tailcall);
   let hasSideEffects = false;
   let mayStore = true;
+}
+
+def G_BZERO : GenericInstruction {
+  let OutOperandList = (outs);
+  let InOperandList = (ins ptype0:$dst_addr, type1:$size, untyped_imm_0:$tailcall);
+  let hasSideEffects = false;
+  let mayStore = true;
+}
+
+//------------------------------------------------------------------------------
+// Bitfield extraction.
+//------------------------------------------------------------------------------
+
+// Generic signed bitfield extraction. The operands are in the range
+// 0 <= lsb < lsb + width <= src bitwidth, where all values are unsigned.
+def G_SBFX : GenericInstruction {
+  let OutOperandList = (outs type0:$dst);
+  let InOperandList = (ins type0:$src, type1:$lsb, type1:$width);
+  let hasSideEffects = false;
+}
+
+// Generic unsigned bitfield extraction. The operands are in the range
+// 0 <= lsb < lsb + width <= src bitwidth, where all values are unsigned.
+def G_UBFX : GenericInstruction {
+  let OutOperandList = (outs type0:$dst);
+  let InOperandList = (ins type0:$src, type1:$lsb, type1:$width);
+  let hasSideEffects = false;
+}
+
+//------------------------------------------------------------------------------
+// Optimization hints
+//------------------------------------------------------------------------------
+
+// Asserts that an operation has already been zero-extended from a specific
+// type.
+def G_ASSERT_ZEXT : GenericInstruction {
+  let OutOperandList = (outs type0:$dst);
+  let InOperandList = (ins type0:$src, untyped_imm_0:$sz);
+  let hasSideEffects = false;
+}
+
+// Asserts that an operation has already been sign-extended from a specific
+// type.
+def G_ASSERT_SEXT : GenericInstruction {
+  let OutOperandList = (outs type0:$dst);
+  let InOperandList = (ins type0:$src, untyped_imm_0:$sz);
+  let hasSideEffects = false;
+}
+
+// Asserts that a value has at least the given alignment.
+def G_ASSERT_ALIGN : GenericInstruction {
+  let OutOperandList = (outs type0:$dst);
+  let InOperandList = (ins type0:$src, untyped_imm_0:$align);
+  let hasSideEffects = false;
+}
+
+// Prevent constant folding of the source value with any users.
+def G_CONSTANT_FOLD_BARRIER : GenericInstruction {
+  let OutOperandList = (outs type0:$dst);
+  let InOperandList = (ins type0:$src);
+  let hasSideEffects = false;
 }

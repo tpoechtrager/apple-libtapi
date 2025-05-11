@@ -1,9 +1,8 @@
 //===- lib/Core/FileListReader.cpp - File List Reader -----------*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 ///
@@ -13,6 +12,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "tapi/Core/FileListReader.h"
+#include "clang/Basic/LangStandard.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/MemoryBuffer.h"
@@ -29,14 +29,11 @@ private:
                                   StringRef error);
   Expected<StringRef> parsePath(const Object *obj);
   Expected<HeaderType> parseType(const Object *obj);
+  std::optional<clang::Language> parseLanguage(const Object *obj);
+  bool parseSwiftCompatibilityHeaderIndicator(const Object *obj);
   Error parseHeaders(Array &headers);
 
 public:
-  struct HeaderInfo {
-    HeaderType type;
-    std::string path;
-  };
-
   std::unique_ptr<MemoryBuffer> inputBuffer;
   unsigned version;
   std::vector<HeaderInfo> headerList;
@@ -79,6 +76,29 @@ FileListReader::Implementation::parsePath(const Object *obj) {
   return *path;
 }
 
+std::optional<clang::Language>
+FileListReader::Implementation::parseLanguage(const Object *obj) {
+  auto language = obj->getString("language");
+  if (!language)
+    return std::nullopt;
+
+  return StringSwitch<clang::Language>(*language)
+      .Case("c", clang::Language::C)
+      .Case("c++", clang::Language::CXX)
+      .Case("objective-c", clang::Language::ObjC)
+      .Case("objective-c++", clang::Language::ObjCXX)
+      .Default(clang::Language::Unknown);
+}
+
+bool FileListReader::Implementation::parseSwiftCompatibilityHeaderIndicator(
+    const Object *obj) {
+  auto isSwiftCompatibilityHeader = obj->getBoolean("swiftCompatibilityHeader");
+  if (!isSwiftCompatibilityHeader)
+    return false;
+
+  return *isSwiftCompatibilityHeader;
+}
+
 Error FileListReader::Implementation::parseHeaders(Array &headers) {
   for (const auto &header : headers) {
     auto *obj = header.getAsObject();
@@ -91,8 +111,12 @@ Error FileListReader::Implementation::parseHeaders(Array &headers) {
     auto path = parsePath(obj);
     if (!path)
       return path.takeError();
+    bool isSwiftCompatibilityHeader =
+        parseSwiftCompatibilityHeaderIndicator(obj);
+    auto language = parseLanguage(obj);
 
-    headerList.emplace_back(HeaderInfo{*type, std::string(*path)});
+    headerList.emplace_back(HeaderInfo{*type, std::string(*path), language,
+                                       isSwiftCompatibilityHeader});
   }
 
   return Error::success();
@@ -116,7 +140,7 @@ Error FileListReader::Implementation::parse(StringRef input) {
     return make_error<StringError>("invalid version number",
                                    inconvertibleErrorCode());
 
-  if (version < 1 || version > 2)
+  if (version < 1 || version > 3)
     return make_error<StringError>("unsupported version",
                                    inconvertibleErrorCode());
 
@@ -157,14 +181,13 @@ FileListReader::~FileListReader() { delete &impl; }
 int FileListReader::getVersion() const { return impl.version; }
 
 void FileListReader::visit(Visitor &visitor) {
-  for (const auto &file : impl.headerList)
-    visitor.visitHeaderFile(file.type, file.path);
+  for (auto &file : impl.headerList)
+    visitor.visitHeaderFile(file);
 }
 
 FileListReader::Visitor::~Visitor() {}
 
-void FileListReader::Visitor::visitHeaderFile(HeaderType type, StringRef path) {
-}
+void FileListReader::Visitor::visitHeaderFile(HeaderInfo &header) {}
 
 TAPI_NAMESPACE_INTERNAL_END
 

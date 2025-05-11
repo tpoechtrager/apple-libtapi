@@ -165,10 +165,11 @@ RewriteObjCAction::CreateASTConsumer(CompilerInstance &CI, StringRef InFile) {
   if (std::unique_ptr<raw_ostream> OS =
           CI.createDefaultOutputFile(false, InFile, "cpp")) {
     if (CI.getLangOpts().ObjCRuntime.isNonFragile())
-      return CreateModernObjCRewriter(
-          std::string(InFile), std::move(OS), CI.getDiagnostics(),
-          CI.getLangOpts(), CI.getDiagnosticOpts().NoRewriteMacros,
-          (CI.getCodeGenOpts().getDebugInfo() != codegenoptions::NoDebugInfo));
+      return CreateModernObjCRewriter(std::string(InFile), std::move(OS),
+                                      CI.getDiagnostics(), CI.getLangOpts(),
+                                      CI.getDiagnosticOpts().NoRewriteMacros,
+                                      (CI.getCodeGenOpts().getDebugInfo() !=
+                                       llvm::codegenoptions::NoDebugInfo));
     return CreateObjCRewriter(std::string(InFile), std::move(OS),
                               CI.getDiagnostics(), CI.getLangOpts(),
                               CI.getDiagnosticOpts().NoRewriteMacros);
@@ -185,7 +186,7 @@ RewriteObjCAction::CreateASTConsumer(CompilerInstance &CI, StringRef InFile) {
 void RewriteMacrosAction::ExecuteAction() {
   CompilerInstance &CI = getCompilerInstance();
   std::unique_ptr<raw_ostream> OS =
-      CI.createDefaultOutputFile(true, getCurrentFileOrBufferName());
+      CI.createDefaultOutputFile(/*Binary=*/true, getCurrentFileOrBufferName());
   if (!OS) return;
 
   RewriteMacrosInInput(CI.getPreprocessor(), OS.get());
@@ -194,7 +195,7 @@ void RewriteMacrosAction::ExecuteAction() {
 void RewriteTestAction::ExecuteAction() {
   CompilerInstance &CI = getCompilerInstance();
   std::unique_ptr<raw_ostream> OS =
-      CI.createDefaultOutputFile(false, getCurrentFileOrBufferName());
+      CI.createDefaultOutputFile(/*Binary=*/false, getCurrentFileOrBufferName());
   if (!OS) return;
 
   DoRewriteTest(CI.getPreprocessor(), OS.get());
@@ -212,8 +213,14 @@ public:
 
   void visitModuleFile(StringRef Filename,
                        serialization::ModuleKind Kind) override {
-    auto File = CI.getFileManager().getFile(Filename);
+    auto File = CI.getFileManager().getOptionalFileRef(Filename);
     assert(File && "missing file for loaded module?");
+
+#if !defined(__APPLE__)
+    // Workaround for ext4 file system.
+    if (auto Bypass = CI.getFileManager().getBypassFile(*File))
+      File = *Bypass;
+#endif
 
     // Only rewrite each module file once.
     if (!Rewritten.insert(*File).second)
@@ -231,7 +238,7 @@ public:
     assert(OS && "loaded module file after finishing rewrite action?");
 
     (*OS) << "#pragma clang module build ";
-    if (isValidIdentifier(MF->ModuleName))
+    if (isValidAsciiIdentifier(MF->ModuleName))
       (*OS) << MF->ModuleName;
     else {
       (*OS) << '"';
@@ -270,7 +277,7 @@ public:
 bool RewriteIncludesAction::BeginSourceFileAction(CompilerInstance &CI) {
   if (!OutputStream) {
     OutputStream =
-        CI.createDefaultOutputFile(true, getCurrentFileOrBufferName());
+        CI.createDefaultOutputFile(/*Binary=*/true, getCurrentFileOrBufferName());
     if (!OutputStream)
       return false;
   }

@@ -93,13 +93,20 @@ private:
     llvm::Type *PaddingType; // canHavePaddingType()
     llvm::Type *UnpaddedCoerceAndExpandType; // isCoerceAndExpand()
   };
+  struct DirectAttrInfo {
+    unsigned Offset;
+    unsigned Align;
+  };
+  struct IndirectAttrInfo {
+    unsigned Align;
+    unsigned AddrSpace;
+  };
   union {
-    unsigned DirectOffset;     // isDirect() || isExtend()
-    unsigned IndirectAlign;    // isIndirect()
+    DirectAttrInfo DirectAttr;     // isDirect() || isExtend()
+    IndirectAttrInfo IndirectAttr; // isIndirect()
     unsigned AllocaFieldIndex; // isInAlloca()
   };
   Kind TheKind;
-  unsigned IndirectAddrSpace : 24; // isIndirect()
   bool PaddingInReg : 1;
   bool InAllocaSRet : 1;    // isInAlloca()
   bool InAllocaIndirect : 1;// isInAlloca()
@@ -126,19 +133,20 @@ private:
 
 public:
   ABIArgInfo(Kind K = Direct)
-      : TypeData(nullptr), PaddingType(nullptr), DirectOffset(0), TheKind(K),
-        IndirectAddrSpace(0), PaddingInReg(false), InAllocaSRet(false),
+      : TypeData(nullptr), PaddingType(nullptr), DirectAttr{0, 0}, TheKind(K),
+        PaddingInReg(false), InAllocaSRet(false),
         InAllocaIndirect(false), IndirectByVal(false), IndirectRealign(false),
         SRetAfterThis(false), InReg(false), CanBeFlattened(false),
         SignExt(false) {}
 
   static ABIArgInfo getDirect(llvm::Type *T = nullptr, unsigned Offset = 0,
                               llvm::Type *Padding = nullptr,
-                              bool CanBeFlattened = true) {
+                              bool CanBeFlattened = true, unsigned Align = 0) {
     auto AI = ABIArgInfo(Direct);
     AI.setCoerceToType(T);
     AI.setPaddingType(Padding);
     AI.setDirectOffset(Offset);
+    AI.setDirectAlign(Align);
     AI.setCanBeFlattened(CanBeFlattened);
     return AI;
   }
@@ -154,6 +162,7 @@ public:
     AI.setCoerceToType(T);
     AI.setPaddingType(nullptr);
     AI.setDirectOffset(0);
+    AI.setDirectAlign(0);
     AI.setSignExt(true);
     return AI;
   }
@@ -164,6 +173,7 @@ public:
     AI.setCoerceToType(T);
     AI.setPaddingType(nullptr);
     AI.setDirectOffset(0);
+    AI.setDirectAlign(0);
     AI.setSignExt(false);
     return AI;
   }
@@ -240,7 +250,7 @@ public:
   static ABIArgInfo getCoerceAndExpand(llvm::StructType *coerceToType,
                                        llvm::Type *unpaddedCoerceToType) {
 #ifndef NDEBUG
-    // Sanity checks on unpaddedCoerceToType.
+    // Check that unpaddedCoerceToType has roughly the right shape.
 
     // Assert that we only have a struct type if there are multiple elements.
     auto unpaddedStruct = dyn_cast<llvm::StructType>(unpaddedCoerceToType);
@@ -299,11 +309,20 @@ public:
   // Direct/Extend accessors
   unsigned getDirectOffset() const {
     assert((isDirect() || isExtend()) && "Not a direct or extend kind");
-    return DirectOffset;
+    return DirectAttr.Offset;
   }
   void setDirectOffset(unsigned Offset) {
     assert((isDirect() || isExtend()) && "Not a direct or extend kind");
-    DirectOffset = Offset;
+    DirectAttr.Offset = Offset;
+  }
+
+  unsigned getDirectAlign() const {
+    assert((isDirect() || isExtend()) && "Not a direct or extend kind");
+    return DirectAttr.Align;
+  }
+  void setDirectAlign(unsigned Align) {
+    assert((isDirect() || isExtend()) && "Not a direct or extend kind");
+    DirectAttr.Align = Align;
   }
 
   bool isSignExt() const {
@@ -352,7 +371,7 @@ public:
           dyn_cast<llvm::StructType>(UnpaddedCoerceAndExpandType)) {
       return structTy->elements();
     } else {
-      return llvm::makeArrayRef(&UnpaddedCoerceAndExpandType, 1);
+      return llvm::ArrayRef(&UnpaddedCoerceAndExpandType, 1);
     }
   }
 
@@ -369,11 +388,11 @@ public:
   // Indirect accessors
   CharUnits getIndirectAlign() const {
     assert((isIndirect() || isIndirectAliased()) && "Invalid kind!");
-    return CharUnits::fromQuantity(IndirectAlign);
+    return CharUnits::fromQuantity(IndirectAttr.Align);
   }
   void setIndirectAlign(CharUnits IA) {
     assert((isIndirect() || isIndirectAliased()) && "Invalid kind!");
-    IndirectAlign = IA.getQuantity();
+    IndirectAttr.Align = IA.getQuantity();
   }
 
   bool getIndirectByVal() const {
@@ -387,12 +406,12 @@ public:
 
   unsigned getIndirectAddrSpace() const {
     assert(isIndirectAliased() && "Invalid kind!");
-    return IndirectAddrSpace;
+    return IndirectAttr.AddrSpace;
   }
 
   void setIndirectAddrSpace(unsigned AddrSpace) {
     assert(isIndirectAliased() && "Invalid kind!");
-    IndirectAddrSpace = AddrSpace;
+    IndirectAttr.AddrSpace = AddrSpace;
   }
 
   bool getIndirectRealign() const {
@@ -548,6 +567,10 @@ class CGFunctionInfo final
   /// Whether this is a chain call.
   unsigned ChainCall : 1;
 
+  /// Whether this function is called by forwarding arguments.
+  /// This doesn't support inalloca or varargs.
+  unsigned DelegateCall : 1;
+
   /// Whether this function is a CMSE nonsecure call
   unsigned CmseNSCall : 1;
 
@@ -566,6 +589,9 @@ class CGFunctionInfo final
 
   /// Whether this function has nocf_check attribute.
   unsigned NoCfCheck : 1;
+
+  /// Log 2 of the maximum vector width.
+  unsigned MaxVectorWidth : 4;
 
   RequiredArgs Required;
 
@@ -594,14 +620,11 @@ class CGFunctionInfo final
   CGFunctionInfo() : Required(RequiredArgs::All) {}
 
 public:
-  static CGFunctionInfo *create(unsigned llvmCC,
-                                bool instanceMethod,
-                                bool chainCall,
-                                const FunctionType::ExtInfo &extInfo,
-                                ArrayRef<ExtParameterInfo> paramInfos,
-                                CanQualType resultType,
-                                ArrayRef<CanQualType> argTypes,
-                                RequiredArgs required);
+  static CGFunctionInfo *
+  create(unsigned llvmCC, bool instanceMethod, bool chainCall,
+         bool delegateCall, const FunctionType::ExtInfo &extInfo,
+         ArrayRef<ExtParameterInfo> paramInfos, CanQualType resultType,
+         ArrayRef<CanQualType> argTypes, RequiredArgs required);
   void operator delete(void *p) { ::operator delete(p); }
 
   // Friending class TrailingObjects is apparently not good enough for MSVC,
@@ -640,6 +663,8 @@ public:
   bool isInstanceMethod() const { return InstanceMethod; }
 
   bool isChainCall() const { return ChainCall; }
+
+  bool isDelegateCall() const { return DelegateCall; }
 
   bool isCmseNSCall() const { return CmseNSCall; }
 
@@ -691,7 +716,7 @@ public:
 
   ArrayRef<ExtParameterInfo> getExtParameterInfos() const {
     if (!HasExtParameterInfos) return {};
-    return llvm::makeArrayRef(getExtParameterInfosBuffer(), NumArgs);
+    return llvm::ArrayRef(getExtParameterInfosBuffer(), NumArgs);
   }
   ExtParameterInfo getExtParameterInfo(unsigned argIndex) const {
     assert(argIndex <= NumArgs);
@@ -712,10 +737,22 @@ public:
     ArgStructAlign = Align.getQuantity();
   }
 
+  /// Return the maximum vector width in the arguments.
+  unsigned getMaxVectorWidth() const {
+    return MaxVectorWidth ? 1U << (MaxVectorWidth - 1) : 0;
+  }
+
+  /// Set the maximum vector width in the arguments.
+  void setMaxVectorWidth(unsigned Width) {
+    assert(llvm::isPowerOf2_32(Width) && "Expected power of 2 vector");
+    MaxVectorWidth = llvm::countr_zero(Width) + 1;
+  }
+
   void Profile(llvm::FoldingSetNodeID &ID) {
     ID.AddInteger(getASTCallingConvention());
     ID.AddBoolean(InstanceMethod);
     ID.AddBoolean(ChainCall);
+    ID.AddBoolean(DelegateCall);
     ID.AddBoolean(NoReturn);
     ID.AddBoolean(ReturnsRetained);
     ID.AddBoolean(NoCallerSavedRegs);
@@ -733,17 +770,16 @@ public:
     for (const auto &I : arguments())
       I.type.Profile(ID);
   }
-  static void Profile(llvm::FoldingSetNodeID &ID,
-                      bool InstanceMethod,
-                      bool ChainCall,
+  static void Profile(llvm::FoldingSetNodeID &ID, bool InstanceMethod,
+                      bool ChainCall, bool IsDelegateCall,
                       const FunctionType::ExtInfo &info,
                       ArrayRef<ExtParameterInfo> paramInfos,
-                      RequiredArgs required,
-                      CanQualType resultType,
+                      RequiredArgs required, CanQualType resultType,
                       ArrayRef<CanQualType> argTypes) {
     ID.AddInteger(info.getCC());
     ID.AddBoolean(InstanceMethod);
     ID.AddBoolean(ChainCall);
+    ID.AddBoolean(IsDelegateCall);
     ID.AddBoolean(info.getNoReturn());
     ID.AddBoolean(info.getProducesResult());
     ID.AddBoolean(info.getNoCallerSavedRegs());

@@ -25,29 +25,28 @@ class ARMAsmPrinter;
 class ARMBaseTargetMachine;
 class ARMRegisterBankInfo;
 class ARMSubtarget;
-struct BasicBlockInfo;
 class Function;
 class FunctionPass;
 class InstructionSelector;
-class MachineBasicBlock;
-class MachineFunction;
-class MachineInstr;
 class MCInst;
+class MachineInstr;
 class PassRegistry;
 
 Pass *createMVETailPredicationPass();
 FunctionPass *createARMLowOverheadLoopsPass();
+FunctionPass *createARMBlockPlacementPass();
 Pass *createARMParallelDSPPass();
 FunctionPass *createARMISelDag(ARMBaseTargetMachine &TM,
                                CodeGenOpt::Level OptLevel);
 FunctionPass *createA15SDOptimizerPass();
 FunctionPass *createARMLoadStoreOptimizationPass(bool PreAlloc = false);
 FunctionPass *createARMExpandPseudoPass();
+FunctionPass *createARMBranchTargetsPass();
 FunctionPass *createARMConstantIslandPass();
 FunctionPass *createMLxExpansionPass();
 FunctionPass *createThumb2ITBlockPass();
 FunctionPass *createMVEVPTBlockPass();
-FunctionPass *createMVEVPTOptimisationsPass();
+FunctionPass *createMVETPAndVPTOptimisationsPass();
 FunctionPass *createARMOptimizeBarriersPass();
 FunctionPass *createThumb2SizeReductionPass(
     std::function<bool(const Function &)> Ftor = nullptr);
@@ -57,23 +56,30 @@ createARMInstructionSelector(const ARMBaseTargetMachine &TM, const ARMSubtarget 
 Pass *createMVEGatherScatterLoweringPass();
 FunctionPass *createARMSLSHardeningPass();
 FunctionPass *createARMIndirectThunks();
+Pass *createMVELaneInterleavingPass();
+FunctionPass *createARMFixCortexA57AES1742098Pass();
 
 void LowerARMMachineInstrToMCInst(const MachineInstr *MI, MCInst &OutMI,
                                   ARMAsmPrinter &AP);
 
-void initializeARMParallelDSPPass(PassRegistry &);
-void initializeARMLoadStoreOptPass(PassRegistry &);
-void initializeARMPreAllocLoadStoreOptPass(PassRegistry &);
+void initializeARMBlockPlacementPass(PassRegistry &);
+void initializeARMBranchTargetsPass(PassRegistry &);
 void initializeARMConstantIslandsPass(PassRegistry &);
+void initializeARMDAGToDAGISelPass(PassRegistry &);
 void initializeARMExpandPseudoPass(PassRegistry &);
-void initializeThumb2SizeReducePass(PassRegistry &);
-void initializeThumb2ITBlockPass(PassRegistry &);
-void initializeMVEVPTBlockPass(PassRegistry &);
-void initializeMVEVPTOptimisationsPass(PassRegistry &);
+void initializeARMFixCortexA57AES1742098Pass(PassRegistry &);
+void initializeARMLoadStoreOptPass(PassRegistry &);
 void initializeARMLowOverheadLoopsPass(PassRegistry &);
-void initializeMVETailPredicationPass(PassRegistry &);
-void initializeMVEGatherScatterLoweringPass(PassRegistry &);
+void initializeARMParallelDSPPass(PassRegistry &);
+void initializeARMPreAllocLoadStoreOptPass(PassRegistry &);
 void initializeARMSLSHardeningPass(PassRegistry &);
+void initializeMVEGatherScatterLoweringPass(PassRegistry &);
+void initializeMVELaneInterleavingPass(PassRegistry &);
+void initializeMVETPAndVPTOptimisationsPass(PassRegistry &);
+void initializeMVETailPredicationPass(PassRegistry &);
+void initializeMVEVPTBlockPass(PassRegistry &);
+void initializeThumb2ITBlockPass(PassRegistry &);
+void initializeThumb2SizeReducePass(PassRegistry &);
 
 } // end namespace llvm
 

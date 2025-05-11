@@ -113,7 +113,7 @@ let Predicates = [FeatureVector] in {
   // Load count to block boundary.
   let Defs = [CC] in
     def LCBB : InstRXE<0xE727, (outs GR32:$R1),
-                               (ins bdxaddr12only:$XBD2, imm32zx4:$M3),
+                               (ins (bdxaddr12only $B2, $D2, $X2):$XBD2, imm32zx4:$M3),
                        "lcbb\t$R1, $XBD2, $M3",
                        [(set GR32:$R1, (int_s390_lcbb bdxaddr12only:$XBD2,
                                                       imm32zx4_timm:$M3))]>;
@@ -1750,6 +1750,37 @@ let Predicates = [FeatureVectorEnhancements2] in {
 }
 
 //===----------------------------------------------------------------------===//
+// NNP assist instructions
+//===----------------------------------------------------------------------===//
+
+let Predicates = [FeatureVector, FeatureNNPAssist] in {
+  let Uses = [FPC], mayRaiseFPException = 1 in
+    def VCFN : UnaryVRRaFloatGeneric<"vcfn", 0xE65D>;
+  def : Pat<(int_s390_vcfn VR128:$x, imm32zx4_timm:$m),
+            (VCFN VR128:$x, 1, imm32zx4:$m)>;
+
+  let Uses = [FPC], mayRaiseFPException = 1 in
+    def VCLFNL : UnaryVRRaFloatGeneric<"vclfnl", 0xE65E>;
+  def : Pat<(int_s390_vclfnls VR128:$x, imm32zx4_timm:$m),
+            (VCLFNL VR128:$x, 2, imm32zx4:$m)>;
+
+  let Uses = [FPC], mayRaiseFPException = 1 in
+    def VCLFNH : UnaryVRRaFloatGeneric<"vclfnh", 0xE656>;
+  def : Pat<(int_s390_vclfnhs VR128:$x, imm32zx4_timm:$m),
+            (VCLFNH VR128:$x, 2, imm32zx4:$m)>;
+
+  let Uses = [FPC], mayRaiseFPException = 1 in
+    def VCNF : UnaryVRRaFloatGeneric<"vcnf", 0xE655>;
+  def : Pat<(int_s390_vcnf VR128:$x, imm32zx4_timm:$m),
+            (VCNF VR128:$x, imm32zx4:$m, 1)>;
+
+  let Uses = [FPC], mayRaiseFPException = 1 in
+    def VCRNF : BinaryVRRcFloatGeneric<"vcrnf", 0xE675>;
+  def : Pat<(int_s390_vcrnfs VR128:$x, VR128:$y, imm32zx4_timm:$m),
+            (VCRNF VR128:$x, VR128:$y, imm32zx4:$m, 2)>;
+}
+
+//===----------------------------------------------------------------------===//
 // Packed-decimal instructions
 //===----------------------------------------------------------------------===//
 
@@ -1784,5 +1815,28 @@ let Predicates = [FeatureVectorPackedDecimal] in {
 
     def VTP : TestVRRg<"vtp", 0xE65F>;
     def VCP : CompareVRRh<"vcp", 0xE677>;
+  }
+}
+
+let Predicates = [FeatureVectorPackedDecimalEnhancement2] in {
+  def VSCHP : BinaryExtraVRRbGeneric<"vschp", 0xE674>;
+  def VSCHSP : BinaryExtraVRRb<"vschsp", 0xE674, 2>;
+  def VSCHDP : BinaryExtraVRRb<"vschdp", 0xE674, 3>;
+  def VSCHXP : BinaryExtraVRRb<"vschxp", 0xE674, 4>;
+
+  def VSCSHP : BinaryVRRb<"vscshp", 0xE67C, null_frag, v128b, v128b>;
+
+  def VCSPH : TernaryVRRj<"vcsph", 0xE67D>;
+
+  let Defs = [CC] in
+    def VCLZDP : BinaryVRRk<"vclzdp", 0xE651>;
+
+  let Defs = [CC] in
+    def VSRPR : QuaternaryVRIf<"vsrpr", 0xE672>;
+
+  let Defs = [CC] in {
+    def VPKZR : QuaternaryVRIf<"vpkzr", 0xE670>;
+    def VUPKZH : BinaryVRRk<"vupkzh", 0xE654>;
+    def VUPKZL : BinaryVRRk<"vupkzl", 0xE65C>;
   }
 }

@@ -1,9 +1,8 @@
 //===--- ImplementDeclaredMethods.cpp -  ----------------------------------===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -44,7 +43,7 @@ public:
   initiate(const ClassType *Container, ArrayRef<const MethodType *> Methods,
            bool CreateOperation) {
     if (Methods.empty())
-      return None;
+      return std::nullopt;
 
     RefactoringOperationResult Result;
     Result.Initiated = true;
@@ -129,7 +128,7 @@ clang::tooling::initiateImplementDeclaredMethodsOperation(
            isa<ObjCCategoryDecl>(D);
   });
   if (!SelectedDecl)
-    return None;
+    return std::nullopt;
   // Look at the set of methods that intersect with the selection.
   if (const auto *CXXClass = dyn_cast<CXXRecordDecl>(SelectedDecl->getDecl())) {
     if (CXXClass->isDependentType())
@@ -195,7 +194,7 @@ ImplementDeclaredCXXMethodsOperation::perform(
   using namespace indexer;
   return continueInExternalASTUnit(
       fileThatShouldContainImplementationOf(Container), runInImplementationAST,
-      Container, filter(llvm::makeArrayRef(SelectedMethods),
+      Container, filter(ArrayRef(SelectedMethods),
                         [](const DeclEntity &D) { return !D.isDefined(); }));
 }
 
@@ -404,7 +403,7 @@ ImplementDeclaredObjCMethodsOperation::perform(
   return continueInExternalASTUnit(
       fileThatShouldContainImplementationOf(Container), runInImplementationAST,
       Container, Interface, MethodDeclarations,
-      filter(llvm::makeArrayRef(SelectedMethods),
+      filter(ArrayRef(SelectedMethods),
              [](const DeclEntity &D) { return !D.isDefined(); }));
 }
 

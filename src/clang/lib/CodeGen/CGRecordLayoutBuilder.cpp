@@ -127,15 +127,20 @@ struct CGRecordLowering {
 
   /// Wraps llvm::Type::getIntNTy with some implicit arguments.
   llvm::Type *getIntNType(uint64_t NumBits) {
-    return llvm::Type::getIntNTy(Types.getLLVMContext(),
-                                 (unsigned)llvm::alignTo(NumBits, 8));
+    unsigned AlignedBits = llvm::alignTo(NumBits, Context.getCharWidth());
+    return llvm::Type::getIntNTy(Types.getLLVMContext(), AlignedBits);
   }
-  /// Gets an llvm type of size NumBytes and alignment 1.
-  llvm::Type *getByteArrayType(CharUnits NumBytes) {
-    assert(!NumBytes.isZero() && "Empty byte arrays aren't allowed.");
-    llvm::Type *Type = llvm::Type::getInt8Ty(Types.getLLVMContext());
-    return NumBytes == CharUnits::One() ? Type :
-        (llvm::Type *)llvm::ArrayType::get(Type, NumBytes.getQuantity());
+  /// Get the LLVM type sized as one character unit.
+  llvm::Type *getCharType() {
+    return llvm::Type::getIntNTy(Types.getLLVMContext(),
+                                 Context.getCharWidth());
+  }
+  /// Gets an llvm type of size NumChars and alignment 1.
+  llvm::Type *getByteArrayType(CharUnits NumChars) {
+    assert(!NumChars.isZero() && "Empty byte arrays aren't allowed.");
+    llvm::Type *Type = getCharType();
+    return NumChars == CharUnits::One() ? Type :
+        (llvm::Type *)llvm::ArrayType::get(Type, NumChars.getQuantity());
   }
   /// Gets the storage type for a field decl and handles storage
   /// for itanium bitfields that are smaller than their declared type.
@@ -157,7 +162,7 @@ struct CGRecordLowering {
     return CharUnits::fromQuantity(DataLayout.getTypeAllocSize(Type));
   }
   CharUnits getAlignment(llvm::Type *Type) {
-    return CharUnits::fromQuantity(DataLayout.getABITypeAlignment(Type));
+    return CharUnits::fromQuantity(DataLayout.getABITypeAlign(Type));
   }
   bool isZeroInitializable(const FieldDecl *FD) {
     return Types.isZeroInitializable(FD->getType());
@@ -177,7 +182,7 @@ struct CGRecordLowering {
                        llvm::Type *StorageType);
   /// Lowers an ASTRecordLayout to a llvm type.
   void lower(bool NonVirtualBaseType);
-  void lowerUnion();
+  void lowerUnion(bool isNoUniqueAddress);
   void accumulateFields();
   void accumulateBitFields(RecordDecl::field_iterator Field,
                            RecordDecl::field_iterator FieldEnd);
@@ -275,7 +280,7 @@ void CGRecordLowering::lower(bool NVBaseType) {
   //    CodeGenTypes::ComputeRecordLayout.
   CharUnits Size = NVBaseType ? Layout.getNonVirtualSize() : Layout.getSize();
   if (D->isUnion()) {
-    lowerUnion();
+    lowerUnion(NVBaseType);
     computeVolatileBitfields();
     return;
   }
@@ -303,8 +308,9 @@ void CGRecordLowering::lower(bool NVBaseType) {
   computeVolatileBitfields();
 }
 
-void CGRecordLowering::lowerUnion() {
-  CharUnits LayoutSize = Layout.getSize();
+void CGRecordLowering::lowerUnion(bool isNoUniqueAddress) {
+  CharUnits LayoutSize =
+      isNoUniqueAddress ? Layout.getDataSize() : Layout.getSize();
   llvm::Type *StorageType = nullptr;
   bool SeenNamedMember = false;
   // Iterate through the fields setting bitFieldInfo and the Fields array. Also
@@ -360,7 +366,12 @@ void CGRecordLowering::lowerUnion() {
   FieldTypes.push_back(StorageType);
   appendPaddingBytes(LayoutSize - getSize(StorageType));
   // Set packed if we need it.
-  if (LayoutSize % getAlignment(StorageType))
+  const auto StorageAlignment = getAlignment(StorageType);
+  assert((Layout.getSize() % StorageAlignment == 0 ||
+          Layout.getDataSize() % StorageAlignment) &&
+         "Union's standard layout and no_unique_address layout must agree on "
+         "packedness");
+  if (Layout.getDataSize() % StorageAlignment)
     Packed = true;
 }
 
@@ -374,9 +385,14 @@ void CGRecordLowering::accumulateFields() {
       for (++Field; Field != FieldEnd && Field->isBitField(); ++Field);
       accumulateBitFields(Start, Field);
     } else if (!Field->isZeroSize(Context)) {
+      // Use base subobject layout for the potentially-overlapping field,
+      // as it is done in RecordLayoutBuilder
       Members.push_back(MemberInfo(
           bitsToCharUnits(getFieldBitOffset(*Field)), MemberInfo::Field,
-          getStorageType(*Field), *Field));
+          Field->isPotentiallyOverlapping()
+              ? getStorageType(Field->getType()->getAsCXXRecordDecl())
+              : getStorageType(*Field),
+          *Field));
       ++Field;
     } else {
       ++Field;
@@ -406,7 +422,7 @@ CGRecordLowering::accumulateBitFields(RecordDecl::field_iterator Field,
         continue;
       }
       llvm::Type *Type =
-          Types.ConvertTypeForMem(Field->getType(), /*ForBitFields=*/true);
+          Types.ConvertTypeForMem(Field->getType(), /*ForBitField=*/true);
       // If we don't have a run yet, or don't live within the previous run's
       // allocated storage then we allocate some storage and start a new run.
       if (Run == FieldEnd || BitOffset >= Tail) {
@@ -877,7 +893,7 @@ CodeGenTypes::ComputeRecordLayout(const RecordDecl *D, llvm::StructType *Ty) {
 
   // If we're in C++, compute the base subobject type.
   llvm::StructType *BaseTy = nullptr;
-  if (isa<CXXRecordDecl>(D) && !D->isUnion() && !D->hasAttr<FinalAttr>()) {
+  if (isa<CXXRecordDecl>(D)) {
     BaseTy = Ty;
     if (Builder.Layout.getNonVirtualSize() != Builder.Layout.getSize()) {
       CGRecordLowering BaseBuilder(*this, D, /*Packed=*/Builder.Packed);

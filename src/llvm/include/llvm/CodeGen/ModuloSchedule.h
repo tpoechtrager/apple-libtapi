@@ -57,11 +57,10 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_LIB_CODEGEN_MODULOSCHEDULE_H
-#define LLVM_LIB_CODEGEN_MODULOSCHEDULE_H
+#ifndef LLVM_CODEGEN_MODULOSCHEDULE_H
+#define LLVM_CODEGEN_MODULOSCHEDULE_H
 
 #include "llvm/CodeGen/MachineFunction.h"
-#include "llvm/CodeGen/MachineLoopInfo.h"
 #include "llvm/CodeGen/MachineLoopUtils.h"
 #include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
@@ -70,6 +69,8 @@
 
 namespace llvm {
 class MachineBasicBlock;
+class MachineLoop;
+class MachineRegisterInfo;
 class MachineInstr;
 class LiveIntervals;
 
@@ -169,11 +170,11 @@ private:
   MachineFunction &MF;
   const TargetSubtargetInfo &ST;
   MachineRegisterInfo &MRI;
-  const TargetInstrInfo *TII;
+  const TargetInstrInfo *TII = nullptr;
   LiveIntervals &LIS;
 
-  MachineBasicBlock *BB;
-  MachineBasicBlock *Preheader;
+  MachineBasicBlock *BB = nullptr;
+  MachineBasicBlock *Preheader = nullptr;
   MachineBasicBlock *NewKernel = nullptr;
   std::unique_ptr<TargetInstrInfo::PipelinerLoopInfo> LoopInfo;
 
@@ -190,7 +191,8 @@ private:
   void generateProlog(unsigned LastStage, MachineBasicBlock *KernelBB,
                       ValueMapTy *VRMap, MBBVectorTy &PrologBBs);
   void generateEpilog(unsigned LastStage, MachineBasicBlock *KernelBB,
-                      ValueMapTy *VRMap, MBBVectorTy &EpilogBBs,
+                      MachineBasicBlock *OrigBB, ValueMapTy *VRMap,
+                      ValueMapTy *VRMapPhi, MBBVectorTy &EpilogBBs,
                       MBBVectorTy &PrologBBs);
   void generateExistingPhis(MachineBasicBlock *NewBB, MachineBasicBlock *BB1,
                             MachineBasicBlock *BB2, MachineBasicBlock *KernelBB,
@@ -199,8 +201,9 @@ private:
                             bool IsLast);
   void generatePhis(MachineBasicBlock *NewBB, MachineBasicBlock *BB1,
                     MachineBasicBlock *BB2, MachineBasicBlock *KernelBB,
-                    ValueMapTy *VRMap, InstrMapTy &InstrMap,
-                    unsigned LastStageNum, unsigned CurStageNum, bool IsLast);
+                    ValueMapTy *VRMap, ValueMapTy *VRMapPhi,
+                    InstrMapTy &InstrMap, unsigned LastStageNum,
+                    unsigned CurStageNum, bool IsLast);
   void removeDeadInstructions(MachineBasicBlock *KernelBB,
                               MBBVectorTy &EpilogBBs);
   void splitLifetimes(MachineBasicBlock *KernelBB, MBBVectorTy &EpilogBBs);
@@ -294,13 +297,13 @@ protected:
   MachineFunction &MF;
   const TargetSubtargetInfo &ST;
   MachineRegisterInfo &MRI;
-  const TargetInstrInfo *TII;
-  LiveIntervals *LIS;
+  const TargetInstrInfo *TII = nullptr;
+  LiveIntervals *LIS = nullptr;
 
   /// The original loop block that gets rewritten in-place.
-  MachineBasicBlock *BB;
+  MachineBasicBlock *BB = nullptr;
   /// The original loop preheader.
-  MachineBasicBlock *Preheader;
+  MachineBasicBlock *Preheader = nullptr;
   /// All prolog and epilog blocks.
   SmallVector<MachineBasicBlock *, 4> Prologs, Epilogs;
   /// For every block, the stages that are produced.
@@ -386,4 +389,4 @@ public:
 
 } // end namespace llvm
 
-#endif // LLVM_LIB_CODEGEN_MODULOSCHEDULE_H
+#endif // LLVM_CODEGEN_MODULOSCHEDULE_H

@@ -58,6 +58,14 @@ int FunctionComparator::cmpNumbers(uint64_t L, uint64_t R) const {
   return 0;
 }
 
+int FunctionComparator::cmpAligns(Align L, Align R) const {
+  if (L.value() < R.value())
+    return -1;
+  if (L.value() > R.value())
+    return 1;
+  return 0;
+}
+
 int FunctionComparator::cmpOrderings(AtomicOrdering L, AtomicOrdering R) const {
   if ((int)L < (int)R)
     return -1;
@@ -102,7 +110,7 @@ int FunctionComparator::cmpMem(StringRef L, StringRef R) const {
 
   // Compare strings lexicographically only when it is necessary: only when
   // strings are equal in size.
-  return L.compare(R);
+  return std::clamp(L.compare(R), -1, 1);
 }
 
 int FunctionComparator::cmpAttrs(const AttributeList L,
@@ -110,7 +118,7 @@ int FunctionComparator::cmpAttrs(const AttributeList L,
   if (int Res = cmpNumbers(L.getNumAttrSets(), R.getNumAttrSets()))
     return Res;
 
-  for (unsigned i = L.index_begin(), e = L.index_end(); i != e; ++i) {
+  for (unsigned i : L.indexes()) {
     AttributeSet LAS = L.getAttributes(i);
     AttributeSet RAS = R.getAttributes(i);
     AttributeSet::iterator LI = LAS.begin(), LE = LAS.end();
@@ -149,16 +157,44 @@ int FunctionComparator::cmpAttrs(const AttributeList L,
   return 0;
 }
 
-int FunctionComparator::cmpRangeMetadata(const MDNode *L,
-                                         const MDNode *R) const {
+int FunctionComparator::cmpMetadata(const Metadata *L,
+                                    const Metadata *R) const {
+  // TODO: the following routine coerce the metadata contents into constants
+  // or MDStrings before comparison.
+  // It ignores any other cases, so that the metadata nodes are considered
+  // equal even though this is not correct.
+  // We should structurally compare the metadata nodes to be perfect here.
+
+  auto *MDStringL = dyn_cast<MDString>(L);
+  auto *MDStringR = dyn_cast<MDString>(R);
+  if (MDStringL && MDStringR) {
+    if (MDStringL == MDStringR)
+      return 0;
+    return MDStringL->getString().compare(MDStringR->getString());
+  }
+  if (MDStringR)
+    return -1;
+  if (MDStringL)
+    return 1;
+
+  auto *CL = dyn_cast<ConstantAsMetadata>(L);
+  auto *CR = dyn_cast<ConstantAsMetadata>(R);
+  if (CL == CR)
+    return 0;
+  if (!CL)
+    return -1;
+  if (!CR)
+    return 1;
+  return cmpConstants(CL->getValue(), CR->getValue());
+}
+
+int FunctionComparator::cmpMDNode(const MDNode *L, const MDNode *R) const {
   if (L == R)
     return 0;
   if (!L)
     return -1;
   if (!R)
     return 1;
-  // Range metadata is a sequence of numbers. Make sure they are the same
-  // sequence.
   // TODO: Note that as this is metadata, it is possible to drop and/or merge
   // this data when considering functions to merge. Thus this comparison would
   // return 0 (i.e. equivalent), but merging would become more complicated
@@ -167,10 +203,30 @@ int FunctionComparator::cmpRangeMetadata(const MDNode *L,
   // function semantically.
   if (int Res = cmpNumbers(L->getNumOperands(), R->getNumOperands()))
     return Res;
-  for (size_t I = 0; I < L->getNumOperands(); ++I) {
-    ConstantInt *LLow = mdconst::extract<ConstantInt>(L->getOperand(I));
-    ConstantInt *RLow = mdconst::extract<ConstantInt>(R->getOperand(I));
-    if (int Res = cmpAPInts(LLow->getValue(), RLow->getValue()))
+  for (size_t I = 0; I < L->getNumOperands(); ++I)
+    if (int Res = cmpMetadata(L->getOperand(I), R->getOperand(I)))
+      return Res;
+  return 0;
+}
+
+int FunctionComparator::cmpInstMetadata(Instruction const *L,
+                                        Instruction const *R) const {
+  /// These metadata affects the other optimization passes by making assertions
+  /// or constraints.
+  /// Values that carry different expectations should be considered different.
+  SmallVector<std::pair<unsigned, MDNode *>> MDL, MDR;
+  L->getAllMetadataOtherThanDebugLoc(MDL);
+  R->getAllMetadataOtherThanDebugLoc(MDR);
+  if (MDL.size() > MDR.size())
+    return 1;
+  else if (MDL.size() < MDR.size())
+    return -1;
+  for (size_t I = 0, N = MDL.size(); I < N; ++I) {
+    auto const [KeyL, ML] = MDL[I];
+    auto const [KeyR, MR] = MDR[I];
+    if (int Res = cmpNumbers(KeyL, KeyR))
+      return Res;
+    if (int Res = cmpMDNode(ML, MR))
       return Res;
   }
   return 0;
@@ -233,9 +289,9 @@ int FunctionComparator::cmpConstants(const Constant *L,
     unsigned TyRWidth = 0;
 
     if (auto *VecTyL = dyn_cast<VectorType>(TyL))
-      TyLWidth = VecTyL->getPrimitiveSizeInBits().getFixedSize();
+      TyLWidth = VecTyL->getPrimitiveSizeInBits().getFixedValue();
     if (auto *VecTyR = dyn_cast<VectorType>(TyR))
-      TyRWidth = VecTyR->getPrimitiveSizeInBits().getFixedSize();
+      TyRWidth = VecTyR->getPrimitiveSizeInBits().getFixedValue();
 
     if (TyLWidth != TyRWidth)
       return cmpNumbers(TyLWidth, TyRWidth);
@@ -373,7 +429,7 @@ int FunctionComparator::cmpConstants(const Constant *L,
       BasicBlock *RBB = RBA->getBasicBlock();
       if (LBB == RBB)
         return 0;
-      for (BasicBlock &BB : F->getBasicBlockList()) {
+      for (BasicBlock &BB : *F) {
         if (&BB == LBB) {
           assert(&BB != RBB);
           return -1;
@@ -393,6 +449,15 @@ int FunctionComparator::cmpConstants(const Constant *L,
       // context of their respective functions.
       return cmpValues(LBA->getBasicBlock(), RBA->getBasicBlock());
     }
+  }
+  case Value::DSOLocalEquivalentVal: {
+    // dso_local_equivalent is functionally equivalent to whatever it points to.
+    // This means the behavior of the IR should be the exact same as if the
+    // function was referenced directly rather than through a
+    // dso_local_equivalent.
+    const auto *LEquiv = cast<DSOLocalEquivalent>(L);
+    const auto *REquiv = cast<DSOLocalEquivalent>(R);
+    return cmpGlobalValues(LEquiv->getGlobalValue(), REquiv->getGlobalValue());
   }
   default: // Unknown constant, abort.
     LLVM_DEBUG(dbgs() << "Looking at valueID " << L->getValueID() << "\n");
@@ -556,13 +621,12 @@ int FunctionComparator::cmpOperations(const Instruction *L,
     if (int Res = cmpTypes(AI->getAllocatedType(),
                            cast<AllocaInst>(R)->getAllocatedType()))
       return Res;
-    return cmpNumbers(AI->getAlignment(), cast<AllocaInst>(R)->getAlignment());
+    return cmpAligns(AI->getAlign(), cast<AllocaInst>(R)->getAlign());
   }
   if (const LoadInst *LI = dyn_cast<LoadInst>(L)) {
     if (int Res = cmpNumbers(LI->isVolatile(), cast<LoadInst>(R)->isVolatile()))
       return Res;
-    if (int Res =
-            cmpNumbers(LI->getAlignment(), cast<LoadInst>(R)->getAlignment()))
+    if (int Res = cmpAligns(LI->getAlign(), cast<LoadInst>(R)->getAlign()))
       return Res;
     if (int Res =
             cmpOrderings(LI->getOrdering(), cast<LoadInst>(R)->getOrdering()))
@@ -570,16 +634,13 @@ int FunctionComparator::cmpOperations(const Instruction *L,
     if (int Res = cmpNumbers(LI->getSyncScopeID(),
                              cast<LoadInst>(R)->getSyncScopeID()))
       return Res;
-    return cmpRangeMetadata(
-        LI->getMetadata(LLVMContext::MD_range),
-        cast<LoadInst>(R)->getMetadata(LLVMContext::MD_range));
+    return cmpInstMetadata(L, R);
   }
   if (const StoreInst *SI = dyn_cast<StoreInst>(L)) {
     if (int Res =
             cmpNumbers(SI->isVolatile(), cast<StoreInst>(R)->isVolatile()))
       return Res;
-    if (int Res =
-            cmpNumbers(SI->getAlignment(), cast<StoreInst>(R)->getAlignment()))
+    if (int Res = cmpAligns(SI->getAlign(), cast<StoreInst>(R)->getAlign()))
       return Res;
     if (int Res =
             cmpOrderings(SI->getOrdering(), cast<StoreInst>(R)->getOrdering()))
@@ -601,8 +662,8 @@ int FunctionComparator::cmpOperations(const Instruction *L,
       if (int Res = cmpNumbers(CI->getTailCallKind(),
                                cast<CallInst>(R)->getTailCallKind()))
         return Res;
-    return cmpRangeMetadata(L->getMetadata(LLVMContext::MD_range),
-                            R->getMetadata(LLVMContext::MD_range));
+    return cmpMDNode(L->getMetadata(LLVMContext::MD_range),
+                     R->getMetadata(LLVMContext::MD_range));
   }
   if (const InsertValueInst *IVI = dyn_cast<InsertValueInst>(L)) {
     ArrayRef<unsigned> LIndices = IVI->getIndices();
@@ -700,8 +761,8 @@ int FunctionComparator::cmpGEPs(const GEPOperator *GEPL,
   // When we have target data, we can reduce the GEP down to the value in bytes
   // added to the address.
   const DataLayout &DL = FnL->getParent()->getDataLayout();
-  unsigned BitWidth = DL.getPointerSizeInBits(ASL);
-  APInt OffsetL(BitWidth, 0), OffsetR(BitWidth, 0);
+  unsigned OffsetBitWidth = DL.getIndexSizeInBits(ASL);
+  APInt OffsetL(OffsetBitWidth, 0), OffsetR(OffsetBitWidth, 0);
   if (GEPL->accumulateConstantOffset(DL, OffsetL) &&
       GEPR->accumulateConstantOffset(DL, OffsetR))
     return cmpAPInts(OffsetL, OffsetR);
@@ -770,6 +831,21 @@ int FunctionComparator::cmpValues(const Value *L, const Value *R) const {
   if (ConstL)
     return 1;
   if (ConstR)
+    return -1;
+
+  const MetadataAsValue *MetadataValueL = dyn_cast<MetadataAsValue>(L);
+  const MetadataAsValue *MetadataValueR = dyn_cast<MetadataAsValue>(R);
+  if (MetadataValueL && MetadataValueR) {
+    if (MetadataValueL == MetadataValueR)
+      return 0;
+
+    return cmpMetadata(MetadataValueL->getMetadata(),
+                       MetadataValueR->getMetadata());
+  }
+
+  if (MetadataValueL)
+    return 1;
+  if (MetadataValueR)
     return -1;
 
   const InlineAsm *InlineAsmL = dyn_cast<InlineAsm>(L);
@@ -962,7 +1038,7 @@ FunctionComparator::FunctionHash FunctionComparator::functionHash(Function &F) {
     // This random value acts as a block header, as otherwise the partition of
     // opcodes into BBs wouldn't affect the hash, only the order of the opcodes
     H.add(45798);
-    for (auto &Inst : *BB) {
+    for (const auto &Inst : *BB) {
       H.add(Inst.getOpcode());
     }
     const Instruction *Term = BB->getTerminator();

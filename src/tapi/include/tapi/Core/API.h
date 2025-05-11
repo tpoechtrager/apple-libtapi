@@ -1,9 +1,8 @@
 //===- tapi/Core/API.h - TAPI API -------------------------------*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 ///
@@ -17,40 +16,39 @@
 
 #include "tapi/Core/APICommon.h"
 #include "tapi/Core/AvailabilityInfo.h"
-#include "tapi/Core/InterfaceFile.h"
 #include "tapi/Core/LLVM.h"
+#include "tapi/Core/Utils.h"
 #include "tapi/Defines.h"
 #include "clang/AST/DeclObjC.h"
-#include "clang/Basic/SourceLocation.h"
 #include "llvm/ADT/MapVector.h"
-#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/StringSet.h"
-#include "llvm/ADT/Triple.h"
 #include "llvm/Support/Error.h"
+#include "llvm/TargetParser/Triple.h"
+#include "llvm/TextAPI/InterfaceFile.h"
+#include "llvm/TextAPI/PackedVersion.h"
+#include <iterator>
+#include <optional>
 
 using clang::Decl;
 
 TAPI_NAMESPACE_INTERNAL_BEGIN
 
-class APILoc {
-public:
-  APILoc() = default;
-  APILoc(clang::PresumedLoc loc) : loc(loc) {}
-  APILoc(std::string file, unsigned line, unsigned col);
-  APILoc(StringRef file, unsigned line, unsigned col);
+class API;
+using SymbolFlags = llvm::MachO::SymbolFlags;
 
-  bool isInvalid() const;
-  StringRef getFilename() const;
-  unsigned getLine() const;
-  unsigned getColumn() const;
-  clang::PresumedLoc getPresumedLoc() const;
+class APIRange {
+public:
+  APIRange() = default;
+  APIRange(APILoc loc) : begin(loc), end(loc) {}
+  APIRange(APILoc begin, APILoc end) : begin(begin), end(end) {}
+
+  APILoc getBegin() const { return begin; }
+  APILoc getEnd() const { return end; }
 
 private:
-  llvm::Optional<clang::PresumedLoc> loc;
-  std::string file;
-  unsigned line;
-  unsigned col;
+  APILoc begin;
+  APILoc end;
 };
 
 struct APIRecord {
@@ -59,29 +57,46 @@ struct APIRecord {
   const Decl *decl;
   AvailabilityInfo availability;
   APILinkage linkage;
-  APIFlags flags;
+  SymbolFlags flags;
   APIAccess access;
+  bool verified = false;
 
   static APIRecord *create(llvm::BumpPtrAllocator &allocator, StringRef name,
-                           APILinkage linkage, APIFlags flags, APILoc loc,
+                           APILinkage linkage, SymbolFlags flags, APILoc loc,
                            const AvailabilityInfo &availability,
                            APIAccess access, const Decl *decl);
 
   bool isWeakDefined() const {
-    return (flags & APIFlags::WeakDefined) == APIFlags::WeakDefined;
+    return (flags & SymbolFlags::WeakDefined) == SymbolFlags::WeakDefined;
   }
 
   bool isWeakReferenced() const {
-    return (flags & APIFlags::WeakReferenced) == APIFlags::WeakReferenced;
+    return (flags & SymbolFlags::WeakReferenced) == SymbolFlags::WeakReferenced;
   }
 
   bool isThreadLocalValue() const {
-    return (flags & APIFlags::ThreadLocalValue) == APIFlags::ThreadLocalValue;
+    return (flags & SymbolFlags::ThreadLocalValue) ==
+           SymbolFlags::ThreadLocalValue;
   }
 
+  bool isData() const {
+    return (flags & SymbolFlags::Data) == SymbolFlags::Data;
+  }
+
+  bool isText() const {
+    return (flags & SymbolFlags::Text) == SymbolFlags::Text;
+  }
+
+  bool isInternal() const { return linkage == APILinkage::Internal; }
   bool isExternal() const { return linkage == APILinkage::External; }
   bool isExported() const { return linkage >= APILinkage::Reexported; }
   bool isReexported() const { return linkage == APILinkage::Reexported; }
+
+  bool operator==(const APIRecord &other) const {
+    return std::tie(name, loc, availability, linkage, flags, access) ==
+           std::tie(other.name, other.loc, other.availability, other.linkage,
+                    other.flags, other.access);
+  }
 };
 
 struct EnumConstantRecord : APIRecord {
@@ -89,11 +104,29 @@ struct EnumConstantRecord : APIRecord {
                      const AvailabilityInfo &availability, APIAccess access,
                      const Decl *decl)
       : APIRecord({name, loc, decl, availability, APILinkage::Unknown,
-                   APIFlags::None, access}) {}
+                   SymbolFlags::None, access}) {}
   static EnumConstantRecord *create(llvm::BumpPtrAllocator &allocator,
                                     StringRef name, APILoc loc,
                                     const AvailabilityInfo &availability,
                                     APIAccess access, const Decl *decl);
+};
+
+struct EnumRecord : APIRecord {
+  std::vector<EnumConstantRecord *> constants;
+  StringRef usr;
+
+  EnumRecord(StringRef name, StringRef usr, APILoc loc,
+             const AvailabilityInfo &availability, APIAccess access,
+             const Decl *decl)
+      : APIRecord({name, loc, decl, availability, APILinkage::Unknown,
+                   SymbolFlags::None, access}),
+        usr(usr) {}
+  static EnumRecord *create(llvm::BumpPtrAllocator &allocator, StringRef name,
+                            StringRef usr, APILoc loc,
+                            const AvailabilityInfo &availability,
+                            APIAccess access, const Decl *decl);
+
+  bool operator==(const EnumRecord &other) const;
 };
 
 enum class GVKind : uint8_t {
@@ -104,17 +137,22 @@ enum class GVKind : uint8_t {
 
 struct GlobalRecord : APIRecord {
   GVKind kind;
+  bool inlined = false;
 
-  GlobalRecord(StringRef name, APIFlags flags, APILoc loc,
+  GlobalRecord(StringRef name, SymbolFlags flags, APILoc loc,
                const AvailabilityInfo &availability, APIAccess access,
                const Decl *decl, GVKind kind, APILinkage linkage)
       : APIRecord({name, loc, decl, availability, linkage, flags, access}),
         kind(kind) {}
 
   static GlobalRecord *create(llvm::BumpPtrAllocator &allocator, StringRef name,
-                              APILinkage linkage, APIFlags flags, APILoc loc,
+                              APILinkage linkage, SymbolFlags flags, APILoc loc,
                               const AvailabilityInfo &availability,
                               APIAccess access, const Decl *decl, GVKind kind);
+
+  bool operator==(const GlobalRecord &other) const {
+    return APIRecord::operator==(other) && kind == other.kind;
+  }
 };
 
 struct ObjCPropertyRecord : APIRecord {
@@ -135,7 +173,7 @@ struct ObjCPropertyRecord : APIRecord {
                      APIAccess access, AttributeKind attributes,
                      bool isOptional, const Decl *decl)
       : APIRecord({name, loc, decl, availability, APILinkage::Unknown,
-                   APIFlags::None, access}),
+                   SymbolFlags::None, access}),
         attributes(attributes), getterName(getterName), setterName(setterName),
         isOptional(isOptional) {}
 
@@ -159,14 +197,17 @@ struct ObjCInstanceVariableRecord : APIRecord {
                              const AvailabilityInfo &availability,
                              APIAccess access, AccessControl accessControl,
                              const Decl *decl)
-      : APIRecord(
-            {name, loc, decl, availability, linkage, APIFlags::None, access}),
+      : APIRecord({name, loc, decl, availability, linkage, SymbolFlags::Data,
+                   access}),
         accessControl(accessControl) {}
 
   static ObjCInstanceVariableRecord *
   create(llvm::BumpPtrAllocator &allocator, StringRef name, APILinkage linkage,
          APILoc loc, const AvailabilityInfo &availability, APIAccess access,
          AccessControl accessControl, const Decl *decl);
+  static std::string createName(StringRef superClass, StringRef ivarName) {
+    return (superClass + "." + ivarName).str();
+  }
 };
 
 struct ObjCMethodRecord : APIRecord {
@@ -179,7 +220,7 @@ struct ObjCMethodRecord : APIRecord {
                    bool isInstanceMethod, bool isOptional, bool isDynamic,
                    const Decl *decl)
       : APIRecord({name, loc, decl, availability, APILinkage::Unknown,
-                   APIFlags::None, access}),
+                   SymbolFlags::None, access}),
         isInstanceMethod(isInstanceMethod), isOptional(isOptional),
         isDynamic(isDynamic) {}
 
@@ -200,25 +241,32 @@ struct ObjCContainerRecord : APIRecord {
   ObjCContainerRecord(StringRef name, APILinkage linkage, APILoc loc,
                       const AvailabilityInfo &availability, APIAccess access,
                       const Decl *decl)
-      : APIRecord(
-            {name, loc, decl, availability, linkage, APIFlags::None, access}) {}
+      : APIRecord({name, loc, decl, availability, linkage, SymbolFlags::Data,
+                   access}) {}
+
+  bool operator==(const ObjCContainerRecord &other) const;
 };
 
 struct ObjCCategoryRecord : ObjCContainerRecord {
-  StringRef interfaceName;
+  StringRef interface;
 
-  ObjCCategoryRecord(StringRef interfaceName, StringRef name, APILoc loc,
+  ObjCCategoryRecord(StringRef interface, StringRef name, APILoc loc,
                      const AvailabilityInfo &availability, APIAccess access,
                      const Decl *decl)
       : ObjCContainerRecord(name, APILinkage::Unknown, loc, availability,
                             access, decl),
-        interfaceName(interfaceName) {}
+        interface(interface) {}
 
   static ObjCCategoryRecord *create(llvm::BumpPtrAllocator &allocator,
-                                    StringRef interfaceName, StringRef name,
+                                    StringRef interface, StringRef name,
                                     APILoc loc,
                                     const AvailabilityInfo &availability,
                                     APIAccess access, const Decl *decl);
+
+  bool operator==(const ObjCCategoryRecord &other) const {
+    return ObjCContainerRecord::operator==(other) &&
+           interface == other.interface;
+  }
 };
 
 struct ObjCProtocolRecord : ObjCContainerRecord {
@@ -235,20 +283,61 @@ struct ObjCProtocolRecord : ObjCContainerRecord {
 };
 
 struct ObjCInterfaceRecord : ObjCContainerRecord {
+private:
+  struct Linkages {
+    APILinkage Class = APILinkage::Unknown;
+    APILinkage MetaClass = APILinkage::Unknown;
+    APILinkage EHType = APILinkage::Unknown;
+    bool operator==(const Linkages &other) const {
+      return std::tie(Class, MetaClass, EHType) ==
+             std::tie(other.Class, other.MetaClass, other.EHType);
+    }
+    bool operator!=(const Linkages &other) const { return !(*this == other); }
+  };
+  Linkages linkages;
+
+public:
   std::vector<const ObjCCategoryRecord *> categories;
-  StringRef superClassName;
-  bool hasExceptionAttribute = false;
+  StringRef superClass;
 
   ObjCInterfaceRecord(StringRef name, APILinkage linkage, APILoc loc,
                       const AvailabilityInfo &availability, APIAccess access,
-                      StringRef superClassName, const Decl *decl)
+                      StringRef superClass, const Decl *decl,
+                      ObjCIFSymbolKind symType)
       : ObjCContainerRecord(name, linkage, loc, availability, access, decl),
-        superClassName(superClassName) {}
+        superClass(superClass) {}
 
   static ObjCInterfaceRecord *
   create(llvm::BumpPtrAllocator &allocator, StringRef name, APILinkage linkage,
          APILoc loc, const AvailabilityInfo &availability, APIAccess access,
-         StringRef superClassName, const Decl *decl);
+         StringRef superClass, const Decl *decl, ObjCIFSymbolKind symType);
+
+  bool hasExceptionAttribute() const {
+    return linkages.EHType != APILinkage::Unknown;
+  }
+  bool isCompleteInterface() const {
+    return linkages.Class >= APILinkage::Reexported &&
+           linkages.MetaClass >= APILinkage::Reexported;
+  }
+
+  APILinkage getLinkageForSymbol(ObjCIFSymbolKind currentType) const;
+  void updateLinkageForSymbols(ObjCIFSymbolKind symType, APILinkage link);
+  bool isExportedSymbol(ObjCIFSymbolKind currentType) const;
+
+  bool operator==(const ObjCInterfaceRecord &other) const;
+};
+
+struct TypedefRecord : APIRecord {
+  TypedefRecord(StringRef name, APILoc loc,
+                const AvailabilityInfo &availability, APIAccess access,
+                const Decl *decl)
+      : APIRecord({name, loc, decl, availability, APILinkage::Unknown,
+                   SymbolFlags::None, access}) {}
+
+  static TypedefRecord *create(llvm::BumpPtrAllocator &allocator,
+                               StringRef name, APILoc loc,
+                               const AvailabilityInfo &availability,
+                               APIAccess access, const Decl *decl);
 };
 
 class APIVisitor;
@@ -256,35 +345,104 @@ class APIMutator;
 
 struct BinaryInfo {
   FileType fileType = FileType::Invalid;
-  PackedVersion currentVersion;
-  PackedVersion compatibilityVersion;
+  llvm::MachO::PackedVersion currentVersion;
+  llvm::MachO::PackedVersion compatibilityVersion;
   uint8_t swiftABIVersion = 0;
   bool isTwoLevelNamespace = false;
   bool isAppExtensionSafe = false;
+  bool isOSLibNotForSharedCache = false;
   StringRef parentUmbrella;
   std::vector<StringRef> allowableClients;
   std::vector<StringRef> reexportedLibraries;
+  std::vector<StringRef> rpaths;
+  std::vector<StringRef> relinkedLibraries;
   StringRef installName;
   StringRef uuid;
+  StringRef path;
 };
+
+// Order of the BinaryInfo.
+inline bool operator<(const BinaryInfo &lhs, const BinaryInfo &rhs) {
+  // Invalid ones goes to the end. Otherwise, first sort by file type.
+  if (lhs.fileType != rhs.fileType) {
+    if (lhs.fileType == FileType::Invalid)
+      return false;
+    if (rhs.fileType == FileType::Invalid)
+      return true;
+
+    return lhs.fileType < rhs.fileType;
+  }
+
+  // Two level names space goes first.
+  if (lhs.isTwoLevelNamespace != rhs.isTwoLevelNamespace)
+    return lhs.isTwoLevelNamespace;
+
+  // Empty paths goes in the end.
+  bool lhsPathEmpty = lhs.installName.empty();
+  bool rhsPathEmpty = rhs.installName.empty();
+  if (lhsPathEmpty != rhsPathEmpty)
+    return rhsPathEmpty;
+
+  // RelativePath goes afterwards.
+  bool lhsRelativePath = lhs.installName.startswith("@");
+  bool rhsRelativePath = rhs.installName.startswith("@");
+  if (lhsRelativePath != rhsRelativePath)
+    return rhsRelativePath;
+
+  // Public path goes first.
+  bool lhsPublic = isPublicDylib(lhs.installName);
+  bool rhsPublic = isPublicDylib(rhs.installName);
+  if (lhsPublic != rhsPublic)
+    return lhsPublic;
+
+  // Check public location in SDK.
+  bool lhsPublicLocation = isWithinPublicLocation(lhs.installName);
+  bool rhsPublicLocation = isWithinPublicLocation(rhs.installName);
+  if (lhsPublicLocation != rhsPublicLocation)
+    return lhsPublicLocation;
+
+  // Last sort by installName.
+  return lhs.installName < rhs.installName;
+}
+
+// Compare only the bits that differentiate two binaries.
+inline bool operator==(const BinaryInfo &lhs, const BinaryInfo &rhs) {
+  return std::tie(lhs.fileType, lhs.installName, lhs.isTwoLevelNamespace) ==
+         std::tie(rhs.fileType, rhs.installName, rhs.isTwoLevelNamespace);
+}
+
+inline bool operator!=(const BinaryInfo &lhs, const BinaryInfo &rhs) {
+  return !(lhs == rhs);
+}
 
 class API {
 public:
-  API(const llvm::Triple &triple) : target(triple) {}
-  const llvm::Triple &getTarget() const { return target; }
+  API(const llvm::Triple &triple) : triple(triple), target(triple) {}
+  const llvm::Triple &getTriple() const { return triple; }
+  const Target &getTarget() const { return target; }
+
+  StringRef getProjectName() const { return projectName; }
+  void setProjectName(StringRef project) { projectName = copyString(project); }
 
   static bool updateAPIAccess(APIRecord *record, APIAccess access);
   static bool updateAPILinkage(APIRecord *record, APILinkage linkage);
 
-  EnumConstantRecord *addEnumConstant(StringRef name, APILoc loc,
+  EnumRecord *addEnum(StringRef name, StringRef usr, APILoc loc,
+                      const AvailabilityInfo &availability, APIAccess access,
+                      const Decl *decl);
+  EnumConstantRecord *addEnumConstant(EnumRecord *record, StringRef name,
+                                      APILoc loc,
                                       const AvailabilityInfo &availability,
                                       APIAccess access, const Decl *decl);
+  APIRecord *addGlobalFromBinary(StringRef name, SymbolFlags flags, APILoc loc,
+                                 GVKind kind = GVKind::Unknown,
+                                 APILinkage linkage = APILinkage::Unknown);
   GlobalRecord *
   addGlobal(StringRef name, APILoc loc, const AvailabilityInfo &availability,
             APIAccess access, const Decl *decl, GVKind kind = GVKind::Unknown,
             APILinkage linkage = APILinkage::Unknown,
             bool isWeakDefined = false, bool isThreadLocal = false);
-  GlobalRecord *addGlobal(StringRef name, APIFlags flags, APILoc loc,
+  GlobalRecord *addGlobal(StringRef name, SymbolFlags flags, APILoc loc,
                           const AvailabilityInfo &availability,
                           APIAccess access, const Decl *decl,
                           GVKind kind = GVKind::Unknown,
@@ -303,15 +461,17 @@ public:
   ObjCInterfaceRecord *addObjCInterface(StringRef name, APILoc loc,
                                         const AvailabilityInfo &availability,
                                         APIAccess access, APILinkage linkage,
-                                        StringRef superClassName,
-                                        const Decl *decl);
-  ObjCCategoryRecord *addObjCCategory(StringRef interfaceName, StringRef name,
+                                        StringRef superClass, const Decl *decl,
+                                        ObjCIFSymbolKind symType,
+                                        bool overrideLinkage = true);
+  ObjCCategoryRecord *addObjCCategory(StringRef interface, StringRef name,
                                       APILoc loc,
                                       const AvailabilityInfo &availability,
                                       APIAccess access, const Decl *decl);
   ObjCProtocolRecord *addObjCProtocol(StringRef name, APILoc loc,
                                       const AvailabilityInfo &availability,
                                       APIAccess access, const Decl *decl);
+  void addObjCProtocol(ObjCContainerRecord *record, StringRef protocol);
   ObjCMethodRecord *addObjCMethod(ObjCContainerRecord *record, StringRef name,
                                   APILoc loc,
                                   const AvailabilityInfo &availability,
@@ -330,9 +490,9 @@ public:
       ObjCInstanceVariableRecord::AccessControl accessControl,
       APILinkage linkage, const Decl *decl);
 
-  APIRecord *addTypeDef(StringRef name, APILoc loc,
-                        const AvailabilityInfo &availability, APIAccess access,
-                        const Decl *decl);
+  TypedefRecord *addTypeDef(StringRef name, APILoc loc,
+                            const AvailabilityInfo &availability,
+                            APIAccess access, const Decl *decl);
 
   void addPotentiallyDefinedSelector(StringRef name) {
     potentiallyDefinedSelectors.insert(name);
@@ -349,50 +509,76 @@ public:
   void visit(APIMutator &visitor);
   void visit(APIVisitor &visitor) const;
 
-  const GlobalRecord *findGlobalVariable(StringRef) const;
-  const GlobalRecord *findFunction(StringRef) const;
-  const APIRecord *findTypeDef(StringRef) const;
-  const EnumConstantRecord *findEnumConstant(StringRef name) const;
-  const ObjCInterfaceRecord *findObjCInterface(StringRef) const;
+  const TypedefRecord *findTypeDef(StringRef) const;
+  const EnumRecord *findEnum(StringRef name) const;
   const ObjCProtocolRecord *findObjCProtocol(StringRef) const;
-  const ObjCCategoryRecord *findObjCCategory(StringRef, StringRef) const;
+  // Container types can have ivars/properties added to it.
+  ObjCInterfaceRecord *findObjCInterface(StringRef) const;
+  ObjCCategoryRecord *findObjCCategory(StringRef, StringRef) const;
+  ObjCContainerRecord *findContainer(StringRef ivar) const;
+  ObjCInstanceVariableRecord *findIVar(StringRef, bool isSymbolName) const;
+  GlobalRecord *findGlobalVariable(StringRef) const;
+  GlobalRecord *findFunction(StringRef) const;
+  // Find Global Record without concern about GVKind.
+  GlobalRecord *findGlobal(StringRef) const;
 
-  bool hasBinaryInfo() const { return binaryInfo.hasValue(); }
+  bool hasBinaryInfo() const { return binaryInfo; }
   BinaryInfo &getBinaryInfo();
   const BinaryInfo &getBinaryInfo() const {
     assert(hasBinaryInfo() && "must have binary info");
     return *binaryInfo;
   }
 
+  std::optional<StringRef> getInstallName() const {
+    if (!hasBinaryInfo())
+      return std::nullopt;
+    return getBinaryInfo().installName;
+  }
+
+  bool operator<(const API &other) const;
+  // Expensive equality operator.
+  bool operator==(const API &other) const;
+  bool operator!=(const API &other) const { return !(*this == other); }
+
   StringRef copyString(StringRef string);
+  static StringRef copyStringInto(StringRef, llvm::BumpPtrAllocator &);
+
+  bool isEmpty() const {
+    return !hasBinaryInfo() && globals.empty() && enums.empty() &&
+           interfaces.empty() && categories.empty() && protocols.empty() &&
+           typeDefs.empty() && potentiallyDefinedSelectors.empty();
+  }
 
 private:
-  using APIRecordMap = llvm::MapVector<StringRef, APIRecord *>;
   using GlobalRecordMap = llvm::MapVector<StringRef, GlobalRecord *>;
-  using EnumConstantRecordMap =
-      llvm::MapVector<StringRef, EnumConstantRecord *>;
+  using EnumRecordMap = llvm::MapVector<StringRef, EnumRecord *>;
   using ObjCInterfaceRecordMap =
       llvm::MapVector<StringRef, ObjCInterfaceRecord *>;
   using ObjCCategoryRecordMap =
       llvm::MapVector<std::pair<StringRef, StringRef>, ObjCCategoryRecord *>;
   using ObjCProtocolRecordMap =
       llvm::MapVector<StringRef, ObjCProtocolRecord *>;
+  using TypedefMap = llvm::MapVector<StringRef, TypedefRecord *>;
 
   llvm::BumpPtrAllocator allocator;
 
-  const llvm::Triple target;
+  const llvm::Triple triple;
+  // Hold tapi converted triple to avoid unecessary casts.
+  const Target target;
 
   GlobalRecordMap globals;
-  EnumConstantRecordMap enumConstants;
+  EnumRecordMap enums;
   ObjCInterfaceRecordMap interfaces;
   ObjCCategoryRecordMap categories;
   ObjCProtocolRecordMap protocols;
-  APIRecordMap typeDefs;
+  TypedefMap typeDefs;
   llvm::StringSet<> potentiallyDefinedSelectors;
 
-  llvm::Optional<BinaryInfo> binaryInfo;
+  StringRef projectName;
+  BinaryInfo *binaryInfo = nullptr;
 
   friend class APIVerifier;
+  friend class SortedAPI;
 };
 
 TAPI_NAMESPACE_INTERNAL_END

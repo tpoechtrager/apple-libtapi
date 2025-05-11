@@ -14,19 +14,26 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/IR/Dominators.h"
-#include "llvm/ADT/DepthFirstIterator.h"
-#include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/ADT/StringRef.h"
 #include "llvm/Config/llvm-config.h"
 #include "llvm/IR/CFG.h"
-#include "llvm/IR/Constants.h"
+#include "llvm/IR/Function.h"
+#include "llvm/IR/Instruction.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/InitializePasses.h"
+#include "llvm/PassRegistry.h"
+#include "llvm/Support/Casting.h"
 #include "llvm/Support/CommandLine.h"
-#include "llvm/Support/Debug.h"
-#include "llvm/Support/GenericDomTreeConstruction.h"
 #include "llvm/Support/raw_ostream.h"
-#include <algorithm>
+
+#include <cassert>
+
+namespace llvm {
+class Argument;
+class Constant;
+class Value;
+} // namespace llvm
 using namespace llvm;
 
 bool llvm::VerifyDomInfo = false;
@@ -112,6 +119,16 @@ bool DominatorTree::invalidate(Function &F, const PreservedAnalyses &PA,
            PAC.preservedSet<CFGAnalyses>());
 }
 
+bool DominatorTree::dominates(const BasicBlock *BB, const Use &U) const {
+  Instruction *UserInst = cast<Instruction>(U.getUser());
+  if (auto *PN = dyn_cast<PHINode>(UserInst))
+    // A phi use using a value from a block is dominated by the end of that
+    // block.  Note that the phi's parent block may not be.
+    return dominates(BB, PN->getIncomingBlock(U));
+  else
+    return properlyDominates(BB, UserInst->getParent());
+}
+
 // dominates - Return true if Def dominates a use in User. This performs
 // the special checks necessary if Def and User are in the same basic block.
 // Note that Def doesn't dominate a use in Def itself!
@@ -177,13 +194,6 @@ bool DominatorTree::dominates(const Instruction *Def,
     return dominates(E, UseBB);
   }
 
-  // Callbr results are similarly only usable in the default destination.
-  if (const auto *CBI = dyn_cast<CallBrInst>(Def)) {
-    BasicBlock *NormalDest = CBI->getDefaultDest();
-    BasicBlockEdge E(DefBB, NormalDest);
-    return dominates(E, UseBB);
-  }
-
   return dominates(DefBB, UseBB);
 }
 
@@ -222,9 +232,7 @@ bool DominatorTree::dominates(const BasicBlockEdge &BBE,
   // other predecessors. Since the only way out of X is via NormalDest, X can
   // only properly dominate a node if NormalDest dominates that node too.
   int IsDuplicateEdge = 0;
-  for (const_pred_iterator PI = pred_begin(End), E = pred_end(End);
-       PI != E; ++PI) {
-    const BasicBlock *BB = *PI;
+  for (const BasicBlock *BB : predecessors(End)) {
     if (BB == Start) {
       // If there are multiple edges between Start and End, by definition they
       // can't dominate anything.
@@ -296,13 +304,6 @@ bool DominatorTree::dominates(const Value *DefV, const Use &U) const {
     return dominates(E, U);
   }
 
-  // Callbr results are similarly only usable in the default destination.
-  if (const auto *CBI = dyn_cast<CallBrInst>(Def)) {
-    BasicBlock *NormalDest = CBI->getDefaultDest();
-    BasicBlockEdge E(DefBB, NormalDest);
-    return dominates(E, U);
-  }
-
   // If the def and use are in different blocks, do a simple CFG dominator
   // tree query.
   if (DefBB != UseBB)
@@ -338,6 +339,24 @@ bool DominatorTree::dominates(const BasicBlockEdge &BBE1,
   if (BBE1.getStart() == BBE2.getStart() && BBE1.getEnd() == BBE2.getEnd())
     return true;
   return dominates(BBE1, BBE2.getStart());
+}
+
+Instruction *DominatorTree::findNearestCommonDominator(Instruction *I1,
+                                                       Instruction *I2) const {
+  BasicBlock *BB1 = I1->getParent();
+  BasicBlock *BB2 = I2->getParent();
+  if (BB1 == BB2)
+    return I1->comesBefore(I2) ? I1 : I2;
+  if (!isReachableFromEntry(BB2))
+    return I1;
+  if (!isReachableFromEntry(BB1))
+    return I2;
+  BasicBlock *DomBB = findNearestCommonDominator(BB1, BB2);
+  if (BB1 == DomBB)
+    return I1;
+  if (BB2 == DomBB)
+    return I2;
+  return DomBB->getTerminator();
 }
 
 //===----------------------------------------------------------------------===//

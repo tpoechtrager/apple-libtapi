@@ -42,15 +42,15 @@ class MachineLoopInfo;
 
 class SpillPlacement : public MachineFunctionPass {
   struct Node;
-  const MachineFunction *MF;
-  const EdgeBundles *bundles;
-  const MachineLoopInfo *loops;
-  const MachineBlockFrequencyInfo *MBFI;
+  const MachineFunction *MF = nullptr;
+  const EdgeBundles *bundles = nullptr;
+  const MachineLoopInfo *loops = nullptr;
+  const MachineBlockFrequencyInfo *MBFI = nullptr;
   Node *nodes = nullptr;
 
   // Nodes that are active in the current computation. Owned by the prepare()
   // caller.
-  BitVector *ActiveNodes;
+  BitVector *ActiveNodes = nullptr;
 
   // Nodes with active links. Populated by scanActiveBundles.
   SmallVector<unsigned, 8> Linked;
@@ -95,6 +95,9 @@ public:
     /// the block has a non-PHI def.  When this is false, a live-in value on
     /// the stack can be live-out on the stack without inserting a spill.
     bool ChangesValue;
+
+    void print(raw_ostream &OS) const;
+    void dump() const;
   };
 
   /// prepare - Reset state and prepare for a new spill placement computation.

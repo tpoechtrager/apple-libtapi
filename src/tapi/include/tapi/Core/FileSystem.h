@@ -1,9 +1,8 @@
 //===- tapi/Core/FileSystem.h - File System ---------------------*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 ///
@@ -40,18 +39,48 @@ std::error_code make_relative(StringRef from, StringRef to,
 // file system.
 class MaskingOverlayFileSystem : public llvm::vfs::OverlayFileSystem {
 public:
-  MaskingOverlayFileSystem(IntrusiveRefCntPtr<FileSystem> base,
-                           StringRef sysroot);
+  MaskingOverlayFileSystem(IntrusiveRefCntPtr<FileSystem> base);
 
   llvm::ErrorOr<llvm::vfs::Status> status(const Twine &path) override;
+  llvm::ErrorOr<std::unique_ptr<llvm::vfs::File>>
+  openFileForRead(const Twine &path) override;
+  llvm::vfs::directory_iterator dir_begin(const Twine &dir,
+                                          std::error_code &ec) override;
+  std::error_code setCurrentWorkingDirectory(const Twine &path) override;
+  std::error_code isLocal(const Twine &path, bool &result) override;
+
+protected:
+  virtual bool pathMasked(const Twine &path) const = 0;
+};
+
+
+// Path Masking Overlay File System.
+// Mask specific path from tapi and clang.
+class PathMaskingOverlayFileSystem : public MaskingOverlayFileSystem {
+public:
+  PathMaskingOverlayFileSystem(IntrusiveRefCntPtr<FileSystem> base);
 
   void addExtraMaskingDirectory(StringRef path) {
     extraMaskingPath.emplace_back(path.str());
   }
 
 private:
-  std::string sysroot;
+  bool pathMasked(const Twine &path) const override;
+
   std::vector<std::string> extraMaskingPath;
+};
+
+// PublicSDK Overlay File system.
+// Masks the path that are not in the public SDK.
+class PublicSDKOverlayFileSystem : public MaskingOverlayFileSystem {
+public:
+  PublicSDKOverlayFileSystem(IntrusiveRefCntPtr<FileSystem> base,
+                             StringRef sysroot);
+
+private:
+  bool pathMasked(const Twine &path) const override;
+
+  std::string sysroot;
 };
 
 TAPI_NAMESPACE_INTERNAL_END

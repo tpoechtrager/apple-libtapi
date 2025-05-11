@@ -1,17 +1,20 @@
 set(LLVM_LINK_COMPONENTS
   Support
+  TargetParser
   )
 
 add_llvm_unittest(SupportTests
+  AddressRangeTest.cpp
   AlignmentTest.cpp
   AlignOfTest.cpp
   AllocatorTest.cpp
-  AnnotationsTest.cpp
   ARMAttributeParser.cpp
   ArrayRecyclerTest.cpp
   Base64Test.cpp
   BinaryStreamTest.cpp
+  BLAKE3Test.cpp
   BlockFrequencyTest.cpp
+  BalancedPartitioningTest.cpp
   BranchProbabilityTest.cpp
   CachePruningTest.cpp
   CrashRecoveryTest.cpp
@@ -20,11 +23,14 @@ add_llvm_unittest(SupportTests
   Chrono.cpp
   CommandLineTest.cpp
   CompressionTest.cpp
+  ConvertEBCDICTest.cpp
   ConvertUTFTest.cpp
   CRCTest.cpp
+  CSKYAttributeParserTest.cpp
   DataExtractorTest.cpp
-  DebugTest.cpp
   DebugCounterTest.cpp
+  DebugTest.cpp
+  DivisionByConstantTest.cpp
   DJBTest.cpp
   EndianStreamTest.cpp
   EndianTest.cpp
@@ -35,18 +41,15 @@ add_llvm_unittest(SupportTests
   ExtensibleRTTITest.cpp
   FileCollectorTest.cpp
   FileOutputBufferTest.cpp
-  FileUtilitiesTest.cpp
   FormatVariadicTest.cpp
   FSUniqueIDTest.cpp
   GlobPatternTest.cpp
-  Host.cpp
+  HashBuilderTest.cpp
   IndexedAccessorTest.cpp
   InstructionCostTest.cpp
-  ItaniumManglingCanonicalizerTest.cpp
   JSONTest.cpp
   KnownBitsTest.cpp
   LEB128Test.cpp
-  LinearPolyBaseTest.cpp
   LineIteratorTest.cpp
   LockFileManagerTest.cpp
   MatchersTest.cpp
@@ -60,42 +63,53 @@ add_llvm_unittest(SupportTests
   OptimizedStructLayoutTest.cpp
   ParallelTest.cpp
   Path.cpp
+  PerThreadBumpPtrAllocatorTest.cpp
+  PrefixMapperTest.cpp
   ProcessTest.cpp
   ProgramTest.cpp
   RegexTest.cpp
   ReverseIterationTest.cpp
   ReplaceFileTest.cpp
   RISCVAttributeParserTest.cpp
+  RISCVISAInfoTest.cpp
   ScaledNumberTest.cpp
+  ScopedPrinterTest.cpp
+  SHA256.cpp
   SourceMgrTest.cpp
   SpecialCaseListTest.cpp
   SuffixTreeTest.cpp
   SwapByteOrderTest.cpp
-  SymbolRemappingReaderTest.cpp
   TarWriterTest.cpp
-  TargetParserTest.cpp
-  TaskQueueTest.cpp
-  ThreadLocalTest.cpp
   ThreadPool.cpp
   Threading.cpp
   TimerTest.cpp
+  TimeProfilerTest.cpp
   ToolOutputFileTest.cpp
   TypeNameTest.cpp
+  TypeSizeTest.cpp
   TypeTraitsTest.cpp
   TrailingObjectsTest.cpp
-  TrigramIndexTest.cpp
   UnicodeTest.cpp
   VersionTupleTest.cpp
   VirtualFileSystemTest.cpp
+  VirtualOutputBackendTest.cpp
+  VirtualOutputBackendsTest.cpp
+  VirtualOutputConfigTest.cpp
+  VirtualOutputFileTest.cpp
   WithColorTest.cpp
   YAMLIOTest.cpp
   YAMLParserTest.cpp
+  buffer_ostream_test.cpp
   formatted_raw_ostream_test.cpp
   raw_fd_stream_test.cpp
   raw_ostream_test.cpp
+  raw_ostream_proxy_test.cpp
   raw_pwrite_stream_test.cpp
   raw_sha1_ostream_test.cpp
   xxhashTest.cpp
+
+  DEPENDS
+  intrinsics_gen
   )
 
 target_link_libraries(SupportTests PRIVATE LLVMTestingSupport)
@@ -126,3 +140,5 @@ if(NOT LLVM_INTEGRATED_CRT_ALLOC)
   # The test doesn't pass when using a custom allocator, PR47881.
   add_subdirectory(DynamicLibrary)
 endif()
+
+add_subdirectory(CommandLineInit)

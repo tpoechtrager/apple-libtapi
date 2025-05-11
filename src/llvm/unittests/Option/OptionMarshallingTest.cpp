@@ -6,10 +6,11 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "llvm/ADT/StringRef.h"
 #include "gtest/gtest.h"
 
 struct OptionWithMarshallingInfo {
-  const char *Name;
+  llvm::StringLiteral PrefixedName;
   const char *KeyPath;
   const char *ImpliedCheck;
   const char *ImpliedValue;
@@ -17,39 +18,39 @@ struct OptionWithMarshallingInfo {
 
 static const OptionWithMarshallingInfo MarshallingTable[] = {
 #define OPTION_WITH_MARSHALLING(                                               \
-    PREFIX_TYPE, NAME, ID, KIND, GROUP, ALIAS, ALIASARGS, FLAGS, PARAM,        \
-    HELPTEXT, METAVAR, VALUES, SPELLING, SHOULD_PARSE, ALWAYS_EMIT, KEYPATH,   \
+    PREFIX_TYPE, PREFIXED_NAME, ID, KIND, GROUP, ALIAS, ALIASARGS, FLAGS,      \
+    PARAM, HELPTEXT, METAVAR, VALUES, SHOULD_PARSE, ALWAYS_EMIT, KEYPATH,      \
     DEFAULT_VALUE, IMPLIED_CHECK, IMPLIED_VALUE, NORMALIZER, DENORMALIZER,     \
     MERGER, EXTRACTOR, TABLE_INDEX)                                            \
-  {NAME, #KEYPATH, #IMPLIED_CHECK, #IMPLIED_VALUE},
+  {PREFIXED_NAME, #KEYPATH, #IMPLIED_CHECK, #IMPLIED_VALUE},
 #include "Opts.inc"
 #undef OPTION_WITH_MARSHALLING
 };
 
 TEST(OptionMarshalling, EmittedOrderSameAsDefinitionOrder) {
-  ASSERT_STREQ(MarshallingTable[0].Name, "marshalled-flag-d");
-  ASSERT_STREQ(MarshallingTable[1].Name, "marshalled-flag-c");
-  ASSERT_STREQ(MarshallingTable[2].Name, "marshalled-flag-b");
-  ASSERT_STREQ(MarshallingTable[3].Name, "marshalled-flag-a");
+  ASSERT_EQ(MarshallingTable[0].PrefixedName, "-marshalled-flag-d");
+  ASSERT_EQ(MarshallingTable[1].PrefixedName, "-marshalled-flag-c");
+  ASSERT_EQ(MarshallingTable[2].PrefixedName, "-marshalled-flag-b");
+  ASSERT_EQ(MarshallingTable[3].PrefixedName, "-marshalled-flag-a");
 }
 
 TEST(OptionMarshalling, EmittedSpecifiedKeyPath) {
-  ASSERT_STREQ(MarshallingTable[0].KeyPath, "MarshalledFlagD");
-  ASSERT_STREQ(MarshallingTable[1].KeyPath, "MarshalledFlagC");
-  ASSERT_STREQ(MarshallingTable[2].KeyPath, "MarshalledFlagB");
-  ASSERT_STREQ(MarshallingTable[3].KeyPath, "MarshalledFlagA");
+  ASSERT_STREQ(MarshallingTable[0].KeyPath, "X->MarshalledFlagD");
+  ASSERT_STREQ(MarshallingTable[1].KeyPath, "X->MarshalledFlagC");
+  ASSERT_STREQ(MarshallingTable[2].KeyPath, "X->MarshalledFlagB");
+  ASSERT_STREQ(MarshallingTable[3].KeyPath, "X->MarshalledFlagA");
 }
 
 TEST(OptionMarshalling, ImpliedCheckContainsDisjunctionOfKeypaths) {
   ASSERT_STREQ(MarshallingTable[0].ImpliedCheck, "false");
 
-  ASSERT_STREQ(MarshallingTable[1].ImpliedCheck, "false || MarshalledFlagD");
+  ASSERT_STREQ(MarshallingTable[1].ImpliedCheck, "false || X->MarshalledFlagD");
   ASSERT_STREQ(MarshallingTable[1].ImpliedValue, "true");
 
-  ASSERT_STREQ(MarshallingTable[2].ImpliedCheck, "false || MarshalledFlagD");
+  ASSERT_STREQ(MarshallingTable[2].ImpliedCheck, "false || X->MarshalledFlagD");
   ASSERT_STREQ(MarshallingTable[2].ImpliedValue, "true");
 
   ASSERT_STREQ(MarshallingTable[3].ImpliedCheck,
-               "false || MarshalledFlagC || MarshalledFlagB");
+               "false || X->MarshalledFlagC || X->MarshalledFlagB");
   ASSERT_STREQ(MarshallingTable[3].ImpliedValue, "true");
 }

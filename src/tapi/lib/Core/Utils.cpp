@@ -1,9 +1,8 @@
 //===- lib/Core/Utils.cpp - TAPI Utility Methods ----------------*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 ///
@@ -13,47 +12,65 @@
 //===----------------------------------------------------------------------===//
 
 #include "tapi/Core/Utils.h"
+#include "tapi/Core/API.h"
+#include "tapi/Core/API2SymbolConverter.h"
 #include "tapi/Core/FileManager.h"
 #include "tapi/Core/Path.h"
 #include "tapi/Defines.h"
+#include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/StringSwitch.h"
-#include "llvm/ADT/Triple.h"
-#include "llvm/TextAPI/MachO/Platform.h"
-#include "llvm/TextAPI/MachO/Target.h"
 #include "llvm/Support/Path.h"
 
 using namespace llvm;
-using namespace llvm::MachO;
 
 TAPI_NAMESPACE_INTERNAL_BEGIN
 
-bool isPublicDylib(StringRef path) {
-  // Remove the iOSSupport/DriverKit prefix to identify public locations inside
+static StringRef consumeSDKPrefixes(StringRef path) {
+  // Remove SPLAT prefix first (can contain iOSSupport)
+  path.consume_front(CRYPTEXES_PREFIX_PATH);
+
+  // Remove the iOSSupport/DriverKit prefix to identify SDK locations inside
   // the iOSSupport/DriverKit directory.
-  path.consume_front("/System/iOSSupport");
-  path.consume_front("/System/DriverKit");
+  path.consume_front(MACCATALYST_PREFIX_PATH);
+  path.consume_front(DRIVERKIT_PREFIX_PATH);
+
   // Also /Library/Apple prefix for ROSP.
   path.consume_front("/Library/Apple");
 
+  return path;
+}
+
+bool isSDKDylib(StringRef installName) {
+  return StringSwitch<bool>(consumeSDKPrefixes(installName))
+      .StartsWith("/usr/lib/", true)
+      .StartsWith("/usr/local/", true)
+      .StartsWith("/System/Library/Frameworks/", true)
+      .StartsWith("/System/Library/PrivateFrameworks/", true)
+      .Default(false);
+}
+
+bool isPublicDylib(StringRef installName) {
+  installName = consumeSDKPrefixes(installName);
+
   // Everything in /usr/lib/swift (including sub-directories) is now considered
   // public.
-  if (path.consume_front("/usr/lib/swift/"))
+  if (installName.consume_front("/usr/lib/swift/"))
     return true;
 
   // Only libraries directly in /usr/lib are public. All other libraries in
   // sub-directories (such as /usr/lib/system) are considered private.
-  if (path.consume_front("/usr/lib/")) {
-    if (path.contains('/'))
+  if (installName.consume_front("/usr/lib/")) {
+    if (installName.contains('/'))
       return false;
     return true;
   }
 
   // /System/Library/Frameworks/ is a public location
-  if (path.consume_front("/System/Library/Frameworks/")) {
+  if (installName.consume_front("/System/Library/Frameworks/")) {
     StringRef name, rest;
-    std::tie(name, rest) = path.split('.');
+    std::tie(name, rest) = installName.split('.');
 
     // but only top level framework
     // /System/Library/Frameworks/Foo.framework/Foo ==> true
@@ -73,15 +90,23 @@ bool isPublicDylib(StringRef path) {
 }
 
 bool isWithinPublicLocation(StringRef path) {
-  path.consume_front("/System/iOSSupport");
-  path.consume_front("/System/DriverKit");
-  path.consume_front("/Library/Apple");
+  path = consumeSDKPrefixes(path);
 
-  if (path.startswith("/usr/include/") || path.startswith("/usr/lib") ||
-      path.startswith("/System/Library/Frameworks"))
-    return true;
+  if (path.startswith("/usr/local/") || 
+      path.startswith("/System/Library/PrivateFrameworks/"))
+    return false;
 
-  return false;
+  if (path.consume_front("/System/Library/Frameworks/")) {
+    // Exclude everything from PrivateHeaders.
+    while (!path.empty()) {
+      auto split = path.split('/');
+      if (split.first == "PrivateHeaders")
+        return false;
+      path = split.second;
+    }
+  }
+
+  return true;
 }
 
 bool isHeaderFile(StringRef path) {
@@ -150,53 +175,79 @@ std::string findLibrary(StringRef installName, FileManager &fm,
   return std::string();
 }
 
-ArchitectureSet mapToArchitectureSet(ArrayRef<Triple> Targets) {
-  ArchitectureSet Result;
-  for (const auto &target : Targets)
-    Result |= getArchitectureFromName(target.getArchName());
-  return Result;
-}
+namespace {
 
-ArchitectureSet mapToArchitectureSet(ArrayRef<Target> Targets) {
-  ArchitectureSet Result;
-  for (const auto &Target : Targets)
-    Result.set(Target.Arch);
-  return Result;
-}
-
-std::string getOSAndEnvironmentName(PlatformKind Platform,
-                                    std::string Version) {
-  switch (Platform) {
-  case PlatformKind::macOS:
-    return "macos" + Version;
-  case PlatformKind::iOS:
-    return "ios" + Version;
-  case PlatformKind::tvOS:
-    return "tvos" + Version;
-  case PlatformKind::watchOS:
-    return "watchos" + Version;
-  case PlatformKind::macCatalyst:
-    return "ios" + Version + "-macabi";
-  case PlatformKind::iOSSimulator:
-    return "ios" + Version + "-simulator";
-  case PlatformKind::tvOSSimulator:
-    return "tvos" + Version + "-simulator";
-  case PlatformKind::watchOSSimulator:
-    return "watchos" + Version + "-simulator";
+std::unique_ptr<InterfaceFile> createInterfaceFile(const APIs &apis,
+                                                   StringRef installName) {
+  // Pickup symbols first.
+  auto symbols = std::make_unique<SymbolSet>();
+  for (auto &api : apis) {
+    auto libName = api->getInstallName();
+    if (!libName || *libName != installName)
+      continue;
+    bool includeUndefs =
+        api->hasBinaryInfo() && !api->getBinaryInfo().isTwoLevelNamespace;
+    const auto target = Target(api->getTarget());
+    API2SymbolConverter converter(symbols.get(), target, includeUndefs);
+    api->visit(converter);
   }
-  llvm_unreachable("Unknown llvm::MachO::PlatformType enum");
+
+  auto file = std::make_unique<InterfaceFile>(std::move(symbols));
+  // Assign other attributes.
+  for (auto &api : apis) {
+    auto libName = api->getInstallName();
+    if (!libName || *libName != installName)
+      continue;
+    const auto target = Target(api->getTarget());
+    file->addTarget(target);
+    if (!api->hasBinaryInfo())
+      continue;
+    auto &binaryInfo = api->getBinaryInfo();
+    file->setFileType(binaryInfo.fileType);
+    if (binaryInfo.isAppExtensionSafe)
+      file->setApplicationExtensionSafe();
+    if (binaryInfo.isTwoLevelNamespace)
+      file->setTwoLevelNamespace();
+    if (binaryInfo.isOSLibNotForSharedCache)
+      file->setOSLibNotForSharedCache();
+    file->setCurrentVersion(binaryInfo.currentVersion);
+    file->setCompatibilityVersion(binaryInfo.compatibilityVersion);
+    file->addParentUmbrella(target, binaryInfo.parentUmbrella);
+    file->setSwiftABIVersion(binaryInfo.swiftABIVersion);
+    file->setPath(binaryInfo.path);
+    if (!binaryInfo.installName.empty())
+      file->setInstallName(binaryInfo.installName);
+    for (const auto &client : binaryInfo.allowableClients)
+      file->addAllowableClient(client, target);
+    for (const auto &lib : binaryInfo.reexportedLibraries)
+      file->addReexportedLibrary(lib, target);
+  }
+
+  return file;
 }
 
-PlatformKind getPlatformFromName(StringRef Name) {
-  return StringSwitch<PlatformKind>(Name)
-      .Case("macos", PlatformKind::macOS)
-      .Case("ios", PlatformKind::iOS)
-      .Case("tvos", PlatformKind::tvOS)
-      .Case("watchos", PlatformKind::watchOS)
-      .Case("ios-macabi", PlatformKind::macCatalyst)
-      .Case("ios-simulator", PlatformKind::iOSSimulator)
-      .Case("tvos-simulator", PlatformKind::tvOSSimulator)
-      .Case("watchos-simulator", PlatformKind::watchOSSimulator);
+} // namespace
+
+std::unique_ptr<InterfaceFile> convertToInterfaceFile(const APIs &apis) {
+
+  auto file = std::make_unique<InterfaceFile>();
+  if (apis.empty())
+    return file;
+
+  llvm::SetVector<StringRef> installNames;
+  for (auto &api : apis) {
+    auto libOr = api->getInstallName();
+    if (!libOr)
+      continue;
+    installNames.insert(*libOr);
+  }
+
+  file = createInterfaceFile(apis, *installNames.begin());
+  for (auto it = std::next(installNames.begin()); it != installNames.end();
+       ++it)
+    file->addDocument(createInterfaceFile(apis, *it));
+
+  return file;
 }
 
 TAPI_NAMESPACE_INTERNAL_END

@@ -11,6 +11,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "AMDKernelCodeTUtils.h"
+#include "AMDKernelCodeT.h"
 #include "SIDefines.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/StringMap.h"
@@ -18,9 +19,6 @@
 #include "llvm/MC/MCParser/MCAsmLexer.h"
 #include "llvm/MC/MCParser/MCAsmParser.h"
 #include "llvm/Support/raw_ostream.h"
-#include <cassert>
-#include <cstdint>
-#include <utility>
 
 using namespace llvm;
 
@@ -31,7 +29,7 @@ static ArrayRef<StringRef> get_amd_kernel_code_t_FldNames() {
 #include "AMDKernelCodeTInfo.h"
 #undef RECORD
   };
-  return makeArrayRef(Table);
+  return ArrayRef(Table);
 }
 
 static ArrayRef<StringRef> get_amd_kernel_code_t_FldAltNames() {
@@ -41,7 +39,7 @@ static ArrayRef<StringRef> get_amd_kernel_code_t_FldAltNames() {
 #include "AMDKernelCodeTInfo.h"
 #undef RECORD
   };
-  return makeArrayRef(Table);
+  return ArrayRef(Table);
 }
 
 static StringMap<int> createIndexMap(const ArrayRef<StringRef> &names,
@@ -49,8 +47,8 @@ static StringMap<int> createIndexMap(const ArrayRef<StringRef> &names,
   StringMap<int> map;
   assert(names.size() == altNames.size());
   for (unsigned i = 0; i < names.size(); ++i) {
-    map.insert(std::make_pair(names[i], i));
-    map.insert(std::make_pair(altNames[i], i));
+    map.insert(std::pair(names[i], i));
+    map.insert(std::pair(altNames[i], i));
   }
   return map;
 }
@@ -92,7 +90,7 @@ static ArrayRef<PrintFx> getPrinterTable() {
 #include "AMDKernelCodeTInfo.h"
 #undef RECORD
   };
-  return makeArrayRef(Table);
+  return ArrayRef(Table);
 }
 
 void llvm::printAmdKernelCodeField(const amd_kernel_code_t &C,
@@ -162,7 +160,7 @@ static ArrayRef<ParseFx> getParserTable() {
 #include "AMDKernelCodeTInfo.h"
 #undef RECORD
   };
-  return makeArrayRef(Table);
+  return ArrayRef(Table);
 }
 
 bool llvm::parseAmdKernelCodeField(StringRef ID,

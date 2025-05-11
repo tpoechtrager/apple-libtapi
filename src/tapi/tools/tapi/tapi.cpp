@@ -1,9 +1,8 @@
 //===- tools/tapi/tapi.cpp - TAPI Tool --------------------------*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 ///
@@ -14,7 +13,6 @@
 //===----------------------------------------------------------------------===//
 
 #include "tapi/Driver/Driver.h"
-#include "tapi/Driver/Snapshot.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/Support/ManagedStatic.h"
 #include "llvm/Support/PrettyStackTrace.h"
@@ -23,19 +21,14 @@
 
 using namespace tapi::internal;
 
-static void HandleSnapshotEmission(void * /*unused*/) {
-  globalSnapshot->writeSnapshot();
-}
-
 int main(int argc, const char *argv[]) {
   // Standard set up, so program fails gracefully.
   llvm::sys::PrintStackTraceOnErrorSignal(argv[0]);
   llvm::PrettyStackTraceProgram stackPrinter(argc, argv);
   llvm::llvm_shutdown_obj shutdown;
-  llvm::sys::AddSignalHandler(HandleSnapshotEmission, nullptr);
 
   if (llvm::sys::Process::FixupStandardFileDescriptors())
     return 1;
 
-  return Driver::run(llvm::makeArrayRef(argv, argc)) ? 0 : 1;
+  return Driver::run(llvm::ArrayRef(argv, argc)) ? 0 : 1;
 }

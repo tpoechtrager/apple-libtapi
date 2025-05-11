@@ -21,10 +21,13 @@
 namespace llvm {
 
 class TargetInstrInfo;
+class ARCSubtarget;
 
 struct ARCRegisterInfo : public ARCGenRegisterInfo {
+  const ARCSubtarget &ST;
+
 public:
-  ARCRegisterInfo();
+  ARCRegisterInfo(const ARCSubtarget &);
 
   /// Code Generation virtual methods...
 
@@ -36,7 +39,9 @@ public:
 
   bool useFPForScavengingIndex(const MachineFunction &MF) const override;
 
-  void eliminateFrameIndex(MachineBasicBlock::iterator II, int SPAdj,
+  bool supportsBackwardScavenger() const override { return true; }
+
+  bool eliminateFrameIndex(MachineBasicBlock::iterator II, int SPAdj,
                            unsigned FIOperandNum,
                            RegScavenger *RS = nullptr) const override;
 

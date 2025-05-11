@@ -185,9 +185,10 @@ private:
   MemoryGroup CodeMem;
   MemoryGroup RWDataMem;
   MemoryGroup RODataMem;
-  MemoryMapper &MMapper;
+  MemoryMapper *MMapper;
+  std::unique_ptr<MemoryMapper> OwnedMMapper;
 };
 
 } // end namespace llvm
 
-#endif // LLVM_EXECUTION_ENGINE_SECTION_MEMORY_MANAGER_H
+#endif // LLVM_EXECUTIONENGINE_SECTIONMEMORYMANAGER_H

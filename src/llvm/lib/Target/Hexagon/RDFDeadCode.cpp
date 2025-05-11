@@ -55,7 +55,8 @@ private:
 // overly conservative (i.e. return "true" for all instructions), but it
 // is not safe to return "false" for an instruction that should not be
 // considered removable.
-bool DeadCodeElimination::isLiveInstr(const MachineInstr *MI) const {
+bool DeadCodeElimination::isLiveInstr(NodeAddr<StmtNode *> S) const {
+  const MachineInstr *MI = S.Addr->getCode();
   if (MI->mayStore() || MI->isBranch() || MI->isCall() || MI->isReturn())
     return true;
   if (MI->hasOrderedMemoryRef() || MI->hasUnmodeledSideEffects() ||
@@ -83,7 +84,7 @@ void DeadCodeElimination::scanInstr(NodeAddr<InstrNode*> IA,
       SetQueue<NodeId> &WorkQ) {
   if (!DFG.IsCode<NodeAttrs::Stmt>(IA))
     return;
-  if (!isLiveInstr(NodeAddr<StmtNode*>(IA).Addr->getCode()))
+  if (!isLiveInstr(IA))
     return;
   for (NodeAddr<RefNode*> RA : IA.Addr->members(DFG)) {
     if (!LiveNodes.count(RA.Id))
@@ -160,7 +161,7 @@ bool DeadCodeElimination::collect() {
         if (!LiveNodes.count(RA.Id))
           DeadNodes.insert(RA.Id);
       if (DFG.IsCode<NodeAttrs::Stmt>(IA))
-        if (isLiveInstr(NodeAddr<StmtNode*>(IA).Addr->getCode()))
+        if (isLiveInstr(IA) || DFG.hasUntrackedRef(IA))
           continue;
       if (IsDead(IA)) {
         DeadInstrs.insert(IA.Id);
@@ -195,8 +196,7 @@ bool DeadCodeElimination::erase(const SetVector<NodeId> &Nodes) {
     // If it's a code node, add all ref nodes from it.
     uint16_t Kind = BA.Addr->getKind();
     if (Kind == NodeAttrs::Stmt || Kind == NodeAttrs::Phi) {
-      for (auto N : NodeAddr<CodeNode*>(BA).Addr->members(DFG))
-        DRNs.push_back(N);
+      append_range(DRNs, NodeAddr<CodeNode*>(BA).Addr->members(DFG));
       DINs.push_back(DFG.addr<InstrNode*>(I));
     } else {
       llvm_unreachable("Unexpected code node");

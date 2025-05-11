@@ -22,21 +22,15 @@
 #include "clang/AST/Type.h"
 #include "llvm/IR/Value.h"
 
-// FIXME: Restructure so we don't have to expose so much stuff.
-#include "ABIInfo.h"
-
 namespace llvm {
-class AttributeList;
-class Function;
 class Type;
 class Value;
 } // namespace llvm
 
 namespace clang {
-class ASTContext;
 class Decl;
 class FunctionDecl;
-class ObjCMethodDecl;
+class TargetOptions;
 class VarDecl;
 
 namespace CodeGen {
@@ -49,11 +43,11 @@ class CGCalleeInfo {
   GlobalDecl CalleeDecl;
 
 public:
-  explicit CGCalleeInfo() : CalleeProtoTy(nullptr), CalleeDecl() {}
+  explicit CGCalleeInfo() : CalleeProtoTy(nullptr) {}
   CGCalleeInfo(const FunctionProtoType *calleeProtoTy, GlobalDecl calleeDecl)
       : CalleeProtoTy(calleeProtoTy), CalleeDecl(calleeDecl) {}
   CGCalleeInfo(const FunctionProtoType *calleeProtoTy)
-      : CalleeProtoTy(calleeProtoTy), CalleeDecl() {}
+      : CalleeProtoTy(calleeProtoTy) {}
   CGCalleeInfo(GlobalDecl calleeDecl)
       : CalleeProtoTy(nullptr), CalleeDecl(calleeDecl) {}
 
@@ -151,7 +145,6 @@ public:
     OrdinaryInfo.PointerAuthInfo = pointerAuthInfo;
     assert(functionPtr && "configuring callee without function pointer");
     assert(functionPtr->getType()->isPointerTy());
-    assert(functionPtr->getType()->getPointerElementType()->isFunctionTy());
   }
 
   static CGCallee forBuiltin(unsigned builtinID,
@@ -425,6 +418,43 @@ public:
   bool isUnused() const { return IsUnused; }
   bool isExternallyDestructed() const { return IsExternallyDestructed; }
 };
+
+/// Helper to add attributes to \p F according to the CodeGenOptions and
+/// LangOptions without requiring a CodeGenModule to be constructed.
+void mergeDefaultFunctionDefinitionAttributes(llvm::Function &F,
+                                              const CodeGenOptions CodeGenOpts,
+                                              const LangOptions &LangOpts,
+                                              const TargetOptions &TargetOpts,
+                                              bool WillInternalize);
+
+enum class FnInfoOpts {
+  None = 0,
+  IsInstanceMethod = 1 << 0,
+  IsChainCall = 1 << 1,
+  IsDelegateCall = 1 << 2,
+};
+
+inline FnInfoOpts operator|(FnInfoOpts A, FnInfoOpts B) {
+  return static_cast<FnInfoOpts>(
+      static_cast<std::underlying_type_t<FnInfoOpts>>(A) |
+      static_cast<std::underlying_type_t<FnInfoOpts>>(B));
+}
+
+inline FnInfoOpts operator&(FnInfoOpts A, FnInfoOpts B) {
+  return static_cast<FnInfoOpts>(
+      static_cast<std::underlying_type_t<FnInfoOpts>>(A) &
+      static_cast<std::underlying_type_t<FnInfoOpts>>(B));
+}
+
+inline FnInfoOpts operator|=(FnInfoOpts A, FnInfoOpts B) {
+  A = A | B;
+  return A;
+}
+
+inline FnInfoOpts operator&=(FnInfoOpts A, FnInfoOpts B) {
+  A = A & B;
+  return A;
+}
 
 } // end namespace CodeGen
 } // end namespace clang

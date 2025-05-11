@@ -2,12 +2,21 @@
 #include "clang/Basic/AttrSubjectMatchRules.h"
 #include "clang/Basic/AttributeCommonInfo.h"
 #include "clang/Basic/IdentifierTable.h"
-#include "llvm/ADT/StringSwitch.h"
+#include "clang/Basic/ParsedAttrInfo.h"
 using namespace clang;
 
-int clang::hasAttribute(AttrSyntax Syntax, const IdentifierInfo *Scope,
-                        const IdentifierInfo *Attr, const TargetInfo &Target,
-                        const LangOptions &LangOpts) {
+static int hasAttributeImpl(AttributeCommonInfo::Syntax Syntax, StringRef Name,
+                            StringRef ScopeName, const TargetInfo &Target,
+                            const LangOptions &LangOpts) {
+
+#include "clang/Basic/AttrHasAttributeImpl.inc"
+
+  return 0;
+}
+
+int clang::hasAttribute(AttributeCommonInfo::Syntax Syntax,
+                        const IdentifierInfo *Scope, const IdentifierInfo *Attr,
+                        const TargetInfo &Target, const LangOptions &LangOpts) {
   StringRef Name = Attr->getName();
   // Normalize the attribute name, __foo__ becomes foo.
   if (Name.size() >= 4 && Name.startswith("__") && Name.endswith("__"))
@@ -20,7 +29,21 @@ int clang::hasAttribute(AttrSyntax Syntax, const IdentifierInfo *Scope,
   else if (ScopeName == "_Clang")
     ScopeName = "clang";
 
-#include "clang/Basic/AttrHasAttributeImpl.inc"
+  // As a special case, look for the omp::sequence and omp::directive
+  // attributes. We support those, but not through the typical attribute
+  // machinery that goes through TableGen. We support this in all OpenMP modes
+  // so long as double square brackets are enabled.
+  if (LangOpts.OpenMP && ScopeName == "omp")
+    return (Name == "directive" || Name == "sequence") ? 1 : 0;
+
+  int res = hasAttributeImpl(Syntax, Name, ScopeName, Target, LangOpts);
+  if (res)
+    return res;
+
+  // Check if any plugin provides this attribute.
+  for (auto &Ptr : getAttributePluginInstances())
+    if (Ptr->hasSpelling(Syntax, Name))
+      return 1;
 
   return 0;
 }
@@ -75,6 +98,10 @@ static StringRef normalizeAttrName(const IdentifierInfo *Name,
 
 bool AttributeCommonInfo::isGNUScope() const {
   return ScopeName && (ScopeName->isStr("gnu") || ScopeName->isStr("__gnu__"));
+}
+
+bool AttributeCommonInfo::isClangScope() const {
+  return ScopeName && (ScopeName->isStr("clang") || ScopeName->isStr("_Clang"));
 }
 
 #include "clang/Sema/AttrParsedAttrKinds.inc"

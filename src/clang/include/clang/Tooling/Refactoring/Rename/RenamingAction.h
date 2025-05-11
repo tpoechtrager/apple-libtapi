@@ -11,19 +11,19 @@
 ///
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_CLANG_TOOLING_REFACTOR_RENAME_RENAMING_ACTION_H
-#define LLVM_CLANG_TOOLING_REFACTOR_RENAME_RENAMING_ACTION_H
+#ifndef LLVM_CLANG_TOOLING_REFACTORING_RENAME_RENAMINGACTION_H
+#define LLVM_CLANG_TOOLING_REFACTORING_RENAME_RENAMINGACTION_H
 
 #include "clang/Tooling/Refactoring.h"
 #include "clang/Tooling/Refactoring/AtomicChange.h"
 #include "clang/Tooling/Refactoring/RefactoringActionRules.h"
 #include "clang/Tooling/Refactoring/RefactoringOptions.h"
 #include "clang/Tooling/Refactoring/Rename/SymbolOccurrences.h"
+#include "clang/Tooling/Syntax/Tokens.h"
 #include "llvm/Support/Error.h"
 
 namespace clang {
 class ASTConsumer;
-class CompilerInstance;
 
 namespace tooling {
 
@@ -117,7 +117,27 @@ private:
   std::map<std::string, tooling::Replacements> &FileToReplaces;
 };
 
+enum class ObjCSymbolSelectorKind {
+  /// The rename location is an Objective-C method call, eg. `[self add: 1]`.
+  MessageSend,
+  
+  /// The rename location is an Objective-C method definition, eg.
+  /// ` - (void)add:(int)theValue`
+  MethodDecl,
+
+  /// It is unknown if the renamed location is a method call or declaration.
+  ///
+  /// The selector kind is being used to improve error recovery, passing unknown
+  /// does not lead to correctness issues.
+  Unknown
+};
+
+llvm::Error findObjCSymbolSelectorPieces(
+    ArrayRef<syntax::Token> Tokens, const SourceManager &SrcMgr,
+    SourceLocation RenameLoc, const SymbolName &OldName,
+    ObjCSymbolSelectorKind Kind, SmallVectorImpl<SourceLocation> &Result);
+
 } // end namespace tooling
 } // end namespace clang
 
-#endif // LLVM_CLANG_TOOLING_REFACTOR_RENAME_RENAMING_ACTION_H
+#endif // LLVM_CLANG_TOOLING_REFACTORING_RENAME_RENAMINGACTION_H

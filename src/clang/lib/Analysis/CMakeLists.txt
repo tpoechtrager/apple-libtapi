@@ -18,35 +18,32 @@ add_clang_library(clangAnalysis
   CodeInjector.cpp
   Dominators.cpp
   ExprMutationAnalyzer.cpp
-  HTMLPathDiagnosticConsumer.cpp
+  IntervalPartition.cpp
   IssueHash.cpp
   LiveVariables.cpp
+  MacroExpansionContext.cpp
   ObjCNoReturn.cpp
   PathDiagnostic.cpp
-  PlistPathDiagnosticConsumer.cpp
-  PlistHTMLPathDiagnosticConsumer.cpp
   PostOrderCFGView.cpp
   ProgramPoint.cpp
   ReachableCode.cpp
   RetainSummaryManager.cpp
-  SarifPathDiagnosticConsumer.cpp
-  TextPathDiagnosticConsumer.cpp
   ThreadSafety.cpp
   ThreadSafetyCommon.cpp
   ThreadSafetyLogical.cpp
   ThreadSafetyTIL.cpp
   UninitializedValues.cpp
+  UnsafeBufferUsage.cpp
 
   LINK_LIBS
   clangAST
   clangASTMatchers
   clangBasic
   clangLex
-  clangRewrite
-  clangToolingCore
 
   DEPENDS
   omp_gen
   )
 
 add_subdirectory(plugins)
+add_subdirectory(FlowSensitive)

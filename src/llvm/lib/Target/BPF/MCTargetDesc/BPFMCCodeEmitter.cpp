@@ -31,14 +31,13 @@ using namespace llvm;
 namespace {
 
 class BPFMCCodeEmitter : public MCCodeEmitter {
-  const MCInstrInfo &MCII;
   const MCRegisterInfo &MRI;
   bool IsLittleEndian;
 
 public:
-  BPFMCCodeEmitter(const MCInstrInfo &mcii, const MCRegisterInfo &mri,
+  BPFMCCodeEmitter(const MCInstrInfo &, const MCRegisterInfo &mri,
                    bool IsLittleEndian)
-      : MCII(mcii), MRI(mri), IsLittleEndian(IsLittleEndian) {}
+      : MRI(mri), IsLittleEndian(IsLittleEndian) { }
   BPFMCCodeEmitter(const BPFMCCodeEmitter &) = delete;
   void operator=(const BPFMCCodeEmitter &) = delete;
   ~BPFMCCodeEmitter() override = default;
@@ -59,29 +58,21 @@ public:
                             SmallVectorImpl<MCFixup> &Fixups,
                             const MCSubtargetInfo &STI) const;
 
-  void encodeInstruction(const MCInst &MI, raw_ostream &OS,
+  void encodeInstruction(const MCInst &MI, SmallVectorImpl<char> &CB,
                          SmallVectorImpl<MCFixup> &Fixups,
                          const MCSubtargetInfo &STI) const override;
-
-private:
-  FeatureBitset computeAvailableFeatures(const FeatureBitset &FB) const;
-  void
-  verifyInstructionPredicates(const MCInst &MI,
-                              const FeatureBitset &AvailableFeatures) const;
 };
 
 } // end anonymous namespace
 
 MCCodeEmitter *llvm::createBPFMCCodeEmitter(const MCInstrInfo &MCII,
-                                            const MCRegisterInfo &MRI,
                                             MCContext &Ctx) {
-  return new BPFMCCodeEmitter(MCII, MRI, true);
+  return new BPFMCCodeEmitter(MCII, *Ctx.getRegisterInfo(), true);
 }
 
 MCCodeEmitter *llvm::createBPFbeMCCodeEmitter(const MCInstrInfo &MCII,
-                                              const MCRegisterInfo &MRI,
                                               MCContext &Ctx) {
-  return new BPFMCCodeEmitter(MCII, MRI, false);
+  return new BPFMCCodeEmitter(MCII, *Ctx.getRegisterInfo(), false);
 }
 
 unsigned BPFMCCodeEmitter::getMachineOpValue(const MCInst &MI,
@@ -116,23 +107,22 @@ static uint8_t SwapBits(uint8_t Val)
   return (Val & 0x0F) << 4 | (Val & 0xF0) >> 4;
 }
 
-void BPFMCCodeEmitter::encodeInstruction(const MCInst &MI, raw_ostream &OS,
+void BPFMCCodeEmitter::encodeInstruction(const MCInst &MI,
+                                         SmallVectorImpl<char> &CB,
                                          SmallVectorImpl<MCFixup> &Fixups,
                                          const MCSubtargetInfo &STI) const {
-  verifyInstructionPredicates(MI,
-                              computeAvailableFeatures(STI.getFeatureBits()));
-
   unsigned Opcode = MI.getOpcode();
+  raw_svector_ostream OS(CB);
   support::endian::Writer OSE(OS,
                               IsLittleEndian ? support::little : support::big);
 
   if (Opcode == BPF::LD_imm64 || Opcode == BPF::LD_pseudo) {
     uint64_t Value = getBinaryCodeForInstr(MI, Fixups, STI);
-    OS << char(Value >> 56);
+    CB.push_back(Value >> 56);
     if (IsLittleEndian)
-      OS << char((Value >> 48) & 0xff);
+      CB.push_back((Value >> 48) & 0xff);
     else
-      OS << char(SwapBits((Value >> 48) & 0xff));
+      CB.push_back(SwapBits((Value >> 48) & 0xff));
     OSE.write<uint16_t>(0);
     OSE.write<uint32_t>(Value & 0xffffFFFF);
 
@@ -145,11 +135,11 @@ void BPFMCCodeEmitter::encodeInstruction(const MCInst &MI, raw_ostream &OS,
   } else {
     // Get instruction encoding and emit it
     uint64_t Value = getBinaryCodeForInstr(MI, Fixups, STI);
-    OS << char(Value >> 56);
+    CB.push_back(Value >> 56);
     if (IsLittleEndian)
-      OS << char((Value >> 48) & 0xff);
+      CB.push_back(char((Value >> 48) & 0xff));
     else
-      OS << char(SwapBits((Value >> 48) & 0xff));
+      CB.push_back(SwapBits((Value >> 48) & 0xff));
     OSE.write<uint16_t>((Value >> 32) & 0xffff);
     OSE.write<uint32_t>(Value & 0xffffFFFF);
   }
@@ -176,5 +166,4 @@ uint64_t BPFMCCodeEmitter::getMemoryOpValue(const MCInst &MI, unsigned Op,
   return Encoding;
 }
 
-#define ENABLE_INSTR_PREDICATE_VERIFIER
 #include "BPFGenMCCodeEmitter.inc"

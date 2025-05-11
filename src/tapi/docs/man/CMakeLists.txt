@@ -4,6 +4,10 @@ set(TAPI_MAN_FILES
   tapi-stubify.1
   tapi-installapi.1
   tapi-reexport.1
+  tapi-analyze.1
+  tapi-tbd.1
+  tapi-tbdv4.1
+  tapi-tbdv5.1
   )
 
 set(TAPI_MAN_EXPERIMENTAL_FILES
@@ -19,7 +23,7 @@ install(
 
 install(
   FILES ${TAPI_MAN_EXPERIMENTAL_FILES}
-  DESTINATION share/man/man1
+  DESTINATION local/share/man/man1
   COMPONENT tapi-docs
   )
 

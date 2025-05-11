@@ -2,21 +2,13 @@
 
 set -e
 
-TAPI_VERSION=1300.6.5
+TAPI_VERSION=1600.0.11.8
 
 pushd "${0%/*}" &>/dev/null
 source tools/tools.sh
 
 if [[ "$(basename "$0")" == *tapi_tools* ]]; then
   BUILD_TAPI_TOOLS=1
-  [[ "$CC" != *clang* ]] && export CC="clang"
-  [[ "$CXX" != *clang++* ]] && export CXX="clang++"
-  command -v lld &>/dev/null || command -v ld.lld &>/dev/null || command -v ld64.lld &>/dev/null || {
-    echo "Missing lld" 1>&2
-    exit 1
-  }
-  CMAKE_EXE_LINKER_FLAGS+=" -fuse-ld=lld"
-  CMAKE_SHARED_LINKER_FLAGS+=" -fuse-ld=lld"
 fi
 
 if [ "$NINJA" = 1 ]; then
@@ -46,12 +38,6 @@ if [ -z "$INSTALLPREFIX" ]; then
   INSTALLPREFIX="/usr/local"
 fi
 
-# TODO: Fix this in a better way.
-INCLUDE_FIX="-I $PWD/../src/llvm/projects/clang/include "
-INCLUDE_FIX+="-I $PWD/projects/clang/include "
-
-printf '%s' "$INSTALLPREFIX" > INSTALLPREFIX
-
 cmake -G "$cmakegen" ../src/llvm \
  -DCMAKE_CXX_FLAGS="$INCLUDE_FIX" \
  -DCMAKE_SHARED_LINKER_FLAGS="$CMAKE_SHARED_LINKER_FLAGS" \
@@ -65,10 +51,10 @@ cmake -G "$cmakegen" ../src/llvm \
  $CMAKE_EXTRA_ARGS
 
 echo ""
-echo "## Building clangBasic ##"
+echo "## Building clangBasic and vt_gen ##"
 echo ""
 
-$MAKE clangBasic -j $JOBS
+$MAKE clangBasic vt_gen -j $JOBS
 
 echo ""
 echo "## Building libtapi ##"
@@ -81,7 +67,8 @@ if [ -n "$BUILD_TAPI_TOOLS" ]; then
   echo "## Building tapi tools ##"
   echo ""
 
-  $MAKE tapi tapi-binary-reader tapi-run tapi-sdkdb -j $JOBS
+  # tapi-run does currently not link
+  $MAKE tapi tapi-binary-reader tapi-sdkdb -j $JOBS
 fi
 
 popd &>/dev/null

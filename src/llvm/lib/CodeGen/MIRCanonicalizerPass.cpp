@@ -27,20 +27,13 @@
 #include "llvm/ADT/PostOrderIterator.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
-#include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
-#include "llvm/CodeGen/Passes.h"
 #include "llvm/InitializePasses.h"
+#include "llvm/Pass.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 
-#include <queue>
-
 using namespace llvm;
-
-namespace llvm {
-extern char &MIRCanonicalizerID;
-} // namespace llvm
 
 #define DEBUG_TYPE "mir-canonicalizer"
 
@@ -85,9 +78,7 @@ static std::vector<MachineBasicBlock *> GetRPOList(MachineFunction &MF) {
     return {};
   ReversePostOrderTraversal<MachineBasicBlock *> RPOT(&*MF.begin());
   std::vector<MachineBasicBlock *> RPOList;
-  for (auto MBB : RPOT) {
-    RPOList.push_back(MBB);
-  }
+  append_range(RPOList, RPOT);
 
   return RPOList;
 }
@@ -112,10 +103,7 @@ rescheduleLexographically(std::vector<MachineInstr *> instructions,
     StringInstrMap.push_back({(i == std::string::npos) ? S : S.substr(i), II});
   }
 
-  llvm::sort(StringInstrMap,
-             [](const StringInstrPair &a, const StringInstrPair &b) -> bool {
-               return (a.first < b.first);
-             });
+  llvm::sort(StringInstrMap, llvm::less_first());
 
   for (auto &II : StringInstrMap) {
 
@@ -141,7 +129,7 @@ static bool rescheduleCanonically(unsigned &PseudoIdempotentInstCount,
   // Calculates the distance of MI from the beginning of its parent BB.
   auto getInstrIdx = [](const MachineInstr &MI) {
     unsigned i = 0;
-    for (auto &CurMI : *MI.getParent()) {
+    for (const auto &CurMI : *MI.getParent()) {
       if (&CurMI == &MI)
         return i;
       i++;
@@ -167,7 +155,7 @@ static bool rescheduleCanonically(unsigned &PseudoIdempotentInstCount,
       if (!MO.isReg())
         continue;
 
-      if (Register::isVirtualRegister(MO.getReg()))
+      if (MO.getReg().isVirtual())
         continue;
 
       if (!MO.isDef())
@@ -184,7 +172,7 @@ static bool rescheduleCanonically(unsigned &PseudoIdempotentInstCount,
       continue;
 
     MachineOperand &MO = II->getOperand(0);
-    if (!MO.isReg() || !Register::isVirtualRegister(MO.getReg()))
+    if (!MO.isReg() || !MO.getReg().isVirtual())
       continue;
     if (!MO.isDef())
       continue;
@@ -197,7 +185,7 @@ static bool rescheduleCanonically(unsigned &PseudoIdempotentInstCount,
       }
 
       if (II->getOperand(i).isReg()) {
-        if (!Register::isVirtualRegister(II->getOperand(i).getReg()))
+        if (!II->getOperand(i).getReg().isVirtual())
           if (!llvm::is_contained(PhysRegDefs, II->getOperand(i).getReg())) {
             continue;
           }
@@ -275,9 +263,9 @@ static bool rescheduleCanonically(unsigned &PseudoIdempotentInstCount,
   // Sort the defs for users of multiple defs lexographically.
   for (const auto &E : MultiUserLookup) {
 
-    auto UseI =
-        std::find_if(MBB->instr_begin(), MBB->instr_end(),
-                     [&](MachineInstr &MI) -> bool { return &MI == E.second; });
+    auto UseI = llvm::find_if(MBB->instrs(), [&](MachineInstr &MI) -> bool {
+      return &MI == E.second;
+    });
 
     if (UseI == MBB->instr_end())
       continue;
@@ -319,9 +307,9 @@ static bool propagateLocalCopies(MachineBasicBlock *MBB) {
     const Register Dst = MI->getOperand(0).getReg();
     const Register Src = MI->getOperand(1).getReg();
 
-    if (!Register::isVirtualRegister(Dst))
+    if (!Dst.isVirtual())
       continue;
-    if (!Register::isVirtualRegister(Src))
+    if (!Src.isVirtual())
       continue;
     // Not folding COPY instructions if regbankselect has not set the RCs.
     // Why are we only considering Register Classes? Because the verifier
@@ -334,8 +322,8 @@ static bool propagateLocalCopies(MachineBasicBlock *MBB) {
       continue;
 
     std::vector<MachineOperand *> Uses;
-    for (auto UI = MRI.use_begin(Dst); UI != MRI.use_end(); ++UI)
-      Uses.push_back(&*UI);
+    for (MachineOperand &MO : MRI.use_operands(Dst))
+      Uses.push_back(&MO);
     for (auto *MO : Uses)
       MO->setReg(Src);
 
@@ -428,7 +416,7 @@ bool MIRCanonicalizer::runOnMachineFunction(MachineFunction &MF) {
   bool Changed = false;
   MachineRegisterInfo &MRI = MF.getRegInfo();
   VRegRenamer Renamer(MRI);
-  for (auto MBB : RPOList)
+  for (auto *MBB : RPOList)
     Changed |= runOnBasicBlock(MBB, BBNum++, Renamer);
 
   return Changed;

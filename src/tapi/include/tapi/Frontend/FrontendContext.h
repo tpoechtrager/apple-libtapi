@@ -1,9 +1,8 @@
 //===- Frontend/FrontendContext.h - TAPI Frontend Context -------*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 ///
@@ -18,6 +17,7 @@
 #include "tapi/Core/FileManager.h"
 #include "tapi/Core/HeaderFile.h"
 #include "tapi/Core/LLVM.h"
+#include "tapi/Core/SymbolVerifier.h"
 #include "tapi/Defines.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/Frontend/CompilerInstance.h"
@@ -28,23 +28,30 @@ TAPI_NAMESPACE_INTERNAL_BEGIN
 
 struct FrontendContext {
   const llvm::Triple target;
-  API api;
+  SymbolVerifier *verifier;
+  std::shared_ptr<API> api;
   std::unique_ptr<clang::CompilerInstance> compiler;
   llvm::IntrusiveRefCntPtr<clang::ASTContext> ast;
   llvm::IntrusiveRefCntPtr<clang::SourceManager> sourceMgr;
   std::shared_ptr<clang::Preprocessor> pp;
   llvm::IntrusiveRefCntPtr<FileManager> fileManager;
+  HeaderType type;
 
   using HeaderMap = std::map<const FileEntry *, HeaderType>;
-  HeaderMap files;
+  HeaderMap knownFiles;
+  std::map<const std::string, HeaderType> knownIncludes;
 
-  FrontendContext(
-      const llvm::Triple &triple, StringRef workingDirectory = StringRef(),
-      IntrusiveRefCntPtr<FileSystemStatCacheFactory> cacheFactory = nullptr,
-      IntrusiveRefCntPtr<llvm::vfs::FileSystem> vfs = nullptr);
+  FrontendContext(const llvm::Triple &triple, SymbolVerifier *verifier,
+                  IntrusiveRefCntPtr<llvm::vfs::FileSystem> vfs = nullptr,
+                  HeaderType type = HeaderType::Project);
 
-  void visit(APIVisitor &visitor) const { api.visit(visitor); }
-  void visit(APIMutator &visitor) { api.visit(visitor); }
+  void visit(APIVisitor &visitor) const { api->visit(visitor); }
+  void visit(APIMutator &visitor) { api->visit(visitor); }
+
+  std::optional<HeaderType> findAndRecordFile(const FileEntry *file);
+
+private:
+  std::set<const FileEntry *> unusedFiles;
 };
 
 TAPI_NAMESPACE_INTERNAL_END

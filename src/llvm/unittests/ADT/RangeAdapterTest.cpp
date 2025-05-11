@@ -7,7 +7,6 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/ADT/iterator_range.h"
 #include "gtest/gtest.h"
 
 #include <iterator>
@@ -129,7 +128,7 @@ template <typename T> class RangeAdapterLValueTest : public ::testing::Test {};
 
 typedef ::testing::Types<std::vector<int>, std::list<int>, int[4]>
     RangeAdapterLValueTestTypes;
-TYPED_TEST_CASE(RangeAdapterLValueTest, RangeAdapterLValueTestTypes);
+TYPED_TEST_SUITE(RangeAdapterLValueTest, RangeAdapterLValueTestTypes, );
 
 TYPED_TEST(RangeAdapterLValueTest, TrivialOperation) {
   TypeParam v = {0, 1, 2, 3};
@@ -145,7 +144,7 @@ typedef ::testing::Types<std::vector<int>, std::list<int>, CustomIteratorVector,
                          ReverseOnlyVector, BidirectionalVector,
                          BidirectionalVectorConsts>
     RangeAdapterRValueTestTypes;
-TYPED_TEST_CASE(RangeAdapterRValueTest, RangeAdapterRValueTestTypes);
+TYPED_TEST_SUITE(RangeAdapterRValueTest, RangeAdapterRValueTestTypes, );
 
 TYPED_TEST(RangeAdapterRValueTest, TrivialOperation) {
   TestRev(reverse(TypeParam({0, 1, 2, 3})));
@@ -157,14 +156,12 @@ TYPED_TEST(RangeAdapterRValueTest, HasRbegin) {
 
 TYPED_TEST(RangeAdapterRValueTest, RangeType) {
   static_assert(
-      std::is_same<
-          decltype(reverse(*static_cast<TypeParam *>(nullptr)).begin()),
-          decltype(static_cast<TypeParam *>(nullptr)->rbegin())>::value,
+      std::is_same_v<decltype(reverse(std::declval<TypeParam>()).begin()),
+                     decltype(std::declval<TypeParam>().rbegin())>,
       "reverse().begin() should have the same type as rbegin()");
   static_assert(
-      std::is_same<
-          decltype(reverse(*static_cast<const TypeParam *>(nullptr)).begin()),
-          decltype(static_cast<const TypeParam *>(nullptr)->rbegin())>::value,
+      std::is_same_v<decltype(reverse(std::declval<const TypeParam>()).begin()),
+                     decltype(std::declval<const TypeParam>().rbegin())>,
       "reverse().begin() should have the same type as rbegin() [const]");
 }
 

@@ -29,6 +29,15 @@ enum class MachineCombinerPattern {
   REASSOC_XY_AMM_BMM,
   REASSOC_XMM_AMM_BMM,
 
+  // These are patterns matched by the PowerPC to reassociate FMA and FSUB to
+  // reduce register pressure.
+  REASSOC_XY_BCA,
+  REASSOC_XY_BAC,
+
+  // These are patterns used to reduce the length of dependence chain.
+  SUBADD_OP1,
+  SUBADD_OP2,
+
   // These are multiply-add patterns matched by the AArch64 machine combiner.
   MULADDW_OP1,
   MULADDW_OP2,
@@ -148,7 +157,29 @@ enum class MachineCombinerPattern {
   FMLSv4f32_OP1,
   FMLSv4f32_OP2,
   FMLSv4i32_indexed_OP1,
-  FMLSv4i32_indexed_OP2
+  FMLSv4i32_indexed_OP2,
+
+  FMULv2i32_indexed_OP1,
+  FMULv2i32_indexed_OP2,
+  FMULv2i64_indexed_OP1,
+  FMULv2i64_indexed_OP2,
+  FMULv4i16_indexed_OP1,
+  FMULv4i16_indexed_OP2,
+  FMULv4i32_indexed_OP1,
+  FMULv4i32_indexed_OP2,
+  FMULv8i16_indexed_OP1,
+  FMULv8i16_indexed_OP2,
+
+  // RISCV FMADD, FMSUB, FNMSUB patterns
+  FMADD_AX,
+  FMADD_XA,
+  FMSUB,
+  FNMSUB,
+
+  // X86 VNNI
+  DPWSSD,
+
+  FNMADD,
 };
 
 } // end namespace llvm

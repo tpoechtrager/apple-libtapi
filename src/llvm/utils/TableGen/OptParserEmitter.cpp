@@ -13,14 +13,13 @@
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/TableGen/Record.h"
 #include "llvm/TableGen/TableGenBackend.h"
-#include <cctype>
 #include <cstring>
 #include <map>
 #include <memory>
 
 using namespace llvm;
 
-static const std::string getOptionName(const Record &R) {
+static std::string getOptionName(const Record &R) {
   // Use the record name unless EnumName is defined.
   if (isa<UnsetInit>(R.getValueInit("EnumName")))
     return std::string(R.getName());
@@ -35,37 +34,22 @@ static raw_ostream &write_cstring(raw_ostream &OS, llvm::StringRef Str) {
   return OS;
 }
 
-static const std::string getOptionSpelling(const Record &R,
-                                           size_t &PrefixLength) {
+static std::string getOptionPrefixedName(const Record &R) {
   std::vector<StringRef> Prefixes = R.getValueAsListOfStrings("Prefixes");
   StringRef Name = R.getValueAsString("Name");
 
-  if (Prefixes.empty()) {
-    PrefixLength = 0;
+  if (Prefixes.empty())
     return Name.str();
-  }
 
-  PrefixLength = Prefixes[0].size();
-  return (Twine(Prefixes[0]) + Twine(Name)).str();
-}
-
-static const std::string getOptionSpelling(const Record &R) {
-  size_t PrefixLength;
-  return getOptionSpelling(R, PrefixLength);
-}
-
-static void emitNameUsingSpelling(raw_ostream &OS, const Record &R) {
-  size_t PrefixLength;
-  OS << "&";
-  write_cstring(OS, StringRef(getOptionSpelling(R, PrefixLength)));
-  OS << "[" << PrefixLength << "]";
+  return (Prefixes[0] + Twine(Name)).str();
 }
 
 class MarshallingInfo {
 public:
   static constexpr const char *MacroName = "OPTION_WITH_MARSHALLING";
   const Record &R;
-  bool ShouldAlwaysEmit;
+  bool ShouldAlwaysEmit = false;
+  StringRef MacroPrefix;
   StringRef KeyPath;
   StringRef DefaultValue;
   StringRef NormalizedValuesScope;
@@ -100,9 +84,11 @@ struct SimpleEnumValueTable {
 
   MarshallingInfo(const Record &R) : R(R) {}
 
+  std::string getMacroName() const {
+    return (MacroPrefix + MarshallingInfo::MacroName).str();
+  }
+
   void emit(raw_ostream &OS) const {
-    write_cstring(OS, StringRef(getOptionSpelling(R)));
-    OS << ", ";
     OS << ShouldParse;
     OS << ", ";
     OS << ShouldAlwaysEmit;
@@ -126,7 +112,7 @@ struct SimpleEnumValueTable {
     OS << TableIndex;
   }
 
-  Optional<StringRef> emitValueTable(raw_ostream &OS) const {
+  std::optional<StringRef> emitValueTable(raw_ostream &OS) const {
     if (TableIndex == -1)
       return {};
     OS << "static const SimpleEnumValue " << ValueTableName << "[] = {\n";
@@ -163,12 +149,13 @@ static MarshallingInfo createMarshallingInfo(const Record &R) {
   MarshallingInfo Ret(R);
 
   Ret.ShouldAlwaysEmit = R.getValueAsBit("ShouldAlwaysEmit");
+  Ret.MacroPrefix = R.getValueAsString("MacroPrefix");
   Ret.KeyPath = R.getValueAsString("KeyPath");
   Ret.DefaultValue = R.getValueAsString("DefaultValue");
   Ret.NormalizedValuesScope = R.getValueAsString("NormalizedValuesScope");
   Ret.ImpliedCheck = R.getValueAsString("ImpliedCheck");
   Ret.ImpliedValue =
-      R.getValueAsOptionalString("ImpliedValue").getValueOr(Ret.DefaultValue);
+      R.getValueAsOptionalString("ImpliedValue").value_or(Ret.DefaultValue);
 
   Ret.ShouldParse = R.getValueAsString("ShouldParse");
   Ret.Normalizer = R.getValueAsString("Normalizer");
@@ -207,8 +194,7 @@ static MarshallingInfo createMarshallingInfo(const Record &R) {
 /// OptParserEmitter - This tablegen backend takes an input .td file
 /// describing a list of options and emits a data structure for parsing and
 /// working with those options when given an input command line.
-namespace llvm {
-void EmitOptParser(RecordKeeper &Records, raw_ostream &OS) {
+static void EmitOptParser(RecordKeeper &Records, raw_ostream &OS) {
   // Get the option groups and options.
   const std::vector<Record*> &Groups =
     Records.getAllDerivedDefinitions("OptionGroup");
@@ -232,8 +218,14 @@ void EmitOptParser(RecordKeeper &Records, raw_ostream &OS) {
       CurPrefix = NewPrefix;
   }
 
-  // Dump prefixes.
+  DenseSet<StringRef> PrefixesUnionSet;
+  for (const auto &Prefix : Prefixes)
+    PrefixesUnionSet.insert(Prefix.first.begin(), Prefix.first.end());
+  SmallVector<StringRef> PrefixesUnion(PrefixesUnionSet.begin(),
+                                       PrefixesUnionSet.end());
+  array_pod_sort(PrefixesUnion.begin(), PrefixesUnion.end());
 
+  // Dump prefixes.
   OS << "/////////\n";
   OS << "// Prefixes\n\n";
   OS << "#ifdef PREFIX\n";
@@ -246,12 +238,42 @@ void EmitOptParser(RecordKeeper &Records, raw_ostream &OS) {
 
     // Prefix values.
     OS << ", {";
-    for (StringRef PrefixKey : Prefix.first)
-      OS << "\"" << PrefixKey << "\" COMMA ";
-    OS << "nullptr})\n";
+    for (const auto &PrefixKey : Prefix.first)
+      OS << "llvm::StringLiteral(\"" << PrefixKey << "\") COMMA ";
+    // Append an empty element to avoid ending up with an empty array.
+    OS << "llvm::StringLiteral(\"\")})\n";
   }
   OS << "#undef COMMA\n";
   OS << "#endif // PREFIX\n\n";
+
+  // Dump prefix unions.
+  OS << "/////////\n";
+  OS << "// Prefix Union\n\n";
+  OS << "#ifdef PREFIX_UNION\n";
+  OS << "#define COMMA ,\n";
+  OS << "PREFIX_UNION({\n";
+  for (const auto &Prefix : PrefixesUnion) {
+    OS << "llvm::StringLiteral(\"" << Prefix << "\") COMMA ";
+  }
+  OS << "llvm::StringLiteral(\"\")})\n";
+  OS << "#undef COMMA\n";
+  OS << "#endif // PREFIX_UNION\n\n";
+
+  // Dump groups.
+  OS << "/////////\n";
+  OS << "// ValuesCode\n\n";
+  OS << "#ifdef OPTTABLE_VALUES_CODE\n";
+  for (const Record &R : llvm::make_pointee_range(Opts)) {
+    // The option values, if any;
+    if (!isa<UnsetInit>(R.getValueInit("ValuesCode"))) {
+      assert(isa<UnsetInit>(R.getValueInit("Values")) &&
+             "Cannot choose between Values and ValuesCode");
+      OS << "#define VALUES_CODE " << getOptionName(R) << "_Values\n";
+      OS << R.getValueAsString("ValuesCode") << "\n";
+      OS << "#undef VALUES_CODE\n";
+    }
+  }
+  OS << "#endif\n";
 
   OS << "/////////\n";
   OS << "// Groups\n\n";
@@ -261,7 +283,7 @@ void EmitOptParser(RecordKeeper &Records, raw_ostream &OS) {
     OS << "OPTION(";
 
     // The option prefix;
-    OS << "nullptr";
+    OS << "llvm::ArrayRef<llvm::StringLiteral>()";
 
     // The option string.
     OS << ", \"" << R.getValueAsString("Name") << '"';
@@ -306,8 +328,8 @@ void EmitOptParser(RecordKeeper &Records, raw_ostream &OS) {
     std::vector<StringRef> RPrefixes = R.getValueAsListOfStrings("Prefixes");
     OS << Prefixes[PrefixKeyT(RPrefixes.begin(), RPrefixes.end())] << ", ";
 
-    // The option string.
-    emitNameUsingSpelling(OS, R);
+    // The option prefixed name.
+    write_cstring(OS, getOptionPrefixedName(R));
 
     // The option identifier name.
     OS << ", " << getOptionName(R);
@@ -382,6 +404,9 @@ void EmitOptParser(RecordKeeper &Records, raw_ostream &OS) {
     OS << ", ";
     if (!isa<UnsetInit>(R.getValueInit("Values")))
       write_cstring(OS, R.getValueAsString("Values"));
+    else if (!isa<UnsetInit>(R.getValueInit("ValuesCode"))) {
+      OS << getOptionName(R) << "_Values";
+    }
     else
       OS << "nullptr";
   };
@@ -420,17 +445,18 @@ void EmitOptParser(RecordKeeper &Records, raw_ostream &OS) {
                  CmpMarshallingOpts);
 
   std::vector<MarshallingInfo> MarshallingInfos;
+  MarshallingInfos.reserve(OptsWithMarshalling.size());
   for (const auto *R : OptsWithMarshalling)
     MarshallingInfos.push_back(createMarshallingInfo(*R));
 
   for (const auto &MI : MarshallingInfos) {
-    OS << "#ifdef " << MarshallingInfo::MacroName << "\n";
-    OS << MarshallingInfo::MacroName << "(";
+    OS << "#ifdef " << MI.getMacroName() << "\n";
+    OS << MI.getMacroName() << "(";
     WriteOptRecordFields(OS, MI.R);
     OS << ", ";
     MI.emit(OS);
     OS << ")\n";
-    OS << "#endif // " << MarshallingInfo::MacroName << "\n";
+    OS << "#endif // " << MI.getMacroName() << "\n";
   }
 
   OS << "\n";
@@ -444,40 +470,16 @@ void EmitOptParser(RecordKeeper &Records, raw_ostream &OS) {
 
   OS << MarshallingInfo::ValueTablesDecl << "{";
   for (auto ValueTableName : ValueTableNames)
-    OS << "{" << ValueTableName << ", sizeof(" << ValueTableName
-       << ") / sizeof(SimpleEnumValue)"
-       << "},\n";
+    OS << "{" << ValueTableName << ", std::size(" << ValueTableName << ")},\n";
   OS << "};\n";
   OS << "static const unsigned SimpleEnumValueTablesSize = "
-        "sizeof(SimpleEnumValueTables) / sizeof(SimpleEnumValueTable);\n";
+        "std::size(SimpleEnumValueTables);\n";
 
   OS << "#endif // SIMPLE_ENUM_VALUE_TABLE\n";
   OS << "\n";
 
   OS << "\n";
-  OS << "#ifdef OPTTABLE_ARG_INIT\n";
-  OS << "//////////\n";
-  OS << "// Option Values\n\n";
-  for (const Record &R : llvm::make_pointee_range(Opts)) {
-    if (isa<UnsetInit>(R.getValueInit("ValuesCode")))
-      continue;
-    OS << "{\n";
-    OS << "bool ValuesWereAdded;\n";
-    OS << R.getValueAsString("ValuesCode");
-    OS << "\n";
-    for (StringRef Prefix : R.getValueAsListOfStrings("Prefixes")) {
-      OS << "ValuesWereAdded = Opt.addValues(";
-      std::string S(Prefix);
-      S += R.getValueAsString("Name");
-      write_cstring(OS, S);
-      OS << ", Values);\n";
-      OS << "(void)ValuesWereAdded;\n";
-      OS << "assert(ValuesWereAdded && \"Couldn't add values to "
-            "OptTable!\");\n";
-    }
-    OS << "}\n";
-  }
-  OS << "\n";
-  OS << "#endif // OPTTABLE_ARG_INIT\n";
 }
-} // end namespace llvm
+
+static TableGen::Emitter::Opt X("gen-opt-parser-defs", EmitOptParser,
+                                "Generate option definitions");

@@ -49,7 +49,7 @@ This is an example of an TBD version 4 file:
       value: xxx
     - target: x86_64-maccatalyst
       value: xxx
-  flags: [ installapi ]
+  flags: [ flat_namespace ]
   install-name: /u/l/libfoo.dylib
   current-version: 1.2.3
   compatibility-version: 1.1
@@ -214,6 +214,7 @@ UUIDs
 
 The key *uuids* is optional and specifies the list of UUIDs per architecture.
 This key is equivalent to the LC_UUID load command in the Mach-O format.
+This field is now deprecated.
 
 Example:
 
@@ -243,13 +244,12 @@ Example:
 
 Valid flags are: flat_namespace, not_app_extension_safe, and installapi.
 
-flat_namespace is deprecated, but there are still some old binaries aroud on
+flat_namespace is deprecated, but there are still some old binaries around on
 macOS that depend on flat namespace linking. The default is two level
 namespace linking. not_app_extension_safe indicates that the library is not safe
 to be used in an Application Extension. Per default libaries are build as
-application extension safe in B&I. installapi indicates that this TBD file was
-generated during the installapi phase in B&I. TBD files with the installapi flag
-are always choosen over a dylib file.
+application extension safe in B&I. Previously, installapi indicated that this TBD file was
+generated during the installapi phase in B&I. The installapi flag is now deprecated.
 
 
 .. _tbd_current_install_name:
@@ -324,7 +324,7 @@ Symbol Sections
 
 The keys *exports*, *re-exports*, and *undefineds* are optional. *exports* are
 regular exported symbol sections. *re-exports* are also exported symbol
-sections, but the symbol is not defined by the libary itself. The symbol is
+sections, but the symbol is not defined by the library itself. The symbol is
 coming from a different library instead. *undefineds* are undefined symbol
 sections and only used for flat address space libaries.
 

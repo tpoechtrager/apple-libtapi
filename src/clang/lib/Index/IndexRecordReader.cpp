@@ -1,9 +1,8 @@
 //===--- IndexRecordReader.cpp - Index record deserialization -------------===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 
@@ -248,15 +247,16 @@ struct IndexRecordReader::Implementation {
             llvm::function_ref<bool(const IndexRecordOccurrence &)> receiver) {
     // FIXME: Use binary search and make this more efficient.
     unsigned lineEnd = lineStart+lineCount;
-    return foreachOccurrence(None, None, [&](const IndexRecordOccurrence &occur) -> bool {
-      if (occur.Line > lineEnd)
-        return false; // we're done.
-      if (occur.Line >= lineStart) {
-        if (!receiver(occur))
-          return false;
-      }
-      return true;
-    });
+    return foreachOccurrence(std::nullopt, std::nullopt,
+                             [&](const IndexRecordOccurrence &occur) -> bool {
+                               if (occur.Line > lineEnd)
+                                 return false; // we're done.
+                               if (occur.Line >= lineStart) {
+                                 if (!receiver(occur))
+                                   return false;
+                               }
+                               return true;
+                             });
   }
 
   static uint64_t read(RecordDataImpl &Record, unsigned &I) {
@@ -325,7 +325,7 @@ public:
     }
     case REC_DECLOFFSETS_BLOCK_ID:
       assert(RecID == REC_DECLOFFSETS);
-      Reader.setDeclOffsets(makeArrayRef((const uint32_t*)Blob.data(),
+      Reader.setDeclOffsets(ArrayRef((const uint32_t*)Blob.data(),
                             Record[0]));
       break;
 
@@ -426,7 +426,7 @@ bool IndexRecordReader::foreachOccurrence(
 
 bool IndexRecordReader::foreachOccurrence(
             llvm::function_ref<bool(const IndexRecordOccurrence &)> Receiver) {
-  return foreachOccurrence(None, None, std::move(Receiver));
+  return foreachOccurrence(std::nullopt, std::nullopt, std::move(Receiver));
 }
 
 bool IndexRecordReader::foreachOccurrenceInLineRange(unsigned lineStart,

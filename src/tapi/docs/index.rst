@@ -8,4 +8,3 @@ TAPI Documentation
    TBD_current
    TBD_legacy
    FileList
-   SDKDBBitcodeFormat

@@ -1,12 +1,12 @@
 set(LLVM_LINK_COMPONENTS
   Core
   Support
+  TargetParser
   )
 
 add_clang_unittest(ClangCodeGenTests
   BufferSourceTest.cpp
   CodeGenExternalTest.cpp
-  IncrementalProcessingTest.cpp
   TBAAMetadataTest.cpp
   CheckTargetFeaturesTest.cpp
   )

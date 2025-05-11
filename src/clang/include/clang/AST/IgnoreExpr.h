@@ -23,7 +23,8 @@ namespace detail {
 inline Expr *IgnoreExprNodesImpl(Expr *E) { return E; }
 template <typename FnTy, typename... FnTys>
 Expr *IgnoreExprNodesImpl(Expr *E, FnTy &&Fn, FnTys &&... Fns) {
-  return IgnoreExprNodesImpl(Fn(E), std::forward<FnTys>(Fns)...);
+  return IgnoreExprNodesImpl(std::forward<FnTy>(Fn)(E),
+                             std::forward<FnTys>(Fns)...);
 }
 } // namespace detail
 
@@ -41,7 +42,7 @@ template <typename... FnTys> Expr *IgnoreExprNodes(Expr *E, FnTys &&... Fns) {
 
 template <typename... FnTys>
 const Expr *IgnoreExprNodes(const Expr *E, FnTys &&...Fns) {
-  return const_cast<Expr *>(IgnoreExprNodes(E, std::forward<FnTys>(Fns)...));
+  return IgnoreExprNodes(const_cast<Expr *>(E), std::forward<FnTys>(Fns)...);
 }
 
 inline Expr *IgnoreImplicitCastsSingleStep(Expr *E) {
@@ -121,6 +122,18 @@ inline Expr *IgnoreImplicitSingleStep(Expr *E) {
   return E;
 }
 
+inline Expr *IgnoreElidableImplicitConstructorSingleStep(Expr *E) {
+  auto *CCE = dyn_cast<CXXConstructExpr>(E);
+  if (CCE && CCE->isElidable() && !isa<CXXTemporaryObjectExpr>(CCE)) {
+    unsigned NumArgs = CCE->getNumArgs();
+    if ((NumArgs == 1 ||
+         (NumArgs > 1 && CCE->getArg(1)->isDefaultArgument())) &&
+        !CCE->getArg(0)->isDefaultArgument() && !CCE->isListInitialization())
+      return CCE->getArg(0);
+  }
+  return E;
+}
+
 inline Expr *IgnoreImplicitAsWrittenSingleStep(Expr *E) {
   if (auto *ICE = dyn_cast<ImplicitCastExpr>(E))
     return ICE->getSubExprAsWritten();
@@ -151,6 +164,11 @@ inline Expr *IgnoreParensSingleStep(Expr *E) {
   else if (auto *CE = dyn_cast<ChooseExpr>(E)) {
     if (!CE->isConditionDependent())
       return CE->getChosenSubExpr();
+  }
+
+  else if (auto *PE = dyn_cast<PredefinedExpr>(E)) {
+    if (PE->isTransparent() && PE->getFunctionName())
+      return PE->getFunctionName();
   }
 
   return E;

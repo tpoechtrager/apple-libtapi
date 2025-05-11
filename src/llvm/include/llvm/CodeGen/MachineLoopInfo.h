@@ -29,11 +29,10 @@
 #ifndef LLVM_CODEGEN_MACHINELOOPINFO_H
 #define LLVM_CODEGEN_MACHINELOOPINFO_H
 
-#include "llvm/Analysis/LoopInfo.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/IR/DebugLoc.h"
-#include "llvm/Pass.h"
+#include "llvm/Support/GenericLoopInfo.h"
 
 namespace llvm {
 
@@ -66,6 +65,12 @@ public:
   /// cannot find a terminating instruction with location information,
   /// it returns an unknown location.
   DebugLoc getStartLoc() const;
+
+  /// Returns true if the instruction is loop invariant.
+  /// I.e., all virtual register operands are defined outside of the loop,
+  /// physical registers aren't accessed explicitly, and there are no side
+  /// effects that aren't captured by the operands or other flags.
+  bool isLoopInvariant(MachineInstr &I) const;
 
   void dump() const;
 
@@ -104,8 +109,11 @@ public:
   /// loop setup code. Code that cannot be speculated should not be placed
   /// here. SpeculativePreheader is controlling whether it also tries to
   /// find the speculative preheader if the regular preheader is not present.
-  MachineBasicBlock *findLoopPreheader(MachineLoop *L,
-                                       bool SpeculativePreheader = false) const;
+  /// With FindMultiLoopPreheader = false, nullptr will be returned if the found
+  /// preheader is the preheader of multiple loops.
+  MachineBasicBlock *
+  findLoopPreheader(MachineLoop *L, bool SpeculativePreheader = false,
+                    bool FindMultiLoopPreheader = false) const;
 
   /// The iterator interface to the top-level loops in the current function.
   using iterator = LoopInfoBase<MachineBasicBlock, MachineLoop>::iterator;

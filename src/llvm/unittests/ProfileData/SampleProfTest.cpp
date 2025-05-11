@@ -9,6 +9,7 @@
 #include "llvm/ProfileData/SampleProf.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Metadata.h"
 #include "llvm/IR/Module.h"
@@ -18,6 +19,7 @@
 #include "llvm/Support/ErrorOr.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/VirtualFileSystem.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Testing/Support/SupportHelpers.h"
 #include "gtest/gtest.h"
@@ -56,11 +58,13 @@ struct SampleProfTest : ::testing::Test {
 
   void readProfile(const Module &M, StringRef Profile,
                    StringRef RemapFile = "") {
+    auto FS = vfs::getRealFileSystem();
     auto ReaderOrErr = SampleProfileReader::create(
-        std::string(Profile), Context, std::string(RemapFile));
+        std::string(Profile), Context, *FS, FSDiscriminatorPass::Base,
+        std::string(RemapFile));
     ASSERT_TRUE(NoError(ReaderOrErr.getError()));
     Reader = std::move(ReaderOrErr.get());
-    Reader->collectFuncsFrom(M);
+    Reader->setModule(&M);
   }
 
   TempFile createRemapFile() {
@@ -97,7 +101,8 @@ struct SampleProfTest : ::testing::Test {
       auto Predicate = [&Cutoff](const ProfileSummaryEntry &PE) {
         return PE.Cutoff == Cutoff;
       };
-      std::vector<ProfileSummaryEntry> &Details = Summary.getDetailedSummary();
+      const std::vector<ProfileSummaryEntry> &Details =
+          Summary.getDetailedSummary();
       auto EightyPerc = find_if(Details, Predicate);
       Cutoff = 900000;
       auto NinetyPerc = find_if(Details, Predicate);
@@ -191,7 +196,7 @@ struct SampleProfTest : ::testing::Test {
     BooSamples.addHeadSamples(1);
     BooSamples.addBodySamples(1, 0, 1232);
 
-    StringMap<FunctionSamples> Profiles;
+    SampleProfileMap Profiles;
     Profiles[FooName] = std::move(FooSamples);
     Profiles[BarName] = std::move(BarSamples);
     Profiles[BazName] = std::move(BazSamples);
@@ -284,11 +289,10 @@ struct SampleProfTest : ::testing::Test {
     ASSERT_FALSE(CTMap.getError());
 
     // Because _Z3bazi is not defined in module M, expect _Z3bazi's profile
-    // is not loaded when the profile is ExtBinary or Compact format because
-    // these formats support loading function profiles on demand.
+    // is not loaded when the profile is ExtBinary format because this format
+    // supports loading function profiles on demand.
     FunctionSamples *ReadBazSamples = Reader->getSamplesFor(BazName);
-    if (Format == SampleProfileFormat::SPF_Ext_Binary ||
-        Format == SampleProfileFormat::SPF_Compact_Binary) {
+    if (Format == SampleProfileFormat::SPF_Ext_Binary) {
       ASSERT_TRUE(ReadBazSamples == nullptr);
       ASSERT_EQ(3u, Reader->getProfiles().size());
     } else {
@@ -325,7 +329,7 @@ struct SampleProfTest : ::testing::Test {
     verifyProfileSummary(Summary, M, true, true);
   }
 
-  void addFunctionSamples(StringMap<FunctionSamples> *Smap, const char *Fname,
+  void addFunctionSamples(SampleProfileMap *Smap, const char *Fname,
                           uint64_t TotalSamples, uint64_t HeadSamples) {
     StringRef Name(Fname);
     FunctionSamples FcnSamples;
@@ -336,8 +340,8 @@ struct SampleProfTest : ::testing::Test {
     (*Smap)[Name] = FcnSamples;
   }
 
-  StringMap<FunctionSamples> setupFcnSamplesForElisionTest(StringRef Policy) {
-    StringMap<FunctionSamples> Smap;
+  SampleProfileMap setupFcnSamplesForElisionTest(StringRef Policy) {
+    SampleProfileMap Smap;
     addFunctionSamples(&Smap, "foo", uint64_t(20301), uint64_t(1437));
     if (Policy == "" || Policy == "all")
       return Smap;
@@ -371,7 +375,7 @@ struct SampleProfTest : ::testing::Test {
 
     Module M("my_module", Context);
     setupModuleForElisionTest(&M, Policy);
-    StringMap<FunctionSamples> ProfMap = setupFcnSamplesForElisionTest(Policy);
+    SampleProfileMap ProfMap = setupFcnSamplesForElisionTest(Policy);
 
     // write profile
     createWriter(Format, ProfileFile.path());
@@ -401,10 +405,6 @@ TEST_F(SampleProfTest, roundtrip_text_profile) {
 
 TEST_F(SampleProfTest, roundtrip_raw_binary_profile) {
   testRoundTrip(SampleProfileFormat::SPF_Binary, false, false);
-}
-
-TEST_F(SampleProfTest, roundtrip_compact_binary_profile) {
-  testRoundTrip(SampleProfileFormat::SPF_Compact_Binary, false, true);
 }
 
 TEST_F(SampleProfTest, roundtrip_ext_binary_profile) {
@@ -468,19 +468,6 @@ TEST_F(SampleProfTest, default_suffix_elision_text) {
   testSuffixElisionPolicy(SampleProfileFormat::SPF_Text, "", Expected);
 }
 
-TEST_F(SampleProfTest, default_suffix_elision_compact_binary) {
-  // Default suffix elision policy: strip everything after first dot.
-  // This implies that all suffix variants will map to "foo", so
-  // we don't expect to see any entries for them in the sample
-  // profile.
-  StringMap<uint64_t> Expected;
-  Expected["foo"] = uint64_t(20301);
-  Expected["foo.bar"] = uint64_t(-1);
-  Expected["foo.llvm.2465"] = uint64_t(-1);
-  testSuffixElisionPolicy(SampleProfileFormat::SPF_Compact_Binary, "",
-                          Expected);
-}
-
 TEST_F(SampleProfTest, selected_suffix_elision_text) {
   // Profile is created and searched using the "selected"
   // suffix elision policy: we only strip a .XXX suffix if
@@ -493,19 +480,6 @@ TEST_F(SampleProfTest, selected_suffix_elision_text) {
   testSuffixElisionPolicy(SampleProfileFormat::SPF_Text, "selected", Expected);
 }
 
-TEST_F(SampleProfTest, selected_suffix_elision_compact_binary) {
-  // Profile is created and searched using the "selected"
-  // suffix elision policy: we only strip a .XXX suffix if
-  // it matches a pattern known to be generated by the compiler
-  // (e.g. ".llvm.<digits>").
-  StringMap<uint64_t> Expected;
-  Expected["foo"] = uint64_t(20301);
-  Expected["foo.bar"] = uint64_t(20303);
-  Expected["foo.llvm.2465"] = uint64_t(-1);
-  testSuffixElisionPolicy(SampleProfileFormat::SPF_Compact_Binary, "selected",
-                          Expected);
-}
-
 TEST_F(SampleProfTest, none_suffix_elision_text) {
   // Profile is created and searched using the "none"
   // suffix elision policy: no stripping of suffixes at all.
@@ -515,18 +489,6 @@ TEST_F(SampleProfTest, none_suffix_elision_text) {
   Expected["foo.bar"] = uint64_t(20303);
   Expected["foo.llvm.2465"] = uint64_t(20305);
   testSuffixElisionPolicy(SampleProfileFormat::SPF_Text, "none", Expected);
-}
-
-TEST_F(SampleProfTest, none_suffix_elision_compact_binary) {
-  // Profile is created and searched using the "none"
-  // suffix elision policy: no stripping of suffixes at all.
-  // Here we expect to see all variants in the profile.
-  StringMap<uint64_t> Expected;
-  Expected["foo"] = uint64_t(20301);
-  Expected["foo.bar"] = uint64_t(20303);
-  Expected["foo.llvm.2465"] = uint64_t(20305);
-  testSuffixElisionPolicy(SampleProfileFormat::SPF_Compact_Binary, "none",
-                          Expected);
 }
 
 } // end anonymous namespace

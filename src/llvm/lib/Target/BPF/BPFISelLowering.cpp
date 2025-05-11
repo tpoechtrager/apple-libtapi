@@ -78,6 +78,24 @@ BPFTargetLowering::BPFTargetLowering(const TargetMachine &TM,
   setOperationAction(ISD::STACKSAVE, MVT::Other, Expand);
   setOperationAction(ISD::STACKRESTORE, MVT::Other, Expand);
 
+  // Set unsupported atomic operations as Custom so
+  // we can emit better error messages than fatal error
+  // from selectiondag.
+  for (auto VT : {MVT::i8, MVT::i16, MVT::i32}) {
+    if (VT == MVT::i32) {
+      if (STI.getHasAlu32())
+        continue;
+    } else {
+      setOperationAction(ISD::ATOMIC_LOAD_ADD, VT, Custom);
+    }
+
+    setOperationAction(ISD::ATOMIC_LOAD_AND, VT, Custom);
+    setOperationAction(ISD::ATOMIC_LOAD_OR, VT, Custom);
+    setOperationAction(ISD::ATOMIC_LOAD_XOR, VT, Custom);
+    setOperationAction(ISD::ATOMIC_SWAP, VT, Custom);
+    setOperationAction(ISD::ATOMIC_CMP_SWAP_WITH_SUCCESS, VT, Custom);
+  }
+
   for (auto VT : { MVT::i32, MVT::i64 }) {
     if (VT == MVT::i32 && !STI.getHasAlu32())
       continue;
@@ -85,7 +103,6 @@ BPFTargetLowering::BPFTargetLowering(const TargetMachine &TM,
     setOperationAction(ISD::SDIVREM, VT, Expand);
     setOperationAction(ISD::UDIVREM, VT, Expand);
     setOperationAction(ISD::SREM, VT, Expand);
-    setOperationAction(ISD::UREM, VT, Expand);
     setOperationAction(ISD::MULHU, VT, Expand);
     setOperationAction(ISD::MULHS, VT, Expand);
     setOperationAction(ISD::UMUL_LOHI, VT, Expand);
@@ -150,6 +167,7 @@ BPFTargetLowering::BPFTargetLowering(const TargetMachine &TM,
     MaxStoresPerMemset = MaxStoresPerMemsetOptSize = 0;
     MaxStoresPerMemcpy = MaxStoresPerMemcpyOptSize = 0;
     MaxStoresPerMemmove = MaxStoresPerMemmoveOptSize = 0;
+    MaxLoadsPerMemcmp = 0;
   } else {
     // inline memcpy() for kernel to see explicit copy
     unsigned CommonMaxStores =
@@ -158,6 +176,7 @@ BPFTargetLowering::BPFTargetLowering(const TargetMachine &TM,
     MaxStoresPerMemset = MaxStoresPerMemsetOptSize = CommonMaxStores;
     MaxStoresPerMemcpy = MaxStoresPerMemcpyOptSize = CommonMaxStores;
     MaxStoresPerMemmove = MaxStoresPerMemmoveOptSize = CommonMaxStores;
+    MaxLoadsPerMemcmp = MaxLoadsPerMemcmpOptSize = CommonMaxStores;
   }
 
   // CPU/Feature control
@@ -202,6 +221,20 @@ bool BPFTargetLowering::isZExtFree(EVT VT1, EVT VT2) const {
   return NumBits1 == 32 && NumBits2 == 64;
 }
 
+BPFTargetLowering::ConstraintType
+BPFTargetLowering::getConstraintType(StringRef Constraint) const {
+  if (Constraint.size() == 1) {
+    switch (Constraint[0]) {
+    default:
+      break;
+    case 'w':
+      return C_RegisterClass;
+    }
+  }
+
+  return TargetLowering::getConstraintType(Constraint);
+}
+
 std::pair<unsigned, const TargetRegisterClass *>
 BPFTargetLowering::getRegForInlineAsmConstraint(const TargetRegisterInfo *TRI,
                                                 StringRef Constraint,
@@ -211,11 +244,39 @@ BPFTargetLowering::getRegForInlineAsmConstraint(const TargetRegisterInfo *TRI,
     switch (Constraint[0]) {
     case 'r': // GENERAL_REGS
       return std::make_pair(0U, &BPF::GPRRegClass);
+    case 'w':
+      if (HasAlu32)
+        return std::make_pair(0U, &BPF::GPR32RegClass);
+      break;
     default:
       break;
     }
 
   return TargetLowering::getRegForInlineAsmConstraint(TRI, Constraint, VT);
+}
+
+void BPFTargetLowering::ReplaceNodeResults(
+  SDNode *N, SmallVectorImpl<SDValue> &Results, SelectionDAG &DAG) const {
+  const char *err_msg;
+  uint32_t Opcode = N->getOpcode();
+  switch (Opcode) {
+  default:
+    report_fatal_error("Unhandled custom legalization");
+  case ISD::ATOMIC_LOAD_ADD:
+  case ISD::ATOMIC_LOAD_AND:
+  case ISD::ATOMIC_LOAD_OR:
+  case ISD::ATOMIC_LOAD_XOR:
+  case ISD::ATOMIC_SWAP:
+  case ISD::ATOMIC_CMP_SWAP_WITH_SUCCESS:
+    if (HasAlu32 || Opcode == ISD::ATOMIC_LOAD_ADD)
+      err_msg = "Unsupported atomic operations, please use 32/64 bit version";
+    else
+      err_msg = "Unsupported atomic operations, please use 64 bit version";
+    break;
+  }
+
+  SDLoc DL(N);
+  fail(DL, DAG, err_msg);
 }
 
 SDValue BPFTargetLowering::LowerOperation(SDValue Op, SelectionDAG &DAG) const {
@@ -264,8 +325,8 @@ SDValue BPFTargetLowering::LowerFormalArguments(
       switch (SimpleTy) {
       default: {
         errs() << "LowerFormalArguments Unhandled argument type: "
-               << RegVT.getEVTString() << '\n';
-        llvm_unreachable(0);
+               << RegVT << '\n';
+        llvm_unreachable(nullptr);
       }
       case MVT::i32:
       case MVT::i64:
@@ -335,7 +396,7 @@ SDValue BPFTargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
 
   CCInfo.AnalyzeCallOperands(Outs, getHasAlu32() ? CC_BPF32 : CC_BPF64);
 
-  unsigned NumBytes = CCInfo.getNextStackOffset();
+  unsigned NumBytes = CCInfo.getStackSize();
 
   if (Outs.size() > MaxArgs)
     fail(CLI.DL, DAG, "too many args to ", Callee);
@@ -384,14 +445,14 @@ SDValue BPFTargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
       llvm_unreachable("call arg pass bug");
   }
 
-  SDValue InFlag;
+  SDValue InGlue;
 
   // Build a sequence of copy-to-reg nodes chained together with token chain and
-  // flag operands which copy the outgoing args into registers.  The InFlag in
+  // flag operands which copy the outgoing args into registers.  The InGlue in
   // necessary since all emitted instructions must be stuck together.
   for (auto &Reg : RegsToPass) {
-    Chain = DAG.getCopyToReg(Chain, CLI.DL, Reg.first, Reg.second, InFlag);
-    InFlag = Chain.getValue(1);
+    Chain = DAG.getCopyToReg(Chain, CLI.DL, Reg.first, Reg.second, InGlue);
+    InGlue = Chain.getValue(1);
   }
 
   // If the callee is a GlobalAddress node (quite common, every direct call is)
@@ -418,21 +479,21 @@ SDValue BPFTargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
   for (auto &Reg : RegsToPass)
     Ops.push_back(DAG.getRegister(Reg.first, Reg.second.getValueType()));
 
-  if (InFlag.getNode())
-    Ops.push_back(InFlag);
+  if (InGlue.getNode())
+    Ops.push_back(InGlue);
 
   Chain = DAG.getNode(BPFISD::CALL, CLI.DL, NodeTys, Ops);
-  InFlag = Chain.getValue(1);
+  InGlue = Chain.getValue(1);
+
+  DAG.addNoMergeSiteInfo(Chain.getNode(), CLI.NoMerge);
 
   // Create the CALLSEQ_END node.
-  Chain = DAG.getCALLSEQ_END(
-      Chain, DAG.getConstant(NumBytes, CLI.DL, PtrVT, true),
-      DAG.getConstant(0, CLI.DL, PtrVT, true), InFlag, CLI.DL);
-  InFlag = Chain.getValue(1);
+  Chain = DAG.getCALLSEQ_END(Chain, NumBytes, 0, InGlue, CLI.DL);
+  InGlue = Chain.getValue(1);
 
   // Handle result values, copying them out of physregs into vregs that we
   // return.
-  return LowerCallResult(Chain, InFlag, CallConv, IsVarArg, Ins, CLI.DL, DAG,
+  return LowerCallResult(Chain, InGlue, CallConv, IsVarArg, Ins, CLI.DL, DAG,
                          InVals);
 }
 
@@ -442,7 +503,7 @@ BPFTargetLowering::LowerReturn(SDValue Chain, CallingConv::ID CallConv,
                                const SmallVectorImpl<ISD::OutputArg> &Outs,
                                const SmallVectorImpl<SDValue> &OutVals,
                                const SDLoc &DL, SelectionDAG &DAG) const {
-  unsigned Opc = BPFISD::RET_FLAG;
+  unsigned Opc = BPFISD::RET_GLUE;
 
   // CCValAssign - represent the assignment of the return value to a location
   SmallVector<CCValAssign, 16> RVLocs;
@@ -459,7 +520,7 @@ BPFTargetLowering::LowerReturn(SDValue Chain, CallingConv::ID CallConv,
   // Analize return values.
   CCInfo.AnalyzeReturn(Outs, getHasAlu32() ? RetCC_BPF32 : RetCC_BPF64);
 
-  SDValue Flag;
+  SDValue Glue;
   SmallVector<SDValue, 4> RetOps(1, Chain);
 
   // Copy the result values into the output registers.
@@ -467,25 +528,25 @@ BPFTargetLowering::LowerReturn(SDValue Chain, CallingConv::ID CallConv,
     CCValAssign &VA = RVLocs[i];
     assert(VA.isRegLoc() && "Can only return in registers!");
 
-    Chain = DAG.getCopyToReg(Chain, DL, VA.getLocReg(), OutVals[i], Flag);
+    Chain = DAG.getCopyToReg(Chain, DL, VA.getLocReg(), OutVals[i], Glue);
 
     // Guarantee that all emitted copies are stuck together,
     // avoiding something bad.
-    Flag = Chain.getValue(1);
+    Glue = Chain.getValue(1);
     RetOps.push_back(DAG.getRegister(VA.getLocReg(), VA.getLocVT()));
   }
 
   RetOps[0] = Chain; // Update chain.
 
-  // Add the flag if we have it.
-  if (Flag.getNode())
-    RetOps.push_back(Flag);
+  // Add the glue if we have it.
+  if (Glue.getNode())
+    RetOps.push_back(Glue);
 
   return DAG.getNode(Opc, DL, MVT::Other, RetOps);
 }
 
 SDValue BPFTargetLowering::LowerCallResult(
-    SDValue Chain, SDValue InFlag, CallingConv::ID CallConv, bool IsVarArg,
+    SDValue Chain, SDValue InGlue, CallingConv::ID CallConv, bool IsVarArg,
     const SmallVectorImpl<ISD::InputArg> &Ins, const SDLoc &DL,
     SelectionDAG &DAG, SmallVectorImpl<SDValue> &InVals) const {
 
@@ -498,7 +559,7 @@ SDValue BPFTargetLowering::LowerCallResult(
     fail(DL, DAG, "only small returns supported");
     for (unsigned i = 0, e = Ins.size(); i != e; ++i)
       InVals.push_back(DAG.getConstant(0, DL, Ins[i].VT));
-    return DAG.getCopyFromReg(Chain, DL, 1, Ins[0].VT, InFlag).getValue(1);
+    return DAG.getCopyFromReg(Chain, DL, 1, Ins[0].VT, InGlue).getValue(1);
   }
 
   CCInfo.AnalyzeCallResult(Ins, getHasAlu32() ? RetCC_BPF32 : RetCC_BPF64);
@@ -506,8 +567,8 @@ SDValue BPFTargetLowering::LowerCallResult(
   // Copy all of the result registers out of their specified physreg.
   for (auto &Val : RVLocs) {
     Chain = DAG.getCopyFromReg(Chain, DL, Val.getLocReg(),
-                               Val.getValVT(), InFlag).getValue(1);
-    InFlag = Chain.getValue(2);
+                               Val.getValVT(), InGlue).getValue(1);
+    InGlue = Chain.getValue(2);
     InVals.push_back(Chain.getValue(0));
   }
 
@@ -565,8 +626,8 @@ const char *BPFTargetLowering::getTargetNodeName(unsigned Opcode) const {
   switch ((BPFISD::NodeType)Opcode) {
   case BPFISD::FIRST_NUMBER:
     break;
-  case BPFISD::RET_FLAG:
-    return "BPFISD::RET_FLAG";
+  case BPFISD::RET_GLUE:
+    return "BPFISD::RET_GLUE";
   case BPFISD::CALL:
     return "BPFISD::CALL";
   case BPFISD::SELECT_CC:
@@ -762,7 +823,7 @@ BPFTargetLowering::EmitInstrWithCustomInserter(MachineInstr &MI,
     BuildMI(BB, DL, TII.get(NewCC)).addReg(LHS).addReg(RHS).addMBB(Copy1MBB);
   } else {
     int64_t imm32 = MI.getOperand(2).getImm();
-    // sanity check before we build J*_ri instruction.
+    // Check before we build J*_ri instruction.
     assert (isInt<32>(imm32));
     BuildMI(BB, DL, TII.get(NewCC))
         .addReg(LHS).addImm(imm32).addMBB(Copy1MBB);
@@ -798,4 +859,26 @@ EVT BPFTargetLowering::getSetCCResultType(const DataLayout &, LLVMContext &,
 MVT BPFTargetLowering::getScalarShiftAmountTy(const DataLayout &DL,
                                               EVT VT) const {
   return (getHasAlu32() && VT == MVT::i32) ? MVT::i32 : MVT::i64;
+}
+
+bool BPFTargetLowering::isLegalAddressingMode(const DataLayout &DL,
+                                              const AddrMode &AM, Type *Ty,
+                                              unsigned AS,
+                                              Instruction *I) const {
+  // No global is ever allowed as a base.
+  if (AM.BaseGV)
+    return false;
+
+  switch (AM.Scale) {
+  case 0: // "r+i" or just "i", depending on HasBaseReg.
+    break;
+  case 1:
+    if (!AM.HasBaseReg) // allow "r+i".
+      break;
+    return false; // disallow "r+r" or "r+r+i".
+  default:
+    return false;
+  }
+
+  return true;
 }

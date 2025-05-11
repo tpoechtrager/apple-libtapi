@@ -52,14 +52,8 @@ enum Linkage : unsigned char;
 class LinkageSpecDecl;
 class Module;
 class NamedDecl;
-class ObjCCategoryDecl;
-class ObjCCategoryImplDecl;
 class ObjCContainerDecl;
-class ObjCImplDecl;
-class ObjCImplementationDecl;
-class ObjCInterfaceDecl;
 class ObjCMethodDecl;
-class ObjCProtocolDecl;
 struct PrintingPolicy;
 class RecordDecl;
 class SourceManager;
@@ -231,8 +225,15 @@ public:
     /// module is imported.
     VisibleWhenImported,
 
+    /// This declaration has an owning module, and is visible to lookups
+    /// that occurs within that module. And it is reachable in other module
+    /// when the owning module is transitively imported.
+    ReachableWhenImported,
+
     /// This declaration has an owning module, but is only visible to
     /// lookups that occur within that module.
+    /// The discarded declarations in global module fragment belongs
+    /// to this group too.
     ModulePrivate
   };
 
@@ -241,8 +242,8 @@ protected:
   /// DeclContext. These pointers form the linked list that is
   /// traversed via DeclContext's decls_begin()/decls_end().
   ///
-  /// The extra two bits are used for the ModuleOwnershipKind.
-  llvm::PointerIntPair<Decl *, 2, ModuleOwnershipKind> NextInContextAndBits;
+  /// The extra three bits are used for the ModuleOwnershipKind.
+  llvm::PointerIntPair<Decl *, 3, ModuleOwnershipKind> NextInContextAndBits;
 
 private:
   friend class DeclContext;
@@ -319,6 +320,7 @@ protected:
   friend class ASTReader;
   friend class CXXClassMemberWrapper;
   friend class LinkageComputer;
+  friend class RecordDecl;
   template<typename decl_type> friend class Redeclarable;
 
   /// Access - Used by C++ decls for the access specifier.
@@ -352,7 +354,7 @@ protected:
                      DeclContext *Parent, std::size_t Extra = 0);
 
 private:
-  bool AccessDeclContextSanity() const;
+  bool AccessDeclContextCheck() const;
 
   /// Get the module ownership kind to use for a local lexical child of \p DC,
   /// which may be either a local or (rarely) an imported declaration.
@@ -445,6 +447,14 @@ public:
     return const_cast<Decl*>(this)->getDeclContext();
   }
 
+  /// Return the non transparent context.
+  /// See the comment of `DeclContext::isTransparentContext()` for the
+  /// definition of transparent context.
+  DeclContext *getNonTransparentDeclContext();
+  const DeclContext *getNonTransparentDeclContext() const {
+    return const_cast<Decl *>(this)->getNonTransparentDeclContext();
+  }
+
   /// Find the innermost non-closure ancestor of this declaration,
   /// walking up through blocks, lambdas, etc.  If that ancestor is
   /// not a code context (!isFunctionOrMethod()), returns null.
@@ -464,6 +474,9 @@ public:
 
   bool isInStdNamespace() const;
 
+  // Return true if this is a FileContext Decl.
+  bool isFileContextDecl() const;
+
   ASTContext &getASTContext() const LLVM_READONLY;
 
   /// Helper to get the language options from the ASTContext.
@@ -472,11 +485,11 @@ public:
 
   void setAccess(AccessSpecifier AS) {
     Access = AS;
-    assert(AccessDeclContextSanity());
+    assert(AccessDeclContextCheck());
   }
 
   AccessSpecifier getAccess() const {
-    assert(AccessDeclContextSanity());
+    assert(AccessDeclContextCheck());
     return AccessSpecifier(Access);
   }
 
@@ -612,6 +625,31 @@ public:
   bool isModulePrivate() const {
     return getModuleOwnershipKind() == ModuleOwnershipKind::ModulePrivate;
   }
+
+  /// Whether this declaration was exported in a lexical context.
+  /// e.g.:
+  ///
+  ///   export namespace A {
+  ///      void f1();        // isInExportDeclContext() == true
+  ///   }
+  ///   void A::f1();        // isInExportDeclContext() == false
+  ///
+  ///   namespace B {
+  ///      void f2();        // isInExportDeclContext() == false
+  ///   }
+  ///   export void B::f2(); // isInExportDeclContext() == true
+  bool isInExportDeclContext() const;
+
+  bool isInvisibleOutsideTheOwningModule() const {
+    return getModuleOwnershipKind() > ModuleOwnershipKind::VisibleWhenImported;
+  }
+
+  /// Whether this declaration comes from another module unit.
+  bool isInAnotherModuleUnit() const;
+
+  /// FIXME: Implement discarding declarations actually in global module
+  /// fragment. See [module.global.frag]p3,4 for details.
+  bool isDiscardedInGlobalModuleFragment() const { return false; }
 
   /// Return true if this declaration has an attribute which acts as
   /// definition of the entity, such as 'alias' or 'ifunc'.
@@ -775,7 +813,7 @@ public:
   }
 
   /// Get the module that owns this declaration for linkage purposes.
-  /// There only ever is such a module under the C++ Modules TS.
+  /// There only ever is such a standard C++ module.
   ///
   /// \param IgnoreLinkage Ignore the linkage of the entity; assume that
   /// all declarations in a global module fragment are unowned.
@@ -788,6 +826,11 @@ public:
   /// helper function; most code should be calling Sema::isVisible() instead.
   bool isUnconditionallyVisible() const {
     return (int)getModuleOwnershipKind() <= (int)ModuleOwnershipKind::Visible;
+  }
+
+  bool isReachable() const {
+    return (int)getModuleOwnershipKind() <=
+           (int)ModuleOwnershipKind::ReachableWhenImported;
   }
 
   /// Set that this declaration is globally visible, even if it came from a
@@ -891,10 +934,12 @@ public:
 
   /// If this decl is defined inside a function/method/block it returns
   /// the corresponding DeclContext, otherwise it returns null.
-  const DeclContext *getParentFunctionOrMethod() const;
-  DeclContext *getParentFunctionOrMethod() {
-    return const_cast<DeclContext*>(
-                    const_cast<const Decl*>(this)->getParentFunctionOrMethod());
+  const DeclContext *
+  getParentFunctionOrMethod(bool LexicalParent = false) const;
+  DeclContext *getParentFunctionOrMethod(bool LexicalParent = false) {
+    return const_cast<DeclContext *>(
+        const_cast<const Decl *>(this)->getParentFunctionOrMethod(
+            LexicalParent));
   }
 
   /// Retrieves the "canonical" declaration of the given declaration.
@@ -1089,7 +1134,7 @@ public:
   /// Determine whether this is a block-scope declaration with linkage.
   /// This will either be a local variable declaration declared 'extern', or a
   /// local function declaration.
-  bool isLocalExternDecl() {
+  bool isLocalExternDecl() const {
     return IdentifierNamespace & IDNS_LocalExtern;
   }
 
@@ -1129,6 +1174,12 @@ public:
         IdentifierNamespace |= IDNS_Ordinary;
     }
   }
+
+  /// Clears the namespace of this declaration.
+  ///
+  /// This is useful if we want this declaration to be available for
+  /// redeclaration lookup but otherwise hidden for ordinary name lookups.
+  void clearIdentifierNamespace() { IdentifierNamespace = 0; }
 
   enum FriendObjectKind {
     FOK_None,      ///< Not a friend object.
@@ -1185,6 +1236,10 @@ public:
   /// have a FunctionType.
   const FunctionType *getFunctionType(bool BlocksToo = true) const;
 
+  // Looks through the Decl's underlying type to determine if it's a
+  // function pointer type.
+  bool isFunctionPointerType() const;
+
 private:
   void setAttrsImpl(const AttrVec& Attrs, ASTContext &Ctx);
   void setDeclContextsImpl(DeclContext *SemaDC, DeclContext *LexicalDC,
@@ -1220,66 +1275,118 @@ public:
 
   void print(raw_ostream &OS) const override;
 };
+} // namespace clang
 
-/// The results of name lookup within a DeclContext. This is either a
-/// single result (with no stable storage) or a collection of results (with
-/// stable storage provided by the lookup table).
+// Required to determine the layout of the PointerUnion<NamedDecl*> before
+// seeing the NamedDecl definition being first used in DeclListNode::operator*.
+namespace llvm {
+  template <> struct PointerLikeTypeTraits<::clang::NamedDecl *> {
+    static inline void *getAsVoidPointer(::clang::NamedDecl *P) { return P; }
+    static inline ::clang::NamedDecl *getFromVoidPointer(void *P) {
+      return static_cast<::clang::NamedDecl *>(P);
+    }
+    static constexpr int NumLowBitsAvailable = 3;
+  };
+}
+
+namespace clang {
+/// A list storing NamedDecls in the lookup tables.
+class DeclListNode {
+  friend class ASTContext; // allocate, deallocate nodes.
+  friend class StoredDeclsList;
+public:
+  using Decls = llvm::PointerUnion<NamedDecl*, DeclListNode*>;
+  class iterator {
+    friend class DeclContextLookupResult;
+    friend class StoredDeclsList;
+
+    Decls Ptr;
+    iterator(Decls Node) : Ptr(Node) { }
+  public:
+    using difference_type = ptrdiff_t;
+    using value_type = NamedDecl*;
+    using pointer = void;
+    using reference = value_type;
+    using iterator_category = std::forward_iterator_tag;
+
+    iterator() = default;
+
+    reference operator*() const {
+      assert(Ptr && "dereferencing end() iterator");
+      if (DeclListNode *CurNode = Ptr.dyn_cast<DeclListNode*>())
+        return CurNode->D;
+      return Ptr.get<NamedDecl*>();
+    }
+    void operator->() const { } // Unsupported.
+    bool operator==(const iterator &X) const { return Ptr == X.Ptr; }
+    bool operator!=(const iterator &X) const { return Ptr != X.Ptr; }
+    inline iterator &operator++() { // ++It
+      assert(!Ptr.isNull() && "Advancing empty iterator");
+
+      if (DeclListNode *CurNode = Ptr.dyn_cast<DeclListNode*>())
+        Ptr = CurNode->Rest;
+      else
+        Ptr = nullptr;
+      return *this;
+    }
+    iterator operator++(int) { // It++
+      iterator temp = *this;
+      ++(*this);
+      return temp;
+    }
+    // Enables the pattern for (iterator I =..., E = I.end(); I != E; ++I)
+    iterator end() { return iterator(); }
+  };
+private:
+  NamedDecl *D = nullptr;
+  Decls Rest = nullptr;
+  DeclListNode(NamedDecl *ND) : D(ND) {}
+};
+
+/// The results of name lookup within a DeclContext.
 class DeclContextLookupResult {
-  using ResultTy = ArrayRef<NamedDecl *>;
+  using Decls = DeclListNode::Decls;
 
-  ResultTy Result;
-
-  // If there is only one lookup result, it would be invalidated by
-  // reallocations of the name table, so store it separately.
-  NamedDecl *Single = nullptr;
-
-  static NamedDecl *const SingleElementDummyList;
+  /// When in collection form, this is what the Data pointer points to.
+  Decls Result;
 
 public:
   DeclContextLookupResult() = default;
-  DeclContextLookupResult(ArrayRef<NamedDecl *> Result)
-      : Result(Result) {}
-  DeclContextLookupResult(NamedDecl *Single)
-      : Result(SingleElementDummyList), Single(Single) {}
+  DeclContextLookupResult(Decls Result) : Result(Result) {}
 
-  class iterator;
-
-  using IteratorBase =
-      llvm::iterator_adaptor_base<iterator, ResultTy::iterator,
-                                  std::random_access_iterator_tag, NamedDecl *>;
-
-  class iterator : public IteratorBase {
-    value_type SingleElement;
-
-  public:
-    explicit iterator(pointer Pos, value_type Single = nullptr)
-        : IteratorBase(Pos), SingleElement(Single) {}
-
-    reference operator*() const {
-      return SingleElement ? SingleElement : IteratorBase::operator*();
-    }
-  };
-
+  using iterator = DeclListNode::iterator;
   using const_iterator = iterator;
-  using pointer = iterator::pointer;
   using reference = iterator::reference;
 
-  iterator begin() const { return iterator(Result.begin(), Single); }
-  iterator end() const { return iterator(Result.end(), Single); }
-
-  bool empty() const { return Result.empty(); }
-  pointer data() const { return Single ? &Single : Result.data(); }
-  size_t size() const { return Single ? 1 : Result.size(); }
-  reference front() const { return Single ? Single : Result.front(); }
-  reference back() const { return Single ? Single : Result.back(); }
-  reference operator[](size_t N) const { return Single ? Single : Result[N]; }
-
-  // FIXME: Remove this from the interface
-  DeclContextLookupResult slice(size_t N) const {
-    DeclContextLookupResult Sliced = Result.slice(N);
-    Sliced.Single = Single;
-    return Sliced;
+  iterator begin() { return iterator(Result); }
+  iterator end() { return iterator(); }
+  const_iterator begin() const {
+    return const_cast<DeclContextLookupResult*>(this)->begin();
   }
+  const_iterator end() const { return iterator(); }
+
+  bool empty() const { return Result.isNull();  }
+  bool isSingleResult() const { return Result.dyn_cast<NamedDecl*>(); }
+  reference front() const { return *begin(); }
+
+  // Find the first declaration of the given type in the list. Note that this
+  // is not in general the earliest-declared declaration, and should only be
+  // used when it's not possible for there to be more than one match or where
+  // it doesn't matter which one is found.
+  template<class T> T *find_first() const {
+    for (auto *D : *this)
+      if (T *Decl = dyn_cast<T>(D))
+        return Decl;
+
+    return nullptr;
+  }
+};
+
+/// Only used by CXXDeductionGuideDecl.
+enum class DeductionCandidate : unsigned char {
+  Normal,
+  Copy,
+  Aggregate,
 };
 
 /// DeclContext - This is used only as base class of specific decl types that
@@ -1302,6 +1409,8 @@ public:
 class DeclContext {
   /// For makeDeclVisibleInContextImpl
   friend class ASTDeclReader;
+  /// For checking the new bits in the Serialization part.
+  friend class ASTDeclWriter;
   /// For reconcileExternalVisibleStorage, CreateStoredDeclsMap,
   /// hasNeedToReconcileExternalVisibleStorage
   friend class ExternalASTSource;
@@ -1390,10 +1499,14 @@ class DeclContext {
     /// Has the full definition of this type been required by a use somewhere in
     /// the TU.
     uint64_t IsCompleteDefinitionRequired : 1;
+
+    /// Whether this tag is a definition which was demoted due to
+    /// a module merge.
+    uint64_t IsThisDeclarationADemotedDefinition : 1;
   };
 
   /// Number of non-inherited bits in TagDeclBitfields.
-  enum { NumTagDeclBits = 9 };
+  enum { NumTagDeclBits = 10 };
 
   /// Stores the bits used by EnumDecl.
   /// If modified NumEnumDeclBit and the accessor
@@ -1483,10 +1596,17 @@ class DeclContext {
 
     /// Represents the way this type is passed to a function.
     uint64_t ArgPassingRestrictions : 2;
+
+    /// Indicates whether this struct has had its field layout randomized.
+    uint64_t IsRandomized : 1;
+
+    /// True if a valid hash is stored in ODRHash. This should shave off some
+    /// extra storage and prevent CXXRecordDecl to store unused bits.
+    uint64_t ODRHash : 26;
   };
 
   /// Number of non-inherited bits in RecordDeclBitfields.
-  enum { NumRecordDeclBits = 14 };
+  enum { NumRecordDeclBits = 41 };
 
   /// Stores the bits used by OMPDeclareReductionDecl.
   /// If modified NumOMPDeclareReductionDeclBits and the accessor
@@ -1497,7 +1617,7 @@ class DeclContext {
     uint64_t : NumDeclContextBits;
 
     /// Kind of initializer,
-    /// function call or omp_priv<init_expr> initializtion.
+    /// function call or omp_priv<init_expr> initialization.
     uint64_t InitializerKind : 2;
   };
 
@@ -1507,10 +1627,10 @@ class DeclContext {
   /// Stores the bits used by FunctionDecl.
   /// If modified NumFunctionDeclBits and the accessor
   /// methods in FunctionDecl and CXXDeductionGuideDecl
-  /// (for IsCopyDeductionCandidate) should be updated appropriately.
+  /// (for DeductionCandidateKind) should be updated appropriately.
   class FunctionDeclBitfields {
     friend class FunctionDecl;
-    /// For IsCopyDeductionCandidate
+    /// For DeductionCandidateKind
     friend class CXXDeductionGuideDecl;
     /// For the bits in DeclContextBitfields.
     uint64_t : NumDeclContextBits;
@@ -1535,11 +1655,19 @@ class DeclContext {
     uint64_t IsDefaulted : 1;
     uint64_t IsExplicitlyDefaulted : 1;
     uint64_t HasDefaultedFunctionInfo : 1;
+
+    /// For member functions of complete types, whether this is an ineligible
+    /// special member function or an unselected destructor. See
+    /// [class.mem.special].
+    uint64_t IsIneligibleOrNotSelected : 1;
+
     uint64_t HasImplicitReturnZero : 1;
     uint64_t IsLateTemplateParsed : 1;
 
     /// Kind of contexpr specifier as defined by ConstexprSpecKind.
     uint64_t ConstexprKind : 2;
+    uint64_t BodyContainsImmediateEscalatingExpression : 1;
+
     uint64_t InstantiationIsPending : 1;
 
     /// Indicates if the function uses __try.
@@ -1557,20 +1685,24 @@ class DeclContext {
     /// function using attribute 'target'.
     uint64_t IsMultiVersion : 1;
 
-    /// [C++17] Only used by CXXDeductionGuideDecl. Indicates that
-    /// the Deduction Guide is the implicitly generated 'copy
-    /// deduction candidate' (is used during overload resolution).
-    uint64_t IsCopyDeductionCandidate : 1;
+    /// Only used by CXXDeductionGuideDecl. Indicates the kind
+    /// of the Deduction Guide that is implicitly generated
+    /// (used during overload resolution).
+    uint64_t DeductionCandidateKind : 2;
 
     /// Store the ODRHash after first calculation.
     uint64_t HasODRHash : 1;
 
     /// Indicates if the function uses Floating Point Constrained Intrinsics
     uint64_t UsesFPIntrin : 1;
+
+    // Indicates this function is a constrained friend, where the constraint
+    // refers to an enclosing template for hte purposes of [temp.friend]p9.
+    uint64_t FriendConstraintRefersToEnclosingTemplate : 1;
   };
 
   /// Number of non-inherited bits in FunctionDeclBitfields.
-  enum { NumFunctionDeclBits = 27 };
+  enum { NumFunctionDeclBits = 31 };
 
   /// Stores the bits used by CXXConstructorDecl. If modified
   /// NumCXXConstructorDeclBits and the accessor
@@ -1582,12 +1714,12 @@ class DeclContext {
     /// For the bits in FunctionDeclBitfields.
     uint64_t : NumFunctionDeclBits;
 
-    /// 24 bits to fit in the remaining available space.
+    /// 20 bits to fit in the remaining available space.
     /// Note that this makes CXXConstructorDeclBitfields take
     /// exactly 64 bits and thus the width of NumCtorInitializers
     /// will need to be shrunk if some bit is added to NumDeclContextBitfields,
     /// NumFunctionDeclBitfields or CXXConstructorDeclBitfields.
-    uint64_t NumCtorInitializers : 21;
+    uint64_t NumCtorInitializers : 17;
     uint64_t IsInheritingConstructor : 1;
 
     /// Whether this constructor has a trail-allocated explicit specifier.
@@ -1805,6 +1937,10 @@ protected:
 public:
   ~DeclContext();
 
+  // For use when debugging; hasValidDeclKind() will always return true for
+  // a correctly constructed object within its lifetime.
+  bool hasValidDeclKind() const;
+
   Decl::Kind getDeclKind() const {
     return static_cast<Decl::Kind>(DeclContextBits.DeclKind);
   }
@@ -1920,7 +2056,7 @@ public:
   /// Here, E is a transparent context, so its enumerator (Val1) will
   /// appear (semantically) that it is in the same context of E.
   /// Examples of transparent contexts include: enumerations (except for
-  /// C++0x scoped enums), and C++ linkage specifications.
+  /// C++0x scoped enums), C++ linkage specifications and export declaration.
   bool isTransparentContext() const;
 
   /// Determines whether this context or some of its ancestors is a
@@ -1950,6 +2086,12 @@ public:
   Decl *getNonClosureAncestor();
   const Decl *getNonClosureAncestor() const {
     return const_cast<DeclContext*>(this)->getNonClosureAncestor();
+  }
+
+  // Retrieve the nearest context that is not a transparent context.
+  DeclContext *getNonTransparentContext();
+  const DeclContext *getNonTransparentContext() const {
+    return const_cast<DeclContext *>(this)->getNonTransparentContext();
   }
 
   /// getPrimaryContext - There may be many different
@@ -2333,7 +2475,7 @@ public:
 
   using udir_iterator_base =
       llvm::iterator_adaptor_base<udir_iterator, lookup_iterator,
-                                  std::random_access_iterator_tag,
+                                  typename lookup_iterator::iterator_category,
                                   UsingDirectiveDecl *>;
 
   struct udir_iterator : udir_iterator_base {
@@ -2407,10 +2549,8 @@ public:
                  D == LastDecl);
   }
 
-  bool setUseQualifiedLookup(bool use = true) const {
-    bool old_value = DeclContextBits.UseQualifiedLookup;
+  void setUseQualifiedLookup(bool use = true) const {
     DeclContextBits.UseQualifiedLookup = use;
-    return old_value;
   }
 
   bool shouldUseQualifiedLookup() const {
@@ -2420,6 +2560,8 @@ public:
   static bool classof(const Decl *D);
   static bool classof(const DeclContext *D) { return true; }
 
+  void dumpAsDecl() const;
+  void dumpAsDecl(const ASTContext *Ctx) const;
   void dumpDeclContext() const;
   void dumpLookups() const;
   void dumpLookups(llvm::raw_ostream &OS, bool DumpDecls = false,
@@ -2468,14 +2610,6 @@ private:
 
   void reconcileExternalVisibleStorage() const;
   bool LoadLexicalDeclsFromExternalStorage() const;
-
-  /// Makes a declaration visible within this context, but
-  /// suppresses searches for external declarations with the same
-  /// name.
-  ///
-  /// Analogous to makeDeclVisibleInContext, but for the exclusive
-  /// use of addDeclInternal().
-  void makeDeclVisibleInContextInternal(NamedDecl *D);
 
   StoredDeclsMap *CreateStoredDeclsMap(ASTContext &C) const;
 

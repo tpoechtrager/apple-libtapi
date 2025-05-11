@@ -10,6 +10,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/CodeGen/AsmPrinter.h"
 #include "llvm/IR/DataLayout.h"
+#include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/Target/TargetLoweringObjectFile.h"
 #include <utility>
@@ -17,20 +18,17 @@
 using namespace llvm;
 
 unsigned AddressPool::getIndex(const MCSymbol *Sym, bool TLS) {
-  HasBeenUsed = true;
+  resetUsedFlag(true);
   auto IterBool =
       Pool.insert(std::make_pair(Sym, AddressPoolEntry(Pool.size(), TLS)));
   return IterBool.first->second.Number;
 }
 
 MCSymbol *AddressPool::emitHeader(AsmPrinter &Asm, MCSection *Section) {
-  static const uint8_t AddrSize = Asm.getDataLayout().getPointerSize();
-  StringRef Prefix = "debug_addr_";
-  MCSymbol *BeginLabel = Asm.createTempSymbol(Prefix + "start");
-  MCSymbol *EndLabel = Asm.createTempSymbol(Prefix + "end");
+  static const uint8_t AddrSize = Asm.MAI->getCodePointerSize();
 
-  Asm.emitDwarfUnitLength(EndLabel, BeginLabel, "Length of contribution");
-  Asm.OutStreamer->emitLabel(BeginLabel);
+  MCSymbol *EndLabel =
+      Asm.emitDwarfUnitLength("debug_addr", "Length of contribution");
   Asm.OutStreamer->AddComment("DWARF version number");
   Asm.emitInt16(Asm.getDwarfVersion());
   Asm.OutStreamer->AddComment("Address size");
@@ -47,7 +45,7 @@ void AddressPool::emit(AsmPrinter &Asm, MCSection *AddrSection) {
     return;
 
   // Start the dwarf addr section.
-  Asm.OutStreamer->SwitchSection(AddrSection);
+  Asm.OutStreamer->switchSection(AddrSection);
 
   MCSymbol *EndLabel = nullptr;
 
@@ -68,7 +66,7 @@ void AddressPool::emit(AsmPrinter &Asm, MCSection *AddrSection) {
             : MCSymbolRefExpr::create(I.first, Asm.OutContext);
 
   for (const MCExpr *Entry : Entries)
-    Asm.OutStreamer->emitValue(Entry, Asm.getDataLayout().getPointerSize());
+    Asm.OutStreamer->emitValue(Entry, Asm.MAI->getCodePointerSize());
 
   if (EndLabel)
     Asm.OutStreamer->emitLabel(EndLabel);

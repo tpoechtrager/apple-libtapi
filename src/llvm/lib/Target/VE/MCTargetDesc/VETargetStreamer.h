@@ -11,6 +11,7 @@
 
 #include "llvm/MC/MCELFStreamer.h"
 #include "llvm/MC/MCStreamer.h"
+#include "llvm/Support/FormattedStream.h"
 
 namespace llvm {
 class VETargetStreamer : public MCTargetStreamer {
@@ -19,9 +20,9 @@ class VETargetStreamer : public MCTargetStreamer {
 public:
   VETargetStreamer(MCStreamer &S);
   /// Emit ".register <reg>, #ignore".
-  virtual void emitVERegisterIgnore(unsigned reg) = 0;
+  virtual void emitVERegisterIgnore(unsigned reg){};
   /// Emit ".register <reg>, #scratch".
-  virtual void emitVERegisterScratch(unsigned reg) = 0;
+  virtual void emitVERegisterScratch(unsigned reg){};
 };
 
 // This part is for ascii assembly output

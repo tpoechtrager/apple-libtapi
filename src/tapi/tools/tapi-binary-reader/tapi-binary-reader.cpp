@@ -1,9 +1,8 @@
 //===- tapi-binary-reader/tapi-binary-reader.cpp ----------------*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 ///
@@ -115,7 +114,7 @@ int main(int argc, const char *argv[]) {
     APIJSONOption options = {};
     options.noUUID = noUUID;
     for (auto &r : *results) {
-      APIJSONSerializer serializer(r.second, options);
+      APIJSONSerializer serializer(*r.second, options);
       serializer.serialize(jsonOut);
     }
   }
@@ -131,8 +130,9 @@ int main(int argc, const char *argv[]) {
       errs().resetColor();
     errs() << r.first << "\n";
 
+    SortedAPI sortedResult(*r.second);
     APIPrinter printer(errs(), !noColors);
-    r.second.visit(printer);
+    sortedResult.visit(printer);
   }
 
   return 0;

@@ -9,10 +9,12 @@
 #include "llvm/DebugInfo/DWARF/DWARFFormValue.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallString.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/BinaryFormat/Dwarf.h"
+#include "llvm/DebugInfo/DWARF/DWARFDataExtractor.h"
 #include "llvm/Support/FormatVariadic.h"
-#include "llvm/Support/Host.h"
 #include "llvm/Support/LEB128.h"
+#include "llvm/TargetParser/Host.h"
 #include "gtest/gtest.h"
 #include <climits>
 using namespace llvm;
@@ -29,6 +31,10 @@ TEST(DWARFFormValue, FormClass) {
   EXPECT_FALSE(isFormClass(DW_FORM_data8, DWARFFormValue::FC_Address));
   EXPECT_TRUE(isFormClass(DW_FORM_data8, DWARFFormValue::FC_Constant));
   EXPECT_TRUE(isFormClass(DW_FORM_data8, DWARFFormValue::FC_SectionOffset));
+  EXPECT_TRUE(doesFormBelongToClass(DW_FORM_data8,
+                                    DWARFFormValue::FC_SectionOffset, 3));
+  EXPECT_FALSE(doesFormBelongToClass(DW_FORM_data8,
+                                     DWARFFormValue::FC_SectionOffset, 5));
   EXPECT_TRUE(
       isFormClass(DW_FORM_sec_offset, DWARFFormValue::FC_SectionOffset));
   EXPECT_TRUE(isFormClass(DW_FORM_GNU_str_index, DWARFFormValue::FC_String));
@@ -78,17 +84,17 @@ TEST(DWARFFormValue, SignedConstantForms) {
   auto Sign2 = createDataXFormValue<uint16_t>(DW_FORM_data2, -12345);
   auto Sign4 = createDataXFormValue<uint32_t>(DW_FORM_data4, -123456789);
   auto Sign8 = createDataXFormValue<uint64_t>(DW_FORM_data8, -1);
-  EXPECT_EQ(Sign1.getAsSignedConstant().getValue(), -123);
-  EXPECT_EQ(Sign2.getAsSignedConstant().getValue(), -12345);
-  EXPECT_EQ(Sign4.getAsSignedConstant().getValue(), -123456789);
-  EXPECT_EQ(Sign8.getAsSignedConstant().getValue(), -1);
+  EXPECT_EQ(*Sign1.getAsSignedConstant(), -123);
+  EXPECT_EQ(*Sign2.getAsSignedConstant(), -12345);
+  EXPECT_EQ(*Sign4.getAsSignedConstant(), -123456789);
+  EXPECT_EQ(*Sign8.getAsSignedConstant(), -1);
 
   // Check that we can handle big positive values, but that we return
   // an error just over the limit.
   auto UMax = createULEBFormValue(LLONG_MAX);
   auto TooBig = createULEBFormValue(uint64_t(LLONG_MAX) + 1);
-  EXPECT_EQ(UMax.getAsSignedConstant().getValue(), LLONG_MAX);
-  EXPECT_EQ(TooBig.getAsSignedConstant().hasValue(), false);
+  EXPECT_EQ(*UMax.getAsSignedConstant(), LLONG_MAX);
+  EXPECT_EQ(TooBig.getAsSignedConstant().has_value(), false);
 
   // Sanity check some other forms.
   auto Data1 = createDataXFormValue<uint8_t>(DW_FORM_data1, 120);
@@ -99,14 +105,14 @@ TEST(DWARFFormValue, SignedConstantForms) {
   auto LEBMax = createSLEBFormValue(LLONG_MAX);
   auto LEB1 = createSLEBFormValue(-42);
   auto LEB2 = createSLEBFormValue(42);
-  EXPECT_EQ(Data1.getAsSignedConstant().getValue(), 120);
-  EXPECT_EQ(Data2.getAsSignedConstant().getValue(), 32000);
-  EXPECT_EQ(Data4.getAsSignedConstant().getValue(), 2000000000);
-  EXPECT_EQ(Data8.getAsSignedConstant().getValue(), 0x1234567812345678LL);
-  EXPECT_EQ(LEBMin.getAsSignedConstant().getValue(), LLONG_MIN);
-  EXPECT_EQ(LEBMax.getAsSignedConstant().getValue(), LLONG_MAX);
-  EXPECT_EQ(LEB1.getAsSignedConstant().getValue(), -42);
-  EXPECT_EQ(LEB2.getAsSignedConstant().getValue(), 42);
+  EXPECT_EQ(*Data1.getAsSignedConstant(), 120);
+  EXPECT_EQ(*Data2.getAsSignedConstant(), 32000);
+  EXPECT_EQ(*Data4.getAsSignedConstant(), 2000000000);
+  EXPECT_EQ(*Data8.getAsSignedConstant(), 0x1234567812345678LL);
+  EXPECT_EQ(*LEBMin.getAsSignedConstant(), LLONG_MIN);
+  EXPECT_EQ(*LEBMax.getAsSignedConstant(), LLONG_MAX);
+  EXPECT_EQ(*LEB1.getAsSignedConstant(), -42);
+  EXPECT_EQ(*LEB2.getAsSignedConstant(), 42);
 
   // Data16 is a little tricky.
   char Cksum[16] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15};
@@ -187,7 +193,7 @@ struct FormSkipValueFixture2 : FormSkipValueFixtureBase {};
 TEST_P(FormSkipValueFixture1, skipValuePart1) { doSkipValueTest(); }
 TEST_P(FormSkipValueFixture2, skipValuePart2) { doSkipValueTest(); }
 
-INSTANTIATE_TEST_CASE_P(
+INSTANTIATE_TEST_SUITE_P(
     SkipValueTestParams1, FormSkipValueFixture1,
     testing::Values(
         // Form, Version, AddrSize, DwarfFormat, InitialData, ExpectedSize,
@@ -231,9 +237,11 @@ INSTANTIATE_TEST_CASE_P(
         ParamType(DW_FORM_ref_sup8, 0, 0, DWARF32, SampleU32, 8, true),
         ParamType(DW_FORM_strx1, 0, 0, DWARF32, SampleU32, 1, true),
         ParamType(DW_FORM_strx2, 0, 0, DWARF32, SampleU32, 2, true),
+        ParamType(DW_FORM_strx3, 0, 0, DWARF32, SampleU32, 3, true),
         ParamType(DW_FORM_strx4, 0, 0, DWARF32, SampleU32, 4, true),
         ParamType(DW_FORM_addrx1, 0, 0, DWARF32, SampleU32, 1, true),
         ParamType(DW_FORM_addrx2, 0, 0, DWARF32, SampleU32, 2, true),
+        ParamType(DW_FORM_addrx3, 0, 0, DWARF32, SampleU32, 3, true),
         ParamType(DW_FORM_addrx4, 0, 0, DWARF32, SampleU32, 4, true),
         ParamType(DW_FORM_sec_offset, 0, 1, DWARF32, SampleU32, 0, false),
         ParamType(DW_FORM_sec_offset, 1, 0, DWARF32, SampleU32, 0, false),
@@ -246,9 +254,9 @@ INSTANTIATE_TEST_CASE_P(
         ParamType(DW_FORM_strp_sup, 0, 1, DWARF32, SampleU32, 0, false),
         ParamType(DW_FORM_strp_sup, 1, 0, DWARF32, SampleU32, 0, false),
         ParamType(DW_FORM_strp_sup, 1, 1, DWARF32, SampleU32, 4, true),
-        ParamType(DW_FORM_strp_sup, 1, 1, DWARF64, SampleU32, 8, true)), );
+        ParamType(DW_FORM_strp_sup, 1, 1, DWARF64, SampleU32, 8, true)));
 
-INSTANTIATE_TEST_CASE_P(
+INSTANTIATE_TEST_SUITE_P(
     SkipValueTestParams2, FormSkipValueFixture2,
     testing::Values(
         ParamType(DW_FORM_line_strp, 0, 1, DWARF32, SampleU32, 0, false),
@@ -301,8 +309,7 @@ INSTANTIATE_TEST_CASE_P(
                   ArrayRef<uint8_t>(IndirectIndirectEnd,
                                     sizeof(IndirectIndirectEnd)),
                   2, false),
-        ParamType(/*Unknown=*/Form(0xff), 4, 4, DWARF32, SampleU32, 0,
-                  false)), );
+        ParamType(/*Unknown=*/Form(0xff), 4, 4, DWARF32, SampleU32, 0, false)));
 
 using ErrorParams = std::tuple<Form, std::vector<uint8_t>>;
 struct ExtractValueErrorFixture : public testing::TestWithParam<ErrorParams> {
@@ -323,7 +330,7 @@ TEST_P(ExtractValueErrorFixture, Test) {
   EXPECT_FALSE(Form.extractValue(Data, &Offset, {0, 0, DWARF32}));
 }
 
-INSTANTIATE_TEST_CASE_P(
+INSTANTIATE_TEST_SUITE_P(
     ExtractValueErrorParams, ExtractValueErrorFixture,
     testing::Values(
         ErrorParams{DW_FORM_ref_addr, {}}, ErrorParams{DW_FORM_block, {}},
@@ -336,8 +343,7 @@ INSTANTIATE_TEST_CASE_P(
         ErrorParams{DW_FORM_udata, {}}, ErrorParams{DW_FORM_string, {}},
         ErrorParams{DW_FORM_indirect, {}},
         ErrorParams{DW_FORM_indirect, {DW_FORM_data1}},
-        ErrorParams{DW_FORM_strp_sup, {}},
-        ErrorParams{DW_FORM_ref_sig8, {}}), );
+        ErrorParams{DW_FORM_strp_sup, {}}, ErrorParams{DW_FORM_ref_sig8, {}}));
 
 using DumpValueParams =
     std::tuple<Form, ArrayRef<uint8_t>, DwarfFormat, StringRef>;
@@ -379,7 +385,7 @@ ArrayRef<uint8_t> DumpTestSample32 = toBytes(DumpTestSample32Val);
 const uint64_t DumpTestSample64Val = 0x11223344556677;
 ArrayRef<uint8_t> DumpTestSample64 = toBytes(DumpTestSample64Val);
 
-INSTANTIATE_TEST_CASE_P(
+INSTANTIATE_TEST_SUITE_P(
     DumpValueParams, DumpValueFixture,
     testing::Values(DumpValueParams{DW_FORM_strp, DumpTestSample32, DWARF32,
                                     " .debug_str[0x00112233] = "},
@@ -393,6 +399,6 @@ INSTANTIATE_TEST_CASE_P(
                     DumpValueParams{DW_FORM_sec_offset, DumpTestSample32,
                                     DWARF32, "0x00112233"},
                     DumpValueParams{DW_FORM_sec_offset, DumpTestSample64,
-                                    DWARF64, "0x0011223344556677"}), );
+                                    DWARF64, "0x0011223344556677"}));
 
 } // end anonymous namespace

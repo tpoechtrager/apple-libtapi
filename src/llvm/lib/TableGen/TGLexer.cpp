@@ -55,14 +55,16 @@ TGLexer::TGLexer(SourceMgr &SM, ArrayRef<std::string> Macros) : SrcMgr(SM) {
       std::make_unique<std::vector<PreprocessorControlDesc>>());
 
   // Put all macros defined in the command line into the DefinedMacros set.
-  std::for_each(Macros.begin(), Macros.end(),
-                [this](const std::string &MacroName) {
-                  DefinedMacros.insert(MacroName);
-                });
+  for (const std::string &MacroName : Macros)
+    DefinedMacros.insert(MacroName);
 }
 
 SMLoc TGLexer::getLoc() const {
   return SMLoc::getFromPointer(TokStart);
+}
+
+SMRange TGLexer::getLocRange() const {
+  return {getLoc(), SMLoc::getFromPointer(CurPtr)};
 }
 
 /// ReturnError - Set the error to the specified string at the specified
@@ -108,16 +110,19 @@ int TGLexer::getNextChar() {
   switch (CurChar) {
   default:
     return (unsigned char)CurChar;
-  case 0: {
-    // A nul character in the stream is either the end of the current buffer or
-    // a random nul in the file.  Disambiguate that here.
-    if (CurPtr-1 != CurBuf.end())
-      return 0;  // Just whitespace.
 
-    // Otherwise, return end of file.
-    --CurPtr;  // Another call to lex will return EOF again.
-    return EOF;
+  case 0: {
+    // A NUL character in the stream is either the end of the current buffer or
+    // a spurious NUL in the file.  Disambiguate that here.
+    if (CurPtr - 1 == CurBuf.end()) {
+      --CurPtr; // Arrange for another call to return EOF again.
+      return EOF;
+    }
+    PrintError(getLoc(),
+               "NUL character is invalid in source; treated as space");
+    return ' ';
   }
+
   case '\n':
   case '\r':
     // Handle the newline character by ignoring it and incrementing the line
@@ -197,7 +202,6 @@ tgtok::TokKind TGLexer::LexToken(bool FileOrLineStart) {
     PrintFatalError("getNextChar() must never return '\r'");
     return tgtok::Error;
 
-  case 0:
   case ' ':
   case '\t':
     // Ignore whitespace.
@@ -239,7 +243,7 @@ tgtok::TokKind TGLexer::LexToken(bool FileOrLineStart) {
         case '0': case '1':
           if (NextChar == 'b')
             return LexNumber();
-          LLVM_FALLTHROUGH;
+          [[fallthrough]];
         case '2': case '3': case '4': case '5':
         case '6': case '7': case '8': case '9':
         case 'a': case 'b': case 'c': case 'd': case 'e': case 'f':
@@ -306,7 +310,7 @@ tgtok::TokKind TGLexer::LexString() {
     case '\0':
       if (CurPtr == CurBuf.end())
         return ReturnError(StrStart, "End of file in string literal");
-      LLVM_FALLTHROUGH;
+      [[fallthrough]];
     default:
       return ReturnError(CurPtr, "invalid escape in string literal");
     }
@@ -365,6 +369,7 @@ tgtok::TokKind TGLexer::LexIdentifier() {
     .Case("if", tgtok::If)
     .Case("then", tgtok::Then)
     .Case("else", tgtok::ElseKW)
+    .Case("assert", tgtok::Assert)
     .Default(tgtok::Id);
 
   // A couple of tokens require special processing.
@@ -414,22 +419,12 @@ bool TGLexer::LexInclude() {
   return false;
 }
 
+/// SkipBCPLComment - Skip over the comment by finding the next CR or LF.
+/// Or we may end up at the end of the buffer.
 void TGLexer::SkipBCPLComment() {
   ++CurPtr;  // skip the second slash.
-  while (true) {
-    switch (*CurPtr) {
-    case '\n':
-    case '\r':
-      return;  // Newline is end of comment.
-    case 0:
-      // If this is the end of the buffer, end the comment.
-      if (CurPtr == CurBuf.end())
-        return;
-      break;
-    }
-    // Otherwise, skip the character.
-    ++CurPtr;
-  }
+  auto EOLPos = CurBuf.find_first_of("\r\n", CurPtr - CurBuf.data());
+  CurPtr = (EOLPos == StringRef::npos) ? CurBuf.end() : CurBuf.data() + EOLPos;
 }
 
 /// SkipCComment - This skips C-style /**/ comments.  The only difference from C
@@ -554,45 +549,57 @@ tgtok::TokKind TGLexer::LexExclaim() {
 
   // Check to see which operator this is.
   tgtok::TokKind Kind =
-    StringSwitch<tgtok::TokKind>(StringRef(Start, CurPtr - Start))
-    .Case("eq", tgtok::XEq)
-    .Case("ne", tgtok::XNe)
-    .Case("le", tgtok::XLe)
-    .Case("lt", tgtok::XLt)
-    .Case("ge", tgtok::XGe)
-    .Case("gt", tgtok::XGt)
-    .Case("if", tgtok::XIf)
-    .Case("cond", tgtok::XCond)
-    .Case("isa", tgtok::XIsA)
-    .Case("head", tgtok::XHead)
-    .Case("tail", tgtok::XTail)
-    .Case("size", tgtok::XSize)
-    .Case("con", tgtok::XConcat)
-    .Case("dag", tgtok::XDag)
-    .Case("add", tgtok::XADD)
-    .Case("sub", tgtok::XSUB)
-    .Case("mul", tgtok::XMUL)
-    .Case("not", tgtok::XNOT)
-    .Case("and", tgtok::XAND)
-    .Case("or", tgtok::XOR)
-    .Case("xor", tgtok::XXOR)
-    .Case("shl", tgtok::XSHL)
-    .Case("sra", tgtok::XSRA)
-    .Case("srl", tgtok::XSRL)
-    .Case("cast", tgtok::XCast)
-    .Case("empty", tgtok::XEmpty)
-    .Case("subst", tgtok::XSubst)
-    .Case("foldl", tgtok::XFoldl)
-    .Case("foreach", tgtok::XForEach)
-    .Case("filter", tgtok::XFilter)
-    .Case("listconcat", tgtok::XListConcat)
-    .Case("listsplat", tgtok::XListSplat)
-    .Case("strconcat", tgtok::XStrConcat)
-    .Case("interleave", tgtok::XInterleave)
-    .Case("substr", tgtok::XSubstr)
-    .Cases("setdagop", "setop", tgtok::XSetDagOp) // !setop is deprecated.
-    .Cases("getdagop", "getop", tgtok::XGetDagOp) // !getop is deprecated.
-    .Default(tgtok::Error);
+      StringSwitch<tgtok::TokKind>(StringRef(Start, CurPtr - Start))
+          .Case("eq", tgtok::XEq)
+          .Case("ne", tgtok::XNe)
+          .Case("le", tgtok::XLe)
+          .Case("lt", tgtok::XLt)
+          .Case("ge", tgtok::XGe)
+          .Case("gt", tgtok::XGt)
+          .Case("if", tgtok::XIf)
+          .Case("cond", tgtok::XCond)
+          .Case("isa", tgtok::XIsA)
+          .Case("head", tgtok::XHead)
+          .Case("tail", tgtok::XTail)
+          .Case("size", tgtok::XSize)
+          .Case("con", tgtok::XConcat)
+          .Case("dag", tgtok::XDag)
+          .Case("add", tgtok::XADD)
+          .Case("sub", tgtok::XSUB)
+          .Case("mul", tgtok::XMUL)
+          .Case("div", tgtok::XDIV)
+          .Case("not", tgtok::XNOT)
+          .Case("logtwo", tgtok::XLOG2)
+          .Case("and", tgtok::XAND)
+          .Case("or", tgtok::XOR)
+          .Case("xor", tgtok::XXOR)
+          .Case("shl", tgtok::XSHL)
+          .Case("sra", tgtok::XSRA)
+          .Case("srl", tgtok::XSRL)
+          .Case("cast", tgtok::XCast)
+          .Case("empty", tgtok::XEmpty)
+          .Case("subst", tgtok::XSubst)
+          .Case("foldl", tgtok::XFoldl)
+          .Case("foreach", tgtok::XForEach)
+          .Case("filter", tgtok::XFilter)
+          .Case("listconcat", tgtok::XListConcat)
+          .Case("listsplat", tgtok::XListSplat)
+          .Case("listremove", tgtok::XListRemove)
+          .Case("range", tgtok::XRange)
+          .Case("strconcat", tgtok::XStrConcat)
+          .Case("interleave", tgtok::XInterleave)
+          .Case("substr", tgtok::XSubstr)
+          .Case("find", tgtok::XFind)
+          .Cases("setdagop", "setop", tgtok::XSetDagOp) // !setop is deprecated.
+          .Cases("getdagop", "getop", tgtok::XGetDagOp) // !getop is deprecated.
+          .Case("getdagarg", tgtok::XGetDagArg)
+          .Case("getdagname", tgtok::XGetDagName)
+          .Case("setdagarg", tgtok::XSetDagArg)
+          .Case("setdagname", tgtok::XSetDagName)
+          .Case("exists", tgtok::XExists)
+          .Case("tolower", tgtok::XToLower)
+          .Case("toupper", tgtok::XToUpper)
+          .Default(tgtok::Error);
 
   return Kind != tgtok::Error ? Kind : ReturnError(Start-1, "Unknown operator");
 }
@@ -625,12 +632,12 @@ bool TGLexer::prepExitInclude(bool IncludeStackMustBeEmpty) {
 }
 
 tgtok::TokKind TGLexer::prepIsDirective() const {
-  for (unsigned ID = 0; ID < llvm::array_lengthof(PreprocessorDirs); ++ID) {
+  for (const auto &PD : PreprocessorDirs) {
     int NextChar = *CurPtr;
     bool Match = true;
     unsigned I = 0;
-    for (; I < strlen(PreprocessorDirs[ID].Word); ++I) {
-      if (NextChar != PreprocessorDirs[ID].Word[I]) {
+    for (; I < strlen(PD.Word); ++I) {
+      if (NextChar != PD.Word[I]) {
         Match = false;
         break;
       }
@@ -641,7 +648,7 @@ tgtok::TokKind TGLexer::prepIsDirective() const {
     // Check for whitespace after the directive.  If there is no whitespace,
     // then we do not recognize it as a preprocessing directive.
     if (Match) {
-      tgtok::TokKind Kind = PreprocessorDirs[ID].Kind;
+      tgtok::TokKind Kind = PD.Kind;
 
       // New line and EOF may follow only #else/#endif.  It will be reported
       // as an error for #ifdef/#define after the call to prepLexMacroName().
@@ -682,10 +689,10 @@ tgtok::TokKind TGLexer::prepIsDirective() const {
 bool TGLexer::prepEatPreprocessorDirective(tgtok::TokKind Kind) {
   TokStart = CurPtr;
 
-  for (unsigned ID = 0; ID < llvm::array_lengthof(PreprocessorDirs); ++ID)
-    if (PreprocessorDirs[ID].Kind == Kind) {
+  for (const auto &PD : PreprocessorDirs)
+    if (PD.Kind == Kind) {
       // Advance CurPtr to the end of the preprocessing word.
-      CurPtr += strlen(PreprocessorDirs[ID].Word);
+      CurPtr += strlen(PD.Word);
       return true;
     }
 
@@ -1023,12 +1030,10 @@ void TGLexer::prepSkipToLineEnd() {
 }
 
 bool TGLexer::prepIsProcessingEnabled() {
-  for (auto I = PrepIncludeStack.back()->rbegin(),
-            E = PrepIncludeStack.back()->rend();
-       I != E; ++I) {
-    if (!I->IsDefined)
+  for (const PreprocessorControlDesc &I :
+       llvm::reverse(*PrepIncludeStack.back()))
+    if (!I.IsDefined)
       return false;
-  }
 
   return true;
 }

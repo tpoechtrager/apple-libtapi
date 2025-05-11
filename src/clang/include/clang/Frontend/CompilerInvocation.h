@@ -16,6 +16,7 @@
 #include "clang/Basic/LLVM.h"
 #include "clang/Basic/LangOptions.h"
 #include "clang/Basic/LangStandard.h"
+#include "clang/CAS/CASOptions.h"
 #include "clang/Frontend/DependencyOutputOptions.h"
 #include "clang/Frontend/FrontendOptions.h"
 #include "clang/Frontend/MigratorOptions.h"
@@ -42,6 +43,11 @@ class FileSystem;
 
 } // namespace vfs
 
+namespace cas {
+
+class ObjectStore;
+}
+
 } // namespace llvm
 
 namespace clang {
@@ -50,6 +56,11 @@ class DiagnosticsEngine;
 class HeaderSearchOptions;
 class PreprocessorOptions;
 class TargetOptions;
+
+// This lets us create the DiagnosticsEngine with a properly-filled-out
+// DiagnosticOptions instance.
+std::unique_ptr<DiagnosticOptions>
+CreateAndPopulateDiagOpts(ArrayRef<const char *> Argv);
 
 /// Fill out Opts based on the options given in Args.
 ///
@@ -62,8 +73,12 @@ bool ParseDiagnosticArgs(DiagnosticOptions &Opts, llvm::opt::ArgList &Args,
                          DiagnosticsEngine *Diags = nullptr,
                          bool DefaultDiagColor = true);
 
+/// The base class of CompilerInvocation. It keeps individual option objects
+/// behind reference-counted pointers, which is useful for clients that want to
+/// keep select option objects alive (even after CompilerInvocation gets
+/// destroyed) without making a copy.
 class CompilerInvocationBase {
-public:
+protected:
   /// Options controlling the language variant.
   std::shared_ptr<LangOptions> LangOpts;
 
@@ -74,44 +89,144 @@ public:
   IntrusiveRefCntPtr<DiagnosticOptions> DiagnosticOpts;
 
   /// Options controlling the \#include directive.
-  std::shared_ptr<HeaderSearchOptions> HeaderSearchOpts;
+  std::shared_ptr<HeaderSearchOptions> HSOpts;
 
   /// Options controlling the preprocessor (aside from \#include handling).
-  std::shared_ptr<PreprocessorOptions> PreprocessorOpts;
+  std::shared_ptr<PreprocessorOptions> PPOpts;
+
+  /// Options controlling the static analyzer.
+  AnalyzerOptionsRef AnalyzerOpts;
+
+  std::shared_ptr<MigratorOptions> MigratorOpts;
+
+  /// Options controlling API notes.
+  std::shared_ptr<APINotesOptions> APINotesOpts;
+
+  /// Options configuring the CAS.
+  std::shared_ptr<CASOptions> CASOpts;
+
+  /// Options controlling IRgen and the backend.
+  std::shared_ptr<CodeGenOptions> CodeGenOpts;
+
+  /// Options controlling file system operations.
+  std::shared_ptr<FileSystemOptions> FSOpts;
+
+  /// Options controlling the frontend itself.
+  std::shared_ptr<FrontendOptions> FrontendOpts;
+
+  /// Options controlling dependency output.
+  std::shared_ptr<DependencyOutputOptions> DependencyOutputOpts;
+
+  /// Options controlling preprocessed output.
+  std::shared_ptr<PreprocessorOutputOptions> PreprocessorOutputOpts;
+
+  /// Dummy tag type whose instance can be passed into the constructor to
+  /// prevent creation of the reference-counted option objects.
+  struct EmptyConstructor {};
 
   CompilerInvocationBase();
-  CompilerInvocationBase(const CompilerInvocationBase &X);
-  CompilerInvocationBase &operator=(const CompilerInvocationBase &) = delete;
-  ~CompilerInvocationBase();
+  CompilerInvocationBase(EmptyConstructor) {}
+  CompilerInvocationBase(const CompilerInvocationBase &X) = delete;
+  CompilerInvocationBase(CompilerInvocationBase &&X) = default;
+  CompilerInvocationBase &operator=(const CompilerInvocationBase &X) = delete;
+  CompilerInvocationBase &deep_copy_assign(const CompilerInvocationBase &X);
+  CompilerInvocationBase &shallow_copy_assign(const CompilerInvocationBase &X);
+  CompilerInvocationBase &operator=(CompilerInvocationBase &&X) = default;
+  ~CompilerInvocationBase() = default;
 
-  LangOptions *getLangOpts() { return LangOpts.get(); }
-  const LangOptions *getLangOpts() const { return LangOpts.get(); }
+public:
+  /// Const getters.
+  /// @{
+  const LangOptions &getLangOpts() const { return *LangOpts; }
+  const TargetOptions &getTargetOpts() const { return *TargetOpts; }
+  const DiagnosticOptions &getDiagnosticOpts() const { return *DiagnosticOpts; }
+  const HeaderSearchOptions &getHeaderSearchOpts() const { return *HSOpts; }
+  const PreprocessorOptions &getPreprocessorOpts() const { return *PPOpts; }
+  const AnalyzerOptions &getAnalyzerOpts() const { return *AnalyzerOpts; }
+  const MigratorOptions &getMigratorOpts() const { return *MigratorOpts; }
+  const APINotesOptions &getAPINotesOpts() const { return *APINotesOpts; }
+  const CASOptions &getCASOpts() const { return *CASOpts; }
+  const CodeGenOptions &getCodeGenOpts() const { return *CodeGenOpts; }
+  const FileSystemOptions &getFileSystemOpts() const { return *FSOpts; }
+  const FrontendOptions &getFrontendOpts() const { return *FrontendOpts; }
+  const DependencyOutputOptions &getDependencyOutputOpts() const {
+    return *DependencyOutputOpts;
+  }
+  const PreprocessorOutputOptions &getPreprocessorOutputOpts() const {
+    return *PreprocessorOutputOpts;
+  }
+  /// @}
 
-  TargetOptions &getTargetOpts() { return *TargetOpts.get(); }
-  const TargetOptions &getTargetOpts() const { return *TargetOpts.get(); }
-
-  DiagnosticOptions &getDiagnosticOpts() const { return *DiagnosticOpts; }
-
-  HeaderSearchOptions &getHeaderSearchOpts() { return *HeaderSearchOpts; }
-
-  const HeaderSearchOptions &getHeaderSearchOpts() const {
-    return *HeaderSearchOpts;
+  /// Command line generation.
+  /// @{
+  using StringAllocator = llvm::function_ref<const char *(const Twine &)>;
+  /// Generate cc1-compatible command line arguments from this instance.
+  ///
+  /// \param [out] Args - The generated arguments. Note that the caller is
+  /// responsible for inserting the path to the clang executable and "-cc1" if
+  /// desired.
+  /// \param SA - A function that given a Twine can allocate storage for a given
+  /// command line argument and return a pointer to the newly allocated string.
+  /// The returned pointer is what gets appended to Args.
+  void generateCC1CommandLine(llvm::SmallVectorImpl<const char *> &Args,
+                              StringAllocator SA) const {
+    generateCC1CommandLine([&](const Twine &Arg) {
+      // No need to allocate static string literals.
+      Args.push_back(Arg.isSingleStringLiteral()
+                         ? Arg.getSingleStringRef().data()
+                         : SA(Arg));
+    });
   }
 
-  std::shared_ptr<HeaderSearchOptions> getHeaderSearchOptsPtr() const {
-    return HeaderSearchOpts;
-  }
+  using ArgumentConsumer = llvm::function_ref<void(const Twine &)>;
+  /// Generate cc1-compatible command line arguments from this instance.
+  ///
+  /// \param Consumer - Callback that gets invoked for every single generated
+  /// command line argument.
+  void generateCC1CommandLine(ArgumentConsumer Consumer) const;
 
-  std::shared_ptr<PreprocessorOptions> getPreprocessorOptsPtr() {
-    return PreprocessorOpts;
-  }
+  /// Generate cc1-compatible command line arguments from this instance,
+  /// wrapping the result as a std::vector<std::string>.
+  ///
+  /// This is a (less-efficient) wrapper over generateCC1CommandLine().
+  std::vector<std::string> getCC1CommandLine() const;
 
-  PreprocessorOptions &getPreprocessorOpts() { return *PreprocessorOpts; }
+private:
+  /// Generate command line options from DiagnosticOptions.
+  static void GenerateDiagnosticArgs(const DiagnosticOptions &Opts,
+                                     ArgumentConsumer Consumer,
+                                     bool DefaultDiagColor);
 
-  const PreprocessorOptions &getPreprocessorOpts() const {
-    return *PreprocessorOpts;
+  /// Generate command line options from LangOptions.
+  static void GenerateLangArgs(const LangOptions &Opts,
+                               ArgumentConsumer Consumer, const llvm::Triple &T,
+                               InputKind IK);
+
+  // Generate command line options from CodeGenOptions.
+  static void GenerateCodeGenArgs(const CodeGenOptions &Opts,
+                                  ArgumentConsumer Consumer,
+                                  const llvm::Triple &T,
+                                  const std::string &OutputFile,
+                                  const LangOptions *LangOpts);
+  /// @}
+
+public:
+  /// Generate command line options from CASOptions.
+  static void GenerateCASArgs(const CASOptions &Opts,
+                              ArgumentConsumer Consumer);
+  static void GenerateCASArgs(const CASOptions &Opts,
+                              SmallVectorImpl<const char *> &Args,
+                              StringAllocator SA) {
+    GenerateCASArgs(Opts, [&](const Twine &Arg) {
+      // No need to allocate static string literals.
+      Args.push_back(Arg.isSingleStringLiteral()
+                         ? Arg.getSingleStringRef().data()
+                         : SA(Arg));
+    });
   }
 };
+
+class CowCompilerInvocation;
 
 /// Helper class for holding the data necessary to invoke the compiler.
 ///
@@ -119,34 +234,76 @@ public:
 /// compiler, including data such as the include paths, the code generation
 /// options, the warning flags, and so on.
 class CompilerInvocation : public CompilerInvocationBase {
-  /// Options controlling the static analyzer.
-  AnalyzerOptionsRef AnalyzerOpts;
-
-  MigratorOptions MigratorOpts;
-
-  /// Options controlling API notes.
-  APINotesOptions APINotesOpts;
-
-  /// Options controlling IRgen and the backend.
-  CodeGenOptions CodeGenOpts;
-
-  /// Options controlling dependency output.
-  DependencyOutputOptions DependencyOutputOpts;
-
-  /// Options controlling file system operations.
-  FileSystemOptions FileSystemOpts;
-
-  /// Options controlling the frontend itself.
-  FrontendOptions FrontendOpts;
-
-  /// Options controlling preprocessed output.
-  PreprocessorOutputOptions PreprocessorOutputOpts;
-
 public:
-  CompilerInvocation() : AnalyzerOpts(new AnalyzerOptions()) {}
+  CompilerInvocation() = default;
+  CompilerInvocation(const CompilerInvocation &X)
+      : CompilerInvocationBase(EmptyConstructor{}) {
+    deep_copy_assign(X);
+  }
+  CompilerInvocation(CompilerInvocation &&) = default;
+  CompilerInvocation &operator=(const CompilerInvocation &X) {
+    deep_copy_assign(X);
+    return *this;
+  }
+  ~CompilerInvocation() = default;
 
-  /// @name Utility Methods
+  explicit CompilerInvocation(const CowCompilerInvocation &X);
+  CompilerInvocation &operator=(const CowCompilerInvocation &X);
+
+  /// Const getters.
   /// @{
+  // Note: These need to be pulled in manually. Otherwise, they get hidden by
+  // the mutable getters with the same names.
+  using CompilerInvocationBase::getLangOpts;
+  using CompilerInvocationBase::getTargetOpts;
+  using CompilerInvocationBase::getDiagnosticOpts;
+  using CompilerInvocationBase::getHeaderSearchOpts;
+  using CompilerInvocationBase::getPreprocessorOpts;
+  using CompilerInvocationBase::getAnalyzerOpts;
+  using CompilerInvocationBase::getMigratorOpts;
+  using CompilerInvocationBase::getAPINotesOpts;
+  using CompilerInvocationBase::getCASOpts;
+  using CompilerInvocationBase::getCodeGenOpts;
+  using CompilerInvocationBase::getFileSystemOpts;
+  using CompilerInvocationBase::getFrontendOpts;
+  using CompilerInvocationBase::getDependencyOutputOpts;
+  using CompilerInvocationBase::getPreprocessorOutputOpts;
+  /// @}
+
+  /// Mutable getters.
+  /// @{
+  LangOptions &getLangOpts() { return *LangOpts; }
+  TargetOptions &getTargetOpts() { return *TargetOpts; }
+  DiagnosticOptions &getDiagnosticOpts() { return *DiagnosticOpts; }
+  HeaderSearchOptions &getHeaderSearchOpts() { return *HSOpts; }
+  PreprocessorOptions &getPreprocessorOpts() { return *PPOpts; }
+  AnalyzerOptions &getAnalyzerOpts() { return *AnalyzerOpts; }
+  MigratorOptions &getMigratorOpts() { return *MigratorOpts; }
+  APINotesOptions &getAPINotesOpts() { return *APINotesOpts; }
+  CASOptions &getCASOpts() { return *CASOpts; }
+  CodeGenOptions &getCodeGenOpts() { return *CodeGenOpts; }
+  FileSystemOptions &getFileSystemOpts() { return *FSOpts; }
+  FrontendOptions &getFrontendOpts() { return *FrontendOpts; }
+  DependencyOutputOptions &getDependencyOutputOpts() {
+    return *DependencyOutputOpts;
+  }
+  PreprocessorOutputOptions &getPreprocessorOutputOpts() {
+    return *PreprocessorOutputOpts;
+  }
+  /// @}
+
+  /// Base class internals.
+  /// @{
+  using CompilerInvocationBase::LangOpts;
+  using CompilerInvocationBase::TargetOpts;
+  using CompilerInvocationBase::DiagnosticOpts;
+  std::shared_ptr<HeaderSearchOptions> getHeaderSearchOptsPtr() {
+    return HSOpts;
+  }
+  std::shared_ptr<PreprocessorOptions> getPreprocessorOptsPtr() {
+    return PPOpts;
+  }
+  /// @}
 
   /// Create a compiler invocation from a list of input options.
   /// \returns true on success.
@@ -174,94 +331,111 @@ public:
   /// executable), for finding the builtin compiler path.
   static std::string GetResourcesPath(const char *Argv0, void *MainAddr);
 
-  /// Set language defaults for the given input language and
-  /// language standard in the given LangOptions object.
-  ///
-  /// \param Opts - The LangOptions object to set up.
-  /// \param IK - The input language.
-  /// \param T - The target triple.
-  /// \param PPOpts - The PreprocessorOptions affected.
-  /// \param LangStd - The input language standard.
-  static void setLangDefaults(LangOptions &Opts, InputKind IK,
-                   const llvm::Triple &T, PreprocessorOptions &PPOpts,
-                   LangStandard::Kind LangStd = LangStandard::lang_unspecified);
-
   /// Retrieve a module hash string that is suitable for uniquely
   /// identifying the conditions under which the module was built.
   std::string getModuleHash(DiagnosticsEngine &Diags) const;
 
-  using StringAllocator = llvm::function_ref<const char *(const llvm::Twine &)>;
-  /// Generate a cc1-compatible command line arguments from this instance.
+  /// Check that \p Args can be parsed and re-serialized without change,
+  /// emiting diagnostics for any differences.
   ///
-  /// \param [out] Args - The generated arguments. Note that the caller is
-  /// responsible for inserting the path to the clang executable and "-cc1" if
-  /// desired.
-  /// \param SA - A function that given a Twine can allocate storage for a given
-  /// command line argument and return a pointer to the newly allocated string.
-  /// The returned pointer is what gets appended to Args.
-  void generateCC1CommandLine(llvm::SmallVectorImpl<const char *> &Args,
-                              StringAllocator SA) const;
+  /// This check is only suitable for command-lines that are expected to already
+  /// be canonical.
+  ///
+  /// \return false if there are any errors.
+  static bool checkCC1RoundTrip(ArrayRef<const char *> Args,
+                                DiagnosticsEngine &Diags,
+                                const char *Argv0 = nullptr);
 
-  /// @}
-  /// @name Option Subgroups
-  /// @{
+  /// Reset all of the options that are not considered when building a
+  /// module.
+  void resetNonModularOptions();
 
-  AnalyzerOptionsRef getAnalyzerOpts() const { return AnalyzerOpts; }
+  /// Disable implicit modules and canonicalize options that are only used by
+  /// implicit modules.
+  void clearImplicitModuleBuildOptions();
 
-  MigratorOptions &getMigratorOpts() { return MigratorOpts; }
-  const MigratorOptions &getMigratorOpts() const { return MigratorOpts; }
-
-  APINotesOptions &getAPINotesOpts() { return APINotesOpts; }
-  const APINotesOptions &getAPINotesOpts() const { return APINotesOpts; }
-
-  CodeGenOptions &getCodeGenOpts() { return CodeGenOpts; }
-  const CodeGenOptions &getCodeGenOpts() const { return CodeGenOpts; }
-
-  DependencyOutputOptions &getDependencyOutputOpts() {
-    return DependencyOutputOpts;
-  }
-
-  const DependencyOutputOptions &getDependencyOutputOpts() const {
-    return DependencyOutputOpts;
-  }
-
-  FileSystemOptions &getFileSystemOpts() { return FileSystemOpts; }
-
-  const FileSystemOptions &getFileSystemOpts() const {
-    return FileSystemOpts;
-  }
-
-  FrontendOptions &getFrontendOpts() { return FrontendOpts; }
-  const FrontendOptions &getFrontendOpts() const { return FrontendOpts; }
-
-  PreprocessorOutputOptions &getPreprocessorOutputOpts() {
-    return PreprocessorOutputOpts;
-  }
-
-  const PreprocessorOutputOptions &getPreprocessorOutputOpts() const {
-    return PreprocessorOutputOpts;
-  }
-
-  /// @}
+  /// Parse command line options that map to \p CASOptions.
+  static bool ParseCASArgs(CASOptions &Opts, const llvm::opt::ArgList &Args,
+                           DiagnosticsEngine &Diags);
 
 private:
-  /// Parse options for flags that expose marshalling information in their
-  /// table-gen definition
-  ///
-  /// \param Args - The argument list containing the arguments to parse
-  /// \param Diags - The DiagnosticsEngine associated with CreateFromArgs
-  /// \returns - True if parsing was successful, false otherwise
-  bool parseSimpleArgs(const llvm::opt::ArgList &Args,
-                       DiagnosticsEngine &Diags);
+  static bool CreateFromArgsImpl(CompilerInvocation &Res,
+                                 ArrayRef<const char *> CommandLineArgs,
+                                 DiagnosticsEngine &Diags, const char *Argv0);
+
+  /// Parse command line options that map to LangOptions.
+  static bool ParseLangArgs(LangOptions &Opts, llvm::opt::ArgList &Args,
+                            InputKind IK, const llvm::Triple &T,
+                            std::vector<std::string> &Includes,
+                            DiagnosticsEngine &Diags);
+
+  /// Parse command line options that map to CodeGenOptions.
+  static bool ParseCodeGenArgs(CodeGenOptions &Opts, llvm::opt::ArgList &Args,
+                               InputKind IK, DiagnosticsEngine &Diags,
+                               const llvm::Triple &T,
+                               const std::string &OutputFile,
+                               const LangOptions &LangOptsRef,
+                               const FileSystemOptions &FSOpts,
+                               const FrontendOptions &FEOpts,
+                               const CASOptions &CASOpts);
 };
 
-IntrusiveRefCntPtr<llvm::vfs::FileSystem>
-createVFSFromCompilerInvocation(const CompilerInvocation &CI,
-                                DiagnosticsEngine &Diags);
+/// Same as \c CompilerInvocation, but with copy-on-write optimization.
+class CowCompilerInvocation : public CompilerInvocationBase {
+public:
+  CowCompilerInvocation() = default;
+  CowCompilerInvocation(const CowCompilerInvocation &X)
+      : CompilerInvocationBase(EmptyConstructor{}) {
+    shallow_copy_assign(X);
+  }
+  CowCompilerInvocation(CowCompilerInvocation &&) = default;
+  CowCompilerInvocation &operator=(const CowCompilerInvocation &X) {
+    shallow_copy_assign(X);
+    return *this;
+  }
+  ~CowCompilerInvocation() = default;
+
+  CowCompilerInvocation(const CompilerInvocation &X)
+      : CompilerInvocationBase(EmptyConstructor{}) {
+    deep_copy_assign(X);
+  }
+
+  CowCompilerInvocation(CompilerInvocation &&X)
+      : CompilerInvocationBase(std::move(X)) {}
+
+  // Const getters are inherited from the base class.
+
+  /// Mutable getters.
+  /// @{
+  LangOptions &getMutLangOpts();
+  TargetOptions &getMutTargetOpts();
+  DiagnosticOptions &getMutDiagnosticOpts();
+  HeaderSearchOptions &getMutHeaderSearchOpts();
+  PreprocessorOptions &getMutPreprocessorOpts();
+  AnalyzerOptions &getMutAnalyzerOpts();
+  MigratorOptions &getMutMigratorOpts();
+  APINotesOptions &getMutAPINotesOpts();
+  CASOptions &getMutCASOpts();
+  CodeGenOptions &getMutCodeGenOpts();
+  FileSystemOptions &getMutFileSystemOpts();
+  FrontendOptions &getMutFrontendOpts();
+  DependencyOutputOptions &getMutDependencyOutputOpts();
+  PreprocessorOutputOptions &getMutPreprocessorOutputOpts();
+  /// @}
+};
+
+IntrusiveRefCntPtr<llvm::vfs::FileSystem> createVFSFromCompilerInvocation(
+    const CompilerInvocation &CI, DiagnosticsEngine &Diags,
+    std::shared_ptr<llvm::cas::ObjectStore> OverrideCAS = nullptr);
 
 IntrusiveRefCntPtr<llvm::vfs::FileSystem> createVFSFromCompilerInvocation(
     const CompilerInvocation &CI, DiagnosticsEngine &Diags,
     IntrusiveRefCntPtr<llvm::vfs::FileSystem> BaseFS);
+
+IntrusiveRefCntPtr<llvm::vfs::FileSystem>
+createVFSFromOverlayFiles(ArrayRef<std::string> VFSOverlayFiles,
+                          DiagnosticsEngine &Diags,
+                          IntrusiveRefCntPtr<llvm::vfs::FileSystem> BaseFS);
 
 } // namespace clang
 

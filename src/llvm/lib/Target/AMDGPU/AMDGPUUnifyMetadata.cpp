@@ -12,15 +12,10 @@
 //===----------------------------------------------------------------------===//
 
 #include "AMDGPU.h"
-#include "llvm/ADT/SmallVector.h"
-#include "llvm/ADT/StringRef.h"
 #include "llvm/IR/Constants.h"
-#include "llvm/IR/Metadata.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/Pass.h"
-#include <algorithm>
-#include <cassert>
 
 using namespace llvm;
 
@@ -63,7 +58,7 @@ namespace {
         return false;
       MDNode *MaxMD = nullptr;
       auto MaxVer = 0U;
-      for (auto VersionMD : NamedMD->operands()) {
+      for (auto *VersionMD : NamedMD->operands()) {
         assert(VersionMD->getNumOperands() == 2);
         auto CMajor = mdconst::extract<ConstantInt>(VersionMD->getOperand(0));
         auto VersionMajor = CMajor->getZExtValue();
@@ -96,7 +91,7 @@ namespace {
       return false;
 
     SmallVector<Metadata *, 4> All;
-    for (auto MD : NamedMD->operands())
+    for (auto *MD : NamedMD->operands())
       for (const auto &Op : MD->operands())
         if (!llvm::is_contained(All, Op.get()))
           All.push_back(Op.get());

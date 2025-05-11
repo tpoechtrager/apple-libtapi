@@ -14,11 +14,11 @@
 #define LLVM_OBJECT_BINARY_H
 
 #include "llvm-c/Types.h"
-#include "llvm/ADT/Triple.h"
 #include "llvm/Object/Error.h"
+#include "llvm/Support/CBindingWrapping.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/MemoryBuffer.h"
-#include <algorithm>
+#include "llvm/TargetParser/Triple.h"
 #include <memory>
 #include <utility>
 
@@ -50,6 +50,8 @@ protected:
 
     ID_WinRes, // Windows resource (.res) file.
 
+    ID_Offload, // Offloading binary file.
+
     // Object and children.
     ID_StartObjects,
     ID_COFF,
@@ -67,6 +69,7 @@ protected:
     ID_MachO64L, // MachO 64-bit, little endian
     ID_MachO64B, // MachO 64-bit, big endian
 
+    ID_GOFF,
     ID_Wasm,
 
     ID_EndObjects
@@ -133,6 +136,8 @@ public:
 
   bool isWasm() const { return TypeID == ID_Wasm; }
 
+  bool isOffloadFile() const { return TypeID == ID_Offload; }
+
   bool isCOFFImportFile() const {
     return TypeID == ID_COFFImportFile;
   }
@@ -141,13 +146,16 @@ public:
     return TypeID == ID_IR;
   }
 
+  bool isGOFF() const { return TypeID == ID_GOFF; }
+
   bool isMinidump() const { return TypeID == ID_Minidump; }
 
   bool isTapiFile() const { return TypeID == ID_TapiFile; }
 
   bool isLittleEndian() const {
     return !(TypeID == ID_ELF32B || TypeID == ID_ELF64B ||
-             TypeID == ID_MachO32B || TypeID == ID_MachO64B);
+             TypeID == ID_MachO32B || TypeID == ID_MachO64B ||
+             TypeID == ID_XCOFF32 || TypeID == ID_XCOFF64);
   }
 
   bool isWinRes() const { return TypeID == ID_WinRes; }
@@ -159,6 +167,8 @@ public:
       return Triple::MachO;
     if (isELF())
       return Triple::ELF;
+    if (isGOFF())
+      return Triple::GOFF;
     return Triple::UnknownObjectFormat;
   }
 

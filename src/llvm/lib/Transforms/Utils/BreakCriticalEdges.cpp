@@ -27,9 +27,7 @@
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/Instructions.h"
-#include "llvm/IR/Type.h"
 #include "llvm/InitializePasses.h"
-#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Transforms/Utils.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Cloning.h"
@@ -100,46 +98,19 @@ PreservedAnalyses BreakCriticalEdgesPass::run(Function &F,
 //    Implementation of the external critical edge manipulation functions
 //===----------------------------------------------------------------------===//
 
-/// When a loop exit edge is split, LCSSA form may require new PHIs in the new
-/// exit block. This function inserts the new PHIs, as needed. Preds is a list
-/// of preds inside the loop, SplitBB is the new loop exit block, and DestBB is
-/// the old loop exit, now the successor of SplitBB.
-static void createPHIsForSplitLoopExit(ArrayRef<BasicBlock *> Preds,
-                                       BasicBlock *SplitBB,
-                                       BasicBlock *DestBB) {
-  // SplitBB shouldn't have anything non-trivial in it yet.
-  assert((SplitBB->getFirstNonPHI() == SplitBB->getTerminator() ||
-          SplitBB->isLandingPad()) && "SplitBB has non-PHI nodes!");
-
-  // For each PHI in the destination block.
-  for (PHINode &PN : DestBB->phis()) {
-    unsigned Idx = PN.getBasicBlockIndex(SplitBB);
-    Value *V = PN.getIncomingValue(Idx);
-
-    // If the input is a PHI which already satisfies LCSSA, don't create
-    // a new one.
-    if (const PHINode *VP = dyn_cast<PHINode>(V))
-      if (VP->getParent() == SplitBB)
-        continue;
-
-    // Otherwise a new PHI is needed. Create one and populate it.
-    PHINode *NewPN = PHINode::Create(
-        PN.getType(), Preds.size(), "split",
-        SplitBB->isLandingPad() ? &SplitBB->front() : SplitBB->getTerminator());
-    for (unsigned i = 0, e = Preds.size(); i != e; ++i)
-      NewPN->addIncoming(V, Preds[i]);
-
-    // Update the original PHI.
-    PN.setIncomingValue(Idx, NewPN);
-  }
-}
-
 BasicBlock *llvm::SplitCriticalEdge(Instruction *TI, unsigned SuccNum,
                                     const CriticalEdgeSplittingOptions &Options,
                                     const Twine &BBName) {
   if (!isCriticalEdge(TI, SuccNum, Options.MergeIdenticalEdges))
     return nullptr;
 
+  return SplitKnownCriticalEdge(TI, SuccNum, Options, BBName);
+}
+
+BasicBlock *
+llvm::SplitKnownCriticalEdge(Instruction *TI, unsigned SuccNum,
+                             const CriticalEdgeSplittingOptions &Options,
+                             const Twine &BBName) {
   assert(!isa<IndirectBrInst>(TI) &&
          "Cannot split critical edge from IndirectBrInst");
 
@@ -162,18 +133,16 @@ BasicBlock *llvm::SplitCriticalEdge(Instruction *TI, unsigned SuccNum,
   if (LI) {
     if (Loop *TIL = LI->getLoopFor(TIBB)) {
 
-      // The only that we can break LoopSimplify form by splitting a critical
-      // edge is if after the split there exists some edge from TIL to DestBB
-      // *and* the only edge into DestBB from outside of TIL is that of
+      // The only way that we can break LoopSimplify form by splitting a
+      // critical edge is if after the split there exists some edge from TIL to
+      // DestBB *and* the only edge into DestBB from outside of TIL is that of
       // NewBB. If the first isn't true, then LoopSimplify still holds, NewBB
       // is the new exit block and it has no non-loop predecessors. If the
       // second isn't true, then DestBB was not in LoopSimplify form prior to
       // the split as it had a non-loop predecessor. In both of these cases,
       // the predecessor must be directly in TIL, not in a subloop, or again
       // LoopSimplify doesn't hold.
-      for (pred_iterator I = pred_begin(DestBB), E = pred_end(DestBB); I != E;
-           ++I) {
-        BasicBlock *P = *I;
+      for (BasicBlock *P : predecessors(DestBB)) {
         if (P == TIBB)
           continue; // The new block is known.
         if (LI->getLoopFor(P) != TIL) {
@@ -210,7 +179,7 @@ BasicBlock *llvm::SplitCriticalEdge(Instruction *TI, unsigned SuccNum,
   // Insert the block into the function... right after the block TI lives in.
   Function &F = *TIBB->getParent();
   Function::iterator FBBI = TIBB->getIterator();
-  F.getBasicBlockList().insert(++FBBI, NewBB);
+  F.insert(++FBBI, NewBB);
 
   // Branch to the new block, breaking the edge.
   TI->setSuccessor(SuccNum, NewBB);
@@ -342,18 +311,11 @@ BasicBlock *llvm::SplitCriticalEdge(Instruction *TI, unsigned SuccNum,
 // predecessors of BB.
 static BasicBlock *
 findIBRPredecessor(BasicBlock *BB, SmallVectorImpl<BasicBlock *> &OtherPreds) {
-  // If the block doesn't have any PHIs, we don't care about it, since there's
-  // no point in splitting it.
-  PHINode *PN = dyn_cast<PHINode>(BB->begin());
-  if (!PN)
-    return nullptr;
-
   // Verify we have exactly one IBR predecessor.
   // Conservatively bail out if one of the other predecessors is not a "regular"
   // terminator (that is, not a switch or a br).
   BasicBlock *IBB = nullptr;
-  for (unsigned Pred = 0, E = PN->getNumIncomingValues(); Pred != E; ++Pred) {
-    BasicBlock *PredBB = PN->getIncomingBlock(Pred);
+  for (BasicBlock *PredBB : predecessors(BB)) {
     Instruction *PredTerm = PredBB->getTerminator();
     switch (PredTerm->getOpcode()) {
     case Instruction::IndirectBr:
@@ -374,6 +336,7 @@ findIBRPredecessor(BasicBlock *BB, SmallVectorImpl<BasicBlock *> &OtherPreds) {
 }
 
 bool llvm::SplitIndirectBrCriticalEdges(Function &F,
+                                        bool IgnoreBlocksWithoutPHI,
                                         BranchProbabilityInfo *BPI,
                                         BlockFrequencyInfo *BFI) {
   // Check whether the function has any indirectbrs, and collect which blocks
@@ -395,6 +358,9 @@ bool llvm::SplitIndirectBrCriticalEdges(Function &F,
   bool ShouldUpdateAnalysis = BPI && BFI;
   bool Changed = false;
   for (BasicBlock *Target : Targets) {
+    if (IgnoreBlocksWithoutPHI && Target->phis().empty())
+      continue;
+
     SmallVector<BasicBlock *, 16> OtherPreds;
     BasicBlock *IBRPred = findIBRPredecessor(Target, OtherPreds);
     // If we did not found an indirectbr, or the indirectbr is the only

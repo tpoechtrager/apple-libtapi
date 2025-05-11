@@ -17,19 +17,29 @@
 #define LLVM_UTILS_TABLEGEN_CODEGENTARGET_H
 
 #include "CodeGenHwModes.h"
-#include "CodeGenInstruction.h"
-#include "CodeGenRegisters.h"
 #include "InfoByHwMode.h"
 #include "SDNodeProperties.h"
-#include "llvm/Support/raw_ostream.h"
-#include "llvm/TableGen/Record.h"
-#include <algorithm>
+#include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringRef.h"
+#include "llvm/CodeGen/MachineValueType.h"
+#include <cassert>
+#include <memory>
+#include <optional>
+#include <string>
+#include <vector>
 
 namespace llvm {
 
-struct CodeGenRegister;
+class RecordKeeper;
+class Record;
+class CodeGenInstruction;
+class CodeGenRegBank;
+class CodeGenRegister;
+class CodeGenRegisterClass;
 class CodeGenSchedModels;
-class CodeGenTarget;
+class CodeGenSubRegIndex;
 
 /// getValueType - Return the MVT::SimpleValueType that the specified TableGen
 /// record corresponds to.
@@ -68,7 +78,7 @@ public:
   ~CodeGenTarget();
 
   Record *getTargetRecord() const { return TargetRec; }
-  const StringRef getName() const;
+  StringRef getName() const;
 
   /// getInstNamespace - Return the target-specific instruction namespace.
   ///
@@ -109,7 +119,7 @@ public:
 
   /// Return the largest register class on \p RegBank which supports \p Ty and
   /// covers \p SubIdx if it exists.
-  Optional<CodeGenRegisterClass *>
+  std::optional<CodeGenRegisterClass *>
   getSuperRegForSubReg(const ValueTypeByHwMode &Ty, CodeGenRegBank &RegBank,
                        const CodeGenSubRegIndex *SubIdx,
                        bool MustBeAllocatable = false) const;
@@ -123,9 +133,7 @@ public:
     return RegAltNameIndices;
   }
 
-  const CodeGenRegisterClass &getRegisterClass(Record *R) const {
-    return *getRegBank().getRegClass(R);
-  }
+  const CodeGenRegisterClass &getRegisterClass(Record *R) const;
 
   /// getRegisterVTs - Find the union of all possible SimpleValueTypes for the
   /// specified physical register.
@@ -202,7 +210,7 @@ private:
 /// ComplexPattern - ComplexPattern info, corresponding to the ComplexPattern
 /// tablegen class in TargetSelectionDAG.td
 class ComplexPattern {
-  MVT::SimpleValueType Ty;
+  Record *Ty;
   unsigned NumOperands;
   std::string SelectFunc;
   std::vector<Record*> RootNodes;
@@ -211,7 +219,7 @@ class ComplexPattern {
 public:
   ComplexPattern(Record *R);
 
-  MVT::SimpleValueType getValueType() const { return Ty; }
+  Record *getValueType() const { return Ty; }
   unsigned getNumOperands() const { return NumOperands; }
   const std::string &getSelectFunc() const { return SelectFunc; }
   const std::vector<Record*> &getRootNodes() const {

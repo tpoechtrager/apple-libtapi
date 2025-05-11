@@ -1,5 +1,3 @@
-set(LLVM_EXPORTED_SYMBOL_FILE ${CMAKE_CURRENT_SOURCE_DIR}/tapi-sdkdb.exports)
-
 set(LLVM_LINK_COMPONENTS
   Support
   )
@@ -16,7 +14,7 @@ target_link_libraries(tapi-sdkdb
   )
 
 install(TARGETS tapi-sdkdb
-  RUNTIME DESTINATION bin
+  RUNTIME DESTINATION local/bin
   COMPONENT tapi-sdkdb
   )
 add_llvm_install_targets(install-tapi-sdkdb

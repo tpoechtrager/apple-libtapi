@@ -23,7 +23,7 @@ class BPFSubtarget;
 namespace BPFISD {
 enum NodeType : unsigned {
   FIRST_NUMBER = ISD::BUILTIN_OP_END,
-  RET_FLAG,
+  RET_GLUE,
   CALL,
   SELECT_CC,
   BR_CC,
@@ -45,6 +45,9 @@ public:
   // This method decides whether folding a constant offset
   // with the given GlobalAddress is legal.
   bool isOffsetFoldingLegal(const GlobalAddressSDNode *GA) const override;
+
+  BPFTargetLowering::ConstraintType
+  getConstraintType(StringRef Constraint) const override;
 
   std::pair<unsigned, const TargetRegisterClass *>
   getRegForInlineAsmConstraint(const TargetRegisterInfo *TRI,
@@ -74,7 +77,7 @@ private:
   SDValue LowerGlobalAddress(SDValue Op, SelectionDAG &DAG) const;
 
   // Lower the result values of a call, copying them out of physregs into vregs
-  SDValue LowerCallResult(SDValue Chain, SDValue InFlag,
+  SDValue LowerCallResult(SDValue Chain, SDValue InGlue,
                           CallingConv::ID CallConv, bool IsVarArg,
                           const SmallVectorImpl<ISD::InputArg> &Ins,
                           const SDLoc &DL, SelectionDAG &DAG,
@@ -99,10 +102,15 @@ private:
                       const SmallVectorImpl<SDValue> &OutVals, const SDLoc &DL,
                       SelectionDAG &DAG) const override;
 
+  void ReplaceNodeResults(SDNode *N, SmallVectorImpl<SDValue> &Results,
+                          SelectionDAG &DAG) const override;
+
   EVT getOptimalMemOpType(const MemOp &Op,
                           const AttributeList &FuncAttributes) const override {
     return Op.size() >= 8 ? MVT::i64 : MVT::i32;
   }
+
+  bool isIntDivCheap(EVT VT, AttributeList Attr) const override { return true; }
 
   bool shouldConvertConstantLoadToIntImm(const APInt &Imm,
                                          Type *Ty) const override {
@@ -121,6 +129,10 @@ private:
                              EVT NewVT) const override {
     return false;
   }
+
+  bool isLegalAddressingMode(const DataLayout &DL, const AddrMode &AM,
+                             Type *Ty, unsigned AS,
+                             Instruction *I = nullptr) const override;
 
   // isTruncateFree - Return true if it's free to truncate a value of
   // type Ty1 to type Ty2. e.g. On BPF at alu32 mode, it's free to truncate

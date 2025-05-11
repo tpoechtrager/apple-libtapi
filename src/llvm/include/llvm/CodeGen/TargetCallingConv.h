@@ -13,9 +13,9 @@
 #ifndef LLVM_CODEGEN_TARGETCALLINGCONV_H
 #define LLVM_CODEGEN_TARGETCALLINGCONV_H
 
+#include "llvm/CodeGen/MachineValueType.h"
 #include "llvm/CodeGen/ValueTypes.h"
 #include "llvm/Support/Alignment.h"
-#include "llvm/Support/MachineValueType.h"
 #include "llvm/Support/MathExtras.h"
 #include <cassert>
 #include <climits>
@@ -45,22 +45,18 @@ namespace ISD {
     unsigned IsHva : 1;        ///< HVA field for
     unsigned IsHvaStart : 1;   ///< HVA structure start
     unsigned IsSecArgPass : 1; ///< Second argument
-    unsigned ByValOrByRefAlign : 4; ///< Log 2 of byval/byref alignment
+    unsigned MemAlign : 4;     ///< Log 2 of alignment when arg is passed in memory
+                               ///< (including byval/byref). The max alignment is
+                               ///< verified in IR verification.
     unsigned OrigAlign : 5;    ///< Log 2 of original alignment
     unsigned IsInConsecutiveRegsLast : 1;
     unsigned IsInConsecutiveRegs : 1;
     unsigned IsCopyElisionCandidate : 1; ///< Argument copy elision candidate
     unsigned IsPointer : 1;
 
-    unsigned ByValOrByRefSize; ///< Byval or byref struct size
+    unsigned ByValOrByRefSize = 0; ///< Byval or byref struct size
 
-    unsigned PointerAddrSpace; ///< Address space of pointer argument
-
-    /// Set the alignment used by byref or byval parameters.
-    void setAlignImpl(Align A) {
-      ByValOrByRefAlign = encode(A);
-      assert(getNonZeroByValAlign() == A && "bitfield overflow");
-    }
+    unsigned PointerAddrSpace = 0; ///< Address space of pointer argument
 
   public:
     ArgFlagsTy()
@@ -68,10 +64,9 @@ namespace ISD {
           IsNest(0), IsReturned(0), IsSplit(0), IsInAlloca(0),
           IsPreallocated(0), IsSplitEnd(0), IsSwiftSelf(0), IsSwiftAsync(0),
           IsSwiftError(0), IsCFGuardTarget(0), IsHva(0), IsHvaStart(0),
-          IsSecArgPass(0), ByValOrByRefAlign(0), OrigAlign(0),
+          IsSecArgPass(0), MemAlign(0), OrigAlign(0),
           IsInConsecutiveRegsLast(0), IsInConsecutiveRegs(0),
-          IsCopyElisionCandidate(0), IsPointer(0), ByValOrByRefSize(0),
-          PointerAddrSpace(0) {
+          IsCopyElisionCandidate(0), IsPointer(0) {
       static_assert(sizeof(*this) == 3 * sizeof(unsigned), "flags are too big");
     }
 
@@ -124,7 +119,7 @@ namespace ISD {
     void setNest() { IsNest = 1; }
 
     bool isReturned() const { return IsReturned; }
-    void setReturned() { IsReturned = 1; }
+    void setReturned(bool V = true) { IsReturned = V; }
 
     bool isInConsecutiveRegs()  const { return IsInConsecutiveRegs; }
     void setInConsecutiveRegs(bool Flag = true) { IsInConsecutiveRegs = Flag; }
@@ -146,34 +141,26 @@ namespace ISD {
     bool isPointer()  const { return IsPointer; }
     void setPointer() { IsPointer = 1; }
 
-    LLVM_ATTRIBUTE_DEPRECATED(unsigned getByValAlign() const,
-                              "Use getNonZeroByValAlign() instead") {
-      MaybeAlign A = decodeMaybeAlign(ByValOrByRefAlign);
-      return A ? A->value() : 0;
+    Align getNonZeroMemAlign() const {
+      return decodeMaybeAlign(MemAlign).valueOrOne();
     }
+
+    void setMemAlign(Align A) {
+      MemAlign = encode(A);
+      assert(getNonZeroMemAlign() == A && "bitfield overflow");
+    }
+
     Align getNonZeroByValAlign() const {
-      MaybeAlign A = decodeMaybeAlign(ByValOrByRefAlign);
+      assert(isByVal());
+      MaybeAlign A = decodeMaybeAlign(MemAlign);
       assert(A && "ByValAlign must be defined");
       return *A;
     }
-    void setByValAlign(Align A) {
-      assert(isByVal() && !isByRef());
-      setAlignImpl(A);
-    }
 
-    void setByRefAlign(Align A) {
-      assert(!isByVal() && isByRef());
-      setAlignImpl(A);
-    }
-
-    LLVM_ATTRIBUTE_DEPRECATED(unsigned getOrigAlign() const,
-                              "Use getNonZeroOrigAlign() instead") {
-      MaybeAlign A = decodeMaybeAlign(OrigAlign);
-      return A ? A->value() : 0;
-    }
     Align getNonZeroOrigAlign() const {
       return decodeMaybeAlign(OrigAlign).valueOrOne();
     }
+
     void setOrigAlign(Align A) {
       OrigAlign = encode(A);
       assert(getNonZeroOrigAlign() == A && "bitfield overflow");
@@ -260,11 +247,11 @@ namespace ISD {
     unsigned PartOffset;
 
     OutputArg() = default;
-    OutputArg(ArgFlagsTy flags, EVT vt, EVT argvt, bool isfixed,
+    OutputArg(ArgFlagsTy flags, MVT vt, EVT argvt, bool isfixed,
               unsigned origIdx, unsigned partOffs)
-      : Flags(flags), IsFixed(isfixed), OrigArgIndex(origIdx),
-        PartOffset(partOffs) {
-      VT = vt.getSimpleVT();
+        : Flags(flags), IsFixed(isfixed), OrigArgIndex(origIdx),
+          PartOffset(partOffs) {
+      VT = vt;
       ArgVT = argvt;
     }
   };

@@ -198,6 +198,8 @@ TEST_F(FormatTestJava, EnumDeclarations) {
                "  void f() {}\n"
                "}");
   verifyFormat("enum SomeThing {\n"
+               "  void f() {}");
+  verifyFormat("enum SomeThing {\n"
                "  ABC(1, \"ABC\"),\n"
                "  CDE(2, \"CDE\");\n"
                "  Something(int i, String s) {}\n"
@@ -431,6 +433,24 @@ TEST_F(FormatTestJava, SynchronizedKeyword) {
   verifyFormat("synchronized (mData) {\n"
                "  // ...\n"
                "}");
+
+  FormatStyle Style = getLLVMStyle(FormatStyle::LK_Java);
+  Style.BreakBeforeBraces = FormatStyle::BS_Custom;
+
+  Style.BraceWrapping.AfterControlStatement = FormatStyle::BWACS_Always;
+  Style.BraceWrapping.AfterFunction = false;
+  verifyFormat("synchronized (mData)\n"
+               "{\n"
+               "  // ...\n"
+               "}",
+               Style);
+
+  Style.BraceWrapping.AfterControlStatement = FormatStyle::BWACS_Never;
+  Style.BraceWrapping.AfterFunction = true;
+  verifyFormat("synchronized (mData) {\n"
+               "  // ...\n"
+               "}",
+               Style);
 }
 
 TEST_F(FormatTestJava, AssertKeyword) {
@@ -547,8 +567,7 @@ TEST_F(FormatTestJava, FormatsLambdas) {
 TEST_F(FormatTestJava, BreaksStringLiterals) {
   // FIXME: String literal breaking is currently disabled for Java and JS, as it
   // requires strings to be merged using "+" which we don't support.
-  EXPECT_EQ("\"some text other\";",
-            format("\"some text other\";", getStyleWithColumns(14)));
+  verifyFormat("\"some text other\";", getStyleWithColumns(14));
 }
 
 TEST_F(FormatTestJava, AlignsBlockComments) {
@@ -562,6 +581,17 @@ TEST_F(FormatTestJava, AlignsBlockComments) {
                    "   * comment.\n"
                    "   */\n"
                    "  void f() {}"));
+}
+
+TEST_F(FormatTestJava, AlignDeclarations) {
+  FormatStyle Style = getLLVMStyle(FormatStyle::LK_Java);
+  Style.AlignConsecutiveDeclarations.Enabled = true;
+  verifyFormat("private final String[]       args;\n"
+               "private final A_ParserHelper parserHelper;\n"
+               "private final int            numOfCmdArgs;\n"
+               "private int                  numOfCmdArgs;\n"
+               "private String[]             args;",
+               Style);
 }
 
 TEST_F(FormatTestJava, KeepsDelimitersOnOwnLineInJavaDocComments) {
@@ -582,6 +612,17 @@ TEST_F(FormatTestJava, RetainsLogicalShifts) {
                "  int a = 1;\n"
                "  a = a >>> 1;\n"
                "}");
+}
+
+TEST_F(FormatTestJava, ShortFunctions) {
+  FormatStyle Style = getLLVMStyle(FormatStyle::LK_Java);
+  Style.AllowShortFunctionsOnASingleLine = FormatStyle::SFS_Inline;
+  verifyFormat("enum Enum {\n"
+               "  E1,\n"
+               "  E2;\n"
+               "  void f() { return; }\n"
+               "}",
+               Style);
 }
 
 } // namespace format

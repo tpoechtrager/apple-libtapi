@@ -1,9 +1,8 @@
 //===- tapi/Driver/ConfigurationFile.h - Configuration File -----*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 ///
@@ -16,11 +15,11 @@
 #define TAPI_CORE_CONFIGURATION_FILE_H
 
 #include "tapi/Core/LLVM.h"
-#include "tapi/Core/PackedVersion.h"
 #include "tapi/Core/Path.h"
 #include "tapi/Defines.h"
 #include "clang/Frontend/FrontendOptions.h"
-#include "llvm/TextAPI/MachO/Platform.h"
+#include "llvm/TextAPI/PackedVersion.h"
+#include "llvm/TextAPI/Platform.h"
 #include <string>
 #include <utility>
 #include <vector>
@@ -51,21 +50,31 @@ struct FrameworkConfiguration {
   std::vector<Macro> macros;
   HeaderConfiguration publicHeaderConfiguration;
   HeaderConfiguration privateHeaderConfiguration;
+  bool scanSwiftModule = false;
   bool useOverlay = false;
+  std::vector<std::string> clangExtraArgs;
 };
 
 struct ProjectConfiguration {
   std::string name;
   clang::Language language;
+  std::string languageStd;
   PathSeq includePaths;
   PathSeq frameworkPaths;
   std::vector<Macro> macros;
   bool isiOSMac = false;
+  bool isZippered = false;
+  bool scanSwiftModule = false;
   bool useOverlay = false;
   bool useUmbrellaOnly = false;
-  PathSeq maskPaths;
+  bool useSplitHeaderDir = false;
+  bool scanPublicHeadersInSDKContentRoot = false;
+  bool ignoreExistingPartialSDKDBs = false;
+  PathSeq rootMaskPaths;
+  PathSeq sdkMaskPaths;
   HeaderConfiguration publicHeaderConfiguration;
   HeaderConfiguration privateHeaderConfiguration;
+  std::vector<std::string> clangExtraArgs;
 };
 
 }
@@ -73,7 +82,7 @@ struct ProjectConfiguration {
 
 class ConfigurationFile {
 public:
-  PlatformKind platform;
+  PlatformType platform;
   PackedVersion version;
   std::string isysroot;
   clang::Language language{defaultLanguage};

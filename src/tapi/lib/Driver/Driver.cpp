@@ -1,9 +1,8 @@
 //===- lib/Driver/Driver.cpp - TAPI Driver ----------------------*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 ///
@@ -69,8 +68,8 @@ bool Driver::run(ArrayRef<const char *> args) {
     return Reexport::run(*diag, options);
   case TAPICommand::SDKDB:
     return SDKDB::run(*diag, options);
-  case TAPICommand::GenerateAPITests:
-    return GenerateAPITests::run(*diag, options);
+  case TAPICommand::APIVerify:
+    return APIVerify::run(*diag, options);
   }
   llvm_unreachable("invalid/unknown driver command");
 }

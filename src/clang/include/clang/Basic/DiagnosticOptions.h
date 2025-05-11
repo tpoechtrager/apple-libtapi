@@ -15,7 +15,14 @@
 #include <type_traits>
 #include <vector>
 
+namespace llvm {
+namespace opt {
+class ArgList;
+} // namespace opt
+} // namespace llvm
+
 namespace clang {
+class DiagnosticsEngine;
 
 /// Specifies which overload candidates to display when overload
 /// resolution fails.
@@ -39,20 +46,20 @@ enum class DiagnosticLevelMask : unsigned {
 };
 
 inline DiagnosticLevelMask operator~(DiagnosticLevelMask M) {
-  using UT = std::underlying_type<DiagnosticLevelMask>::type;
+  using UT = std::underlying_type_t<DiagnosticLevelMask>;
   return static_cast<DiagnosticLevelMask>(~static_cast<UT>(M));
 }
 
 inline DiagnosticLevelMask operator|(DiagnosticLevelMask LHS,
                                      DiagnosticLevelMask RHS) {
-  using UT = std::underlying_type<DiagnosticLevelMask>::type;
+  using UT = std::underlying_type_t<DiagnosticLevelMask>;
   return static_cast<DiagnosticLevelMask>(
     static_cast<UT>(LHS) | static_cast<UT>(RHS));
 }
 
 inline DiagnosticLevelMask operator&(DiagnosticLevelMask LHS,
                                      DiagnosticLevelMask RHS) {
-  using UT = std::underlying_type<DiagnosticLevelMask>::type;
+  using UT = std::underlying_type_t<DiagnosticLevelMask>;
   return static_cast<DiagnosticLevelMask>(
     static_cast<UT>(LHS) & static_cast<UT>(RHS));
 }
@@ -61,8 +68,14 @@ raw_ostream& operator<<(raw_ostream& Out, DiagnosticLevelMask M);
 
 /// Options for controlling the compiler diagnostics engine.
 class DiagnosticOptions : public RefCountedBase<DiagnosticOptions>{
+  friend bool ParseDiagnosticArgs(DiagnosticOptions &, llvm::opt::ArgList &,
+                                  clang::DiagnosticsEngine *, bool);
+
+  friend class CompilerInvocation;
+  friend class CompilerInvocationBase;
+
 public:
-  enum TextDiagnosticFormat { Clang, MSVC, Vi };
+  enum TextDiagnosticFormat { Clang, MSVC, Vi, SARIF };
 
   // Default values.
   enum {
@@ -72,7 +85,8 @@ public:
     DefaultTemplateBacktraceLimit = 10,
     DefaultConstexprBacktraceLimit = 10,
     DefaultSpellCheckingLimit = 50,
-    DefaultSnippetLineLimit = 1,
+    DefaultSnippetLineLimit = 16,
+    DefaultShowLineNumbers = 1,
   };
 
   // Define simple diagnostic options (with no accessors).
@@ -109,6 +123,10 @@ public:
   /// The prefixes for comment directives sought by -verify ("expected" by
   /// default).
   std::vector<std::string> VerifyPrefixes;
+
+  /// The list of -Wsystem-header-in-module=... options used to override
+  /// whether -Wsystem-headers is enabled on a per-module basis.
+  std::vector<std::string> SystemHeaderWarningsModules;
 
 public:
   // Define accessors/mutators for diagnostic options of enumeration type.

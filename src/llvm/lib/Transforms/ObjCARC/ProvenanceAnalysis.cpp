@@ -112,12 +112,12 @@ static bool IsStoredObjCPointer(const Value *P) {
 bool ProvenanceAnalysis::relatedCheck(const Value *A, const Value *B) {
   // Ask regular AliasAnalysis, for a first approximation.
   switch (AA->alias(A, B)) {
-  case NoAlias:
+  case AliasResult::NoAlias:
     return false;
-  case MustAlias:
-  case PartialAlias:
+  case AliasResult::MustAlias:
+  case AliasResult::PartialAlias:
     return true;
-  case MayAlias:
+  case AliasResult::MayAlias:
     break;
   }
 
@@ -167,7 +167,6 @@ bool ProvenanceAnalysis::related(const Value *A, const Value *B) {
   // Begin by inserting a conservative value into the map. If the insertion
   // fails, we have the answer already. If it succeeds, leave it there until we
   // compute the real answer to guard against recursive queries.
-  if (A > B) std::swap(A, B);
   std::pair<CachedResultsTy::iterator, bool> Pair =
     CachedResults.insert(std::make_pair(ValuePairTy(A, B), true));
   if (!Pair.second)

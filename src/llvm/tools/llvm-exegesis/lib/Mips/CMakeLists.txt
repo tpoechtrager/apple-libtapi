@@ -3,16 +3,22 @@ include_directories(
   ${LLVM_BINARY_DIR}/lib/Target/Mips
   )
 
-add_library(LLVMExegesisMips
+set(LLVM_LINK_COMPONENTS
+  CodeGenTypes
+  Core
+  Exegesis
+  MC
+  Mips
+  Support
+  TargetParser
+  )
+
+add_llvm_library(LLVMExegesisMips
+  DISABLE_LLVM_LINK_LLVM_DYLIB
   STATIC
   Target.cpp
-  )
 
-llvm_update_compile_flags(LLVMExegesisMips)
-llvm_map_components_to_libnames(libs
-  Mips
-  Exegesis
+  DEPENDS
+  intrinsics_gen
+  MipsCommonTableGen
   )
-
-target_link_libraries(LLVMExegesisMips ${libs})
-set_target_properties(LLVMExegesisMips PROPERTIES FOLDER "Libraries")

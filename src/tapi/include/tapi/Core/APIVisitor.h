@@ -1,9 +1,8 @@
 //===- tapi/Core/APIVisitor.h - TAPI API Visitor ----------------*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 ///
@@ -25,11 +24,11 @@ public:
   virtual ~APIVisitor();
 
   virtual void visitGlobal(const GlobalRecord &);
-  virtual void visitEnumConstant(const EnumConstantRecord &);
+  virtual void visitEnum(const EnumRecord &);
   virtual void visitObjCInterface(const ObjCInterfaceRecord &);
   virtual void visitObjCCategory(const ObjCCategoryRecord &);
   virtual void visitObjCProtocol(const ObjCProtocolRecord &);
-  virtual void visitTypeDef(const APIRecord &);
+  virtual void visitTypeDef(const TypedefRecord &);
 };
 
 class APIMutator {
@@ -37,11 +36,11 @@ public:
   virtual ~APIMutator();
 
   virtual void visitGlobal(GlobalRecord &);
-  virtual void visitEnumConstant(EnumConstantRecord &);
+  virtual void visitEnum(EnumRecord &);
   virtual void visitObjCInterface(ObjCInterfaceRecord &);
   virtual void visitObjCCategory(ObjCCategoryRecord &);
   virtual void visitObjCProtocol(ObjCProtocolRecord &);
-  virtual void visitTypeDef(APIRecord &);
+  virtual void visitTypeDef(TypedefRecord &);
 };
 
 TAPI_NAMESPACE_INTERNAL_END

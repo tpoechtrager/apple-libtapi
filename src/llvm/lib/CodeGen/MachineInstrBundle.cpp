@@ -16,7 +16,8 @@
 #include "llvm/CodeGen/TargetRegisterInfo.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/InitializePasses.h"
-#include "llvm/Target/TargetMachine.h"
+#include "llvm/Pass.h"
+#include "llvm/PassRegistry.h"
 #include <utility>
 using namespace llvm;
 
@@ -47,11 +48,9 @@ bool UnpackMachineBundles::runOnMachineFunction(MachineFunction &MF) {
     return false;
 
   bool Changed = false;
-  for (MachineFunction::iterator I = MF.begin(), E = MF.end(); I != E; ++I) {
-    MachineBasicBlock *MBB = &*I;
-
-    for (MachineBasicBlock::instr_iterator MII = MBB->instr_begin(),
-           MIE = MBB->instr_end(); MII != MIE; ) {
+  for (MachineBasicBlock &MBB : MF) {
+    for (MachineBasicBlock::instr_iterator MII = MBB.instr_begin(),
+           MIE = MBB.instr_end(); MII != MIE; ) {
       MachineInstr *MI = &*MII;
 
       // Remove BUNDLE instruction and the InsideBundle flags from bundled
@@ -59,8 +58,7 @@ bool UnpackMachineBundles::runOnMachineFunction(MachineFunction &MF) {
       if (MI->isBundle()) {
         while (++MII != MIE && MII->isBundledWithPred()) {
           MII->unbundleFromPred();
-          for (unsigned i = 0, e = MII->getNumOperands(); i != e; ++i) {
-            MachineOperand &MO = MII->getOperand(i);
+          for (MachineOperand &MO  : MII->operands()) {
             if (MO.isReg() && MO.isInternalRead())
               MO.setIsInternalRead(false);
           }
@@ -111,7 +109,7 @@ bool FinalizeMachineBundles::runOnMachineFunction(MachineFunction &MF) {
 static DebugLoc getDebugLoc(MachineBasicBlock::instr_iterator FirstMI,
                             MachineBasicBlock::instr_iterator LastMI) {
   for (auto MII = FirstMI; MII != LastMI; ++MII)
-    if (MII->getDebugLoc().get())
+    if (MII->getDebugLoc())
       return MII->getDebugLoc();
   return DebugLoc();
 }
@@ -146,8 +144,11 @@ void llvm::finalizeBundle(MachineBasicBlock &MBB,
   SmallSet<Register, 8> UndefUseSet;
   SmallVector<MachineOperand*, 4> Defs;
   for (auto MII = FirstMI; MII != LastMI; ++MII) {
-    for (unsigned i = 0, e = MII->getNumOperands(); i != e; ++i) {
-      MachineOperand &MO = MII->getOperand(i);
+    // Debug instructions have no effects to track.
+    if (MII->isDebugInstr())
+      continue;
+
+    for (MachineOperand &MO : MII->operands()) {
       if (!MO.isReg())
         continue;
       if (MO.isDef()) {
@@ -195,9 +196,8 @@ void llvm::finalizeBundle(MachineBasicBlock &MBB,
           DeadDefSet.erase(Reg);
       }
 
-      if (!MO.isDead() && Register::isPhysicalRegister(Reg)) {
-        for (MCSubRegIterator SubRegs(Reg, TRI); SubRegs.isValid(); ++SubRegs) {
-          unsigned SubReg = *SubRegs;
+      if (!MO.isDead() && Reg.isPhysical()) {
+        for (MCPhysReg SubReg : TRI->subregs(Reg)) {
           if (LocalDefSet.insert(SubReg).second)
             LocalDefs.push_back(SubReg);
         }
@@ -256,8 +256,7 @@ llvm::finalizeBundle(MachineBasicBlock &MBB,
 /// MachineFunction. Return true if any bundles are finalized.
 bool llvm::finalizeBundles(MachineFunction &MF) {
   bool Changed = false;
-  for (MachineFunction::iterator I = MF.begin(), E = MF.end(); I != E; ++I) {
-    MachineBasicBlock &MBB = *I;
+  for (MachineBasicBlock &MBB : MF) {
     MachineBasicBlock::instr_iterator MII = MBB.instr_begin();
     MachineBasicBlock::instr_iterator MIE = MBB.instr_end();
     if (MII == MIE)
@@ -308,6 +307,34 @@ VirtRegInfo llvm::AnalyzeVirtRegInBundle(
   return RI;
 }
 
+std::pair<LaneBitmask, LaneBitmask>
+llvm::AnalyzeVirtRegLanesInBundle(const MachineInstr &MI, Register Reg,
+                                  const MachineRegisterInfo &MRI,
+                                  const TargetRegisterInfo &TRI) {
+
+  LaneBitmask UseMask, DefMask;
+
+  for (ConstMIBundleOperands O(MI); O.isValid(); ++O) {
+    const MachineOperand &MO = *O;
+    if (!MO.isReg() || MO.getReg() != Reg)
+      continue;
+
+    unsigned SubReg = MO.getSubReg();
+    if (SubReg == 0 && MO.isUse() && !MO.isUndef())
+      UseMask |= MRI.getMaxLaneMaskForVReg(Reg);
+
+    LaneBitmask SubRegMask = TRI.getSubRegIndexLaneMask(SubReg);
+    if (MO.isDef()) {
+      if (!MO.isUndef())
+        UseMask |= ~SubRegMask;
+      DefMask |= SubRegMask;
+    } else if (!MO.isUndef())
+      UseMask |= SubRegMask;
+  }
+
+  return {UseMask, DefMask};
+}
+
 PhysRegInfo llvm::AnalyzePhysRegInBundle(const MachineInstr &MI, Register Reg,
                                          const TargetRegisterInfo *TRI) {
   bool AllDefsDead = true;
@@ -326,7 +353,7 @@ PhysRegInfo llvm::AnalyzePhysRegInBundle(const MachineInstr &MI, Register Reg,
       continue;
 
     Register MOReg = MO.getReg();
-    if (!MOReg || !Register::isPhysicalRegister(MOReg))
+    if (!MOReg || !MOReg.isPhysical())
       continue;
 
     if (!TRI->regsOverlap(MOReg, Reg))

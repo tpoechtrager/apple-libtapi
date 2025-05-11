@@ -1,9 +1,8 @@
 //===- tapi-frontend/tapi-frontend.cpp - TAPI Frontend Tool -----*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 ///
@@ -14,13 +13,15 @@
 //===----------------------------------------------------------------------===//
 #include "tapi/APIVerifier/APIVerifier.h"
 #include "tapi/Config/Version.h"
-#include "tapi/Core/APIPrinter.h"
 #include "tapi/Core/APIJSONSerializer.h"
+#include "tapi/Core/APIPrinter.h"
 #include "tapi/Core/HeaderFile.h"
 #include "tapi/Diagnostics/Diagnostics.h"
 #include "tapi/Frontend/Frontend.h"
+#include "clang/Basic/FileManager.h"
+#include "clang/Basic/Version.inc"
+#include "clang/Config/config.h"
 #include "llvm/ADT/SmallString.h"
-#include "llvm/ADT/Triple.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Format.h"
 #include "llvm/Support/ManagedStatic.h"
@@ -29,9 +30,7 @@
 #include "llvm/Support/Process.h"
 #include "llvm/Support/Signals.h"
 #include "llvm/Support/raw_ostream.h"
-#include "clang/Basic/FileManager.h"
-#include "clang/Basic/Version.inc"
-#include "clang/Config/config.h"
+#include "llvm/TargetParser/Triple.h"
 
 using namespace llvm;
 using namespace TAPI_INTERNAL;
@@ -110,15 +109,15 @@ static std::string getClangResourcesPath(clang::FileManager &fm) {
   // Try the default tapi path.
   SmallString<PATH_MAX>
       path(dir);
-  llvm::sys::path::append(path, "..", Twine("lib") + CLANG_LIBDIR_SUFFIX,
-                          "tapi", TAPI_MAKE_STRING(TAPI_VERSION));
+  llvm::sys::path::append(path, "..", CLANG_INSTALL_LIBDIR_BASENAME, "tapi",
+                          TAPI_MAKE_STRING(TAPI_VERSION_MAJOR));
   if (fileExists(path))
     return path.str().str();
 
   // Try the default clang path. This is used by check-tapi.
   path = dir;
-  llvm::sys::path::append(path, "..", Twine("lib") + CLANG_LIBDIR_SUFFIX,
-                          "clang", CLANG_VERSION_STRING);
+  llvm::sys::path::append(path, "..", CLANG_INSTALL_LIBDIR_BASENAME, "clang",
+                          CLANG_VERSION_MAJOR_STRING);
   if (fileExists(path))
     return path.str().str();
 
@@ -150,7 +149,6 @@ int main(int argc, const char *argv[]) {
   headers.emplace_back(inputFilename, HeaderType::Public);
   for (const auto &target : targets) {
     FrontendJob job;
-
     job.target = Triple(target);
     job.isysroot = isysroot;
     job.language_std = language_std;
@@ -158,10 +156,13 @@ int main(int argc, const char *argv[]) {
     job.clangExtraArgs = xparser;
     job.headerFiles = headers;
     job.clangResourcePath = getClangResourcesPath(fm);
-    auto result = runFrontend(job, inputFilename);
-    if (!result)
+    auto contextOrError = runFrontend(job, inputFilename);
+    if (auto err = contextOrError.takeError()) {
+      if (canIgnoreFrontendError(err))
+        continue;
       return -1;
-    results.emplace_back(std::move(result.getValue()));
+    }
+    results.emplace_back(std::move(*contextOrError));
   }
 
   if (verify) {
@@ -209,7 +210,7 @@ int main(int argc, const char *argv[]) {
     }
 
     for (auto &r : results) {
-      APIJSONSerializer serializer(r.api);
+      APIJSONSerializer serializer(*r.api);
       serializer.serialize(jsonOut);
     }
   }

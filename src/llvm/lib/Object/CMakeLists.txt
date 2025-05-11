@@ -2,13 +2,17 @@ add_llvm_component_library(LLVMObject
   Archive.cpp
   ArchiveWriter.cpp
   Binary.cpp
+  BuildID.cpp
   COFFImportFile.cpp
   COFFModuleDefinition.cpp
   COFFObjectFile.cpp
   Decompressor.cpp
+  DXContainer.cpp
   ELF.cpp
   ELFObjectFile.cpp
   Error.cpp
+  GOFFObjectFile.cpp
+  FaultMapParser.cpp
   IRObjectFile.cpp
   IRSymtab.cpp
   MachOObjectFile.cpp
@@ -17,6 +21,7 @@ add_llvm_component_library(LLVMObject
   ModuleSymbolTable.cpp
   Object.cpp
   ObjectFile.cpp
+  OffloadBinary.cpp
   RecordStreamer.cpp
   RelocationResolver.cpp
   SymbolicFile.cpp
@@ -40,8 +45,10 @@ add_llvm_component_library(LLVMObject
   BitReader
   Core
   MC
+  IRReader
   BinaryFormat
   MCParser
   Support
+  TargetParser
   TextAPI
   )

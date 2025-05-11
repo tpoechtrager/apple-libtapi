@@ -13,10 +13,11 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Frontend/OpenMP/OMPContext.h"
-#include "llvm/ADT/SetOperations.h"
+#include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/TargetParser/Triple.h"
 
 #define DEBUG_TYPE "openmp-ir-builder"
 
@@ -58,9 +59,13 @@ OMPContext::OMPContext(bool IsDeviceCompilation, Triple TargetTriple) {
 
   // Add the appropriate device architecture trait based on the triple.
 #define OMP_TRAIT_PROPERTY(Enum, TraitSetEnum, TraitSelectorEnum, Str)         \
-  if (TraitSelector::TraitSelectorEnum == TraitSelector::device_arch)          \
+  if (TraitSelector::TraitSelectorEnum == TraitSelector::device_arch) {        \
     if (TargetTriple.getArch() == TargetTriple.getArchTypeForLLVMName(Str))    \
-      ActiveTraits.set(unsigned(TraitProperty::Enum));
+      ActiveTraits.set(unsigned(TraitProperty::Enum));                         \
+    if (StringRef(Str) == StringRef("x86_64") &&                               \
+        TargetTriple.getArch() == Triple::x86_64)                              \
+      ActiveTraits.set(unsigned(TraitProperty::Enum));                         \
+  }
 #include "llvm/Frontend/OpenMP/OMPKinds.def"
 
   // TODO: What exactly do we want to see as device ISA trait?
@@ -158,19 +163,19 @@ static int isVariantApplicableInContextHelper(
   // context based on the match kind selected by the user via
   // `implementation={extensions(match_[all,any,none])}'
   auto HandleTrait = [MK](TraitProperty Property,
-                          bool WasFound) -> Optional<bool> /* Result */ {
+                          bool WasFound) -> std::optional<bool> /* Result */ {
     // For kind "any" a single match is enough but we ignore non-matched
     // properties.
     if (MK == MK_ANY) {
       if (WasFound)
         return true;
-      return None;
+      return std::nullopt;
     }
 
     // In "all" or "none" mode we accept a matching or non-matching property
     // respectively and move on. We are not done yet!
     if ((WasFound && MK == MK_ALL) || (!WasFound && MK == MK_NONE))
-      return None;
+      return std::nullopt;
 
     // We missed a property, provide some debug output and indicate failure.
     LLVM_DEBUG({
@@ -207,9 +212,8 @@ static int isVariantApplicableInContextHelper(
         return Ctx.matchesISATrait(RawString);
       });
 
-    Optional<bool> Result = HandleTrait(Property, IsActiveTrait);
-    if (Result.hasValue())
-      return Result.getValue();
+    if (std::optional<bool> Result = HandleTrait(Property, IsActiveTrait))
+      return *Result;
   }
 
   if (!DeviceSetOnly) {
@@ -228,9 +232,8 @@ static int isVariantApplicableInContextHelper(
       if (ConstructMatches)
         ConstructMatches->push_back(ConstructIdx - 1);
 
-      Optional<bool> Result = HandleTrait(Property, FoundInOrder);
-      if (Result.hasValue())
-        return Result.getValue();
+      if (std::optional<bool> Result = HandleTrait(Property, FoundInOrder))
+        return *Result;
 
       if (!FoundInOrder) {
         LLVM_DEBUG(dbgs() << "[" << DEBUG_TYPE << "] Construct property "

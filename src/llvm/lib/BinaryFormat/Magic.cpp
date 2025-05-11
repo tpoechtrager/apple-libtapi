@@ -10,10 +10,8 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/BinaryFormat/COFF.h"
-#include "llvm/BinaryFormat/ELF.h"
 #include "llvm/BinaryFormat/MachO.h"
 #include "llvm/Support/Endian.h"
-#include "llvm/Support/FileSystem.h"
 #include "llvm/Support/MemoryBuffer.h"
 
 #if !defined(_MSC_VER) && !defined(__MINGW32__)
@@ -35,6 +33,10 @@ static bool startswith(StringRef Magic, const char (&S)[N]) {
 file_magic llvm::identify_magic(StringRef Magic) {
   if (Magic.size() < 4)
     return file_magic::unknown;
+  // BEGIN MCCAS
+  if (Magic.startswith(casidObjectMagicPrefix))
+    return file_magic::cas_id;
+  // END MCCAS
   switch ((unsigned char)Magic[0]) {
   case 0x00: {
     // COFF bigobj, CL.exe's LTO object file, or short import library file
@@ -71,6 +73,16 @@ file_magic llvm::identify_magic(StringRef Magic) {
       return file_magic::xcoff_object_64;
     break;
 
+  case 0x03:
+    if (startswith(Magic, "\x03\xF0\x00"))
+      return file_magic::goff_object;
+    break;
+
+  case 0x10:
+    if (startswith(Magic, "\x10\xFF\x10\xAD"))
+      return file_magic::offload_binary;
+    break;
+
   case 0xDE: // 0x0B17C0DE = BC wraper
     if (startswith(Magic, "\xDE\xC0\x17\x0B"))
       return file_magic::bitcode;
@@ -83,7 +95,10 @@ file_magic llvm::identify_magic(StringRef Magic) {
     if (startswith(Magic, "!<arch>\n") || startswith(Magic, "!<thin>\n"))
       return file_magic::archive;
     break;
-
+  case '<':
+    if (startswith(Magic, "<bigaf>\n"))
+      return file_magic::archive;
+    break;
   case '\177':
     if (startswith(Magic, "\177ELF") && Magic.size() >= 18) {
       bool Data2MSB = Magic[5] == 2;
@@ -171,6 +186,8 @@ file_magic llvm::identify_magic(StringRef Magic) {
       return file_magic::macho_dsym_companion;
     case 11:
       return file_magic::macho_kext_bundle;
+    case 12:
+      return file_magic::macho_file_set;
     }
     break;
   }
@@ -179,11 +196,15 @@ file_magic llvm::identify_magic(StringRef Magic) {
   case 0x84: // Alpha 64-bit
   case 0x66: // MPS R4000 Windows
   case 0x50: // mc68K
+    if (startswith(Magic, "\x50\xed\x55\xba"))
+      return file_magic::cuda_fatbinary;
+    [[fallthrough]];
+
   case 0x4c: // 80386 Windows
   case 0xc4: // ARMNT Windows
     if (Magic[1] == 0x01)
       return file_magic::coff_object;
-    LLVM_FALLTHROUGH;
+    [[fallthrough]];
 
   case 0x90: // PA-RISC Windows
   case 0x68: // mc68K Windows
@@ -211,9 +232,27 @@ file_magic llvm::identify_magic(StringRef Magic) {
       return file_magic::coff_object;
     break;
 
-  case 0x2d: // YAML '-'
+  case 0x2d: // YAML '-' MachO TBD.
     if (startswith(Magic, "--- !tapi") || startswith(Magic, "---\narchs:"))
       return file_magic::tapi_file;
+    break;
+  case 0x7b: // JSON '{' MachO TBD.
+    return file_magic::tapi_file;
+    break;
+
+  case 'D': // DirectX container file - DXBC
+    if (startswith(Magic, "DXBC"))
+      return file_magic::dxcontainer_object;
+    break;
+
+  case 0x41: // ARM64EC windows
+    if (Magic[1] == char(0xA6))
+      return file_magic::coff_object;
+    break;
+
+  case 0x4e: // ARM64X windows
+    if (Magic[1] == char(0xA6))
+      return file_magic::coff_object;
     break;
 
   default:
@@ -223,7 +262,8 @@ file_magic llvm::identify_magic(StringRef Magic) {
 }
 
 std::error_code llvm::identify_magic(const Twine &Path, file_magic &Result) {
-  auto FileOrError = MemoryBuffer::getFile(Path, -1LL, false);
+  auto FileOrError = MemoryBuffer::getFile(Path, /*IsText=*/false,
+                                           /*RequiresNullTerminator=*/false);
   if (!FileOrError)
     return FileOrError.getError();
 

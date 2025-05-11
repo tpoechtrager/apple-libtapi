@@ -38,6 +38,7 @@
 #include "llvm/ADT/iterator.h"
 #include "llvm/ADT/iterator_range.h"
 #include "llvm/Analysis/AssumptionCache.h"
+#include "llvm/Analysis/DomTreeUpdater.h"
 #include "llvm/Analysis/GlobalsModRef.h"
 #include "llvm/Analysis/Loads.h"
 #include "llvm/Analysis/PtrUseVisitor.h"
@@ -48,6 +49,7 @@
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DIBuilder.h"
 #include "llvm/IR/DataLayout.h"
+#include "llvm/IR/DebugInfo.h"
 #include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Dominators.h"
@@ -56,11 +58,9 @@
 #include "llvm/IR/GlobalAlias.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/InstVisitor.h"
-#include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicInst.h"
-#include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Metadata.h"
 #include "llvm/IR/Module.h"
@@ -77,14 +77,13 @@
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Scalar.h"
+#include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/PromoteMemToReg.h"
 #include <algorithm>
 #include <cassert>
-#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -107,6 +106,11 @@ STATISTIC(MaxUsesPerAllocaPartition, "Maximum number of uses of a partition");
 STATISTIC(NumNewAllocas, "Number of new, smaller allocas introduced");
 STATISTIC(NumPromoted, "Number of allocas promoted to SSA values");
 STATISTIC(NumLoadsSpeculated, "Number of loads speculated to allow promotion");
+STATISTIC(NumLoadsPredicated,
+          "Number of loads rewritten into predicated loads to allow promotion");
+STATISTIC(
+    NumStoresPredicated,
+    "Number of stores rewritten into predicated loads to allow promotion");
 STATISTIC(NumDeleted, "Number of instructions deleted");
 STATISTIC(NumVectorized, "Number of vectorized aggregates");
 
@@ -114,15 +118,224 @@ STATISTIC(NumVectorized, "Number of vectorized aggregates");
 /// GEPs.
 static cl::opt<bool> SROAStrictInbounds("sroa-strict-inbounds", cl::init(false),
                                         cl::Hidden);
-
+/// Disable running mem2reg during SROA in order to test or debug SROA.
+static cl::opt<bool> SROASkipMem2Reg("sroa-skip-mem2reg", cl::init(false),
+                                     cl::Hidden);
 namespace {
+
+/// Calculate the fragment of a variable to use when slicing a store
+/// based on the slice dimensions, existing fragment, and base storage
+/// fragment.
+/// Results:
+/// UseFrag - Use Target as the new fragment.
+/// UseNoFrag - The new slice already covers the whole variable.
+/// Skip - The new alloca slice doesn't include this variable.
+/// FIXME: Can we use calculateFragmentIntersect instead?
+enum FragCalcResult { UseFrag, UseNoFrag, Skip };
+static FragCalcResult
+calculateFragment(DILocalVariable *Variable,
+                  uint64_t NewStorageSliceOffsetInBits,
+                  uint64_t NewStorageSliceSizeInBits,
+                  std::optional<DIExpression::FragmentInfo> StorageFragment,
+                  std::optional<DIExpression::FragmentInfo> CurrentFragment,
+                  DIExpression::FragmentInfo &Target) {
+  // If the base storage describes part of the variable apply the offset and
+  // the size constraint.
+  if (StorageFragment) {
+    Target.SizeInBits =
+        std::min(NewStorageSliceSizeInBits, StorageFragment->SizeInBits);
+    Target.OffsetInBits =
+        NewStorageSliceOffsetInBits + StorageFragment->OffsetInBits;
+  } else {
+    Target.SizeInBits = NewStorageSliceSizeInBits;
+    Target.OffsetInBits = NewStorageSliceOffsetInBits;
+  }
+
+  // If this slice extracts the entirety of an independent variable from a
+  // larger alloca, do not produce a fragment expression, as the variable is
+  // not fragmented.
+  if (!CurrentFragment) {
+    if (auto Size = Variable->getSizeInBits()) {
+      // Treat the current fragment as covering the whole variable.
+      CurrentFragment =  DIExpression::FragmentInfo(*Size, 0);
+      if (Target == CurrentFragment)
+        return UseNoFrag;
+    }
+  }
+
+  // No additional work to do if there isn't a fragment already, or there is
+  // but it already exactly describes the new assignment.
+  if (!CurrentFragment || *CurrentFragment == Target)
+    return UseFrag;
+
+  // Reject the target fragment if it doesn't fit wholly within the current
+  // fragment. TODO: We could instead chop up the target to fit in the case of
+  // a partial overlap.
+  if (Target.startInBits() < CurrentFragment->startInBits() ||
+      Target.endInBits() > CurrentFragment->endInBits())
+    return Skip;
+
+  // Target fits within the current fragment, return it.
+  return UseFrag;
+}
+
+static DebugVariable getAggregateVariable(DbgVariableIntrinsic *DVI) {
+  return DebugVariable(DVI->getVariable(), std::nullopt,
+                       DVI->getDebugLoc().getInlinedAt());
+}
+
+/// Find linked dbg.assign and generate a new one with the correct
+/// FragmentInfo. Link Inst to the new dbg.assign.  If Value is nullptr the
+/// value component is copied from the old dbg.assign to the new.
+/// \param OldAlloca             Alloca for the variable before splitting.
+/// \param IsSplit               True if the store (not necessarily alloca)
+///                              is being split.
+/// \param OldAllocaOffsetInBits Offset of the slice taken from OldAlloca.
+/// \param SliceSizeInBits       New number of bits being written to.
+/// \param OldInst               Instruction that is being split.
+/// \param Inst                  New instruction performing this part of the
+///                              split store.
+/// \param Dest                  Store destination.
+/// \param Value                 Stored value.
+/// \param DL                    Datalayout.
+static void migrateDebugInfo(AllocaInst *OldAlloca, bool IsSplit,
+                             uint64_t OldAllocaOffsetInBits,
+                             uint64_t SliceSizeInBits, Instruction *OldInst,
+                             Instruction *Inst, Value *Dest, Value *Value,
+                             const DataLayout &DL) {
+  auto MarkerRange = at::getAssignmentMarkers(OldInst);
+  // Nothing to do if OldInst has no linked dbg.assign intrinsics.
+  if (MarkerRange.empty())
+    return;
+
+  LLVM_DEBUG(dbgs() << "  migrateDebugInfo\n");
+  LLVM_DEBUG(dbgs() << "    OldAlloca: " << *OldAlloca << "\n");
+  LLVM_DEBUG(dbgs() << "    IsSplit: " << IsSplit << "\n");
+  LLVM_DEBUG(dbgs() << "    OldAllocaOffsetInBits: " << OldAllocaOffsetInBits
+                    << "\n");
+  LLVM_DEBUG(dbgs() << "    SliceSizeInBits: " << SliceSizeInBits << "\n");
+  LLVM_DEBUG(dbgs() << "    OldInst: " << *OldInst << "\n");
+  LLVM_DEBUG(dbgs() << "    Inst: " << *Inst << "\n");
+  LLVM_DEBUG(dbgs() << "    Dest: " << *Dest << "\n");
+  if (Value)
+    LLVM_DEBUG(dbgs() << "    Value: " << *Value << "\n");
+
+  /// Map of aggregate variables to their fragment associated with OldAlloca.
+  DenseMap<DebugVariable, std::optional<DIExpression::FragmentInfo>>
+      BaseFragments;
+  for (auto *DAI : at::getAssignmentMarkers(OldAlloca))
+    BaseFragments[getAggregateVariable(DAI)] =
+        DAI->getExpression()->getFragmentInfo();
+
+  // The new inst needs a DIAssignID unique metadata tag (if OldInst has
+  // one). It shouldn't already have one: assert this assumption.
+  assert(!Inst->getMetadata(LLVMContext::MD_DIAssignID));
+  DIAssignID *NewID = nullptr;
+  auto &Ctx = Inst->getContext();
+  DIBuilder DIB(*OldInst->getModule(), /*AllowUnresolved*/ false);
+  assert(OldAlloca->isStaticAlloca());
+
+  for (DbgAssignIntrinsic *DbgAssign : MarkerRange) {
+    LLVM_DEBUG(dbgs() << "      existing dbg.assign is: " << *DbgAssign
+                      << "\n");
+    auto *Expr = DbgAssign->getExpression();
+    bool SetKillLocation = false;
+
+    if (IsSplit) {
+      std::optional<DIExpression::FragmentInfo> BaseFragment;
+      {
+        auto R = BaseFragments.find(getAggregateVariable(DbgAssign));
+        if (R == BaseFragments.end())
+          continue;
+        BaseFragment = R->second;
+      }
+      std::optional<DIExpression::FragmentInfo> CurrentFragment =
+          Expr->getFragmentInfo();
+      DIExpression::FragmentInfo NewFragment;
+      FragCalcResult Result = calculateFragment(
+          DbgAssign->getVariable(), OldAllocaOffsetInBits, SliceSizeInBits,
+          BaseFragment, CurrentFragment, NewFragment);
+
+      if (Result == Skip)
+        continue;
+      if (Result == UseFrag && !(NewFragment == CurrentFragment)) {
+        if (CurrentFragment) {
+          // Rewrite NewFragment to be relative to the existing one (this is
+          // what createFragmentExpression wants).  CalculateFragment has
+          // already resolved the size for us. FIXME: Should it return the
+          // relative fragment too?
+          NewFragment.OffsetInBits -= CurrentFragment->OffsetInBits;
+        }
+        // Add the new fragment info to the existing expression if possible.
+        if (auto E = DIExpression::createFragmentExpression(
+                Expr, NewFragment.OffsetInBits, NewFragment.SizeInBits)) {
+          Expr = *E;
+        } else {
+          // Otherwise, add the new fragment info to an empty expression and
+          // discard the value component of this dbg.assign as the value cannot
+          // be computed with the new fragment.
+          Expr = *DIExpression::createFragmentExpression(
+              DIExpression::get(Expr->getContext(), std::nullopt),
+              NewFragment.OffsetInBits, NewFragment.SizeInBits);
+          SetKillLocation = true;
+        }
+      }
+    }
+
+    // If we haven't created a DIAssignID ID do that now and attach it to Inst.
+    if (!NewID) {
+      NewID = DIAssignID::getDistinct(Ctx);
+      Inst->setMetadata(LLVMContext::MD_DIAssignID, NewID);
+    }
+
+    ::Value *NewValue = Value ? Value : DbgAssign->getValue();
+    auto *NewAssign = DIB.insertDbgAssign(
+        Inst, NewValue, DbgAssign->getVariable(), Expr, Dest,
+        DIExpression::get(Ctx, std::nullopt), DbgAssign->getDebugLoc());
+
+    // If we've updated the value but the original dbg.assign has an arglist
+    // then kill it now - we can't use the requested new value.
+    // We can't replace the DIArgList with the new value as it'd leave
+    // the DIExpression in an invalid state (DW_OP_LLVM_arg operands without
+    // an arglist). And we can't keep the DIArgList in case the linked store
+    // is being split - in which case the DIArgList + expression may no longer
+    // be computing the correct value.
+    // This should be a very rare situation as it requires the value being
+    // stored to differ from the dbg.assign (i.e., the value has been
+    // represented differently in the debug intrinsic for some reason).
+    SetKillLocation |=
+        Value && (DbgAssign->hasArgList() ||
+                  !DbgAssign->getExpression()->isSingleLocationExpression());
+    if (SetKillLocation)
+      NewAssign->setKillLocation();
+
+    // We could use more precision here at the cost of some additional (code)
+    // complexity - if the original dbg.assign was adjacent to its store, we
+    // could position this new dbg.assign adjacent to its store rather than the
+    // old dbg.assgn. That would result in interleaved dbg.assigns rather than
+    // what we get now:
+    //    split store !1
+    //    split store !2
+    //    dbg.assign !1
+    //    dbg.assign !2
+    // This (current behaviour) results results in debug assignments being
+    // noted as slightly offset (in code) from the store. In practice this
+    // should have little effect on the debugging experience due to the fact
+    // that all the split stores should get the same line number.
+    NewAssign->moveBefore(DbgAssign);
+
+    NewAssign->setDebugLoc(DbgAssign->getDebugLoc());
+    LLVM_DEBUG(dbgs() << "Created new assign intrinsic: " << *NewAssign
+                      << "\n");
+  }
+}
 
 /// A custom IRBuilder inserter which prefixes all names, but only in
 /// Assert builds.
 class IRBuilderPrefixedInserter final : public IRBuilderDefaultInserter {
   std::string Prefix;
 
-  const Twine getNameWithPrefix(const Twine &Name) const {
+  Twine getNameWithPrefix(const Twine &Name) const {
     return Name.isTriviallyEmpty() ? Name : Prefix + Name;
   }
 
@@ -323,7 +536,7 @@ private:
   ///
   /// Note that these are not separated by slice. This is because we expect an
   /// alloca to be completely rewritten or not rewritten at all. If rewritten,
-  /// all these instructions can simply be removed and replaced with undef as
+  /// all these instructions can simply be removed and replaced with poison as
   /// they come from outside of the allocated space.
   SmallVector<Instruction *, 8> DeadUsers;
 
@@ -333,10 +546,10 @@ private:
   /// Operands which will become dead if we rewrite the alloca.
   ///
   /// These are operands that in their particular use can be replaced with
-  /// undef when we rewrite the alloca. These show up in out-of-bounds inputs
+  /// poison when we rewrite the alloca. These show up in out-of-bounds inputs
   /// to PHI nodes and the like. They aren't entirely dead (there might be
   /// a GEP back into the bounds using it elsewhere) and nor is the PHI, but we
-  /// want to swap this particular input for undef to simplify the use lists of
+  /// want to swap this particular input for poison to simplify the use lists of
   /// the alloca.
   SmallVector<Use *, 8> DeadOperands;
 };
@@ -656,7 +869,7 @@ class AllocaSlices::SliceBuilder : public PtrUseVisitor<SliceBuilder> {
 public:
   SliceBuilder(const DataLayout &DL, AllocaInst &AI, AllocaSlices &AS)
       : PtrUseVisitor<SliceBuilder>(DL),
-        AllocSize(DL.getTypeAllocSize(AI.getAllocatedType()).getFixedSize()),
+        AllocSize(DL.getTypeAllocSize(AI.getAllocatedType()).getFixedValue()),
         AS(AS) {}
 
 private:
@@ -749,7 +962,7 @@ private:
           GEPOffset +=
               Index *
               APInt(Offset.getBitWidth(),
-                    DL.getTypeAllocSize(GTI.getIndexedType()).getFixedSize());
+                    DL.getTypeAllocSize(GTI.getIndexedType()).getFixedValue());
         }
 
         // If this index has computed an intermediate pointer which is not
@@ -768,7 +981,8 @@ private:
     // We allow splitting of non-volatile loads and stores where the type is an
     // integer type. These may be used to implement 'memcpy' or other "transfer
     // of bits" patterns.
-    bool IsSplittable = Ty->isIntegerTy() && !IsVolatile;
+    bool IsSplittable =
+        Ty->isIntegerTy() && !IsVolatile && DL.typeSizeEqualsStoreSize(Ty);
 
     insertUse(I, Offset, Size, IsSplittable);
   }
@@ -780,15 +994,12 @@ private:
     if (!IsOffsetKnown)
       return PI.setAborted(&LI);
 
-    if (LI.isVolatile() &&
-        LI.getPointerAddressSpace() != DL.getAllocaAddrSpace())
+    TypeSize Size = DL.getTypeStoreSize(LI.getType());
+    if (Size.isScalable())
       return PI.setAborted(&LI);
 
-    if (isa<ScalableVectorType>(LI.getType()))
-      return PI.setAborted(&LI);
-
-    uint64_t Size = DL.getTypeStoreSize(LI.getType()).getFixedSize();
-    return handleLoadOrStore(LI.getType(), LI, Offset, Size, LI.isVolatile());
+    return handleLoadOrStore(LI.getType(), LI, Offset, Size.getFixedValue(),
+                             LI.isVolatile());
   }
 
   void visitStoreInst(StoreInst &SI) {
@@ -798,14 +1009,11 @@ private:
     if (!IsOffsetKnown)
       return PI.setAborted(&SI);
 
-    if (SI.isVolatile() &&
-        SI.getPointerAddressSpace() != DL.getAllocaAddrSpace())
+    TypeSize StoreSize = DL.getTypeStoreSize(ValOp->getType());
+    if (StoreSize.isScalable())
       return PI.setAborted(&SI);
 
-    if (isa<ScalableVectorType>(ValOp->getType()))
-      return PI.setAborted(&SI);
-
-    uint64_t Size = DL.getTypeStoreSize(ValOp->getType()).getFixedSize();
+    uint64_t Size = StoreSize.getFixedValue();
 
     // If this memory access can be shown to *statically* extend outside the
     // bounds of the allocation, it's behavior is undefined, so simply
@@ -839,11 +1047,6 @@ private:
     if (!IsOffsetKnown)
       return PI.setAborted(&II);
 
-    // Don't replace this with a store with a different address space.  TODO:
-    // Use a store with the casted new alloca?
-    if (II.isVolatile() && II.getDestAddressSpace() != DL.getAllocaAddrSpace())
-      return PI.setAborted(&II);
-
     insertUse(II, Offset, Length ? Length->getLimitedValue()
                                  : AllocSize - Offset.getLimitedValue(),
               (bool)Length);
@@ -861,13 +1064,6 @@ private:
       return;
 
     if (!IsOffsetKnown)
-      return PI.setAborted(&II);
-
-    // Don't replace this with a load/store with a different address space.
-    // TODO: Use a store with the casted new alloca?
-    if (II.isVolatile() &&
-        (II.getDestAddressSpace() != DL.getAllocaAddrSpace() ||
-         II.getSourceAddressSpace() != DL.getAllocaAddrSpace()))
       return PI.setAborted(&II);
 
     // This side of the transfer is completely out-of-bounds, and so we can
@@ -926,7 +1122,8 @@ private:
            "Map index doesn't point back to a slice with this user.");
   }
 
-  // Disable SRoA for any intrinsics except for lifetime invariants.
+  // Disable SRoA for any intrinsics except for lifetime invariants and
+  // invariant group.
   // FIXME: What about debug intrinsics? This matches old behavior, but
   // doesn't make sense.
   void visitIntrinsicInst(IntrinsicInst &II) {
@@ -943,6 +1140,11 @@ private:
       uint64_t Size = std::min(AllocSize - Offset.getLimitedValue(),
                                Length->getLimitedValue());
       insertUse(II, Offset, Size, true);
+      return;
+    }
+
+    if (II.isLaunderOrStripInvariantGroup()) {
+      enqueueUsers(II);
       return;
     }
 
@@ -967,16 +1169,16 @@ private:
       std::tie(UsedI, I) = Uses.pop_back_val();
 
       if (LoadInst *LI = dyn_cast<LoadInst>(I)) {
-        Size = std::max(Size,
-                        DL.getTypeStoreSize(LI->getType()).getFixedSize());
+        Size =
+            std::max(Size, DL.getTypeStoreSize(LI->getType()).getFixedValue());
         continue;
       }
       if (StoreInst *SI = dyn_cast<StoreInst>(I)) {
         Value *Op = SI->getOperand(0);
         if (Op == UsedI)
           return SI;
-        Size = std::max(Size,
-                        DL.getTypeStoreSize(Op->getType()).getFixedSize());
+        Size =
+            std::max(Size, DL.getTypeStoreSize(Op->getType()).getFixedValue());
         continue;
       }
 
@@ -1001,7 +1203,14 @@ private:
     if (I.use_empty())
       return markAsDead(I);
 
-    // TODO: We could use SimplifyInstruction here to fold PHINodes and
+    // If this is a PHI node before a catchswitch, we cannot insert any non-PHI
+    // instructions in this BB, which may be required during rewriting. Bail out
+    // on these cases.
+    if (isa<PHINode>(I) &&
+        I.getParent()->getFirstInsertionPt() == I.getParent()->end())
+      return PI.setAborted(&I);
+
+    // TODO: We could use simplifyInstruction here to fold PHINodes and
     // SelectInsts. However, doing so requires to change the current
     // dead-operand-tracking mechanism. For instance, suppose neither loading
     // from %U nor %other traps. Then "load (select undef, %U, %other)" does not
@@ -1016,7 +1225,7 @@ private:
         enqueueUsers(I);
       else
         // Otherwise the operand to the PHI/select is dead, and we can replace
-        // it with undef.
+        // it with poison.
         AS.DeadOperands.push_back(U);
 
       return;
@@ -1036,7 +1245,7 @@ private:
     // For PHI and select operands outside the alloca, we can't nuke the entire
     // phi or select -- the other side might still be relevant, so we special
     // case them here and use a separate structure to track the operands
-    // themselves which should be replaced with undef.
+    // themselves which should be replaced with poison.
     // FIXME: This should instead be escaped in the event we're instrumenting
     // for address sanitization.
     if (Offset.uge(AllocSize)) {
@@ -1076,7 +1285,7 @@ AllocaSlices::AllocaSlices(const DataLayout &DL, AllocaInst &AI)
 
   // Sort the uses. This arranges for the offsets to be in ascending order,
   // and the sizes to be in descending order.
-  std::stable_sort(Slices.begin(), Slices.end());
+  llvm::stable_sort(Slices);
 }
 
 #if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
@@ -1199,8 +1408,7 @@ static bool isSafePHIToSpeculate(PHINode &PN) {
   BasicBlock *BB = PN.getParent();
   Align MaxAlign;
   uint64_t APWidth = DL.getIndexTypeSizeInBits(PN.getType());
-  APInt MaxSize(APWidth, 0);
-  bool HaveLoad = false;
+  Type *LoadType = nullptr;
   for (User *U : PN.users()) {
     LoadInst *LI = dyn_cast<LoadInst>(U);
     if (!LI || !LI->isSimple())
@@ -1212,20 +1420,27 @@ static bool isSafePHIToSpeculate(PHINode &PN) {
     if (LI->getParent() != BB)
       return false;
 
+    if (LoadType) {
+      if (LoadType != LI->getType())
+        return false;
+    } else {
+      LoadType = LI->getType();
+    }
+
     // Ensure that there are no instructions between the PHI and the load that
     // could store.
     for (BasicBlock::iterator BBI(PN); &*BBI != LI; ++BBI)
       if (BBI->mayWriteToMemory())
         return false;
 
-    uint64_t Size = DL.getTypeStoreSize(LI->getType()).getFixedSize();
     MaxAlign = std::max(MaxAlign, LI->getAlign());
-    MaxSize = MaxSize.ult(Size) ? APInt(APWidth, Size) : MaxSize;
-    HaveLoad = true;
   }
 
-  if (!HaveLoad)
+  if (!LoadType)
     return false;
+
+  APInt LoadSize =
+      APInt(APWidth, DL.getTypeStoreSize(LoadType).getFixedValue());
 
   // We can only transform this if it is safe to push the loads into the
   // predecessor blocks. The only thing to watch out for is that we can't put
@@ -1248,7 +1463,7 @@ static bool isSafePHIToSpeculate(PHINode &PN) {
     // If this pointer is always safe to load, or if we can prove that there
     // is already a load in the block, then we can move the load to the pred
     // block.
-    if (isSafeToLoadUnconditionally(InVal, MaxAlign, MaxSize, DL, TI))
+    if (isSafeToLoadUnconditionally(InVal, MaxAlign, LoadSize, DL, TI))
       continue;
 
     return false;
@@ -1257,19 +1472,18 @@ static bool isSafePHIToSpeculate(PHINode &PN) {
   return true;
 }
 
-static void speculatePHINodeLoads(PHINode &PN) {
+static void speculatePHINodeLoads(IRBuilderTy &IRB, PHINode &PN) {
   LLVM_DEBUG(dbgs() << "    original: " << PN << "\n");
 
   LoadInst *SomeLoad = cast<LoadInst>(PN.user_back());
   Type *LoadTy = SomeLoad->getType();
-  IRBuilderTy PHIBuilder(&PN);
-  PHINode *NewPN = PHIBuilder.CreatePHI(LoadTy, PN.getNumIncomingValues(),
-                                        PN.getName() + ".sroa.speculated");
+  IRB.SetInsertPoint(&PN);
+  PHINode *NewPN = IRB.CreatePHI(LoadTy, PN.getNumIncomingValues(),
+                                 PN.getName() + ".sroa.speculated");
 
   // Get the AA tags and alignment to use from one of the loads. It does not
   // matter which one we get and if any differ.
-  AAMDNodes AATags;
-  SomeLoad->getAAMetadata(AATags);
+  AAMDNodes AATags = SomeLoad->getAAMetadata();
   Align Alignment = SomeLoad->getAlign();
 
   // Rewrite all loads of the PN to use the new PHI.
@@ -1295,9 +1509,9 @@ static void speculatePHINodeLoads(PHINode &PN) {
     }
 
     Instruction *TI = Pred->getTerminator();
-    IRBuilderTy PredBuilder(TI);
+    IRB.SetInsertPoint(TI);
 
-    LoadInst *Load = PredBuilder.CreateAlignedLoad(
+    LoadInst *Load = IRB.CreateAlignedLoad(
         LoadTy, InVal, Alignment,
         (PN.getName() + ".sroa.speculate.load." + Pred->getName()));
     ++NumLoadsSpeculated;
@@ -1311,376 +1525,244 @@ static void speculatePHINodeLoads(PHINode &PN) {
   PN.eraseFromParent();
 }
 
-/// Select instructions that use an alloca and are subsequently loaded can be
-/// rewritten to load both input pointers and then select between the result,
-/// allowing the load of the alloca to be promoted.
-/// From this:
-///   %P2 = select i1 %cond, i32* %Alloca, i32* %Other
-///   %V = load i32* %P2
-/// to:
-///   %V1 = load i32* %Alloca      -> will be mem2reg'd
-///   %V2 = load i32* %Other
-///   %V = select i1 %cond, i32 %V1, i32 %V2
-///
-/// We can do this to a select if its only uses are loads and if the operand
-/// to the select can be loaded unconditionally.
-static bool isSafeSelectToSpeculate(SelectInst &SI) {
-  Value *TValue = SI.getTrueValue();
-  Value *FValue = SI.getFalseValue();
+sroa::SelectHandSpeculativity &
+sroa::SelectHandSpeculativity::setAsSpeculatable(bool isTrueVal) {
+  if (isTrueVal)
+    Bitfield::set<sroa::SelectHandSpeculativity::TrueVal>(Storage, true);
+  else
+    Bitfield::set<sroa::SelectHandSpeculativity::FalseVal>(Storage, true);
+  return *this;
+}
+
+bool sroa::SelectHandSpeculativity::isSpeculatable(bool isTrueVal) const {
+  return isTrueVal
+             ? Bitfield::get<sroa::SelectHandSpeculativity::TrueVal>(Storage)
+             : Bitfield::get<sroa::SelectHandSpeculativity::FalseVal>(Storage);
+}
+
+bool sroa::SelectHandSpeculativity::areAllSpeculatable() const {
+  return isSpeculatable(/*isTrueVal=*/true) &&
+         isSpeculatable(/*isTrueVal=*/false);
+}
+
+bool sroa::SelectHandSpeculativity::areAnySpeculatable() const {
+  return isSpeculatable(/*isTrueVal=*/true) ||
+         isSpeculatable(/*isTrueVal=*/false);
+}
+bool sroa::SelectHandSpeculativity::areNoneSpeculatable() const {
+  return !areAnySpeculatable();
+}
+
+static sroa::SelectHandSpeculativity
+isSafeLoadOfSelectToSpeculate(LoadInst &LI, SelectInst &SI, bool PreserveCFG) {
+  assert(LI.isSimple() && "Only for simple loads");
+  sroa::SelectHandSpeculativity Spec;
+
   const DataLayout &DL = SI.getModule()->getDataLayout();
+  for (Value *Value : {SI.getTrueValue(), SI.getFalseValue()})
+    if (isSafeToLoadUnconditionally(Value, LI.getType(), LI.getAlign(), DL,
+                                    &LI))
+      Spec.setAsSpeculatable(/*isTrueVal=*/Value == SI.getTrueValue());
+    else if (PreserveCFG)
+      return Spec;
+
+  return Spec;
+}
+
+std::optional<sroa::RewriteableMemOps>
+SROAPass::isSafeSelectToSpeculate(SelectInst &SI, bool PreserveCFG) {
+  RewriteableMemOps Ops;
 
   for (User *U : SI.users()) {
-    LoadInst *LI = dyn_cast<LoadInst>(U);
-    if (!LI || !LI->isSimple())
-      return false;
+    if (auto *BC = dyn_cast<BitCastInst>(U); BC && BC->hasOneUse())
+      U = *BC->user_begin();
 
-    // Both operands to the select need to be dereferenceable, either
-    // absolutely (e.g. allocas) or at this point because we can see other
-    // accesses to it.
-    if (!isSafeToLoadUnconditionally(TValue, LI->getType(),
-                                     LI->getAlign(), DL, LI))
-      return false;
-    if (!isSafeToLoadUnconditionally(FValue, LI->getType(),
-                                     LI->getAlign(), DL, LI))
-      return false;
+    if (auto *Store = dyn_cast<StoreInst>(U)) {
+      // Note that atomic stores can be transformed; atomic semantics do not
+      // have any meaning for a local alloca. Stores are not speculatable,
+      // however, so if we can't turn it into a predicated store, we are done.
+      if (Store->isVolatile() || PreserveCFG)
+        return {}; // Give up on this `select`.
+      Ops.emplace_back(Store);
+      continue;
+    }
+
+    auto *LI = dyn_cast<LoadInst>(U);
+
+    // Note that atomic loads can be transformed;
+    // atomic semantics do not have any meaning for a local alloca.
+    if (!LI || LI->isVolatile())
+      return {}; // Give up on this `select`.
+
+    PossiblySpeculatableLoad Load(LI);
+    if (!LI->isSimple()) {
+      // If the `load` is not simple, we can't speculatively execute it,
+      // but we could handle this via a CFG modification. But can we?
+      if (PreserveCFG)
+        return {}; // Give up on this `select`.
+      Ops.emplace_back(Load);
+      continue;
+    }
+
+    sroa::SelectHandSpeculativity Spec =
+        isSafeLoadOfSelectToSpeculate(*LI, SI, PreserveCFG);
+    if (PreserveCFG && !Spec.areAllSpeculatable())
+      return {}; // Give up on this `select`.
+
+    Load.setInt(Spec);
+    Ops.emplace_back(Load);
   }
 
-  return true;
+  return Ops;
 }
 
-static void speculateSelectInstLoads(SelectInst &SI) {
-  LLVM_DEBUG(dbgs() << "    original: " << SI << "\n");
+static void speculateSelectInstLoads(SelectInst &SI, LoadInst &LI,
+                                     IRBuilderTy &IRB) {
+  LLVM_DEBUG(dbgs() << "    original load: " << SI << "\n");
 
-  IRBuilderTy IRB(&SI);
   Value *TV = SI.getTrueValue();
   Value *FV = SI.getFalseValue();
-  // Replace the loads of the select with a select of two loads.
-  while (!SI.use_empty()) {
-    LoadInst *LI = cast<LoadInst>(SI.user_back());
-    assert(LI->isSimple() && "We only speculate simple loads");
+  // Replace the given load of the select with a select of two loads.
 
-    IRB.SetInsertPoint(LI);
-    LoadInst *TL = IRB.CreateLoad(LI->getType(), TV,
-                                  LI->getName() + ".sroa.speculate.load.true");
-    LoadInst *FL = IRB.CreateLoad(LI->getType(), FV,
-                                  LI->getName() + ".sroa.speculate.load.false");
-    NumLoadsSpeculated += 2;
+  assert(LI.isSimple() && "We only speculate simple loads");
 
-    // Transfer alignment and AA info if present.
-    TL->setAlignment(LI->getAlign());
-    FL->setAlignment(LI->getAlign());
+  IRB.SetInsertPoint(&LI);
 
-    AAMDNodes Tags;
-    LI->getAAMetadata(Tags);
-    if (Tags) {
-      TL->setAAMetadata(Tags);
-      FL->setAAMetadata(Tags);
-    }
+  LoadInst *TL =
+      IRB.CreateAlignedLoad(LI.getType(), TV, LI.getAlign(),
+                            LI.getName() + ".sroa.speculate.load.true");
+  LoadInst *FL =
+      IRB.CreateAlignedLoad(LI.getType(), FV, LI.getAlign(),
+                            LI.getName() + ".sroa.speculate.load.false");
+  NumLoadsSpeculated += 2;
 
-    Value *V = IRB.CreateSelect(SI.getCondition(), TL, FL,
-                                LI->getName() + ".sroa.speculated");
+  // Transfer alignment and AA info if present.
+  TL->setAlignment(LI.getAlign());
+  FL->setAlignment(LI.getAlign());
 
-    LLVM_DEBUG(dbgs() << "          speculated to: " << *V << "\n");
-    LI->replaceAllUsesWith(V);
-    LI->eraseFromParent();
+  AAMDNodes Tags = LI.getAAMetadata();
+  if (Tags) {
+    TL->setAAMetadata(Tags);
+    FL->setAAMetadata(Tags);
   }
-  SI.eraseFromParent();
+
+  Value *V = IRB.CreateSelect(SI.getCondition(), TL, FL,
+                              LI.getName() + ".sroa.speculated");
+
+  LLVM_DEBUG(dbgs() << "          speculated to: " << *V << "\n");
+  LI.replaceAllUsesWith(V);
 }
 
-/// Build a GEP out of a base pointer and indices.
-///
-/// This will return the BasePtr if that is valid, or build a new GEP
-/// instruction using the IRBuilder if GEP-ing is needed.
-static Value *buildGEP(IRBuilderTy &IRB, Value *BasePtr,
-                       SmallVectorImpl<Value *> &Indices,
-                       const Twine &NamePrefix) {
-  if (Indices.empty())
-    return BasePtr;
-
-  // A single zero index is a no-op, so check for this and avoid building a GEP
-  // in that case.
-  if (Indices.size() == 1 && cast<ConstantInt>(Indices.back())->isZero())
-    return BasePtr;
-
-  return IRB.CreateInBoundsGEP(BasePtr->getType()->getPointerElementType(),
-                               BasePtr, Indices, NamePrefix + "sroa_idx");
-}
-
-/// Get a natural GEP off of the BasePtr walking through Ty toward
-/// TargetTy without changing the offset of the pointer.
-///
-/// This routine assumes we've already established a properly offset GEP with
-/// Indices, and arrived at the Ty type. The goal is to continue to GEP with
-/// zero-indices down through type layers until we find one the same as
-/// TargetTy. If we can't find one with the same type, we at least try to use
-/// one with the same size. If none of that works, we just produce the GEP as
-/// indicated by Indices to have the correct offset.
-static Value *getNaturalGEPWithType(IRBuilderTy &IRB, const DataLayout &DL,
-                                    Value *BasePtr, Type *Ty, Type *TargetTy,
-                                    SmallVectorImpl<Value *> &Indices,
-                                    const Twine &NamePrefix) {
-  if (Ty == TargetTy)
-    return buildGEP(IRB, BasePtr, Indices, NamePrefix);
-
-  // Offset size to use for the indices.
-  unsigned OffsetSize = DL.getIndexTypeSizeInBits(BasePtr->getType());
-
-  // See if we can descend into a struct and locate a field with the correct
-  // type.
-  unsigned NumLayers = 0;
-  Type *ElementTy = Ty;
-  do {
-    if (ElementTy->isPointerTy())
-      break;
-
-    if (ArrayType *ArrayTy = dyn_cast<ArrayType>(ElementTy)) {
-      ElementTy = ArrayTy->getElementType();
-      Indices.push_back(IRB.getIntN(OffsetSize, 0));
-    } else if (VectorType *VectorTy = dyn_cast<VectorType>(ElementTy)) {
-      ElementTy = VectorTy->getElementType();
-      Indices.push_back(IRB.getInt32(0));
-    } else if (StructType *STy = dyn_cast<StructType>(ElementTy)) {
-      if (STy->element_begin() == STy->element_end())
-        break; // Nothing left to descend into.
-      ElementTy = *STy->element_begin();
-      Indices.push_back(IRB.getInt32(0));
+template <typename T>
+static void rewriteMemOpOfSelect(SelectInst &SI, T &I,
+                                 sroa::SelectHandSpeculativity Spec,
+                                 DomTreeUpdater &DTU) {
+  assert((isa<LoadInst>(I) || isa<StoreInst>(I)) && "Only for load and store!");
+  LLVM_DEBUG(dbgs() << "    original mem op: " << I << "\n");
+  BasicBlock *Head = I.getParent();
+  Instruction *ThenTerm = nullptr;
+  Instruction *ElseTerm = nullptr;
+  if (Spec.areNoneSpeculatable())
+    SplitBlockAndInsertIfThenElse(SI.getCondition(), &I, &ThenTerm, &ElseTerm,
+                                  SI.getMetadata(LLVMContext::MD_prof), &DTU);
+  else {
+    SplitBlockAndInsertIfThen(SI.getCondition(), &I, /*Unreachable=*/false,
+                              SI.getMetadata(LLVMContext::MD_prof), &DTU,
+                              /*LI=*/nullptr, /*ThenBlock=*/nullptr);
+    if (Spec.isSpeculatable(/*isTrueVal=*/true))
+      cast<BranchInst>(Head->getTerminator())->swapSuccessors();
+  }
+  auto *HeadBI = cast<BranchInst>(Head->getTerminator());
+  Spec = {}; // Do not use `Spec` beyond this point.
+  BasicBlock *Tail = I.getParent();
+  Tail->setName(Head->getName() + ".cont");
+  PHINode *PN;
+  if (isa<LoadInst>(I))
+    PN = PHINode::Create(I.getType(), 2, "", &I);
+  for (BasicBlock *SuccBB : successors(Head)) {
+    bool IsThen = SuccBB == HeadBI->getSuccessor(0);
+    int SuccIdx = IsThen ? 0 : 1;
+    auto *NewMemOpBB = SuccBB == Tail ? Head : SuccBB;
+    auto &CondMemOp = cast<T>(*I.clone());
+    if (NewMemOpBB != Head) {
+      NewMemOpBB->setName(Head->getName() + (IsThen ? ".then" : ".else"));
+      if (isa<LoadInst>(I))
+        ++NumLoadsPredicated;
+      else
+        ++NumStoresPredicated;
     } else {
-      break;
+      CondMemOp.dropUBImplyingAttrsAndMetadata();
+      ++NumLoadsSpeculated;
     }
-    ++NumLayers;
-  } while (ElementTy != TargetTy);
-  if (ElementTy != TargetTy)
-    Indices.erase(Indices.end() - NumLayers, Indices.end());
-
-  return buildGEP(IRB, BasePtr, Indices, NamePrefix);
+    CondMemOp.insertBefore(NewMemOpBB->getTerminator());
+    Value *Ptr = SI.getOperand(1 + SuccIdx);
+    CondMemOp.setOperand(I.getPointerOperandIndex(), Ptr);
+    if (isa<LoadInst>(I)) {
+      CondMemOp.setName(I.getName() + (IsThen ? ".then" : ".else") + ".val");
+      PN->addIncoming(&CondMemOp, NewMemOpBB);
+    } else
+      LLVM_DEBUG(dbgs() << "                 to: " << CondMemOp << "\n");
+  }
+  if (isa<LoadInst>(I)) {
+    PN->takeName(&I);
+    LLVM_DEBUG(dbgs() << "          to: " << *PN << "\n");
+    I.replaceAllUsesWith(PN);
+  }
 }
 
-/// Recursively compute indices for a natural GEP.
-///
-/// This is the recursive step for getNaturalGEPWithOffset that walks down the
-/// element types adding appropriate indices for the GEP.
-static Value *getNaturalGEPRecursively(IRBuilderTy &IRB, const DataLayout &DL,
-                                       Value *Ptr, Type *Ty, APInt &Offset,
-                                       Type *TargetTy,
-                                       SmallVectorImpl<Value *> &Indices,
-                                       const Twine &NamePrefix) {
-  if (Offset == 0)
-    return getNaturalGEPWithType(IRB, DL, Ptr, Ty, TargetTy, Indices,
-                                 NamePrefix);
-
-  // We can't recurse through pointer types.
-  if (Ty->isPointerTy())
-    return nullptr;
-
-  // We try to analyze GEPs over vectors here, but note that these GEPs are
-  // extremely poorly defined currently. The long-term goal is to remove GEPing
-  // over a vector from the IR completely.
-  if (VectorType *VecTy = dyn_cast<VectorType>(Ty)) {
-    unsigned ElementSizeInBits =
-        DL.getTypeSizeInBits(VecTy->getScalarType()).getFixedSize();
-    if (ElementSizeInBits % 8 != 0) {
-      // GEPs over non-multiple of 8 size vector elements are invalid.
-      return nullptr;
-    }
-    APInt ElementSize(Offset.getBitWidth(), ElementSizeInBits / 8);
-    APInt NumSkippedElements = Offset.sdiv(ElementSize);
-    if (NumSkippedElements.ugt(cast<FixedVectorType>(VecTy)->getNumElements()))
-      return nullptr;
-    Offset -= NumSkippedElements * ElementSize;
-    Indices.push_back(IRB.getInt(NumSkippedElements));
-    return getNaturalGEPRecursively(IRB, DL, Ptr, VecTy->getElementType(),
-                                    Offset, TargetTy, Indices, NamePrefix);
-  }
-
-  if (ArrayType *ArrTy = dyn_cast<ArrayType>(Ty)) {
-    Type *ElementTy = ArrTy->getElementType();
-    APInt ElementSize(Offset.getBitWidth(),
-                      DL.getTypeAllocSize(ElementTy).getFixedSize());
-    APInt NumSkippedElements = Offset.sdiv(ElementSize);
-    if (NumSkippedElements.ugt(ArrTy->getNumElements()))
-      return nullptr;
-
-    Offset -= NumSkippedElements * ElementSize;
-    Indices.push_back(IRB.getInt(NumSkippedElements));
-    return getNaturalGEPRecursively(IRB, DL, Ptr, ElementTy, Offset, TargetTy,
-                                    Indices, NamePrefix);
-  }
-
-  StructType *STy = dyn_cast<StructType>(Ty);
-  if (!STy)
-    return nullptr;
-
-  const StructLayout *SL = DL.getStructLayout(STy);
-  uint64_t StructOffset = Offset.getZExtValue();
-  if (StructOffset >= SL->getSizeInBytes())
-    return nullptr;
-  unsigned Index = SL->getElementContainingOffset(StructOffset);
-  Offset -= APInt(Offset.getBitWidth(), SL->getElementOffset(Index));
-  Type *ElementTy = STy->getElementType(Index);
-  if (Offset.uge(DL.getTypeAllocSize(ElementTy).getFixedSize()))
-    return nullptr; // The offset points into alignment padding.
-
-  Indices.push_back(IRB.getInt32(Index));
-  return getNaturalGEPRecursively(IRB, DL, Ptr, ElementTy, Offset, TargetTy,
-                                  Indices, NamePrefix);
+static void rewriteMemOpOfSelect(SelectInst &SelInst, Instruction &I,
+                                 sroa::SelectHandSpeculativity Spec,
+                                 DomTreeUpdater &DTU) {
+  if (auto *LI = dyn_cast<LoadInst>(&I))
+    rewriteMemOpOfSelect(SelInst, *LI, Spec, DTU);
+  else if (auto *SI = dyn_cast<StoreInst>(&I))
+    rewriteMemOpOfSelect(SelInst, *SI, Spec, DTU);
+  else
+    llvm_unreachable_internal("Only for load and store.");
 }
 
-/// Get a natural GEP from a base pointer to a particular offset and
-/// resulting in a particular type.
-///
-/// The goal is to produce a "natural" looking GEP that works with the existing
-/// composite types to arrive at the appropriate offset and element type for
-/// a pointer. TargetTy is the element type the returned GEP should point-to if
-/// possible. We recurse by decreasing Offset, adding the appropriate index to
-/// Indices, and setting Ty to the result subtype.
-///
-/// If no natural GEP can be constructed, this function returns null.
-static Value *getNaturalGEPWithOffset(IRBuilderTy &IRB, const DataLayout &DL,
-                                      Value *Ptr, APInt Offset, Type *TargetTy,
-                                      SmallVectorImpl<Value *> &Indices,
-                                      const Twine &NamePrefix) {
-  PointerType *Ty = cast<PointerType>(Ptr->getType());
+static bool rewriteSelectInstMemOps(SelectInst &SI,
+                                    const sroa::RewriteableMemOps &Ops,
+                                    IRBuilderTy &IRB, DomTreeUpdater *DTU) {
+  bool CFGChanged = false;
+  LLVM_DEBUG(dbgs() << "    original select: " << SI << "\n");
 
-  // Don't consider any GEPs through an i8* as natural unless the TargetTy is
-  // an i8.
-  if (Ty == IRB.getInt8PtrTy(Ty->getAddressSpace()) && TargetTy->isIntegerTy(8))
-    return nullptr;
+  for (const RewriteableMemOp &Op : Ops) {
+    sroa::SelectHandSpeculativity Spec;
+    Instruction *I;
+    if (auto *const *US = std::get_if<UnspeculatableStore>(&Op)) {
+      I = *US;
+    } else {
+      auto PSL = std::get<PossiblySpeculatableLoad>(Op);
+      I = PSL.getPointer();
+      Spec = PSL.getInt();
+    }
+    if (Spec.areAllSpeculatable()) {
+      speculateSelectInstLoads(SI, cast<LoadInst>(*I), IRB);
+    } else {
+      assert(DTU && "Should not get here when not allowed to modify the CFG!");
+      rewriteMemOpOfSelect(SI, *I, Spec, *DTU);
+      CFGChanged = true;
+    }
+    I->eraseFromParent();
+  }
 
-  Type *ElementTy = Ty->getElementType();
-  if (!ElementTy->isSized())
-    return nullptr; // We can't GEP through an unsized element.
-  if (isa<ScalableVectorType>(ElementTy))
-    return nullptr;
-  APInt ElementSize(Offset.getBitWidth(),
-                    DL.getTypeAllocSize(ElementTy).getFixedSize());
-  if (ElementSize == 0)
-    return nullptr; // Zero-length arrays can't help us build a natural GEP.
-  APInt NumSkippedElements = Offset.sdiv(ElementSize);
-
-  Offset -= NumSkippedElements * ElementSize;
-  Indices.push_back(IRB.getInt(NumSkippedElements));
-  return getNaturalGEPRecursively(IRB, DL, Ptr, ElementTy, Offset, TargetTy,
-                                  Indices, NamePrefix);
+  for (User *U : make_early_inc_range(SI.users()))
+    cast<BitCastInst>(U)->eraseFromParent();
+  SI.eraseFromParent();
+  return CFGChanged;
 }
 
 /// Compute an adjusted pointer from Ptr by Offset bytes where the
 /// resulting pointer has PointerTy.
-///
-/// This tries very hard to compute a "natural" GEP which arrives at the offset
-/// and produces the pointer type desired. Where it cannot, it will try to use
-/// the natural GEP to arrive at the offset and bitcast to the type. Where that
-/// fails, it will try to use an existing i8* and GEP to the byte offset and
-/// bitcast to the type.
-///
-/// The strategy for finding the more natural GEPs is to peel off layers of the
-/// pointer, walking back through bit casts and GEPs, searching for a base
-/// pointer from which we can compute a natural GEP with the desired
-/// properties. The algorithm tries to fold as many constant indices into
-/// a single GEP as possible, thus making each GEP more independent of the
-/// surrounding code.
 static Value *getAdjustedPtr(IRBuilderTy &IRB, const DataLayout &DL, Value *Ptr,
                              APInt Offset, Type *PointerTy,
                              const Twine &NamePrefix) {
-  // Even though we don't look through PHI nodes, we could be called on an
-  // instruction in an unreachable block, which may be on a cycle.
-  SmallPtrSet<Value *, 4> Visited;
-  Visited.insert(Ptr);
-  SmallVector<Value *, 4> Indices;
-
-  // We may end up computing an offset pointer that has the wrong type. If we
-  // never are able to compute one directly that has the correct type, we'll
-  // fall back to it, so keep it and the base it was computed from around here.
-  Value *OffsetPtr = nullptr;
-  Value *OffsetBasePtr;
-
-  // Remember any i8 pointer we come across to re-use if we need to do a raw
-  // byte offset.
-  Value *Int8Ptr = nullptr;
-  APInt Int8PtrOffset(Offset.getBitWidth(), 0);
-
-  PointerType *TargetPtrTy = cast<PointerType>(PointerTy);
-  Type *TargetTy = TargetPtrTy->getElementType();
-
-  // As `addrspacecast` is , `Ptr` (the storage pointer) may have different
-  // address space from the expected `PointerTy` (the pointer to be used).
-  // Adjust the pointer type based the original storage pointer.
-  auto AS = cast<PointerType>(Ptr->getType())->getAddressSpace();
-  PointerTy = TargetTy->getPointerTo(AS);
-
-  do {
-    // First fold any existing GEPs into the offset.
-    while (GEPOperator *GEP = dyn_cast<GEPOperator>(Ptr)) {
-      APInt GEPOffset(Offset.getBitWidth(), 0);
-      if (!GEP->accumulateConstantOffset(DL, GEPOffset))
-        break;
-      Offset += GEPOffset;
-      Ptr = GEP->getPointerOperand();
-      if (!Visited.insert(Ptr).second)
-        break;
-    }
-
-    // See if we can perform a natural GEP here.
-    Indices.clear();
-    if (Value *P = getNaturalGEPWithOffset(IRB, DL, Ptr, Offset, TargetTy,
-                                           Indices, NamePrefix)) {
-      // If we have a new natural pointer at the offset, clear out any old
-      // offset pointer we computed. Unless it is the base pointer or
-      // a non-instruction, we built a GEP we don't need. Zap it.
-      if (OffsetPtr && OffsetPtr != OffsetBasePtr)
-        if (Instruction *I = dyn_cast<Instruction>(OffsetPtr)) {
-          assert(I->use_empty() && "Built a GEP with uses some how!");
-          I->eraseFromParent();
-        }
-      OffsetPtr = P;
-      OffsetBasePtr = Ptr;
-      // If we also found a pointer of the right type, we're done.
-      if (P->getType() == PointerTy)
-        break;
-    }
-
-    // Stash this pointer if we've found an i8*.
-    if (Ptr->getType()->isIntegerTy(8)) {
-      Int8Ptr = Ptr;
-      Int8PtrOffset = Offset;
-    }
-
-    // Peel off a layer of the pointer and update the offset appropriately.
-    if (Operator::getOpcode(Ptr) == Instruction::BitCast) {
-      Ptr = cast<Operator>(Ptr)->getOperand(0);
-    } else if (GlobalAlias *GA = dyn_cast<GlobalAlias>(Ptr)) {
-      if (GA->isInterposable())
-        break;
-      Ptr = GA->getAliasee();
-    } else {
-      break;
-    }
-    assert(Ptr->getType()->isPointerTy() && "Unexpected operand type!");
-  } while (Visited.insert(Ptr).second);
-
-  if (!OffsetPtr) {
-    if (!Int8Ptr) {
-      Int8Ptr = IRB.CreateBitCast(
-          Ptr, IRB.getInt8PtrTy(PointerTy->getPointerAddressSpace()),
-          NamePrefix + "sroa_raw_cast");
-      Int8PtrOffset = Offset;
-    }
-
-    OffsetPtr = Int8PtrOffset == 0
-                    ? Int8Ptr
-                    : IRB.CreateInBoundsGEP(IRB.getInt8Ty(), Int8Ptr,
-                                            IRB.getInt(Int8PtrOffset),
-                                            NamePrefix + "sroa_raw_idx");
-  }
-  Ptr = OffsetPtr;
-
-  // On the off chance we were targeting i8*, guard the bitcast here.
-  if (cast<PointerType>(Ptr->getType()) != TargetPtrTy) {
-    Ptr = IRB.CreatePointerBitCastOrAddrSpaceCast(Ptr,
-                                                  TargetPtrTy,
-                                                  NamePrefix + "sroa_cast");
-  }
-
-  return Ptr;
+  if (Offset != 0)
+    Ptr = IRB.CreateInBoundsGEP(IRB.getInt8Ty(), Ptr, IRB.getInt(Offset),
+                                NamePrefix + "sroa_idx");
+  return IRB.CreatePointerBitCastOrAddrSpaceCast(Ptr, PointerTy,
+                                                 NamePrefix + "sroa_cast");
 }
 
 /// Compute the adjusted alignment for a load or store from an offset.
@@ -1708,8 +1790,8 @@ static bool canConvertValue(const DataLayout &DL, Type *OldTy, Type *NewTy) {
     return false;
   }
 
-  if (DL.getTypeSizeInBits(NewTy).getFixedSize() !=
-      DL.getTypeSizeInBits(OldTy).getFixedSize())
+  if (DL.getTypeSizeInBits(NewTy).getFixedValue() !=
+      DL.getTypeSizeInBits(OldTy).getFixedValue())
     return false;
   if (!NewTy->isSingleValueType() || !OldTy->isSingleValueType())
     return false;
@@ -1743,6 +1825,9 @@ static bool canConvertValue(const DataLayout &DL, Type *OldTy, Type *NewTy) {
 
     return false;
   }
+
+  if (OldTy->isTargetExtTy() || NewTy->isTargetExtTy())
+    return false;
 
   return true;
 }
@@ -1844,13 +1929,13 @@ static bool isVectorPromotionViableForSlice(Partition &P, const Slice &S,
   } else if (IntrinsicInst *II = dyn_cast<IntrinsicInst>(U->getUser())) {
     if (!II->isLifetimeStartOrEnd() && !II->isDroppable())
       return false;
-  } else if (U->get()->getType()->getPointerElementType()->isStructTy()) {
-    // Disable vector promotion when there are loads or stores of an FCA.
-    return false;
   } else if (LoadInst *LI = dyn_cast<LoadInst>(U->getUser())) {
     if (LI->isVolatile())
       return false;
     Type *LTy = LI->getType();
+    // Disable vector promotion when there are loads or stores of an FCA.
+    if (LTy->isStructTy())
+      return false;
     if (P.beginOffset() > S.beginOffset() || P.endOffset() < S.endOffset()) {
       assert(LTy->isIntegerTy());
       LTy = SplitIntTy;
@@ -1861,6 +1946,9 @@ static bool isVectorPromotionViableForSlice(Partition &P, const Slice &S,
     if (SI->isVolatile())
       return false;
     Type *STy = SI->getValueOperand()->getType();
+    // Disable vector promotion when there are loads or stores of an FCA.
+    if (STy->isStructTy())
+      return false;
     if (P.beginOffset() > S.beginOffset() || P.endOffset() < S.endOffset()) {
       assert(STy->isIntegerTy());
       STy = SplitIntTy;
@@ -1870,6 +1958,34 @@ static bool isVectorPromotionViableForSlice(Partition &P, const Slice &S,
   } else {
     return false;
   }
+
+  return true;
+}
+
+/// Test whether a vector type is viable for promotion.
+///
+/// This implements the necessary checking for \c isVectorPromotionViable over
+/// all slices of the alloca for the given VectorType.
+static bool checkVectorTypeForPromotion(Partition &P, VectorType *VTy,
+                                        const DataLayout &DL) {
+  uint64_t ElementSize =
+      DL.getTypeSizeInBits(VTy->getElementType()).getFixedValue();
+
+  // While the definition of LLVM vectors is bitpacked, we don't support sizes
+  // that aren't byte sized.
+  if (ElementSize % 8)
+    return false;
+  assert((DL.getTypeSizeInBits(VTy).getFixedValue() % 8) == 0 &&
+         "vector size not a multiple of element size?");
+  ElementSize /= 8;
+
+  for (const Slice &S : P)
+    if (!isVectorPromotionViableForSlice(P, S, VTy, ElementSize, DL))
+      return false;
+
+  for (const Slice *S : P.splitSliceTails())
+    if (!isVectorPromotionViableForSlice(P, *S, VTy, ElementSize, DL))
+      return false;
 
   return true;
 }
@@ -1887,59 +2003,105 @@ static VectorType *isVectorPromotionViable(Partition &P, const DataLayout &DL) {
   // Collect the candidate types for vector-based promotion. Also track whether
   // we have different element types.
   SmallVector<VectorType *, 4> CandidateTys;
+  SetVector<Type *> LoadStoreTys;
   Type *CommonEltTy = nullptr;
+  VectorType *CommonVecPtrTy = nullptr;
+  bool HaveVecPtrTy = false;
   bool HaveCommonEltTy = true;
+  bool HaveCommonVecPtrTy = true;
   auto CheckCandidateType = [&](Type *Ty) {
     if (auto *VTy = dyn_cast<VectorType>(Ty)) {
       // Return if bitcast to vectors is different for total size in bits.
       if (!CandidateTys.empty()) {
         VectorType *V = CandidateTys[0];
-        if (DL.getTypeSizeInBits(VTy).getFixedSize() !=
-            DL.getTypeSizeInBits(V).getFixedSize()) {
+        if (DL.getTypeSizeInBits(VTy).getFixedValue() !=
+            DL.getTypeSizeInBits(V).getFixedValue()) {
           CandidateTys.clear();
           return;
         }
       }
       CandidateTys.push_back(VTy);
+      Type *EltTy = VTy->getElementType();
+
       if (!CommonEltTy)
-        CommonEltTy = VTy->getElementType();
-      else if (CommonEltTy != VTy->getElementType())
+        CommonEltTy = EltTy;
+      else if (CommonEltTy != EltTy)
         HaveCommonEltTy = false;
+
+      if (EltTy->isPointerTy()) {
+        HaveVecPtrTy = true;
+        if (!CommonVecPtrTy)
+          CommonVecPtrTy = VTy;
+        else if (CommonVecPtrTy != VTy)
+          HaveCommonVecPtrTy = false;
+      }
     }
   };
-  // Consider any loads or stores that are the exact size of the slice.
-  for (const Slice &S : P)
-    if (S.beginOffset() == P.beginOffset() &&
-        S.endOffset() == P.endOffset()) {
-      if (auto *LI = dyn_cast<LoadInst>(S.getUse()->getUser()))
-        CheckCandidateType(LI->getType());
-      else if (auto *SI = dyn_cast<StoreInst>(S.getUse()->getUser()))
-        CheckCandidateType(SI->getValueOperand()->getType());
+  // Put load and store types into a set for de-duplication.
+  for (const Slice &S : P) {
+    Type *Ty;
+    if (auto *LI = dyn_cast<LoadInst>(S.getUse()->getUser()))
+      Ty = LI->getType();
+    else if (auto *SI = dyn_cast<StoreInst>(S.getUse()->getUser()))
+      Ty = SI->getValueOperand()->getType();
+    else
+      continue;
+    LoadStoreTys.insert(Ty);
+    // Consider any loads or stores that are the exact size of the slice.
+    if (S.beginOffset() == P.beginOffset() && S.endOffset() == P.endOffset())
+      CheckCandidateType(Ty);
+  }
+  // Consider additional vector types where the element type size is a
+  // multiple of load/store element size.
+  for (Type *Ty : LoadStoreTys) {
+    if (!VectorType::isValidElementType(Ty))
+      continue;
+    unsigned TypeSize = DL.getTypeSizeInBits(Ty).getFixedValue();
+    // Make a copy of CandidateTys and iterate through it, because we might
+    // append to CandidateTys in the loop.
+    SmallVector<VectorType *, 4> CandidateTysCopy = CandidateTys;
+    for (VectorType *&VTy : CandidateTysCopy) {
+      unsigned VectorSize = DL.getTypeSizeInBits(VTy).getFixedValue();
+      unsigned ElementSize =
+          DL.getTypeSizeInBits(VTy->getElementType()).getFixedValue();
+      if (TypeSize != VectorSize && TypeSize != ElementSize &&
+          VectorSize % TypeSize == 0) {
+        VectorType *NewVTy = VectorType::get(Ty, VectorSize / TypeSize, false);
+        CheckCandidateType(NewVTy);
+      }
     }
+  }
 
   // If we didn't find a vector type, nothing to do here.
   if (CandidateTys.empty())
     return nullptr;
 
-  // Remove non-integer vector types if we had multiple common element types.
-  // FIXME: It'd be nice to replace them with integer vector types, but we can't
-  // do that until all the backends are known to produce good code for all
-  // integer vector types.
-  if (!HaveCommonEltTy) {
-    llvm::erase_if(CandidateTys, [](VectorType *VTy) {
-      return !VTy->getElementType()->isIntegerTy();
-    });
+  // Pointer-ness is sticky, if we had a vector-of-pointers candidate type,
+  // then we should choose it, not some other alternative.
+  // But, we can't perform a no-op pointer address space change via bitcast,
+  // so if we didn't have a common pointer element type, bail.
+  if (HaveVecPtrTy && !HaveCommonVecPtrTy)
+    return nullptr;
 
-    // If there were no integer vector types, give up.
-    if (CandidateTys.empty())
-      return nullptr;
+  // Try to pick the "best" element type out of the choices.
+  if (!HaveCommonEltTy && HaveVecPtrTy) {
+    // If there was a pointer element type, there's really only one choice.
+    CandidateTys.clear();
+    CandidateTys.push_back(CommonVecPtrTy);
+  } else if (!HaveCommonEltTy && !HaveVecPtrTy) {
+    // Integer-ify vector types.
+    for (VectorType *&VTy : CandidateTys) {
+      if (!VTy->getElementType()->isIntegerTy())
+        VTy = cast<VectorType>(VTy->getWithNewType(IntegerType::getIntNTy(
+            VTy->getContext(), VTy->getScalarSizeInBits())));
+    }
 
     // Rank the remaining candidate vector types. This is easy because we know
     // they're all integer vectors. We sort by ascending number of elements.
-    auto RankVectorTypes = [&DL](VectorType *RHSTy, VectorType *LHSTy) {
+    auto RankVectorTypesComp = [&DL](VectorType *RHSTy, VectorType *LHSTy) {
       (void)DL;
-      assert(DL.getTypeSizeInBits(RHSTy).getFixedSize() ==
-                 DL.getTypeSizeInBits(LHSTy).getFixedSize() &&
+      assert(DL.getTypeSizeInBits(RHSTy).getFixedValue() ==
+                 DL.getTypeSizeInBits(LHSTy).getFixedValue() &&
              "Cannot have vector types of different sizes!");
       assert(RHSTy->getElementType()->isIntegerTy() &&
              "All non-integer types eliminated!");
@@ -1948,10 +2110,22 @@ static VectorType *isVectorPromotionViable(Partition &P, const DataLayout &DL) {
       return cast<FixedVectorType>(RHSTy)->getNumElements() <
              cast<FixedVectorType>(LHSTy)->getNumElements();
     };
-    llvm::sort(CandidateTys, RankVectorTypes);
-    CandidateTys.erase(
-        std::unique(CandidateTys.begin(), CandidateTys.end(), RankVectorTypes),
-        CandidateTys.end());
+    auto RankVectorTypesEq = [&DL](VectorType *RHSTy, VectorType *LHSTy) {
+      (void)DL;
+      assert(DL.getTypeSizeInBits(RHSTy).getFixedValue() ==
+                 DL.getTypeSizeInBits(LHSTy).getFixedValue() &&
+             "Cannot have vector types of different sizes!");
+      assert(RHSTy->getElementType()->isIntegerTy() &&
+             "All non-integer types eliminated!");
+      assert(LHSTy->getElementType()->isIntegerTy() &&
+             "All non-integer types eliminated!");
+      return cast<FixedVectorType>(RHSTy)->getNumElements() ==
+             cast<FixedVectorType>(LHSTy)->getNumElements();
+    };
+    llvm::sort(CandidateTys, RankVectorTypesComp);
+    CandidateTys.erase(std::unique(CandidateTys.begin(), CandidateTys.end(),
+                                   RankVectorTypesEq),
+                       CandidateTys.end());
   } else {
 // The only way to have the same element type in every vector type is to
 // have the same vector type. Check that and remove all but one.
@@ -1966,31 +2140,15 @@ static VectorType *isVectorPromotionViable(Partition &P, const DataLayout &DL) {
     CandidateTys.resize(1);
   }
 
-  // Try each vector type, and return the one which works.
-  auto CheckVectorTypeForPromotion = [&](VectorType *VTy) {
-    uint64_t ElementSize =
-        DL.getTypeSizeInBits(VTy->getElementType()).getFixedSize();
+  // FIXME: hack. Do we have a named constant for this?
+  // SDAG SDNode can't have more than 65535 operands.
+  llvm::erase_if(CandidateTys, [](VectorType *VTy) {
+    return cast<FixedVectorType>(VTy)->getNumElements() >
+           std::numeric_limits<unsigned short>::max();
+  });
 
-    // While the definition of LLVM vectors is bitpacked, we don't support sizes
-    // that aren't byte sized.
-    if (ElementSize % 8)
-      return false;
-    assert((DL.getTypeSizeInBits(VTy).getFixedSize() % 8) == 0 &&
-           "vector size not a multiple of element size?");
-    ElementSize /= 8;
-
-    for (const Slice &S : P)
-      if (!isVectorPromotionViableForSlice(P, S, VTy, ElementSize, DL))
-        return false;
-
-    for (const Slice *S : P.splitSliceTails())
-      if (!isVectorPromotionViableForSlice(P, *S, VTy, ElementSize, DL))
-        return false;
-
-    return true;
-  };
   for (VectorType *VTy : CandidateTys)
-    if (CheckVectorTypeForPromotion(VTy))
+    if (checkVectorTypeForPromotion(P, VTy, DL))
       return VTy;
 
   return nullptr;
@@ -2005,23 +2163,32 @@ static bool isIntegerWideningViableForSlice(const Slice &S,
                                             Type *AllocaTy,
                                             const DataLayout &DL,
                                             bool &WholeAllocaOp) {
-  uint64_t Size = DL.getTypeStoreSize(AllocaTy).getFixedSize();
+  uint64_t Size = DL.getTypeStoreSize(AllocaTy).getFixedValue();
 
   uint64_t RelBegin = S.beginOffset() - AllocBeginOffset;
   uint64_t RelEnd = S.endOffset() - AllocBeginOffset;
+
+  Use *U = S.getUse();
+
+  // Lifetime intrinsics operate over the whole alloca whose sizes are usually
+  // larger than other load/store slices (RelEnd > Size). But lifetime are
+  // always promotable and should not impact other slices' promotability of the
+  // partition.
+  if (IntrinsicInst *II = dyn_cast<IntrinsicInst>(U->getUser())) {
+    if (II->isLifetimeStartOrEnd() || II->isDroppable())
+      return true;
+  }
 
   // We can't reasonably handle cases where the load or store extends past
   // the end of the alloca's type and into its padding.
   if (RelEnd > Size)
     return false;
 
-  Use *U = S.getUse();
-
   if (LoadInst *LI = dyn_cast<LoadInst>(U->getUser())) {
     if (LI->isVolatile())
       return false;
     // We can't handle loads that extend past the allocated memory.
-    if (DL.getTypeStoreSize(LI->getType()).getFixedSize() > Size)
+    if (DL.getTypeStoreSize(LI->getType()).getFixedValue() > Size)
       return false;
     // So far, AllocaSliceRewriter does not support widening split slice tails
     // in rewriteIntegerLoad.
@@ -2033,7 +2200,7 @@ static bool isIntegerWideningViableForSlice(const Slice &S,
     if (!isa<VectorType>(LI->getType()) && RelBegin == 0 && RelEnd == Size)
       WholeAllocaOp = true;
     if (IntegerType *ITy = dyn_cast<IntegerType>(LI->getType())) {
-      if (ITy->getBitWidth() < DL.getTypeStoreSizeInBits(ITy).getFixedSize())
+      if (ITy->getBitWidth() < DL.getTypeStoreSizeInBits(ITy).getFixedValue())
         return false;
     } else if (RelBegin != 0 || RelEnd != Size ||
                !canConvertValue(DL, AllocaTy, LI->getType())) {
@@ -2046,7 +2213,7 @@ static bool isIntegerWideningViableForSlice(const Slice &S,
     if (SI->isVolatile())
       return false;
     // We can't handle stores that extend past the allocated memory.
-    if (DL.getTypeStoreSize(ValueTy).getFixedSize() > Size)
+    if (DL.getTypeStoreSize(ValueTy).getFixedValue() > Size)
       return false;
     // So far, AllocaSliceRewriter does not support widening split slice tails
     // in rewriteIntegerStore.
@@ -2058,7 +2225,7 @@ static bool isIntegerWideningViableForSlice(const Slice &S,
     if (!isa<VectorType>(ValueTy) && RelBegin == 0 && RelEnd == Size)
       WholeAllocaOp = true;
     if (IntegerType *ITy = dyn_cast<IntegerType>(ValueTy)) {
-      if (ITy->getBitWidth() < DL.getTypeStoreSizeInBits(ITy).getFixedSize())
+      if (ITy->getBitWidth() < DL.getTypeStoreSizeInBits(ITy).getFixedValue())
         return false;
     } else if (RelBegin != 0 || RelEnd != Size ||
                !canConvertValue(DL, ValueTy, AllocaTy)) {
@@ -2071,9 +2238,6 @@ static bool isIntegerWideningViableForSlice(const Slice &S,
       return false;
     if (!S.isSplittable())
       return false; // Skip any unsplittable intrinsics.
-  } else if (IntrinsicInst *II = dyn_cast<IntrinsicInst>(U->getUser())) {
-    if (!II->isLifetimeStartOrEnd() && !II->isDroppable())
-      return false;
   } else {
     return false;
   }
@@ -2089,13 +2253,13 @@ static bool isIntegerWideningViableForSlice(const Slice &S,
 /// promote the resulting alloca.
 static bool isIntegerWideningViable(Partition &P, Type *AllocaTy,
                                     const DataLayout &DL) {
-  uint64_t SizeInBits = DL.getTypeSizeInBits(AllocaTy).getFixedSize();
+  uint64_t SizeInBits = DL.getTypeSizeInBits(AllocaTy).getFixedValue();
   // Don't create integer types larger than the maximum bitwidth.
   if (SizeInBits > IntegerType::MAX_INT_BITS)
     return false;
 
   // Don't try to handle allocas with bit-padding.
-  if (SizeInBits != DL.getTypeStoreSizeInBits(AllocaTy).getFixedSize())
+  if (SizeInBits != DL.getTypeStoreSizeInBits(AllocaTy).getFixedValue())
     return false;
 
   // We need to ensure that an integer type with the appropriate bitwidth can
@@ -2113,8 +2277,7 @@ static bool isIntegerWideningViable(Partition &P, Type *AllocaTy,
   // that we cover the alloca.
   // FIXME: We shouldn't consider split slices that happen to start in the
   // partition here...
-  bool WholeAllocaOp =
-      P.begin() != P.end() ? false : DL.isLegalInteger(SizeInBits);
+  bool WholeAllocaOp = P.empty() && DL.isLegalInteger(SizeInBits);
 
   for (const Slice &S : P)
     if (!isIntegerWideningViableForSlice(S, P.beginOffset(), AllocaTy, DL,
@@ -2134,13 +2297,13 @@ static Value *extractInteger(const DataLayout &DL, IRBuilderTy &IRB, Value *V,
                              const Twine &Name) {
   LLVM_DEBUG(dbgs() << "       start: " << *V << "\n");
   IntegerType *IntTy = cast<IntegerType>(V->getType());
-  assert(DL.getTypeStoreSize(Ty).getFixedSize() + Offset <=
-             DL.getTypeStoreSize(IntTy).getFixedSize() &&
+  assert(DL.getTypeStoreSize(Ty).getFixedValue() + Offset <=
+             DL.getTypeStoreSize(IntTy).getFixedValue() &&
          "Element extends past full value");
   uint64_t ShAmt = 8 * Offset;
   if (DL.isBigEndian())
-    ShAmt = 8 * (DL.getTypeStoreSize(IntTy).getFixedSize() -
-                 DL.getTypeStoreSize(Ty).getFixedSize() - Offset);
+    ShAmt = 8 * (DL.getTypeStoreSize(IntTy).getFixedValue() -
+                 DL.getTypeStoreSize(Ty).getFixedValue() - Offset);
   if (ShAmt) {
     V = IRB.CreateLShr(V, ShAmt, Name + ".shift");
     LLVM_DEBUG(dbgs() << "     shifted: " << *V << "\n");
@@ -2165,13 +2328,13 @@ static Value *insertInteger(const DataLayout &DL, IRBuilderTy &IRB, Value *Old,
     V = IRB.CreateZExt(V, IntTy, Name + ".ext");
     LLVM_DEBUG(dbgs() << "    extended: " << *V << "\n");
   }
-  assert(DL.getTypeStoreSize(Ty).getFixedSize() + Offset <=
-             DL.getTypeStoreSize(IntTy).getFixedSize() &&
+  assert(DL.getTypeStoreSize(Ty).getFixedValue() + Offset <=
+             DL.getTypeStoreSize(IntTy).getFixedValue() &&
          "Element store outside of alloca store");
   uint64_t ShAmt = 8 * Offset;
   if (DL.isBigEndian())
-    ShAmt = 8 * (DL.getTypeStoreSize(IntTy).getFixedSize() -
-                 DL.getTypeStoreSize(Ty).getFixedSize() - Offset);
+    ShAmt = 8 * (DL.getTypeStoreSize(IntTy).getFixedValue() -
+                 DL.getTypeStoreSize(Ty).getFixedValue() - Offset);
   if (ShAmt) {
     V = IRB.CreateShl(V, ShAmt, Name + ".shift");
     LLVM_DEBUG(dbgs() << "     shifted: " << *V << "\n");
@@ -2203,10 +2366,7 @@ static Value *extractVector(IRBuilderTy &IRB, Value *V, unsigned BeginIndex,
     return V;
   }
 
-  SmallVector<int, 8> Mask;
-  Mask.reserve(NumElements);
-  for (unsigned i = BeginIndex; i != EndIndex; ++i)
-    Mask.push_back(i);
+  auto Mask = llvm::to_vector<8>(llvm::seq<int>(BeginIndex, EndIndex));
   V = IRB.CreateShuffleVector(V, Mask, Name + ".extract");
   LLVM_DEBUG(dbgs() << "     shuffle: " << *V << "\n");
   return V;
@@ -2276,7 +2436,7 @@ class llvm::sroa::AllocaSliceRewriter
 
   const DataLayout &DL;
   AllocaSlices &AS;
-  SROA &Pass;
+  SROAPass &Pass;
   AllocaInst &OldAI, &NewAI;
   const uint64_t NewAllocaBeginOffset, NewAllocaEndOffset;
   Type *NewAllocaTy;
@@ -2323,8 +2483,18 @@ class llvm::sroa::AllocaSliceRewriter
   // the insertion point is set to point to the user.
   IRBuilderTy IRB;
 
+  // Return the new alloca, addrspacecasted if required to avoid changing the
+  // addrspace of a volatile access.
+  Value *getPtrToNewAI(unsigned AddrSpace, bool IsVolatile) {
+    if (!IsVolatile || AddrSpace == NewAI.getType()->getPointerAddressSpace())
+      return &NewAI;
+
+    Type *AccessTy = NewAI.getAllocatedType()->getPointerTo(AddrSpace);
+    return IRB.CreateAddrSpaceCast(&NewAI, AccessTy);
+  }
+
 public:
-  AllocaSliceRewriter(const DataLayout &DL, AllocaSlices &AS, SROA &Pass,
+  AllocaSliceRewriter(const DataLayout &DL, AllocaSlices &AS, SROAPass &Pass,
                       AllocaInst &OldAI, AllocaInst &NewAI,
                       uint64_t NewAllocaBeginOffset,
                       uint64_t NewAllocaEndOffset, bool IsIntegerPromotable,
@@ -2339,16 +2509,16 @@ public:
             IsIntegerPromotable
                 ? Type::getIntNTy(NewAI.getContext(),
                                   DL.getTypeSizeInBits(NewAI.getAllocatedType())
-                                      .getFixedSize())
+                                      .getFixedValue())
                 : nullptr),
         VecTy(PromotableVecTy),
         ElementTy(VecTy ? VecTy->getElementType() : nullptr),
-        ElementSize(VecTy ? DL.getTypeSizeInBits(ElementTy).getFixedSize() / 8
+        ElementSize(VecTy ? DL.getTypeSizeInBits(ElementTy).getFixedValue() / 8
                           : 0),
         PHIUsers(PHIUsers), SelectUsers(SelectUsers),
         IRB(NewAI.getContext(), ConstantFolder()) {
     if (VecTy) {
-      assert((DL.getTypeSizeInBits(ElementTy).getFixedSize() % 8) == 0 &&
+      assert((DL.getTypeSizeInBits(ElementTy).getFixedValue() % 8) == 0 &&
              "Only multiple-of-8 sized vector elements are viable");
       ++NumVectorized;
     }
@@ -2373,7 +2543,12 @@ public:
     NewEndOffset = std::min(EndOffset, NewAllocaEndOffset);
 
     SliceSize = NewEndOffset - NewBeginOffset;
-
+    LLVM_DEBUG(dbgs() << "   Begin:(" << BeginOffset << ", " << EndOffset
+                      << ") NewBegin:(" << NewBeginOffset << ", "
+                      << NewEndOffset << ") NewAllocaBegin:("
+                      << NewAllocaBeginOffset << ", " << NewAllocaEndOffset
+                      << ")\n");
+    assert(IsSplit || NewBeginOffset == BeginOffset);
     OldUse = I->getUse();
     OldPtr = cast<Instruction>(OldUse->get());
 
@@ -2462,14 +2637,17 @@ private:
       Pass.DeadInsts.push_back(I);
   }
 
-  Value *rewriteVectorizedLoadInst() {
+  Value *rewriteVectorizedLoadInst(LoadInst &LI) {
     unsigned BeginIndex = getIndex(NewBeginOffset);
     unsigned EndIndex = getIndex(NewEndOffset);
     assert(EndIndex > BeginIndex && "Empty vector!");
 
-    Value *V = IRB.CreateAlignedLoad(NewAI.getAllocatedType(), &NewAI,
-                                     NewAI.getAlign(), "load");
-    return extractVector(IRB, V, BeginIndex, EndIndex, "vec");
+    LoadInst *Load = IRB.CreateAlignedLoad(NewAI.getAllocatedType(), &NewAI,
+                                           NewAI.getAlign(), "load");
+
+    Load->copyMetadata(LI, {LLVMContext::MD_mem_parallel_loop_access,
+                            LLVMContext::MD_access_group});
+    return extractVector(IRB, Load, BeginIndex, EndIndex, "vec");
   }
 
   Value *rewriteIntegerLoad(LoadInst &LI) {
@@ -2501,19 +2679,18 @@ private:
     Value *OldOp = LI.getOperand(0);
     assert(OldOp == OldPtr);
 
-    AAMDNodes AATags;
-    LI.getAAMetadata(AATags);
+    AAMDNodes AATags = LI.getAAMetadata();
 
     unsigned AS = LI.getPointerAddressSpace();
 
     Type *TargetTy = IsSplit ? Type::getIntNTy(LI.getContext(), SliceSize * 8)
                              : LI.getType();
     const bool IsLoadPastEnd =
-        DL.getTypeStoreSize(TargetTy).getFixedSize() > SliceSize;
+        DL.getTypeStoreSize(TargetTy).getFixedValue() > SliceSize;
     bool IsPtrAdjusted = false;
     Value *V;
     if (VecTy) {
-      V = rewriteVectorizedLoadInst();
+      V = rewriteVectorizedLoadInst(LI);
     } else if (IntTy && LI.getType()->isIntegerTy()) {
       V = rewriteIntegerLoad(LI);
     } else if (NewBeginOffset == NewAllocaBeginOffset &&
@@ -2521,28 +2698,25 @@ private:
                (canConvertValue(DL, NewAllocaTy, TargetTy) ||
                 (IsLoadPastEnd && NewAllocaTy->isIntegerTy() &&
                  TargetTy->isIntegerTy()))) {
-      LoadInst *NewLI = IRB.CreateAlignedLoad(NewAI.getAllocatedType(), &NewAI,
+      Value *NewPtr =
+          getPtrToNewAI(LI.getPointerAddressSpace(), LI.isVolatile());
+      LoadInst *NewLI = IRB.CreateAlignedLoad(NewAI.getAllocatedType(), NewPtr,
                                               NewAI.getAlign(), LI.isVolatile(),
                                               LI.getName());
-      if (AATags)
-        NewLI->setAAMetadata(AATags);
       if (LI.isVolatile())
         NewLI->setAtomic(LI.getOrdering(), LI.getSyncScopeID());
       if (NewLI->isAtomic())
         NewLI->setAlignment(LI.getAlign());
 
-      // Any !nonnull metadata or !range metadata on the old load is also valid
-      // on the new load. This is even true in some cases even when the loads
-      // are different types, for example by mapping !nonnull metadata to
-      // !range metadata by modeling the null pointer constant converted to the
-      // integer type.
-      // FIXME: Add support for range metadata here. Currently the utilities
-      // for this don't propagate range metadata in trivial cases from one
-      // integer load to another, don't handle non-addrspace-0 null pointers
-      // correctly, and don't have any support for mapping ranges as the
-      // integer type becomes winder or narrower.
-      if (MDNode *N = LI.getMetadata(LLVMContext::MD_nonnull))
-        copyNonnullMetadata(LI, N, *NewLI);
+      // Copy any metadata that is valid for the new load. This may require
+      // conversion to a different kind of metadata, e.g. !nonnull might change
+      // to !range or vice versa.
+      copyMetadataForLoad(*NewLI, LI);
+
+      // Do this after copyMetadataForLoad() to preserve the TBAA shift.
+      if (AATags)
+        NewLI->setAAMetadata(AATags.adjustForAccess(
+            NewBeginOffset - BeginOffset, NewLI->getType(), DL));
 
       // Try to preserve nonnull metadata
       V = NewLI;
@@ -2563,10 +2737,15 @@ private:
       LoadInst *NewLI =
           IRB.CreateAlignedLoad(TargetTy, getNewAllocaSlicePtr(IRB, LTy),
                                 getSliceAlign(), LI.isVolatile(), LI.getName());
+
       if (AATags)
-        NewLI->setAAMetadata(AATags);
+        NewLI->setAAMetadata(AATags.adjustForAccess(
+            NewBeginOffset - BeginOffset, NewLI->getType(), DL));
+
       if (LI.isVolatile())
         NewLI->setAtomic(LI.getOrdering(), LI.getSyncScopeID());
+      NewLI->copyMetadata(LI, {LLVMContext::MD_mem_parallel_loop_access,
+                               LLVMContext::MD_access_group});
 
       V = NewLI;
       IsPtrAdjusted = true;
@@ -2577,7 +2756,7 @@ private:
       assert(!LI.isVolatile());
       assert(LI.getType()->isIntegerTy() &&
              "Only integer type loads and stores are split");
-      assert(SliceSize < DL.getTypeStoreSize(LI.getType()).getFixedSize() &&
+      assert(SliceSize < DL.getTypeStoreSize(LI.getType()).getFixedValue() &&
              "Split load isn't smaller than original load");
       assert(DL.typeSizeEqualsStoreSize(LI.getType()) &&
              "Non-byte-multiple bit width");
@@ -2588,7 +2767,7 @@ private:
       // the computed value, and then replace the placeholder with LI, leaving
       // LI only used for this computation.
       Value *Placeholder = new LoadInst(
-          LI.getType(), UndefValue::get(LI.getType()->getPointerTo(AS)), "",
+          LI.getType(), PoisonValue::get(LI.getType()->getPointerTo(AS)), "",
           false, Align(1));
       V = insertInteger(DL, IRB, Placeholder, V, NewBeginOffset - BeginOffset,
                         "insert");
@@ -2607,6 +2786,9 @@ private:
 
   bool rewriteVectorizedStoreInst(Value *V, StoreInst &SI, Value *OldOp,
                                   AAMDNodes AATags) {
+    // Capture V for the purpose of debug-info accounting once it's converted
+    // to a vector store.
+    Value *OrigV = V;
     if (V->getType() != VecTy) {
       unsigned BeginIndex = getIndex(NewBeginOffset);
       unsigned EndIndex = getIndex(NewEndOffset);
@@ -2626,10 +2808,16 @@ private:
       V = insertVector(IRB, Old, V, BeginIndex, "vec");
     }
     StoreInst *Store = IRB.CreateAlignedStore(V, &NewAI, NewAI.getAlign());
+    Store->copyMetadata(SI, {LLVMContext::MD_mem_parallel_loop_access,
+                             LLVMContext::MD_access_group});
     if (AATags)
-      Store->setAAMetadata(AATags);
+      Store->setAAMetadata(AATags.adjustForAccess(NewBeginOffset - BeginOffset,
+                                                  V->getType(), DL));
     Pass.DeadInsts.push_back(&SI);
 
+    // NOTE: Careful to use OrigV rather than V.
+    migrateDebugInfo(&OldAI, IsSplit, NewBeginOffset * 8, SliceSize * 8, &SI,
+                     Store, Store->getPointerOperand(), OrigV, DL);
     LLVM_DEBUG(dbgs() << "          to: " << *Store << "\n");
     return true;
   }
@@ -2637,7 +2825,7 @@ private:
   bool rewriteIntegerStore(Value *V, StoreInst &SI, AAMDNodes AATags) {
     assert(IntTy && "We cannot extract an integer from the alloca");
     assert(!SI.isVolatile());
-    if (DL.getTypeSizeInBits(V->getType()).getFixedSize() !=
+    if (DL.getTypeSizeInBits(V->getType()).getFixedValue() !=
         IntTy->getBitWidth()) {
       Value *Old = IRB.CreateAlignedLoad(NewAI.getAllocatedType(), &NewAI,
                                          NewAI.getAlign(), "oldload");
@@ -2651,7 +2839,13 @@ private:
     Store->copyMetadata(SI, {LLVMContext::MD_mem_parallel_loop_access,
                              LLVMContext::MD_access_group});
     if (AATags)
-      Store->setAAMetadata(AATags);
+      Store->setAAMetadata(AATags.adjustForAccess(NewBeginOffset - BeginOffset,
+                                                  V->getType(), DL));
+
+    migrateDebugInfo(&OldAI, IsSplit, NewBeginOffset * 8, SliceSize * 8, &SI,
+                     Store, Store->getPointerOperand(),
+                     Store->getValueOperand(), DL);
+
     Pass.DeadInsts.push_back(&SI);
     LLVM_DEBUG(dbgs() << "          to: " << *Store << "\n");
     return true;
@@ -2662,9 +2856,7 @@ private:
     Value *OldOp = SI.getOperand(1);
     assert(OldOp == OldPtr);
 
-    AAMDNodes AATags;
-    SI.getAAMetadata(AATags);
-
+    AAMDNodes AATags = SI.getAAMetadata();
     Value *V = SI.getValueOperand();
 
     // Strip all inbounds GEPs and pointer casts to try to dig out any root
@@ -2673,7 +2865,7 @@ private:
       if (AllocaInst *AI = dyn_cast<AllocaInst>(V->stripInBoundsOffsets()))
         Pass.PostPromotionWorklist.insert(AI);
 
-    if (SliceSize < DL.getTypeStoreSize(V->getType()).getFixedSize()) {
+    if (SliceSize < DL.getTypeStoreSize(V->getType()).getFixedValue()) {
       assert(!SI.isVolatile());
       assert(V->getType()->isIntegerTy() &&
              "Only integer type loads and stores are split");
@@ -2690,7 +2882,7 @@ private:
       return rewriteIntegerStore(V, SI, AATags);
 
     const bool IsStorePastEnd =
-        DL.getTypeStoreSize(V->getType()).getFixedSize() > SliceSize;
+        DL.getTypeStoreSize(V->getType()).getFixedValue() > SliceSize;
     StoreInst *NewSI;
     if (NewBeginOffset == NewAllocaBeginOffset &&
         NewEndOffset == NewAllocaEndOffset &&
@@ -2710,8 +2902,11 @@ private:
           }
 
       V = convertValue(DL, IRB, V, NewAllocaTy);
+      Value *NewPtr =
+          getPtrToNewAI(SI.getPointerAddressSpace(), SI.isVolatile());
+
       NewSI =
-          IRB.CreateAlignedStore(V, &NewAI, NewAI.getAlign(), SI.isVolatile());
+          IRB.CreateAlignedStore(V, NewPtr, NewAI.getAlign(), SI.isVolatile());
     } else {
       unsigned AS = SI.getPointerAddressSpace();
       Value *NewPtr = getNewAllocaSlicePtr(IRB, V->getType()->getPointerTo(AS));
@@ -2721,16 +2916,24 @@ private:
     NewSI->copyMetadata(SI, {LLVMContext::MD_mem_parallel_loop_access,
                              LLVMContext::MD_access_group});
     if (AATags)
-      NewSI->setAAMetadata(AATags);
+      NewSI->setAAMetadata(AATags.adjustForAccess(NewBeginOffset - BeginOffset,
+                                                  V->getType(), DL));
     if (SI.isVolatile())
       NewSI->setAtomic(SI.getOrdering(), SI.getSyncScopeID());
     if (NewSI->isAtomic())
       NewSI->setAlignment(SI.getAlign());
+
+    migrateDebugInfo(&OldAI, IsSplit, NewBeginOffset * 8, SliceSize * 8, &SI,
+                     NewSI, NewSI->getPointerOperand(),
+                     NewSI->getValueOperand(), DL);
+
     Pass.DeadInsts.push_back(&SI);
     deleteIfTriviallyDead(OldOp);
 
     LLVM_DEBUG(dbgs() << "          to: " << *NewSI << "\n");
-    return NewSI->getPointerOperand() == &NewAI && !SI.isVolatile();
+    return NewSI->getPointerOperand() == &NewAI &&
+           NewSI->getValueOperand()->getType() == NewAllocaTy &&
+           !SI.isVolatile();
   }
 
   /// Compute an integer value from splatting an i8 across the given
@@ -2752,10 +2955,9 @@ private:
     Type *SplatIntTy = Type::getIntNTy(VTy->getContext(), Size * 8);
     V = IRB.CreateMul(
         IRB.CreateZExt(V, SplatIntTy, "zext"),
-        ConstantExpr::getUDiv(
-            Constant::getAllOnesValue(SplatIntTy),
-            ConstantExpr::getZExt(Constant::getAllOnesValue(V->getType()),
-                                  SplatIntTy)),
+        IRB.CreateUDiv(Constant::getAllOnesValue(SplatIntTy),
+                       IRB.CreateZExt(Constant::getAllOnesValue(V->getType()),
+                                      SplatIntTy)),
         "isplat");
     return V;
   }
@@ -2771,17 +2973,20 @@ private:
     LLVM_DEBUG(dbgs() << "    original: " << II << "\n");
     assert(II.getRawDest() == OldPtr);
 
-    AAMDNodes AATags;
-    II.getAAMetadata(AATags);
+    AAMDNodes AATags = II.getAAMetadata();
 
     // If the memset has a variable size, it cannot be split, just adjust the
     // pointer to the new alloca.
-    if (!isa<Constant>(II.getLength())) {
+    if (!isa<ConstantInt>(II.getLength())) {
       assert(!IsSplit);
       assert(NewBeginOffset == BeginOffset);
       II.setDest(getNewAllocaSlicePtr(IRB, OldPtr->getType()));
       II.setDestAlignment(getSliceAlign());
-
+      // In theory we should call migrateDebugInfo here. However, we do not
+      // emit dbg.assign intrinsics for mem intrinsics storing through non-
+      // constant geps, or storing a variable number of bytes.
+      assert(at::getAssignmentMarkers(&II).empty() &&
+             "AT: Unexpected link to non-const GEP");
       deleteIfTriviallyDead(OldPtr);
       return false;
     }
@@ -2798,26 +3003,33 @@ private:
       if (BeginOffset > NewAllocaBeginOffset ||
           EndOffset < NewAllocaEndOffset)
         return false;
+      // Length must be in range for FixedVectorType.
       auto *C = cast<ConstantInt>(II.getLength());
-      if (C->getBitWidth() > 64)
+      const uint64_t Len = C->getLimitedValue();
+      if (Len > std::numeric_limits<unsigned>::max())
         return false;
-      const auto Len = C->getZExtValue();
       auto *Int8Ty = IntegerType::getInt8Ty(NewAI.getContext());
       auto *SrcTy = FixedVectorType::get(Int8Ty, Len);
       return canConvertValue(DL, SrcTy, AllocaTy) &&
-             DL.isLegalInteger(DL.getTypeSizeInBits(ScalarTy).getFixedSize());
+             DL.isLegalInteger(DL.getTypeSizeInBits(ScalarTy).getFixedValue());
     }();
 
     // If this doesn't map cleanly onto the alloca type, and that type isn't
     // a single value type, just emit a memset.
     if (!CanContinue) {
       Type *SizeTy = II.getLength()->getType();
-      Constant *Size = ConstantInt::get(SizeTy, NewEndOffset - NewBeginOffset);
-      CallInst *New = IRB.CreateMemSet(
+      unsigned Sz = NewEndOffset - NewBeginOffset;
+      Constant *Size = ConstantInt::get(SizeTy, Sz);
+      MemIntrinsic *New = cast<MemIntrinsic>(IRB.CreateMemSet(
           getNewAllocaSlicePtr(IRB, OldPtr->getType()), II.getValue(), Size,
-          MaybeAlign(getSliceAlign()), II.isVolatile());
+          MaybeAlign(getSliceAlign()), II.isVolatile()));
       if (AATags)
-        New->setAAMetadata(AATags);
+        New->setAAMetadata(
+            AATags.adjustForAccess(NewBeginOffset - BeginOffset, Sz));
+
+      migrateDebugInfo(&OldAI, IsSplit, NewBeginOffset * 8, SliceSize * 8, &II,
+                       New, New->getRawDest(), nullptr, DL);
+
       LLVM_DEBUG(dbgs() << "          to: " << *New << "\n");
       return false;
     }
@@ -2841,7 +3053,7 @@ private:
              "Too many elements!");
 
       Value *Splat = getIntegerSplat(
-          II.getValue(), DL.getTypeSizeInBits(ElementTy).getFixedSize() / 8);
+          II.getValue(), DL.getTypeSizeInBits(ElementTy).getFixedValue() / 8);
       Splat = convertValue(DL, IRB, Splat, ElementTy);
       if (NumElements > 1)
         Splat = getVectorSplat(Splat, NumElements);
@@ -2875,7 +3087,7 @@ private:
       assert(NewEndOffset == NewAllocaEndOffset);
 
       V = getIntegerSplat(II.getValue(),
-                          DL.getTypeSizeInBits(ScalarTy).getFixedSize() / 8);
+                          DL.getTypeSizeInBits(ScalarTy).getFixedValue() / 8);
       if (VectorType *AllocaVecTy = dyn_cast<VectorType>(AllocaTy))
         V = getVectorSplat(
             V, cast<FixedVectorType>(AllocaVecTy)->getNumElements());
@@ -2883,10 +3095,18 @@ private:
       V = convertValue(DL, IRB, V, AllocaTy);
     }
 
+    Value *NewPtr = getPtrToNewAI(II.getDestAddressSpace(), II.isVolatile());
     StoreInst *New =
-        IRB.CreateAlignedStore(V, &NewAI, NewAI.getAlign(), II.isVolatile());
+        IRB.CreateAlignedStore(V, NewPtr, NewAI.getAlign(), II.isVolatile());
+    New->copyMetadata(II, {LLVMContext::MD_mem_parallel_loop_access,
+                           LLVMContext::MD_access_group});
     if (AATags)
-      New->setAAMetadata(AATags);
+      New->setAAMetadata(AATags.adjustForAccess(NewBeginOffset - BeginOffset,
+                                                V->getType(), DL));
+
+    migrateDebugInfo(&OldAI, IsSplit, NewBeginOffset * 8, SliceSize * 8, &II,
+                     New, New->getPointerOperand(), V, DL);
+
     LLVM_DEBUG(dbgs() << "          to: " << *New << "\n");
     return !II.isVolatile();
   }
@@ -2897,15 +3117,13 @@ private:
 
     LLVM_DEBUG(dbgs() << "    original: " << II << "\n");
 
-    AAMDNodes AATags;
-    II.getAAMetadata(AATags);
+    AAMDNodes AATags = II.getAAMetadata();
 
     bool IsDest = &II.getRawDestUse() == OldUse;
     assert((IsDest && II.getRawDest() == OldPtr) ||
            (!IsDest && II.getRawSource() == OldPtr));
 
-    MaybeAlign SliceAlign = getSliceAlign();
-
+    Align SliceAlign = getSliceAlign();
     // For unsplit intrinsics, we simply modify the source and destination
     // pointers in place. This isn't just an optimization, it is a matter of
     // correctness. With unsplit intrinsics we may be dealing with transfers
@@ -2916,10 +3134,16 @@ private:
     if (!IsSplittable) {
       Value *AdjustedPtr = getNewAllocaSlicePtr(IRB, OldPtr->getType());
       if (IsDest) {
+        // Update the address component of linked dbg.assigns.
+        for (auto *DAI : at::getAssignmentMarkers(&II)) {
+          if (any_of(DAI->location_ops(),
+                     [&](Value *V) { return V == II.getDest(); }) ||
+              DAI->getAddress() == II.getDest())
+            DAI->replaceVariableLocationOp(II.getDest(), AdjustedPtr);
+        }
         II.setDest(AdjustedPtr);
         II.setDestAlignment(SliceAlign);
-      }
-      else {
+      } else {
         II.setSource(AdjustedPtr);
         II.setSourceAlignment(SliceAlign);
       }
@@ -2940,7 +3164,7 @@ private:
         !VecTy && !IntTy &&
         (BeginOffset > NewAllocaBeginOffset || EndOffset < NewAllocaEndOffset ||
          SliceSize !=
-             DL.getTypeStoreSize(NewAI.getAllocatedType()).getFixedSize() ||
+             DL.getTypeStoreSize(NewAI.getAllocatedType()).getFixedValue() ||
          !NewAI.getAllocatedType()->isSingleValueType());
 
     // If we're just going to emit a memcpy, the alloca hasn't changed, and the
@@ -3007,7 +3231,18 @@ private:
       CallInst *New = IRB.CreateMemCpy(DestPtr, DestAlign, SrcPtr, SrcAlign,
                                        Size, II.isVolatile());
       if (AATags)
-        New->setAAMetadata(AATags);
+        New->setAAMetadata(AATags.shift(NewBeginOffset - BeginOffset));
+
+      APInt Offset(DL.getIndexTypeSizeInBits(DestPtr->getType()), 0);
+      if (IsDest) {
+        migrateDebugInfo(&OldAI, IsSplit, NewBeginOffset * 8, SliceSize * 8,
+                         &II, New, DestPtr, nullptr, DL);
+      } else if (AllocaInst *Base = dyn_cast<AllocaInst>(
+                     DestPtr->stripAndAccumulateConstantOffsets(
+                         DL, Offset, /*AllowNonInbounds*/ true))) {
+        migrateDebugInfo(Base, IsSplit, Offset.getZExtValue() * 8,
+                         SliceSize * 8, &II, New, DestPtr, nullptr, DL);
+      }
       LLVM_DEBUG(dbgs() << "          to: " << *New << "\n");
       return false;
     }
@@ -3036,14 +3271,22 @@ private:
     }
     OtherPtrTy = OtherTy->getPointerTo(OtherAS);
 
-    Value *SrcPtr = getAdjustedPtr(IRB, DL, OtherPtr, OtherOffset, OtherPtrTy,
+    Value *AdjPtr = getAdjustedPtr(IRB, DL, OtherPtr, OtherOffset, OtherPtrTy,
                                    OtherPtr->getName() + ".");
     MaybeAlign SrcAlign = OtherAlign;
-    Value *DstPtr = &NewAI;
     MaybeAlign DstAlign = SliceAlign;
-    if (!IsDest) {
-      std::swap(SrcPtr, DstPtr);
+    if (!IsDest)
       std::swap(SrcAlign, DstAlign);
+
+    Value *SrcPtr;
+    Value *DstPtr;
+
+    if (IsDest) {
+      DstPtr = getPtrToNewAI(II.getDestAddressSpace(), II.isVolatile());
+      SrcPtr = AdjPtr;
+    } else {
+      DstPtr = AdjPtr;
+      SrcPtr = getPtrToNewAI(II.getSourceAddressSpace(), II.isVolatile());
     }
 
     Value *Src;
@@ -3060,8 +3303,11 @@ private:
     } else {
       LoadInst *Load = IRB.CreateAlignedLoad(OtherTy, SrcPtr, SrcAlign,
                                              II.isVolatile(), "copyload");
+      Load->copyMetadata(II, {LLVMContext::MD_mem_parallel_loop_access,
+                              LLVMContext::MD_access_group});
       if (AATags)
-        Load->setAAMetadata(AATags);
+        Load->setAAMetadata(AATags.adjustForAccess(NewBeginOffset - BeginOffset,
+                                                   Load->getType(), DL));
       Src = Load;
     }
 
@@ -3080,8 +3326,24 @@ private:
 
     StoreInst *Store = cast<StoreInst>(
         IRB.CreateAlignedStore(Src, DstPtr, DstAlign, II.isVolatile()));
+    Store->copyMetadata(II, {LLVMContext::MD_mem_parallel_loop_access,
+                             LLVMContext::MD_access_group});
     if (AATags)
-      Store->setAAMetadata(AATags);
+      Store->setAAMetadata(AATags.adjustForAccess(NewBeginOffset - BeginOffset,
+                                                  Src->getType(), DL));
+
+    APInt Offset(DL.getIndexTypeSizeInBits(DstPtr->getType()), 0);
+    if (IsDest) {
+
+      migrateDebugInfo(&OldAI, IsSplit, NewBeginOffset * 8, SliceSize * 8, &II,
+                       Store, DstPtr, Src, DL);
+    } else if (AllocaInst *Base = dyn_cast<AllocaInst>(
+                   DstPtr->stripAndAccumulateConstantOffsets(
+                       DL, Offset, /*AllowNonInbounds*/ true))) {
+      migrateDebugInfo(Base, IsSplit, Offset.getZExtValue() * 8, SliceSize * 8,
+                       &II, Store, DstPtr, Src, DL);
+    }
+
     LLVM_DEBUG(dbgs() << "          to: " << *Store << "\n");
     return !II.isVolatile();
   }
@@ -3246,8 +3508,11 @@ class AggLoadStoreRewriter : public InstVisitor<AggLoadStoreRewriter, bool> {
   /// Used to calculate offsets, and hence alignment, of subobjects.
   const DataLayout &DL;
 
+  IRBuilderTy &IRB;
+
 public:
-  AggLoadStoreRewriter(const DataLayout &DL) : DL(DL) {}
+  AggLoadStoreRewriter(const DataLayout &DL, IRBuilderTy &IRB)
+      : DL(DL), IRB(IRB) {}
 
   /// Rewrite loads and stores through a pointer and all pointers derived from
   /// it.
@@ -3278,7 +3543,7 @@ private:
   template <typename Derived> class OpSplitter {
   protected:
     /// The builder used to form new instructions.
-    IRBuilderTy IRB;
+    IRBuilderTy &IRB;
 
     /// The indices which to be used with insert- or extractvalue to select the
     /// appropriate value within the aggregate.
@@ -3305,9 +3570,11 @@ private:
     /// Initialize the splitter with an insertion point, Ptr and start with a
     /// single zero GEP index.
     OpSplitter(Instruction *InsertionPoint, Value *Ptr, Type *BaseTy,
-               Align BaseAlign, const DataLayout &DL)
-        : IRB(InsertionPoint), GEPIndices(1, IRB.getInt32(0)), Ptr(Ptr),
-          BaseTy(BaseTy), BaseAlign(BaseAlign), DL(DL) {}
+               Align BaseAlign, const DataLayout &DL, IRBuilderTy &IRB)
+        : IRB(IRB), GEPIndices(1, IRB.getInt32(0)), Ptr(Ptr), BaseTy(BaseTy),
+          BaseAlign(BaseAlign), DL(DL) {
+      IRB.SetInsertPoint(InsertionPoint);
+    }
 
   public:
     /// Generic recursive split emission routine.
@@ -3368,9 +3635,10 @@ private:
     AAMDNodes AATags;
 
     LoadOpSplitter(Instruction *InsertionPoint, Value *Ptr, Type *BaseTy,
-                   AAMDNodes AATags, Align BaseAlign, const DataLayout &DL)
-        : OpSplitter<LoadOpSplitter>(InsertionPoint, Ptr, BaseTy, BaseAlign,
-                                     DL),
+                   AAMDNodes AATags, Align BaseAlign, const DataLayout &DL,
+                   IRBuilderTy &IRB)
+        : OpSplitter<LoadOpSplitter>(InsertionPoint, Ptr, BaseTy, BaseAlign, DL,
+                                     IRB),
           AATags(AATags) {}
 
     /// Emit a leaf load of a single value. This is called at the leaves of the
@@ -3382,8 +3650,14 @@ private:
           IRB.CreateInBoundsGEP(BaseTy, Ptr, GEPIndices, Name + ".gep");
       LoadInst *Load =
           IRB.CreateAlignedLoad(Ty, GEP, Alignment, Name + ".load");
-      if (AATags)
-        Load->setAAMetadata(AATags);
+
+      APInt Offset(
+          DL.getIndexSizeInBits(Ptr->getType()->getPointerAddressSpace()), 0);
+      if (AATags &&
+          GEPOperator::accumulateConstantOffset(BaseTy, GEPIndices, DL, Offset))
+        Load->setAAMetadata(
+            AATags.adjustForAccess(Offset.getZExtValue(), Load->getType(), DL));
+
       Agg = IRB.CreateInsertValue(Agg, Load, Indices, Name + ".insert");
       LLVM_DEBUG(dbgs() << "          to: " << *Load << "\n");
     }
@@ -3396,11 +3670,9 @@ private:
 
     // We have an aggregate being loaded, split it apart.
     LLVM_DEBUG(dbgs() << "    original: " << LI << "\n");
-    AAMDNodes AATags;
-    LI.getAAMetadata(AATags);
-    LoadOpSplitter Splitter(&LI, *U, LI.getType(), AATags,
-                            getAdjustedAlignment(&LI, 0), DL);
-    Value *V = UndefValue::get(LI.getType());
+    LoadOpSplitter Splitter(&LI, *U, LI.getType(), LI.getAAMetadata(),
+                            getAdjustedAlignment(&LI, 0), DL, IRB);
+    Value *V = PoisonValue::get(LI.getType());
     Splitter.emitSplitOps(LI.getType(), V, LI.getName() + ".fca");
     Visited.erase(&LI);
     LI.replaceAllUsesWith(V);
@@ -3410,11 +3682,13 @@ private:
 
   struct StoreOpSplitter : public OpSplitter<StoreOpSplitter> {
     StoreOpSplitter(Instruction *InsertionPoint, Value *Ptr, Type *BaseTy,
-                    AAMDNodes AATags, Align BaseAlign, const DataLayout &DL)
+                    AAMDNodes AATags, StoreInst *AggStore, Align BaseAlign,
+                    const DataLayout &DL, IRBuilderTy &IRB)
         : OpSplitter<StoreOpSplitter>(InsertionPoint, Ptr, BaseTy, BaseAlign,
-                                      DL),
-          AATags(AATags) {}
+                                      DL, IRB),
+          AATags(AATags), AggStore(AggStore) {}
     AAMDNodes AATags;
+    StoreInst *AggStore;
     /// Emit a leaf store of a single value. This is called at the leaves of the
     /// recursive emission to actually produce stores.
     void emitFunc(Type *Ty, Value *&Agg, Align Alignment, const Twine &Name) {
@@ -3429,8 +3703,32 @@ private:
           IRB.CreateInBoundsGEP(BaseTy, Ptr, GEPIndices, Name + ".gep");
       StoreInst *Store =
           IRB.CreateAlignedStore(ExtractValue, InBoundsGEP, Alignment);
-      if (AATags)
-        Store->setAAMetadata(AATags);
+
+      APInt Offset(
+          DL.getIndexSizeInBits(Ptr->getType()->getPointerAddressSpace()), 0);
+      GEPOperator::accumulateConstantOffset(BaseTy, GEPIndices, DL, Offset);
+      if (AATags) {
+        Store->setAAMetadata(AATags.adjustForAccess(
+            Offset.getZExtValue(), ExtractValue->getType(), DL));
+      }
+
+      // migrateDebugInfo requires the base Alloca. Walk to it from this gep.
+      // If we cannot (because there's an intervening non-const or unbounded
+      // gep) then we wouldn't expect to see dbg.assign intrinsics linked to
+      // this instruction.
+      Value *Base = AggStore->getPointerOperand()->stripInBoundsOffsets();
+      if (auto *OldAI = dyn_cast<AllocaInst>(Base)) {
+        uint64_t SizeInBits =
+            DL.getTypeSizeInBits(Store->getValueOperand()->getType());
+        migrateDebugInfo(OldAI, /*IsSplit*/ true, Offset.getZExtValue() * 8,
+                         SizeInBits, AggStore, Store,
+                         Store->getPointerOperand(), Store->getValueOperand(),
+                         DL);
+      } else {
+        assert(at::getAssignmentMarkers(Store).empty() &&
+               "AT: unexpected debug.assign linked to store through "
+               "unbounded GEP");
+      }
       LLVM_DEBUG(dbgs() << "          to: " << *Store << "\n");
     }
   };
@@ -3444,12 +3742,13 @@ private:
 
     // We have an aggregate being stored, split it apart.
     LLVM_DEBUG(dbgs() << "    original: " << SI << "\n");
-    AAMDNodes AATags;
-    SI.getAAMetadata(AATags);
-    StoreOpSplitter Splitter(&SI, *U, V->getType(), AATags,
-                             getAdjustedAlignment(&SI, 0), DL);
+    StoreOpSplitter Splitter(&SI, *U, V->getType(), SI.getAAMetadata(), &SI,
+                             getAdjustedAlignment(&SI, 0), DL, IRB);
     Splitter.emitSplitOps(V->getType(), V, V->getName() + ".fca");
     Visited.erase(&SI);
+    // The stores replacing SI each have markers describing fragments of the
+    // assignment so delete the assignment markers linked to SI.
+    at::deleteAssignmentMarkers(&SI);
     SI.eraseFromParent();
     return true;
   }
@@ -3475,27 +3774,22 @@ private:
                       << "\n    original: " << *Sel
                       << "\n              " << GEPI);
 
-    IRBuilderTy Builder(&GEPI);
+    IRB.SetInsertPoint(&GEPI);
     SmallVector<Value *, 4> Index(GEPI.indices());
     bool IsInBounds = GEPI.isInBounds();
 
+    Type *Ty = GEPI.getSourceElementType();
     Value *True = Sel->getTrueValue();
-    Value *NTrue =
-        IsInBounds
-            ? Builder.CreateInBoundsGEP(True, Index,
-                                        True->getName() + ".sroa.gep")
-            : Builder.CreateGEP(True, Index, True->getName() + ".sroa.gep");
+    Value *NTrue = IRB.CreateGEP(Ty, True, Index, True->getName() + ".sroa.gep",
+                                 IsInBounds);
 
     Value *False = Sel->getFalseValue();
 
-    Value *NFalse =
-        IsInBounds
-            ? Builder.CreateInBoundsGEP(False, Index,
-                                        False->getName() + ".sroa.gep")
-            : Builder.CreateGEP(False, Index, False->getName() + ".sroa.gep");
+    Value *NFalse = IRB.CreateGEP(Ty, False, Index,
+                                  False->getName() + ".sroa.gep", IsInBounds);
 
-    Value *NSel = Builder.CreateSelect(Sel->getCondition(), NTrue, NFalse,
-                                       Sel->getName() + ".sroa.sel");
+    Value *NSel = IRB.CreateSelect(Sel->getCondition(), NTrue, NFalse,
+                                   Sel->getName() + ".sroa.sel");
     Visited.erase(&GEPI);
     GEPI.replaceAllUsesWith(NSel);
     GEPI.eraseFromParent();
@@ -3532,10 +3826,9 @@ private:
 
     SmallVector<Value *, 4> Index(GEPI.indices());
     bool IsInBounds = GEPI.isInBounds();
-    IRBuilderTy PHIBuilder(GEPI.getParent()->getFirstNonPHI());
-    PHINode *NewPN = PHIBuilder.CreatePHI(GEPI.getType(),
-                                          PHI->getNumIncomingValues(),
-                                          PHI->getName() + ".sroa.phi");
+    IRB.SetInsertPoint(GEPI.getParent()->getFirstNonPHI());
+    PHINode *NewPN = IRB.CreatePHI(GEPI.getType(), PHI->getNumIncomingValues(),
+                                   PHI->getName() + ".sroa.phi");
     for (unsigned I = 0, E = PHI->getNumIncomingValues(); I != E; ++I) {
       BasicBlock *B = PHI->getIncomingBlock(I);
       Value *NewVal = nullptr;
@@ -3545,10 +3838,10 @@ private:
       } else {
         Instruction *In = cast<Instruction>(PHI->getIncomingValue(I));
 
-        IRBuilderTy B(In->getParent(), std::next(In->getIterator()));
-        NewVal = IsInBounds
-            ? B.CreateInBoundsGEP(In, Index, In->getName() + ".sroa.gep")
-            : B.CreateGEP(In, Index, In->getName() + ".sroa.gep");
+        IRB.SetInsertPoint(In->getParent(), std::next(In->getIterator()));
+        Type *Ty = GEPI.getSourceElementType();
+        NewVal = IRB.CreateGEP(Ty, In, Index, In->getName() + ".sroa.gep",
+                               IsInBounds);
       }
       NewPN->addIncoming(NewVal, B);
     }
@@ -3601,8 +3894,8 @@ static Type *stripAggregateTypeWrapping(const DataLayout &DL, Type *Ty) {
   if (Ty->isSingleValueType())
     return Ty;
 
-  uint64_t AllocSize = DL.getTypeAllocSize(Ty).getFixedSize();
-  uint64_t TypeSize = DL.getTypeSizeInBits(Ty).getFixedSize();
+  uint64_t AllocSize = DL.getTypeAllocSize(Ty).getFixedValue();
+  uint64_t TypeSize = DL.getTypeSizeInBits(Ty).getFixedValue();
 
   Type *InnerTy;
   if (ArrayType *ArrTy = dyn_cast<ArrayType>(Ty)) {
@@ -3615,8 +3908,8 @@ static Type *stripAggregateTypeWrapping(const DataLayout &DL, Type *Ty) {
     return Ty;
   }
 
-  if (AllocSize > DL.getTypeAllocSize(InnerTy).getFixedSize() ||
-      TypeSize > DL.getTypeSizeInBits(InnerTy).getFixedSize())
+  if (AllocSize > DL.getTypeAllocSize(InnerTy).getFixedValue() ||
+      TypeSize > DL.getTypeSizeInBits(InnerTy).getFixedValue())
     return Ty;
 
   return stripAggregateTypeWrapping(DL, InnerTy);
@@ -3637,10 +3930,10 @@ static Type *stripAggregateTypeWrapping(const DataLayout &DL, Type *Ty) {
 /// return a type if necessary.
 static Type *getTypePartition(const DataLayout &DL, Type *Ty, uint64_t Offset,
                               uint64_t Size) {
-  if (Offset == 0 && DL.getTypeAllocSize(Ty).getFixedSize() == Size)
+  if (Offset == 0 && DL.getTypeAllocSize(Ty).getFixedValue() == Size)
     return stripAggregateTypeWrapping(DL, Ty);
-  if (Offset > DL.getTypeAllocSize(Ty).getFixedSize() ||
-      (DL.getTypeAllocSize(Ty).getFixedSize() - Offset) < Size)
+  if (Offset > DL.getTypeAllocSize(Ty).getFixedValue() ||
+      (DL.getTypeAllocSize(Ty).getFixedValue() - Offset) < Size)
     return nullptr;
 
   if (isa<ArrayType>(Ty) || isa<VectorType>(Ty)) {
@@ -3656,7 +3949,7 @@ static Type *getTypePartition(const DataLayout &DL, Type *Ty, uint64_t Offset,
        ElementTy = VT->getElementType();
        TyNumElements = VT->getNumElements();
     }
-    uint64_t ElementSize = DL.getTypeAllocSize(ElementTy).getFixedSize();
+    uint64_t ElementSize = DL.getTypeAllocSize(ElementTy).getFixedValue();
     uint64_t NumSkippedElements = Offset / ElementSize;
     if (NumSkippedElements >= TyNumElements)
       return nullptr;
@@ -3686,6 +3979,10 @@ static Type *getTypePartition(const DataLayout &DL, Type *Ty, uint64_t Offset,
     return nullptr;
 
   const StructLayout *SL = DL.getStructLayout(STy);
+
+  if (SL->getSizeInBits().isScalable())
+    return nullptr;
+
   if (Offset >= SL->getSizeInBytes())
     return nullptr;
   uint64_t EndOffset = Offset + Size;
@@ -3696,7 +3993,7 @@ static Type *getTypePartition(const DataLayout &DL, Type *Ty, uint64_t Offset,
   Offset -= SL->getElementOffset(Index);
 
   Type *ElementTy = STy->getElementType(Index);
-  uint64_t ElementSize = DL.getTypeAllocSize(ElementTy).getFixedSize();
+  uint64_t ElementSize = DL.getTypeAllocSize(ElementTy).getFixedValue();
   if (Offset >= ElementSize)
     return nullptr; // The offset points into alignment padding.
 
@@ -3731,7 +4028,7 @@ static Type *getTypePartition(const DataLayout &DL, Type *Ty, uint64_t Offset,
 
   // Try to build up a sub-structure.
   StructType *SubTy =
-      StructType::get(STy->getContext(), makeArrayRef(EI, EE), STy->isPacked());
+      StructType::get(STy->getContext(), ArrayRef(EI, EE), STy->isPacked());
   const StructLayout *SubSL = DL.getStructLayout(SubTy);
   if (Size != SubSL->getSizeInBytes())
     return nullptr; // The sub-struct doesn't have quite the size needed.
@@ -3749,27 +4046,22 @@ static Type *getTypePartition(const DataLayout &DL, Type *Ty, uint64_t Offset,
 /// the following:
 ///
 ///   %a = alloca [12 x i8]
-///   %gep1 = getelementptr [12 x i8]* %a, i32 0, i32 0
-///   %gep2 = getelementptr [12 x i8]* %a, i32 0, i32 4
-///   %gep3 = getelementptr [12 x i8]* %a, i32 0, i32 8
-///   %iptr1 = bitcast i8* %gep1 to i64*
-///   %iptr2 = bitcast i8* %gep2 to i64*
-///   %fptr1 = bitcast i8* %gep1 to float*
-///   %fptr2 = bitcast i8* %gep2 to float*
-///   %fptr3 = bitcast i8* %gep3 to float*
-///   store float 0.0, float* %fptr1
-///   store float 1.0, float* %fptr2
-///   %v = load i64* %iptr1
-///   store i64 %v, i64* %iptr2
-///   %f1 = load float* %fptr2
-///   %f2 = load float* %fptr3
+///   %gep1 = getelementptr i8, ptr %a, i32 0
+///   %gep2 = getelementptr i8, ptr %a, i32 4
+///   %gep3 = getelementptr i8, ptr %a, i32 8
+///   store float 0.0, ptr %gep1
+///   store float 1.0, ptr %gep2
+///   %v = load i64, ptr %gep1
+///   store i64 %v, ptr %gep2
+///   %f1 = load float, ptr %gep2
+///   %f2 = load float, ptr %gep3
 ///
 /// Here we want to form 3 partitions of the alloca, each 4 bytes large, and
 /// promote everything so we recover the 2 SSA values that should have been
 /// there all along.
 ///
 /// \returns true if any changes are made.
-bool SROA::presplitLoadsAndStores(AllocaInst &AI, AllocaSlices &AS) {
+bool SROAPass::presplitLoadsAndStores(AllocaInst &AI, AllocaSlices &AS) {
   LLVM_DEBUG(dbgs() << "Pre-splitting loads and stores\n");
 
   // Track the loads and stores which are candidates for pre-splitting here, in
@@ -3970,15 +4262,15 @@ bool SROA::presplitLoadsAndStores(AllocaInst &AI, AllocaSlices &AS) {
   for (LoadInst *LI : Loads) {
     SplitLoads.clear();
 
-    IntegerType *Ty = cast<IntegerType>(LI->getType());
-    uint64_t LoadSize = Ty->getBitWidth() / 8;
-    assert(LoadSize > 0 && "Cannot have a zero-sized integer load!");
-
     auto &Offsets = SplitOffsetsMap[LI];
-    assert(LoadSize == Offsets.S->endOffset() - Offsets.S->beginOffset() &&
-           "Slice size should always match load size exactly!");
+    unsigned SliceSize = Offsets.S->endOffset() - Offsets.S->beginOffset();
+    assert(LI->getType()->getIntegerBitWidth() % 8 == 0 &&
+           "Load must have type size equal to store size");
+    assert(LI->getType()->getIntegerBitWidth() / 8 >= SliceSize &&
+           "Load must be >= slice size");
+
     uint64_t BaseOffset = Offsets.S->beginOffset();
-    assert(BaseOffset + LoadSize > BaseOffset &&
+    assert(BaseOffset + SliceSize > BaseOffset &&
            "Cannot represent alloca access size using 64-bit integers!");
 
     Instruction *BasePtr = cast<Instruction>(LI->getPointerOperand());
@@ -3989,7 +4281,7 @@ bool SROA::presplitLoadsAndStores(AllocaInst &AI, AllocaSlices &AS) {
     uint64_t PartOffset = 0, PartSize = Offsets.Splits.front();
     int Idx = 0, Size = Offsets.Splits.size();
     for (;;) {
-      auto *PartTy = Type::getIntNTy(Ty->getContext(), PartSize * 8);
+      auto *PartTy = Type::getIntNTy(LI->getContext(), PartSize * 8);
       auto AS = LI->getPointerAddressSpace();
       auto *PartPtrTy = PartTy->getPointerTo(AS);
       LoadInst *PLoad = IRB.CreateAlignedLoad(
@@ -4022,7 +4314,7 @@ bool SROA::presplitLoadsAndStores(AllocaInst &AI, AllocaSlices &AS) {
       // Setup the next partition.
       PartOffset = Offsets.Splits[Idx];
       ++Idx;
-      PartSize = (Idx < Size ? Offsets.Splits[Idx] : LoadSize) - PartOffset;
+      PartSize = (Idx < Size ? Offsets.Splits[Idx] : SliceSize) - PartOffset;
     }
 
     // Now that we have the split loads, do the slow walk over all uses of the
@@ -4040,6 +4332,7 @@ bool SROA::presplitLoadsAndStores(AllocaInst &AI, AllocaSlices &AS) {
 
       Value *StoreBasePtr = SI->getPointerOperand();
       IRB.SetInsertPoint(SI);
+      AAMDNodes AATags = SI->getAAMetadata();
 
       LLVM_DEBUG(dbgs() << "    Splitting store of load: " << *SI << "\n");
 
@@ -4057,8 +4350,13 @@ bool SROA::presplitLoadsAndStores(AllocaInst &AI, AllocaSlices &AS) {
                            PartPtrTy, StoreBasePtr->getName() + "."),
             getAdjustedAlignment(SI, PartOffset),
             /*IsVolatile*/ false);
-        PStore->copyMetadata(*LI, {LLVMContext::MD_mem_parallel_loop_access,
-                                   LLVMContext::MD_access_group});
+        PStore->copyMetadata(*SI, {LLVMContext::MD_mem_parallel_loop_access,
+                                   LLVMContext::MD_access_group,
+                                   LLVMContext::MD_DIAssignID});
+
+        if (AATags)
+          PStore->setAAMetadata(
+              AATags.adjustForAccess(PartOffset, PLoad->getType(), DL));
         LLVM_DEBUG(dbgs() << "      +" << PartOffset << ":" << *PStore << "\n");
       }
 
@@ -4095,6 +4393,7 @@ bool SROA::presplitLoadsAndStores(AllocaInst &AI, AllocaSlices &AS) {
   for (StoreInst *SI : Stores) {
     auto *LI = cast<LoadInst>(SI->getValueOperand());
     IntegerType *Ty = cast<IntegerType>(LI->getType());
+    assert(Ty->getBitWidth() % 8 == 0);
     uint64_t StoreSize = Ty->getBitWidth() / 8;
     assert(StoreSize > 0 && "Cannot have a zero-sized integer store!");
 
@@ -4142,6 +4441,8 @@ bool SROA::presplitLoadsAndStores(AllocaInst &AI, AllocaSlices &AS) {
                            LoadPartPtrTy, LoadBasePtr->getName() + "."),
             getAdjustedAlignment(LI, PartOffset),
             /*IsVolatile*/ false, LI->getName());
+        PLoad->copyMetadata(*LI, {LLVMContext::MD_mem_parallel_loop_access,
+                                  LLVMContext::MD_access_group});
       }
 
       // And store this partition.
@@ -4154,6 +4455,8 @@ bool SROA::presplitLoadsAndStores(AllocaInst &AI, AllocaSlices &AS) {
                          StorePartPtrTy, StoreBasePtr->getName() + "."),
           getAdjustedAlignment(SI, PartOffset),
           /*IsVolatile*/ false);
+      PStore->copyMetadata(*SI, {LLVMContext::MD_mem_parallel_loop_access,
+                                 LLVMContext::MD_access_group});
 
       // Now build a new slice for the alloca.
       NewSlices.push_back(
@@ -4243,35 +4546,54 @@ bool SROA::presplitLoadsAndStores(AllocaInst &AI, AllocaSlices &AS) {
 /// appropriate new offsets. It also evaluates how successful the rewrite was
 /// at enabling promotion and if it was successful queues the alloca to be
 /// promoted.
-AllocaInst *SROA::rewritePartition(AllocaInst &AI, AllocaSlices &AS,
-                                   Partition &P) {
+AllocaInst *SROAPass::rewritePartition(AllocaInst &AI, AllocaSlices &AS,
+                                       Partition &P) {
   // Try to compute a friendly type for this partition of the alloca. This
   // won't always succeed, in which case we fall back to a legal integer type
   // or an i8 array of an appropriate size.
   Type *SliceTy = nullptr;
+  VectorType *SliceVecTy = nullptr;
   const DataLayout &DL = AI.getModule()->getDataLayout();
   std::pair<Type *, IntegerType *> CommonUseTy =
       findCommonType(P.begin(), P.end(), P.endOffset());
   // Do all uses operate on the same type?
   if (CommonUseTy.first)
-    if (DL.getTypeAllocSize(CommonUseTy.first).getFixedSize() >= P.size())
+    if (DL.getTypeAllocSize(CommonUseTy.first).getFixedValue() >= P.size()) {
       SliceTy = CommonUseTy.first;
+      SliceVecTy = dyn_cast<VectorType>(SliceTy);
+    }
   // If not, can we find an appropriate subtype in the original allocated type?
   if (!SliceTy)
     if (Type *TypePartitionTy = getTypePartition(DL, AI.getAllocatedType(),
                                                  P.beginOffset(), P.size()))
       SliceTy = TypePartitionTy;
+
   // If still not, can we use the largest bitwidth integer type used?
   if (!SliceTy && CommonUseTy.second)
-    if (DL.getTypeAllocSize(CommonUseTy.second).getFixedSize() >= P.size())
+    if (DL.getTypeAllocSize(CommonUseTy.second).getFixedValue() >= P.size()) {
       SliceTy = CommonUseTy.second;
+      SliceVecTy = dyn_cast<VectorType>(SliceTy);
+    }
   if ((!SliceTy || (SliceTy->isArrayTy() &&
                     SliceTy->getArrayElementType()->isIntegerTy())) &&
-      DL.isLegalInteger(P.size() * 8))
+      DL.isLegalInteger(P.size() * 8)) {
     SliceTy = Type::getIntNTy(*C, P.size() * 8);
+  }
+
+  // If the common use types are not viable for promotion then attempt to find
+  // another type that is viable.
+  if (SliceVecTy && !checkVectorTypeForPromotion(P, SliceVecTy, DL))
+    if (Type *TypePartitionTy = getTypePartition(DL, AI.getAllocatedType(),
+                                                 P.beginOffset(), P.size())) {
+      VectorType *TypePartitionVecTy = dyn_cast<VectorType>(TypePartitionTy);
+      if (TypePartitionVecTy &&
+          checkVectorTypeForPromotion(P, TypePartitionVecTy, DL))
+        SliceTy = TypePartitionTy;
+    }
+
   if (!SliceTy)
     SliceTy = ArrayType::get(Type::getInt8Ty(*C), P.size());
-  assert(DL.getTypeAllocSize(SliceTy).getFixedSize() >= P.size());
+  assert(DL.getTypeAllocSize(SliceTy).getFixedValue() >= P.size());
 
   bool IsIntegerPromotable = isIntegerWideningViable(P, SliceTy, DL);
 
@@ -4299,7 +4621,7 @@ AllocaInst *SROA::rewritePartition(AllocaInst &AI, AllocaSlices &AS,
     // the alloca's alignment unconstrained.
     const bool IsUnconstrained = Alignment <= DL.getABITypeAlign(SliceTy);
     NewAI = new AllocaInst(
-        SliceTy, AI.getType()->getAddressSpace(), nullptr,
+        SliceTy, AI.getAddressSpace(), nullptr,
         IsUnconstrained ? DL.getPrefTypeAlign(SliceTy) : Alignment,
         AI.getName() + ".sroa." + Twine(P.begin() - AS.begin()), &AI);
     // Copy the old AI debug location over to the new one.
@@ -4345,13 +4667,21 @@ AllocaInst *SROA::rewritePartition(AllocaInst &AI, AllocaSlices &AS,
       break;
     }
 
-  for (SelectInst *Sel : SelectUsers)
-    if (!isSafeSelectToSpeculate(*Sel)) {
+  SmallVector<std::pair<SelectInst *, RewriteableMemOps>, 2>
+      NewSelectsToRewrite;
+  NewSelectsToRewrite.reserve(SelectUsers.size());
+  for (SelectInst *Sel : SelectUsers) {
+    std::optional<RewriteableMemOps> Ops =
+        isSafeSelectToSpeculate(*Sel, PreserveCFG);
+    if (!Ops) {
       Promotable = false;
       PHIUsers.clear();
       SelectUsers.clear();
+      NewSelectsToRewrite.clear();
       break;
     }
+    NewSelectsToRewrite.emplace_back(std::make_pair(Sel, *Ops));
+  }
 
   if (Promotable) {
     for (Use *U : AS.getDeadUsesIfPromotable()) {
@@ -4370,8 +4700,12 @@ AllocaInst *SROA::rewritePartition(AllocaInst &AI, AllocaSlices &AS,
       // next iteration.
       for (PHINode *PHIUser : PHIUsers)
         SpeculatablePHIs.insert(PHIUser);
-      for (SelectInst *SelectUser : SelectUsers)
-        SpeculatableSelects.insert(SelectUser);
+      SelectsToRewrite.reserve(SelectsToRewrite.size() +
+                               NewSelectsToRewrite.size());
+      for (auto &&KV : llvm::make_range(
+               std::make_move_iterator(NewSelectsToRewrite.begin()),
+               std::make_move_iterator(NewSelectsToRewrite.end())))
+        SelectsToRewrite.insert(std::move(KV));
       Worklist.insert(NewAI);
     }
   } else {
@@ -4395,7 +4729,7 @@ AllocaInst *SROA::rewritePartition(AllocaInst &AI, AllocaSlices &AS,
 
 /// Walks the slices of an alloca and form partitions based on them,
 /// rewriting each of their uses.
-bool SROA::splitAlloca(AllocaInst &AI, AllocaSlices &AS) {
+bool SROAPass::splitAlloca(AllocaInst &AI, AllocaSlices &AS) {
   if (AS.begin() == AS.end())
     return false;
 
@@ -4415,7 +4749,7 @@ bool SROA::splitAlloca(AllocaInst &AI, AllocaSlices &AS) {
   bool IsSorted = true;
 
   uint64_t AllocaSize =
-      DL.getTypeAllocSize(AI.getAllocatedType()).getFixedSize();
+      DL.getTypeAllocSize(AI.getAllocatedType()).getFixedValue();
   const uint64_t MaxBitVectorSize = 1024;
   if (AllocaSize <= MaxBitVectorSize) {
     // If a byte boundary is included in any load or store, a slice starting or
@@ -4480,7 +4814,7 @@ bool SROA::splitAlloca(AllocaInst &AI, AllocaSlices &AS) {
       if (NewAI != &AI) {
         uint64_t SizeOfByte = 8;
         uint64_t AllocaSize =
-            DL.getTypeSizeInBits(NewAI->getAllocatedType()).getFixedSize();
+            DL.getTypeSizeInBits(NewAI->getAllocatedType()).getFixedValue();
         // Don't include any padding.
         uint64_t Size = std::min(AllocaSize, P.size() * SizeOfByte);
         Fragments.push_back(Fragment(NewAI, P.beginOffset() * SizeOfByte, Size));
@@ -4494,12 +4828,16 @@ bool SROA::splitAlloca(AllocaInst &AI, AllocaSlices &AS) {
 
   // Migrate debug information from the old alloca to the new alloca(s)
   // and the individual partitions.
-  TinyPtrVector<DbgVariableIntrinsic *> DbgDeclares = FindDbgAddrUses(&AI);
-  for (DbgVariableIntrinsic *DbgDeclare : DbgDeclares) {
-    auto *Expr = DbgDeclare->getExpression();
+  TinyPtrVector<DbgVariableIntrinsic *> DbgVariables;
+  for (auto *DbgDeclare : FindDbgDeclareUses(&AI))
+    DbgVariables.push_back(DbgDeclare);
+  for (auto *DbgAssign : at::getAssignmentMarkers(&AI))
+    DbgVariables.push_back(DbgAssign);
+  for (DbgVariableIntrinsic *DbgVariable : DbgVariables) {
+    auto *Expr = DbgVariable->getExpression();
     DIBuilder DIB(*AI.getModule(), /*AllowUnresolved*/ false);
     uint64_t AllocaSize =
-        DL.getTypeSizeInBits(AI.getAllocatedType()).getFixedSize();
+        DL.getTypeSizeInBits(AI.getAllocatedType()).getFixedValue();
     for (auto Fragment : Fragments) {
       // Create a fragment expression describing the new partition or reuse AI's
       // expression if there is only one partition.
@@ -4514,9 +4852,10 @@ bool SROA::splitAlloca(AllocaInst &AI, AllocaSlices &AS) {
         if (ExprFragment) {
           uint64_t AbsEnd =
               ExprFragment->OffsetInBits + ExprFragment->SizeInBits;
-          if (Start >= AbsEnd)
+          if (Start >= AbsEnd) {
             // No need to describe a SROAed padding.
             continue;
+          }
           Size = std::min(Size, AbsEnd - Start);
         }
         // The new, smaller fragment is stenciled out from the old fragment.
@@ -4527,7 +4866,7 @@ bool SROA::splitAlloca(AllocaInst &AI, AllocaSlices &AS) {
         }
 
         // The alloca may be larger than the variable.
-        auto VarSize = DbgDeclare->getVariable()->getSizeInBits();
+        auto VarSize = DbgVariable->getVariable()->getSizeInBits();
         if (VarSize) {
           if (Size > *VarSize)
             Size = *VarSize;
@@ -4547,29 +4886,44 @@ bool SROA::splitAlloca(AllocaInst &AI, AllocaSlices &AS) {
 
       // Remove any existing intrinsics on the new alloca describing
       // the variable fragment.
-      for (DbgVariableIntrinsic *OldDII : FindDbgAddrUses(Fragment.Alloca)) {
+      for (DbgDeclareInst *OldDII : FindDbgDeclareUses(Fragment.Alloca)) {
         auto SameVariableFragment = [](const DbgVariableIntrinsic *LHS,
                                        const DbgVariableIntrinsic *RHS) {
           return LHS->getVariable() == RHS->getVariable() &&
                  LHS->getDebugLoc()->getInlinedAt() ==
                      RHS->getDebugLoc()->getInlinedAt();
         };
-        if (SameVariableFragment(OldDII, DbgDeclare))
+        if (SameVariableFragment(OldDII, DbgVariable))
           OldDII->eraseFromParent();
       }
 
-      DIB.insertDeclare(Fragment.Alloca, DbgDeclare->getVariable(), FragmentExpr,
-                        DbgDeclare->getDebugLoc(), &AI);
+      if (auto *DbgAssign = dyn_cast<DbgAssignIntrinsic>(DbgVariable)) {
+        if (!Fragment.Alloca->hasMetadata(LLVMContext::MD_DIAssignID)) {
+          Fragment.Alloca->setMetadata(
+              LLVMContext::MD_DIAssignID,
+              DIAssignID::getDistinct(AI.getContext()));
+        }
+        auto *NewAssign = DIB.insertDbgAssign(
+            Fragment.Alloca, DbgAssign->getValue(), DbgAssign->getVariable(),
+            FragmentExpr, Fragment.Alloca, DbgAssign->getAddressExpression(),
+            DbgAssign->getDebugLoc());
+        NewAssign->setDebugLoc(DbgAssign->getDebugLoc());
+        LLVM_DEBUG(dbgs() << "Created new assign intrinsic: " << *NewAssign
+                          << "\n");
+      } else {
+        DIB.insertDeclare(Fragment.Alloca, DbgVariable->getVariable(),
+                          FragmentExpr, DbgVariable->getDebugLoc(), &AI);
+      }
     }
   }
   return Changed;
 }
 
-/// Clobber a use with undef, deleting the used value if it becomes dead.
-void SROA::clobberUse(Use &U) {
+/// Clobber a use with poison, deleting the used value if it becomes dead.
+void SROAPass::clobberUse(Use &U) {
   Value *OldV = U;
-  // Replace the use with an undef value.
-  U = UndefValue::get(OldV->getType());
+  // Replace the use with an poison value.
+  U = PoisonValue::get(OldV->getType());
 
   // Check for this making an instruction dead. We have to garbage collect
   // all the dead instructions to ensure the uses of any alloca end up being
@@ -4585,35 +4939,40 @@ void SROA::clobberUse(Use &U) {
 /// This analyzes the alloca to ensure we can reason about it, builds
 /// the slices of the alloca, and then hands it off to be split and
 /// rewritten as needed.
-bool SROA::runOnAlloca(AllocaInst &AI) {
+std::pair<bool /*Changed*/, bool /*CFGChanged*/>
+SROAPass::runOnAlloca(AllocaInst &AI) {
+  bool Changed = false;
+  bool CFGChanged = false;
+
   LLVM_DEBUG(dbgs() << "SROA alloca: " << AI << "\n");
   ++NumAllocasAnalyzed;
 
   // Special case dead allocas, as they're trivial.
   if (AI.use_empty()) {
     AI.eraseFromParent();
-    return true;
+    Changed = true;
+    return {Changed, CFGChanged};
   }
   const DataLayout &DL = AI.getModule()->getDataLayout();
 
   // Skip alloca forms that this analysis can't handle.
   auto *AT = AI.getAllocatedType();
-  if (AI.isArrayAllocation() || !AT->isSized() || isa<ScalableVectorType>(AT) ||
-      DL.getTypeAllocSize(AT).getFixedSize() == 0)
-    return false;
-
-  bool Changed = false;
+  TypeSize Size = DL.getTypeAllocSize(AT);
+  if (AI.isArrayAllocation() || !AT->isSized() || Size.isScalable() ||
+      Size.getFixedValue() == 0)
+    return {Changed, CFGChanged};
 
   // First, split any FCA loads and stores touching this alloca to promote
   // better splitting and promotion opportunities.
-  AggLoadStoreRewriter AggRewriter(DL);
+  IRBuilderTy IRB(&AI);
+  AggLoadStoreRewriter AggRewriter(DL, IRB);
   Changed |= AggRewriter.rewrite(AI);
 
   // Build the slices using a recursive instruction-visiting builder.
   AllocaSlices AS(DL, AI);
   LLVM_DEBUG(AS.print(dbgs()));
   if (AS.isEscaped())
-    return Changed;
+    return {Changed, CFGChanged};
 
   // Delete all the dead users of this alloca before splitting and rewriting it.
   for (Instruction *DeadUser : AS.getDeadUsers()) {
@@ -4622,7 +4981,7 @@ bool SROA::runOnAlloca(AllocaInst &AI) {
       clobberUse(DeadOp);
 
     // Now replace the uses of this instruction.
-    DeadUser->replaceAllUsesWith(UndefValue::get(DeadUser->getType()));
+    DeadUser->replaceAllUsesWith(PoisonValue::get(DeadUser->getType()));
 
     // And mark it for deletion.
     DeadInsts.push_back(DeadUser);
@@ -4635,19 +4994,23 @@ bool SROA::runOnAlloca(AllocaInst &AI) {
 
   // No slices to split. Leave the dead alloca for a later pass to clean up.
   if (AS.begin() == AS.end())
-    return Changed;
+    return {Changed, CFGChanged};
 
   Changed |= splitAlloca(AI, AS);
 
   LLVM_DEBUG(dbgs() << "  Speculating PHIs\n");
   while (!SpeculatablePHIs.empty())
-    speculatePHINodeLoads(*SpeculatablePHIs.pop_back_val());
+    speculatePHINodeLoads(IRB, *SpeculatablePHIs.pop_back_val());
 
-  LLVM_DEBUG(dbgs() << "  Speculating Selects\n");
-  while (!SpeculatableSelects.empty())
-    speculateSelectInstLoads(*SpeculatableSelects.pop_back_val());
+  LLVM_DEBUG(dbgs() << "  Rewriting Selects\n");
+  auto RemainingSelectsToRewrite = SelectsToRewrite.takeVector();
+  while (!RemainingSelectsToRewrite.empty()) {
+    const auto [K, V] = RemainingSelectsToRewrite.pop_back_val();
+    CFGChanged |=
+        rewriteSelectInstMemOps(*K, V, IRB, PreserveCFG ? nullptr : DTU);
+  }
 
-  return Changed;
+  return {Changed, CFGChanged};
 }
 
 /// Delete the dead instructions accumulated in this run.
@@ -4659,12 +5022,13 @@ bool SROA::runOnAlloca(AllocaInst &AI) {
 ///
 /// We also record the alloca instructions deleted here so that they aren't
 /// subsequently handed to mem2reg to promote.
-bool SROA::deleteDeadInstructions(
+bool SROAPass::deleteDeadInstructions(
     SmallPtrSetImpl<AllocaInst *> &DeletedAllocas) {
   bool Changed = false;
   while (!DeadInsts.empty()) {
     Instruction *I = dyn_cast_or_null<Instruction>(DeadInsts.pop_back_val());
-    if (!I) continue; 
+    if (!I)
+      continue;
     LLVM_DEBUG(dbgs() << "Deleting dead instruction: " << *I << "\n");
 
     // If the instruction is an alloca, find the possible dbg.declare connected
@@ -4672,10 +5036,11 @@ bool SROA::deleteDeadInstructions(
     // not be able to find it.
     if (AllocaInst *AI = dyn_cast<AllocaInst>(I)) {
       DeletedAllocas.insert(AI);
-      for (DbgVariableIntrinsic *OldDII : FindDbgAddrUses(AI))
+      for (DbgDeclareInst *OldDII : FindDbgDeclareUses(AI))
         OldDII->eraseFromParent();
     }
 
+    at::deleteAssignmentMarkers(I);
     I->replaceAllUsesWith(UndefValue::get(I->getType()));
 
     for (Use &Operand : I->operands())
@@ -4698,46 +5063,56 @@ bool SROA::deleteDeadInstructions(
 /// This attempts to promote whatever allocas have been identified as viable in
 /// the PromotableAllocas list. If that list is empty, there is nothing to do.
 /// This function returns whether any promotion occurred.
-bool SROA::promoteAllocas(Function &F) {
+bool SROAPass::promoteAllocas(Function &F) {
   if (PromotableAllocas.empty())
     return false;
 
   NumPromoted += PromotableAllocas.size();
 
-  LLVM_DEBUG(dbgs() << "Promoting allocas with mem2reg...\n");
-  PromoteMemToReg(PromotableAllocas, *DT, AC);
+  if (SROASkipMem2Reg) {
+    LLVM_DEBUG(dbgs() << "Not promoting allocas with mem2reg!\n");
+  } else {
+    LLVM_DEBUG(dbgs() << "Promoting allocas with mem2reg...\n");
+    PromoteMemToReg(PromotableAllocas, DTU->getDomTree(), AC);
+  }
+
   PromotableAllocas.clear();
   return true;
 }
 
-PreservedAnalyses SROA::runImpl(Function &F, DominatorTree &RunDT,
-                                AssumptionCache &RunAC) {
+PreservedAnalyses SROAPass::runImpl(Function &F, DomTreeUpdater &RunDTU,
+                                    AssumptionCache &RunAC) {
   LLVM_DEBUG(dbgs() << "SROA function: " << F.getName() << "\n");
   C = &F.getContext();
-  DT = &RunDT;
+  DTU = &RunDTU;
   AC = &RunAC;
 
+  const DataLayout &DL = F.getParent()->getDataLayout();
   BasicBlock &EntryBB = F.getEntryBlock();
   for (BasicBlock::iterator I = EntryBB.begin(), E = std::prev(EntryBB.end());
        I != E; ++I) {
     if (AllocaInst *AI = dyn_cast<AllocaInst>(I)) {
-      if (isa<ScalableVectorType>(AI->getAllocatedType())) {
-        if (isAllocaPromotable(AI))
-          PromotableAllocas.push_back(AI);
-      } else {
+      if (DL.getTypeAllocSize(AI->getAllocatedType()).isScalable() &&
+          isAllocaPromotable(AI))
+        PromotableAllocas.push_back(AI);
+      else
         Worklist.insert(AI);
-      }
     }
   }
 
   bool Changed = false;
+  bool CFGChanged = false;
   // A set of deleted alloca instruction pointers which should be removed from
   // the list of promotable allocas.
   SmallPtrSet<AllocaInst *, 4> DeletedAllocas;
 
   do {
     while (!Worklist.empty()) {
-      Changed |= runOnAlloca(*Worklist.pop_back_val());
+      auto [IterationChanged, IterationCFGChanged] =
+          runOnAlloca(*Worklist.pop_back_val());
+      Changed |= IterationChanged;
+      CFGChanged |= IterationCFGChanged;
+
       Changed |= deleteDeadInstructions(DeletedAllocas);
 
       // Remove the deleted allocas from various lists so that we don't try to
@@ -4757,19 +5132,46 @@ PreservedAnalyses SROA::runImpl(Function &F, DominatorTree &RunDT,
     PostPromotionWorklist.clear();
   } while (!Worklist.empty());
 
+  assert((!CFGChanged || Changed) && "Can not only modify the CFG.");
+  assert((!CFGChanged || !PreserveCFG) &&
+         "Should not have modified the CFG when told to preserve it.");
+
   if (!Changed)
     return PreservedAnalyses::all();
 
+  if (isAssignmentTrackingEnabled(*F.getParent())) {
+    for (auto &BB : F)
+      RemoveRedundantDbgInstrs(&BB);
+  }
+
   PreservedAnalyses PA;
-  PA.preserveSet<CFGAnalyses>();
-  PA.preserve<GlobalsAA>();
+  if (!CFGChanged)
+    PA.preserveSet<CFGAnalyses>();
+  PA.preserve<DominatorTreeAnalysis>();
   return PA;
 }
 
-PreservedAnalyses SROA::run(Function &F, FunctionAnalysisManager &AM) {
-  return runImpl(F, AM.getResult<DominatorTreeAnalysis>(F),
-                 AM.getResult<AssumptionAnalysis>(F));
+PreservedAnalyses SROAPass::runImpl(Function &F, DominatorTree &RunDT,
+                                    AssumptionCache &RunAC) {
+  DomTreeUpdater DTU(RunDT, DomTreeUpdater::UpdateStrategy::Lazy);
+  return runImpl(F, DTU, RunAC);
 }
+
+PreservedAnalyses SROAPass::run(Function &F, FunctionAnalysisManager &AM) {
+  DominatorTree &DT = AM.getResult<DominatorTreeAnalysis>(F);
+  AssumptionCache &AC = AM.getResult<AssumptionAnalysis>(F);
+  return runImpl(F, DT, AC);
+}
+
+void SROAPass::printPipeline(
+    raw_ostream &OS, function_ref<StringRef(StringRef)> MapClassName2PassName) {
+  static_cast<PassInfoMixin<SROAPass> *>(this)->printPipeline(
+      OS, MapClassName2PassName);
+  OS << (PreserveCFG ? "<preserve-cfg>" : "<modify-cfg>");
+}
+
+SROAPass::SROAPass(SROAOptions PreserveCFG_)
+    : PreserveCFG(PreserveCFG_ == SROAOptions::PreserveCFG) {}
 
 /// A legacy pass for the legacy pass manager that wraps the \c SROA pass.
 ///
@@ -4777,12 +5179,13 @@ PreservedAnalyses SROA::run(Function &F, FunctionAnalysisManager &AM) {
 /// SROA pass.
 class llvm::sroa::SROALegacyPass : public FunctionPass {
   /// The SROA implementation.
-  SROA Impl;
+  SROAPass Impl;
 
 public:
   static char ID;
 
-  SROALegacyPass() : FunctionPass(ID) {
+  SROALegacyPass(SROAOptions PreserveCFG = SROAOptions::PreserveCFG)
+      : FunctionPass(ID), Impl(PreserveCFG) {
     initializeSROALegacyPassPass(*PassRegistry::getPassRegistry());
   }
 
@@ -4800,7 +5203,7 @@ public:
     AU.addRequired<AssumptionCacheTracker>();
     AU.addRequired<DominatorTreeWrapperPass>();
     AU.addPreserved<GlobalsAAWrapperPass>();
-    AU.setPreservesCFG();
+    AU.addPreserved<DominatorTreeWrapperPass>();
   }
 
   StringRef getPassName() const override { return "SROA"; }
@@ -4808,7 +5211,10 @@ public:
 
 char SROALegacyPass::ID = 0;
 
-FunctionPass *llvm::createSROAPass() { return new SROALegacyPass(); }
+FunctionPass *llvm::createSROAPass(bool PreserveCFG) {
+  return new SROALegacyPass(PreserveCFG ? SROAOptions::PreserveCFG
+                                        : SROAOptions::ModifyCFG);
+}
 
 INITIALIZE_PASS_BEGIN(SROALegacyPass, "sroa",
                       "Scalar Replacement Of Aggregates", false, false)

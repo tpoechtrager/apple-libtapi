@@ -26,6 +26,11 @@ struct NewArchiveMember {
   NewArchiveMember() = default;
   NewArchiveMember(MemoryBufferRef BufRef);
 
+  // Detect the archive format from the object or bitcode file. This helps
+  // assume the archive format when creating or editing archives in the case
+  // one isn't explicitly set.
+  object::Archive::Kind detectKindFromObject() const;
+
   static Expected<NewArchiveMember>
   getOldMember(const object::Archive::Child &OldMember, bool Deterministic);
 
@@ -38,7 +43,8 @@ Expected<std::string> computeArchiveRelativePath(StringRef From, StringRef To);
 Error writeArchive(StringRef ArcName, ArrayRef<NewArchiveMember> NewMembers,
                    bool WriteSymtab, object::Archive::Kind Kind,
                    bool Deterministic, bool Thin,
-                   std::unique_ptr<MemoryBuffer> OldArchiveBuf = nullptr);
+                   std::unique_ptr<MemoryBuffer> OldArchiveBuf = nullptr,
+                   bool IsEC = false);
 
 // writeArchiveToBuffer is similar to writeArchive but returns the Archive in a
 // buffer instead of writing it out to a file.

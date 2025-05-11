@@ -34,8 +34,10 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "llvm/Transforms/Instrumentation/SoftPointerAuth.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/GlobalVariable.h"
+#include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Module.h"
 #include "llvm/InitializePasses.h"
@@ -43,10 +45,10 @@
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 
-#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/STLExtras.h"
 #include <map>
+#include <optional>
 
 #define DEBUG_TYPE "soft-ptrauth"
 
@@ -88,7 +90,7 @@ class SoftPointerAuth {
   FunctionCallee BlendDiscriminatorFn = nullptr;
   FunctionCallee SignGenericFn = nullptr;
 
-  Optional<IRBuilderTy> GlobalConstructorBuilder;
+  std::optional<IRBuilderTy> GlobalConstructorBuilder;
 
 public:
   SoftPointerAuth() {}
@@ -135,7 +137,7 @@ private:
     if (!hasType(call, resultTypeTag))
       return false;
 
-    if (call->getNumArgOperands() != argTypeTags.size())
+    if (call->arg_size() != argTypeTags.size())
       return false;
     for (unsigned i = 0, e = argTypeTags.size(); i != e; ++i) {
       if (!hasType(call->getArgOperand(i), argTypeTags[i]))
@@ -149,10 +151,7 @@ private:
     auto type = value->getType();
     switch (tag) {
     case VoidPtr:
-      if (auto ptrType = dyn_cast<PointerType>(type))
-        return ptrType->getAddressSpace() == 0 &&
-               ptrType->getElementType()->isIntegerTy(8);
-      return false;
+      return type == Type::getInt8PtrTy(M->getContext());
     case Key:
       return type->isIntegerTy(32);
     case IntPtr:
@@ -850,30 +849,10 @@ bool SoftPointerAuth::transformPointerAuthCall(CallBase *oldCall,
 /**************************** Pass Manager Support ***************************/
 /*****************************************************************************/
 
-namespace {
-
-class SoftPointerAuthLegacyPass : public ModulePass {
-public:
-  static char ID;
-  SoftPointerAuthLegacyPass() : ModulePass(ID) {
-    initializeSoftPointerAuthLegacyPassPass(*PassRegistry::getPassRegistry());
-  }
-  StringRef getPassName() const override {
-    return "Soft Pointer Auth Lowering";
-  }
-  bool runOnModule(Module &M) override { return Pass.runOnModule(M); }
-
-private:
+PreservedAnalyses SoftPointerAuthPass::run(Module &M,
+                                           ModuleAnalysisManager &AM) {
   SoftPointerAuth Pass;
-};
-
-} // end anonymous namespace
-
-char SoftPointerAuthLegacyPass::ID = 0;
-INITIALIZE_PASS(SoftPointerAuthLegacyPass, "soft-ptrauth",
-                "Lower pointer authentication intrinsics for soft targets",
-                false, false)
-
-ModulePass *llvm::createSoftPointerAuthPass() {
-  return new SoftPointerAuthLegacyPass();
+  if (!Pass.runOnModule(M))
+    return PreservedAnalyses::all();
+  return PreservedAnalyses::none();
 }

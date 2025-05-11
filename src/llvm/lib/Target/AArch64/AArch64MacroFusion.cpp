@@ -11,23 +11,30 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "AArch64MacroFusion.h"
 #include "AArch64Subtarget.h"
 #include "llvm/CodeGen/MacroFusion.h"
 #include "llvm/CodeGen/TargetInstrInfo.h"
 
 using namespace llvm;
 
-namespace {
-
 /// CMN, CMP, TST followed by Bcc
 static bool isArithmeticBccPair(const MachineInstr *FirstMI,
-                                const MachineInstr &SecondMI) {
+                                const MachineInstr &SecondMI, bool CmpOnly) {
   if (SecondMI.getOpcode() != AArch64::Bcc)
     return false;
 
   // Assume the 1st instr to be a wildcard if it is unspecified.
   if (FirstMI == nullptr)
     return true;
+
+  // If we're in CmpOnly mode, we only fuse arithmetic instructions that
+  // discard their result.
+  if (CmpOnly && FirstMI->getOperand(0).isReg() &&
+      !(FirstMI->getOperand(0).getReg() == AArch64::XZR ||
+        FirstMI->getOperand(0).getReg() == AArch64::WZR)) {
+    return false;
+  }
 
   switch (FirstMI->getOpcode()) {
   case AArch64::ADDSWri:
@@ -151,16 +158,19 @@ static bool isCryptoEORPair(const MachineInstr *FirstMI,
   return false;
 }
 
+static bool isAdrpAddPair(const MachineInstr *FirstMI,
+                          const MachineInstr &SecondMI) {
+  // Assume the 1st instr to be a wildcard if it is unspecified.
+  if ((FirstMI == nullptr || FirstMI->getOpcode() == AArch64::ADRP) &&
+      SecondMI.getOpcode() == AArch64::ADDXri)
+    return true;
+  return false;
+}
+
 /// Literal generation.
 static bool isLiteralsPair(const MachineInstr *FirstMI,
                            const MachineInstr &SecondMI) {
   // Assume the 1st instr to be a wildcard if it is unspecified.
-
-  // PC relative address.
-  if ((FirstMI == nullptr || FirstMI->getOpcode() == AArch64::ADRP) &&
-      SecondMI.getOpcode() == AArch64::ADDXri)
-    return true;
-
   // 32 bit immediate.
   if ((FirstMI == nullptr || FirstMI->getOpcode() == AArch64::MOVZWi) &&
       (SecondMI.getOpcode() == AArch64::MOVKWi &&
@@ -369,6 +379,64 @@ static bool isArithmeticLogicPair(const MachineInstr *FirstMI,
   return false;
 }
 
+// "(A + B) + 1" or "(A - B) - 1"
+static bool isAddSub2RegAndConstOnePair(const MachineInstr *FirstMI,
+                                        const MachineInstr &SecondMI) {
+  bool NeedsSubtract = false;
+
+  // The 2nd instr must be an add-immediate or subtract-immediate.
+  switch (SecondMI.getOpcode()) {
+  case AArch64::SUBWri:
+  case AArch64::SUBXri:
+    NeedsSubtract = true;
+    [[fallthrough]];
+  case AArch64::ADDWri:
+  case AArch64::ADDXri:
+    break;
+
+  default:
+    return false;
+  }
+
+  // The immediate in the 2nd instr must be "1".
+  if (!SecondMI.getOperand(2).isImm() || SecondMI.getOperand(2).getImm() != 1) {
+    return false;
+  }
+
+  // Assume the 1st instr to be a wildcard if it is unspecified.
+  if (FirstMI == nullptr) {
+    return true;
+  }
+
+  switch (FirstMI->getOpcode()) {
+  case AArch64::SUBWrs:
+  case AArch64::SUBXrs:
+    if (AArch64InstrInfo::hasShiftedReg(*FirstMI))
+      return false;
+    [[fallthrough]];
+  case AArch64::SUBWrr:
+  case AArch64::SUBXrr:
+    if (NeedsSubtract) {
+      return true;
+    }
+    break;
+
+  case AArch64::ADDWrs:
+  case AArch64::ADDXrs:
+    if (AArch64InstrInfo::hasShiftedReg(*FirstMI))
+      return false;
+    [[fallthrough]];
+  case AArch64::ADDWrr:
+  case AArch64::ADDXrr:
+    if (!NeedsSubtract) {
+      return true;
+    }
+    break;
+  }
+
+  return false;
+}
+
 /// \brief Check if the instr pair, FirstMI and SecondMI, should be fused
 /// together. Given SecondMI, when FirstMI is unspecified, then check if
 /// SecondMI may be part of a fused pair at all.
@@ -380,13 +448,18 @@ static bool shouldScheduleAdjacent(const TargetInstrInfo &TII,
 
   // All checking functions assume that the 1st instr is a wildcard if it is
   // unspecified.
-  if (ST.hasArithmeticBccFusion() && isArithmeticBccPair(FirstMI, SecondMI))
-    return true;
+  if (ST.hasCmpBccFusion() || ST.hasArithmeticBccFusion()) {
+    bool CmpOnly = !ST.hasArithmeticBccFusion();
+    if (isArithmeticBccPair(FirstMI, SecondMI, CmpOnly))
+      return true;
+  }
   if (ST.hasArithmeticCbzFusion() && isArithmeticCbzPair(FirstMI, SecondMI))
     return true;
   if (ST.hasFuseAES() && isAESPair(FirstMI, SecondMI))
     return true;
   if (ST.hasFuseCryptoEOR() && isCryptoEORPair(FirstMI, SecondMI))
+    return true;
+  if (ST.hasFuseAdrpAdd() && isAdrpAddPair(FirstMI, SecondMI))
     return true;
   if (ST.hasFuseLiterals() && isLiteralsPair(FirstMI, SecondMI))
     return true;
@@ -396,17 +469,14 @@ static bool shouldScheduleAdjacent(const TargetInstrInfo &TII,
     return true;
   if (ST.hasFuseArithmeticLogic() && isArithmeticLogicPair(FirstMI, SecondMI))
     return true;
+  if (ST.hasFuseAddSub2RegAndConstOne() &&
+      isAddSub2RegAndConstOnePair(FirstMI, SecondMI))
+    return true;
 
   return false;
 }
 
-} // end namespace
-
-
-namespace llvm {
-
-std::unique_ptr<ScheduleDAGMutation> createAArch64MacroFusionDAGMutation () {
+std::unique_ptr<ScheduleDAGMutation>
+llvm::createAArch64MacroFusionDAGMutation() {
   return createMacroFusionDAGMutation(shouldScheduleAdjacent);
 }
-
-} // end namespace llvm

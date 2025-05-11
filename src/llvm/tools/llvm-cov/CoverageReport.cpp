@@ -13,6 +13,7 @@
 #include "CoverageReport.h"
 #include "RenderingSupport.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/SmallString.h"
 #include "llvm/Support/Format.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/ThreadPool.h"
@@ -179,7 +180,7 @@ void CoverageReport::render(const FileCoverageSummary &File,
       determineCoveragePercentageColor(File.InstantiationCoverage);
   auto LineCoverageColor = determineCoveragePercentageColor(File.LineCoverage);
   SmallString<256> FileName = File.Name;
-  sys::path::remove_dots(FileName, /*remove_dot_dots=*/true);
+  sys::path::remove_dots(FileName, /*remove_dot_dot=*/true);
   sys::path::native(FileName);
   OS << column(FileName, FileReportColumns[0], Column::NoTrim);
 
@@ -437,6 +438,7 @@ void CoverageReport::renderFileReports(
       prepareFileReports(Coverage, Totals, Files, Options, Filters);
 
   std::vector<StringRef> Filenames;
+  Filenames.reserve(FileReports.size());
   for (const FileCoverageSummary &FCS : FileReports)
     Filenames.emplace_back(FCS.Name);
   adjustColumnWidths(Filenames, {});

@@ -27,6 +27,10 @@
 #include "llvm/Support/raw_ostream.h"
 #include <cassert>
 
+#ifdef EXPENSIVE_CHECKS
+#include "llvm/IR/StructuralHash.h"
+#endif
+
 using namespace llvm;
 
 #define DEBUG_TYPE "ir"
@@ -58,7 +62,8 @@ static std::string getDescription(const Module &M) {
 
 bool ModulePass::skipModule(Module &M) const {
   OptPassGate &Gate = M.getContext().getOptPassGate();
-  return Gate.isEnabled() && !Gate.shouldRunPass(this, getDescription(M));
+  return Gate.isEnabled() &&
+         !Gate.shouldRunPass(this->getPassName(), getDescription(M));
 }
 
 bool Pass::mustPreserveAnalysisID(char &AID) const {
@@ -133,6 +138,12 @@ LLVM_DUMP_METHOD void Pass::dump() const {
 }
 #endif
 
+#ifdef EXPENSIVE_CHECKS
+uint64_t Pass::structuralHash(Module &M) const { return StructuralHash(M); }
+
+uint64_t Pass::structuralHash(Function &F) const { return StructuralHash(F); }
+#endif
+
 //===----------------------------------------------------------------------===//
 // ImmutablePass Implementation
 //
@@ -162,7 +173,8 @@ static std::string getDescription(const Function &F) {
 
 bool FunctionPass::skipFunction(const Function &F) const {
   OptPassGate &Gate = F.getContext().getOptPassGate();
-  if (Gate.isEnabled() && !Gate.shouldRunPass(this, getDescription(F)))
+  if (Gate.isEnabled() &&
+      !Gate.shouldRunPass(this->getPassName(), getDescription(F)))
     return true;
 
   if (F.hasOptNone()) {
@@ -259,22 +271,23 @@ void AnalysisUsage::setPreservesCFG() {
 AnalysisUsage &AnalysisUsage::addPreserved(StringRef Arg) {
   const PassInfo *PI = Pass::lookupPassInfo(Arg);
   // If the pass exists, preserve it. Otherwise silently do nothing.
-  if (PI) Preserved.push_back(PI->getTypeInfo());
+  if (PI)
+    pushUnique(Preserved, PI->getTypeInfo());
   return *this;
 }
 
 AnalysisUsage &AnalysisUsage::addRequiredID(const void *ID) {
-  Required.push_back(ID);
+  pushUnique(Required, ID);
   return *this;
 }
 
 AnalysisUsage &AnalysisUsage::addRequiredID(char &ID) {
-  Required.push_back(&ID);
+  pushUnique(Required, &ID);
   return *this;
 }
 
 AnalysisUsage &AnalysisUsage::addRequiredTransitiveID(char &ID) {
-  Required.push_back(&ID);
-  RequiredTransitive.push_back(&ID);
+  pushUnique(Required, &ID);
+  pushUnique(RequiredTransitive, &ID);
   return *this;
 }

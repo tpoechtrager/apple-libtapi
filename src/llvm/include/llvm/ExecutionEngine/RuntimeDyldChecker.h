@@ -10,9 +10,9 @@
 #define LLVM_EXECUTIONENGINE_RUNTIMEDYLDCHECKER_H
 
 #include "llvm/ADT/DenseMap.h"
-#include "llvm/ADT/Optional.h"
 #include "llvm/ExecutionEngine/JITSymbol.h"
 #include "llvm/Support/Endian.h"
+#include <optional>
 
 #include <cstdint>
 #include <memory>
@@ -62,6 +62,7 @@ class raw_ostream;
 ///            | 'next_pc'        '(' symbol ')'
 ///            | 'stub_addr' '(' stub-container-name ',' symbol ')'
 ///            | 'got_addr' '(' stub-container-name ',' symbol ')'
+///            | 'section_addr' '(' stub-container-name ',' symbol ')'
 ///            | symbol
 ///
 /// binary_expr = expr '+' expr
@@ -78,7 +79,7 @@ public:
     MemoryRegionInfo() = default;
 
     /// Constructor for symbols/sections with content.
-    MemoryRegionInfo(StringRef Content, JITTargetAddress TargetAddress)
+    MemoryRegionInfo(ArrayRef<char> Content, JITTargetAddress TargetAddress)
         : ContentPtr(Content.data()), Size(Content.size()),
           TargetAddress(TargetAddress) {}
 
@@ -93,7 +94,7 @@ public:
     }
 
     /// Set the content for this memory region.
-    void setContent(StringRef Content) {
+    void setContent(ArrayRef<char> Content) {
       assert(!ContentPtr && !Size && "Content/zero-fill already set");
       ContentPtr = Content.data();
       Size = Content.size();
@@ -106,9 +107,9 @@ public:
     }
 
     /// Returns the content for this section if there is any.
-    StringRef getContent() const {
+    ArrayRef<char> getContent() const {
       assert(!isZeroFill() && "Can't get content for a zero-fill section");
-      return StringRef(ContentPtr, static_cast<size_t>(Size));
+      return {ContentPtr, static_cast<size_t>(Size)};
     }
 
     /// Returns the zero-fill length for this section.
@@ -127,7 +128,7 @@ public:
     JITTargetAddress getTargetAddress() const { return TargetAddress; }
 
   private:
-    const char *ContentPtr = 0;
+    const char *ContentPtr = nullptr;
     uint64_t Size = 0;
     JITTargetAddress TargetAddress = 0;
   };
@@ -172,8 +173,8 @@ public:
                                                   bool LocalAddress);
 
   /// If there is a section at the given local address, return its load
-  /// address, otherwise return none.
-  Optional<uint64_t> getSectionLoadAddress(void *LocalAddress) const;
+  /// address, otherwise return std::nullopt.
+  std::optional<uint64_t> getSectionLoadAddress(void *LocalAddress) const;
 
 private:
   std::unique_ptr<RuntimeDyldCheckerImpl> Impl;

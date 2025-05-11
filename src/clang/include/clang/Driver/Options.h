@@ -9,13 +9,7 @@
 #ifndef LLVM_CLANG_DRIVER_OPTIONS_H
 #define LLVM_CLANG_DRIVER_OPTIONS_H
 
-#include <memory>
-
-namespace llvm {
-namespace opt {
-class OptTable;
-}
-}
+#include "llvm/Option/OptTable.h"
 
 namespace clang {
 namespace driver {
@@ -37,14 +31,15 @@ enum ClangFlags {
   FlangOption = (1 << 14),
   FC1Option = (1 << 15),
   FlangOnlyOption = (1 << 16),
-  Ignored = (1 << 17),
+  DXCOption = (1 << 17),
+  CLDXCOption = (1 << 18),
+  Ignored = (1 << 19),
+  TargetSpecific = (1 << 20),
 };
 
 enum ID {
     OPT_INVALID = 0, // This is not an option ID.
-#define OPTION(PREFIX, NAME, ID, KIND, GROUP, ALIAS, ALIASARGS, FLAGS, PARAM,  \
-               HELPTEXT, METAVAR, VALUES)                                      \
-  OPT_##ID,
+#define OPTION(...) LLVM_MAKE_OPT_ID(__VA_ARGS__),
 #include "clang/Driver/Options.inc"
     LastOption
 #undef OPTION

@@ -1,9 +1,8 @@
 //===--- SDKDBBitcodeFormat.h - The internals of SDKDB bitcode --*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 ///
@@ -98,6 +97,21 @@ enum BlockID {
   ///
   /// \sa library_table_block
   LIBRARY_TABLE_BLOCK_ID,
+
+  /// The Enum block, which contains API info for enum.
+  ///
+  /// \sa enum_block
+  ENUM_BLOCK_ID,
+
+  /// The Enum constant block, which contains API info for enum constant.
+  ///
+  /// \sa enum_constant_block
+  ENUM_CONSTANT_BLOCK_ID,
+
+  /// The typedef block, which contains API info for typedef.
+  ///
+  /// \sa typdef_block
+  TYPEDEF_BLOCK_ID,
 };
 
 // clang-format off
@@ -164,6 +178,9 @@ enum {
 
   /// Potentially defined selectors.
   POTENTIALLY_DEFINED_SELECTOR = 10,
+
+  /// Project name.
+  PROJECT_NAME = 11,
 };
 } // end namespace api_block
 
@@ -306,13 +323,67 @@ namespace library_table_block {
 // These IDs must \em not be renumbered or reordered without incrementing
 // VERSION_MAJOR.
 enum {
-  // Taget Triple for the lookup table.
+  // Target Triple for the lookup table.
   TARGET_TRIPLE = 1,
 
   // OnDiskHashTable.
   LOOKUP_TABLE = 2,
 };
 } // end namespace library_table_block
+
+namespace enum_block {
+// These IDs must \em not be renumbered or reordered without incrementing
+// VERSION_MAJOR.
+enum {
+  /// API Record info.
+  INFO = 1,
+
+  /// Availability info.
+  AVAILABILITY = 2,
+
+  /// Filename info.
+  FILENAME = 3,
+
+  /// Location.
+  LOCATION = 4,
+};
+} // end namespace enum_block
+
+namespace enum_constant_block {
+// These IDs must \em not be renumbered or reordered without incrementing
+// VERSION_MAJOR.
+enum {
+  /// API Record info.
+  INFO = 1,
+
+  /// Availability info.
+  AVAILABILITY = 2,
+
+  /// Filename info.
+  FILENAME = 3,
+
+  /// Location.
+  LOCATION = 4,
+};
+} // end namespace enum_constant_block
+
+namespace typedef_block {
+// These IDs must \em not be renumbered or reordered without incrementing
+// VERSION_MAJOR.
+enum {
+  /// API Record info.
+  INFO = 1,
+
+  /// Availability info.
+  AVAILABILITY = 2,
+
+  /// Filename info.
+  FILENAME = 3,
+
+  /// Location.
+  LOCATION = 4,
+};
+} // end namespace typedef_block
 
 // clang-format on
 

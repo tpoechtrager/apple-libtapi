@@ -88,12 +88,11 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "llvm/Transforms/IPO/MergeFunctions.h"
 #include "llvm/ADT/ArrayRef.h"
-#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/IR/Argument.h"
-#include "llvm/IR/Attributes.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Constant.h"
 #include "llvm/IR/Constants.h"
@@ -113,16 +112,13 @@
 #include "llvm/IR/User.h"
 #include "llvm/IR/Value.h"
 #include "llvm/IR/ValueHandle.h"
-#include "llvm/IR/ValueMap.h"
-#include "llvm/InitializePasses.h"
-#include "llvm/Pass.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/IPO.h"
-#include "llvm/Transforms/IPO/MergeFunctions.h"
 #include "llvm/Transforms/Utils/FunctionComparator.h"
+#include "llvm/Transforms/Utils/ModuleUtils.h"
 #include <algorithm>
 #include <cassert>
 #include <iterator>
@@ -139,10 +135,10 @@ STATISTIC(NumThunksWritten, "Number of thunks generated");
 STATISTIC(NumAliasesWritten, "Number of aliases generated");
 STATISTIC(NumDoubleWeak, "Number of new functions created");
 
-static cl::opt<unsigned> NumFunctionsForSanityCheck(
-    "mergefunc-sanity",
-    cl::desc("How many functions in module could be used for "
-             "MergeFunctions pass sanity check. "
+static cl::opt<unsigned> NumFunctionsForVerificationCheck(
+    "mergefunc-verify",
+    cl::desc("How many functions in a module could be used for "
+             "MergeFunctions to pass a basic correctness check. "
              "'0' disables this check. Works only with '-debug' key."),
     cl::init(0), cl::Hidden);
 
@@ -217,7 +213,7 @@ private:
       if (LHS.getHash() != RHS.getHash())
         return LHS.getHash() < RHS.getHash();
       FunctionComparator FCmp(LHS.getFunc(), RHS.getFunc(), GlobalNumbers);
-      return FCmp.compare() == -1;
+      return FCmp.compare() < 0;
     }
   };
   using FnTreeType = std::set<FunctionNode, FunctionNodeCmp>;
@@ -228,10 +224,13 @@ private:
   /// analyzed again.
   std::vector<WeakTrackingVH> Deferred;
 
+  /// Set of values marked as used in llvm.used and llvm.compiler.used.
+  SmallPtrSet<GlobalValue *, 4> Used;
+
 #ifndef NDEBUG
   /// Checks the rules of order relation introduced among functions set.
-  /// Returns true, if sanity check has been passed, and false if failed.
-  bool doSanityCheck(std::vector<WeakTrackingVH> &Worklist);
+  /// Returns true, if check has been passed, and false if failed.
+  bool doFunctionalCheck(std::vector<WeakTrackingVH> &Worklist);
 #endif
 
   /// Insert a ComparableFunction into the FnTree, or merge it away if it's
@@ -293,33 +292,7 @@ private:
   // there is exactly one mapping F -> FN for each FunctionNode FN in FnTree.
   DenseMap<AssertingVH<Function>, FnTreeType::iterator> FNodesInTree;
 };
-
-class MergeFunctionsLegacyPass : public ModulePass {
-public:
-  static char ID;
-
-  MergeFunctionsLegacyPass(): ModulePass(ID) {
-    initializeMergeFunctionsLegacyPassPass(*PassRegistry::getPassRegistry());
-  }
-
-  bool runOnModule(Module &M) override {
-    if (skipModule(M))
-      return false;
-
-    MergeFunctions MF;
-    return MF.runOnModule(M);
-  }
-};
-
 } // end anonymous namespace
-
-char MergeFunctionsLegacyPass::ID = 0;
-INITIALIZE_PASS(MergeFunctionsLegacyPass, "mergefunc",
-                "Merge Functions", false, false)
-
-ModulePass *llvm::createMergeFunctionsPass() {
-  return new MergeFunctionsLegacyPass();
-}
 
 PreservedAnalyses MergeFunctionsPass::run(Module &M,
                                           ModuleAnalysisManager &AM) {
@@ -330,12 +303,12 @@ PreservedAnalyses MergeFunctionsPass::run(Module &M,
 }
 
 #ifndef NDEBUG
-bool MergeFunctions::doSanityCheck(std::vector<WeakTrackingVH> &Worklist) {
-  if (const unsigned Max = NumFunctionsForSanityCheck) {
+bool MergeFunctions::doFunctionalCheck(std::vector<WeakTrackingVH> &Worklist) {
+  if (const unsigned Max = NumFunctionsForVerificationCheck) {
     unsigned TripleNumber = 0;
     bool Valid = true;
 
-    dbgs() << "MERGEFUNC-SANITY: Started for first " << Max << " functions.\n";
+    dbgs() << "MERGEFUNC-VERIFY: Started for first " << Max << " functions.\n";
 
     unsigned i = 0;
     for (std::vector<WeakTrackingVH>::iterator I = Worklist.begin(),
@@ -351,7 +324,7 @@ bool MergeFunctions::doSanityCheck(std::vector<WeakTrackingVH> &Worklist) {
 
         // If F1 <= F2, then F2 >= F1, otherwise report failure.
         if (Res1 != -Res2) {
-          dbgs() << "MERGEFUNC-SANITY: Non-symmetric; triple: " << TripleNumber
+          dbgs() << "MERGEFUNC-VERIFY: Non-symmetric; triple: " << TripleNumber
                  << "\n";
           dbgs() << *F1 << '\n' << *F2 << '\n';
           Valid = false;
@@ -384,7 +357,7 @@ bool MergeFunctions::doSanityCheck(std::vector<WeakTrackingVH> &Worklist) {
           }
 
           if (!Transitive) {
-            dbgs() << "MERGEFUNC-SANITY: Non-transitive; triple: "
+            dbgs() << "MERGEFUNC-VERIFY: Non-transitive; triple: "
                    << TripleNumber << "\n";
             dbgs() << "Res1, Res3, Res4: " << Res1 << ", " << Res3 << ", "
                    << Res4 << "\n";
@@ -395,7 +368,7 @@ bool MergeFunctions::doSanityCheck(std::vector<WeakTrackingVH> &Worklist) {
       }
     }
 
-    dbgs() << "MERGEFUNC-SANITY: " << (Valid ? "Passed." : "Failed.") << "\n";
+    dbgs() << "MERGEFUNC-VERIFY: " << (Valid ? "Passed." : "Failed.") << "\n";
     return Valid;
   }
   return true;
@@ -409,6 +382,11 @@ static bool isEligibleForMerging(Function &F) {
 
 bool MergeFunctions::runOnModule(Module &M) {
   bool Changed = false;
+
+  SmallVector<GlobalValue *, 4> UsedV;
+  collectUsedGlobalVariables(M, UsedV, /*CompilerUsed=*/false);
+  collectUsedGlobalVariables(M, UsedV, /*CompilerUsed=*/true);
+  Used.insert(UsedV.begin(), UsedV.end());
 
   // All functions in the module, ordered by hash. Functions with a unique
   // hash value are easily eliminated.
@@ -436,7 +414,7 @@ bool MergeFunctions::runOnModule(Module &M) {
     std::vector<WeakTrackingVH> Worklist;
     Deferred.swap(Worklist);
 
-    LLVM_DEBUG(doSanityCheck(Worklist));
+    LLVM_DEBUG(doFunctionalCheck(Worklist));
 
     LLVM_DEBUG(dbgs() << "size of module: " << M.size() << '\n');
     LLVM_DEBUG(dbgs() << "size of worklist: " << Worklist.size() << '\n');
@@ -456,6 +434,7 @@ bool MergeFunctions::runOnModule(Module &M) {
   FnTree.clear();
   FNodesInTree.clear();
   GlobalNumbers.clear();
+  Used.clear();
 
   return Changed;
 }
@@ -463,17 +442,15 @@ bool MergeFunctions::runOnModule(Module &M) {
 // Replace direct callers of Old with New.
 void MergeFunctions::replaceDirectCallers(Function *Old, Function *New) {
   Constant *BitcastNew = ConstantExpr::getBitCast(New, Old->getType());
-  for (auto UI = Old->use_begin(), UE = Old->use_end(); UI != UE;) {
-    Use *U = &*UI;
-    ++UI;
-    CallBase *CB = dyn_cast<CallBase>(U->getUser());
-    if (CB && CB->isCallee(U)) {
+  for (Use &U : llvm::make_early_inc_range(Old->uses())) {
+    CallBase *CB = dyn_cast<CallBase>(U.getUser());
+    if (CB && CB->isCallee(&U)) {
       // Do not copy attributes from the called function to the call-site.
       // Function comparison ensures that the attributes are the same up to
       // type congruences in byval(), in which case we need to keep the byval
       // type of the call-site, not the callee function.
       remove(CB->getFunction());
-      U->set(BitcastNew);
+      U.set(BitcastNew);
     }
   }
 }
@@ -486,14 +463,13 @@ static Value *createCast(IRBuilder<> &Builder, Value *V, Type *DestTy) {
   if (SrcTy->isStructTy()) {
     assert(DestTy->isStructTy());
     assert(SrcTy->getStructNumElements() == DestTy->getStructNumElements());
-    Value *Result = UndefValue::get(DestTy);
+    Value *Result = PoisonValue::get(DestTy);
     for (unsigned int I = 0, E = SrcTy->getStructNumElements(); I < E; ++I) {
-      Value *Element = createCast(
-          Builder, Builder.CreateExtractValue(V, makeArrayRef(I)),
-          DestTy->getStructElementType(I));
+      Value *Element =
+          createCast(Builder, Builder.CreateExtractValue(V, ArrayRef(I)),
+                     DestTy->getStructElementType(I));
 
-      Result =
-          Builder.CreateInsertValue(Result, Element, makeArrayRef(I));
+      Result = Builder.CreateInsertValue(Result, Element, ArrayRef(I));
     }
     return Result;
   }
@@ -529,10 +505,9 @@ void MergeFunctions::eraseInstsUnrelatedToPDI(
 // Reduce G to its entry block.
 void MergeFunctions::eraseTail(Function *G) {
   std::vector<BasicBlock *> WorklistBB;
-  for (Function::iterator BBI = std::next(G->begin()), BBE = G->end();
-       BBI != BBE; ++BBI) {
-    BBI->dropAllReferences();
-    WorklistBB.push_back(&*BBI);
+  for (BasicBlock &BB : drop_begin(*G)) {
+    BB.dropAllReferences();
+    WorklistBB.push_back(&BB);
   }
   while (!WorklistBB.empty()) {
     BasicBlock *BB = WorklistBB.back();
@@ -585,7 +560,7 @@ void MergeFunctions::filterInstsUnrelatedToPDI(
           for (User *U : AI->users()) {
             if (StoreInst *SI = dyn_cast<StoreInst>(U)) {
               if (Value *Arg = SI->getValueOperand()) {
-                if (dyn_cast<Argument>(Arg)) {
+                if (isa<Argument>(Arg)) {
                   LLVM_DEBUG(dbgs() << "  Include: ");
                   LLVM_DEBUG(AI->print(dbgs()));
                   LLVM_DEBUG(dbgs() << "\n");
@@ -634,18 +609,15 @@ void MergeFunctions::filterInstsUnrelatedToPDI(
   LLVM_DEBUG(
       dbgs()
       << " Report parameter debug info related/related instructions: {\n");
-  for (BasicBlock::iterator BI = GEntryBlock->begin(), BE = GEntryBlock->end();
-       BI != BE; ++BI) {
-
-    Instruction *I = &*BI;
-    if (PDIRelated.find(I) == PDIRelated.end()) {
+  for (Instruction &I : *GEntryBlock) {
+    if (PDIRelated.find(&I) == PDIRelated.end()) {
       LLVM_DEBUG(dbgs() << "  !PDIRelated: ");
-      LLVM_DEBUG(I->print(dbgs()));
+      LLVM_DEBUG(I.print(dbgs()));
       LLVM_DEBUG(dbgs() << "\n");
-      PDIUnrelatedWL.push_back(I);
+      PDIUnrelatedWL.push_back(&I);
     } else {
       LLVM_DEBUG(dbgs() << "   PDIRelated: ");
-      LLVM_DEBUG(I->print(dbgs()));
+      LLVM_DEBUG(I.print(dbgs()));
       LLVM_DEBUG(dbgs() << "\n");
     }
   }
@@ -713,11 +685,10 @@ void MergeFunctions::writeThunk(Function *F, Function *G) {
 
   CallInst *CI = Builder.CreateCall(F, Args);
   ReturnInst *RI = nullptr;
-  bool isSwiftTailCall =
-   F->getCallingConv() == CallingConv::SwiftTail &&
-   G->getCallingConv() == CallingConv::SwiftTail;
-  CI->setTailCallKind(
-    isSwiftTailCall ? llvm::CallInst::TCK_MustTail : llvm::CallInst::TCK_Tail);
+  bool isSwiftTailCall = F->getCallingConv() == CallingConv::SwiftTail &&
+                         G->getCallingConv() == CallingConv::SwiftTail;
+  CI->setTailCallKind(isSwiftTailCall ? llvm::CallInst::TCK_MustTail
+                                      : llvm::CallInst::TCK_Tail);
   CI->setCallingConv(F->getCallingConv());
   CI->setAttributes(F->getAttributes());
   if (H->getReturnType()->isVoidTy()) {
@@ -772,11 +743,15 @@ static bool canCreateAliasFor(Function *F) {
 void MergeFunctions::writeAlias(Function *F, Function *G) {
   Constant *BitcastF = ConstantExpr::getBitCast(F, G->getType());
   PointerType *PtrType = G->getType();
-  auto *GA = GlobalAlias::create(
-      PtrType->getElementType(), PtrType->getAddressSpace(),
-      G->getLinkage(), "", BitcastF, G->getParent());
+  auto *GA = GlobalAlias::create(G->getValueType(), PtrType->getAddressSpace(),
+                                 G->getLinkage(), "", BitcastF, G->getParent());
 
-  F->setAlignment(MaybeAlign(std::max(F->getAlignment(), G->getAlignment())));
+  const MaybeAlign FAlign = F->getAlign();
+  const MaybeAlign GAlign = G->getAlign();
+  if (FAlign || GAlign)
+    F->setAlignment(std::max(FAlign.valueOrOne(), GAlign.valueOrOne()));
+  else
+    F->setAlignment(std::nullopt);
   GA->takeName(G);
   GA->setVisibility(G->getVisibility());
   GA->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
@@ -823,12 +798,18 @@ void MergeFunctions::mergeTwoFunctions(Function *F, Function *G) {
     removeUsers(F);
     F->replaceAllUsesWith(NewF);
 
-    MaybeAlign MaxAlignment(std::max(G->getAlignment(), NewF->getAlignment()));
+    // We collect alignment before writeThunkOrAlias that overwrites NewF and
+    // G's content.
+    const MaybeAlign NewFAlign = NewF->getAlign();
+    const MaybeAlign GAlign = G->getAlign();
 
     writeThunkOrAlias(F, G);
     writeThunkOrAlias(F, NewF);
 
-    F->setAlignment(MaxAlignment);
+    if (NewFAlign || GAlign)
+      F->setAlignment(std::max(NewFAlign.valueOrOne(), GAlign.valueOrOne()));
+    else
+      F->setAlignment(std::nullopt);
     F->setLinkage(GlobalValue::PrivateLinkage);
     ++NumDoubleWeak;
     ++NumFunctionsMerged;
@@ -836,7 +817,10 @@ void MergeFunctions::mergeTwoFunctions(Function *F, Function *G) {
     // For better debugability, under MergeFunctionsPDI, we do not modify G's
     // call sites to point to F even when within the same translation unit.
     if (!G->isInterposable() && !MergeFunctionsPDI) {
-      if (G->hasGlobalUnnamedAddr()) {
+      // Functions referred to by llvm.used/llvm.compiler.used are special:
+      // there are uses of the symbol name that are not visible to LLVM,
+      // usually from inline asm.
+      if (G->hasGlobalUnnamedAddr() && !Used.contains(G)) {
         // G might have been a key in our GlobalNumberState, and it's illegal
         // to replace a key in ValueMap<GlobalValue *> with a non-global.
         GlobalNumbers.erase(G);

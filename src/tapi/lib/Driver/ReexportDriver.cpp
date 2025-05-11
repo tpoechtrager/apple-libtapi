@@ -1,9 +1,8 @@
 //===- lib/Driver/ReexportDriver.cpp - TAPI Reexport Driver -----*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 ///
@@ -17,7 +16,6 @@
 #include "tapi/Diagnostics/Diagnostics.h"
 #include "tapi/Driver/Driver.h"
 #include "tapi/Driver/Options.h"
-#include "tapi/Driver/Snapshot.h"
 #include "tapi/Frontend/Frontend.h"
 #include "clang/Driver/DriverDiagnostic.h"
 
@@ -56,9 +54,9 @@ bool Driver::Reexport::run(DiagnosticsEngine &diag, Options &opts) {
   HeaderSeq files;
   for (const auto &path : opts.driverOptions.inputs) {
     if (fm.exists(path))
-      files.emplace_back(path, HeaderType::Public);
+      files.emplace_back(path, HeaderType::Project);
     else {
-      diag.report(diag::err_cannot_open_file) << path;
+      diag.report(diag::err_cannot_open_file) << path << "File does not exist";
       return false;
     }
   }
@@ -75,6 +73,7 @@ bool Driver::Reexport::run(DiagnosticsEngine &diag, Options &opts) {
   job.systemFrameworkPaths =
       getAllPaths(opts.frontendOptions.systemFrameworkPaths);
   job.systemIncludePaths = opts.frontendOptions.systemIncludePaths;
+  job.afterIncludePaths = opts.frontendOptions.afterIncludePaths;
   job.quotedIncludePaths = opts.frontendOptions.quotedIncludePaths;
   job.frameworkPaths = opts.frontendOptions.frameworkPaths;
   job.includePaths = opts.frontendOptions.includePaths;
@@ -83,7 +82,7 @@ bool Driver::Reexport::run(DiagnosticsEngine &diag, Options &opts) {
   job.clangResourcePath = opts.frontendOptions.clangResourcePath;
   job.useObjectiveCARC = opts.frontendOptions.useObjectiveCARC;
   job.useObjectiveCWeakARC = opts.frontendOptions.useObjectiveCWeakARC;
-  job.type = HeaderType::Public;
+  job.type = HeaderType::Project;
   job.verbose = opts.frontendOptions.verbose;
 
   // Infer additional include paths.
@@ -94,12 +93,12 @@ bool Driver::Reexport::run(DiagnosticsEngine &diag, Options &opts) {
   job.includePaths.insert(job.includePaths.end(), inferredIncludePaths.begin(),
                           inferredIncludePaths.end());
 
-  auto frontendResult = runFrontend(job);
-  if (!frontendResult)
-    return false;
+  auto contextOrError = runFrontend(job);
+  if (auto err = contextOrError.takeError())
+    return canIgnoreFrontendError(err);
 
   ReexportFileWriter writer(target);
-  frontendResult->visit(writer);
+  contextOrError->visit(writer);
 
   SmallString<PATH_MAX> outputPath(opts.driverOptions.outputPath);
   if (outputPath.empty()) {
@@ -135,8 +134,6 @@ bool Driver::Reexport::run(DiagnosticsEngine &diag, Options &opts) {
         << outputPath.str() << err.message();
     return false;
   }
-
-  globalSnapshot->recordFile(outputPath.str());
 
   return true;
 }

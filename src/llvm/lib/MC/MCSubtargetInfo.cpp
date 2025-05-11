@@ -11,12 +11,13 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/MC/MCInstrItineraries.h"
 #include "llvm/MC/MCSchedule.h"
-#include "llvm/MC/SubtargetFeature.h"
 #include "llvm/Support/Format.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/TargetParser/SubtargetFeature.h"
 #include <algorithm>
 #include <cassert>
 #include <cstring>
+#include <optional>
 
 using namespace llvm;
 
@@ -141,7 +142,7 @@ static void cpuHelp(ArrayRef<SubtargetSubTypeKV> CPUTable) {
   errs() << '\n';
 
   errs() << "Use -mcpu or -mtune to specify the target's processor.\n"
-            "For example, clang --target=aarch64-unknown-linux-gui "
+            "For example, clang --target=aarch64-unknown-linux-gnu "
             "-mcpu=cortex-a35\n";
 
   PrintOnce = true;
@@ -208,6 +209,8 @@ static FeatureBitset getFeatures(StringRef CPU, StringRef TuneCPU, StringRef FS,
 void MCSubtargetInfo::InitMCProcessorInfo(StringRef CPU, StringRef TuneCPU,
                                           StringRef FS) {
   FeatureBits = getFeatures(CPU, TuneCPU, FS, ProcDesc, ProcFeatures);
+  FeatureString = std::string(FS);
+
   if (!TuneCPU.empty())
     CPUSchedModel = &getSchedModelForCPU(TuneCPU);
   else
@@ -217,6 +220,7 @@ void MCSubtargetInfo::InitMCProcessorInfo(StringRef CPU, StringRef TuneCPU,
 void MCSubtargetInfo::setDefaultFeatures(StringRef CPU, StringRef TuneCPU,
                                          StringRef FS) {
   FeatureBits = getFeatures(CPU, TuneCPU, FS, ProcDesc, ProcFeatures);
+  FeatureString = std::string(FS);
 }
 
 MCSubtargetInfo::MCSubtargetInfo(const Triple &TT, StringRef C, StringRef TC,
@@ -332,17 +336,18 @@ void MCSubtargetInfo::initInstrItins(InstrItineraryData &InstrItins) const {
                                   ForwardingPaths);
 }
 
-Optional<unsigned> MCSubtargetInfo::getCacheSize(unsigned Level) const {
-  return Optional<unsigned>();
+std::optional<unsigned> MCSubtargetInfo::getCacheSize(unsigned Level) const {
+  return std::nullopt;
 }
 
-Optional<unsigned>
+std::optional<unsigned>
 MCSubtargetInfo::getCacheAssociativity(unsigned Level) const {
-  return Optional<unsigned>();
+  return std::nullopt;
 }
 
-Optional<unsigned> MCSubtargetInfo::getCacheLineSize(unsigned Level) const {
-  return Optional<unsigned>();
+std::optional<unsigned>
+MCSubtargetInfo::getCacheLineSize(unsigned Level) const {
+  return std::nullopt;
 }
 
 unsigned MCSubtargetInfo::getPrefetchDistance() const {
@@ -362,4 +367,8 @@ unsigned MCSubtargetInfo::getMinPrefetchStride(unsigned NumMemAccesses,
                                                unsigned NumPrefetches,
                                                bool HasCall) const {
   return 1;
+}
+
+bool MCSubtargetInfo::shouldPrefetchAddressSpace(unsigned AS) const {
+  return !AS;
 }

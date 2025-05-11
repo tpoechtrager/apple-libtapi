@@ -9,17 +9,18 @@
 #ifndef LLVM_DEBUGINFO_GSYM_FUNCTIONINFO_H
 #define LLVM_DEBUGINFO_GSYM_FUNCTIONINFO_H
 
-#include "llvm/ADT/Optional.h"
+#include "llvm/ADT/SmallString.h"
+#include "llvm/DebugInfo/GSYM/ExtractRanges.h"
 #include "llvm/DebugInfo/GSYM/InlineInfo.h"
 #include "llvm/DebugInfo/GSYM/LineTable.h"
 #include "llvm/DebugInfo/GSYM/LookupResult.h"
-#include "llvm/DebugInfo/GSYM/Range.h"
 #include "llvm/DebugInfo/GSYM/StringTable.h"
+#include <cstdint>
 #include <tuple>
-#include <vector>
 
 namespace llvm {
 class raw_ostream;
+
 namespace gsym {
 
 class GsymReader;
@@ -88,8 +89,12 @@ class GsymReader;
 struct FunctionInfo {
   AddressRange Range;
   uint32_t Name; ///< String table offset in the string table.
-  llvm::Optional<LineTable> OptLineTable;
-  llvm::Optional<InlineInfo> Inline;
+  std::optional<LineTable> OptLineTable;
+  std::optional<InlineInfo> Inline;
+  /// If we encode a FunctionInfo during segmenting so we know its size, we can
+  /// cache that encoding here so we don't need to re-encode it when saving the
+  /// GSYM file.
+  SmallString<32> EncodingCache;
 
   FunctionInfo(uint64_t Addr = 0, uint64_t Size = 0, uint32_t N = 0)
       : Range(Addr, Addr + Size), Name(N) {}
@@ -101,9 +106,7 @@ struct FunctionInfo {
   /// debug info, we might end up with multiple FunctionInfo objects for the
   /// same range and we need to be able to tell which one is the better object
   /// to use.
-  bool hasRichInfo() const {
-    return OptLineTable.hasValue() || Inline.hasValue();
-  }
+  bool hasRichInfo() const { return OptLineTable || Inline; }
 
   /// Query if a FunctionInfo object is valid.
   ///
@@ -142,6 +145,17 @@ struct FunctionInfo {
   /// function info that was successfully written into the stream.
   llvm::Expected<uint64_t> encode(FileWriter &O) const;
 
+  /// Encode this function info into the internal byte cache and return the size
+  /// in bytes.
+  ///
+  /// When segmenting GSYM files we need to know how big each FunctionInfo will
+  /// encode into so we can generate segments of the right size. We don't want
+  /// to have to encode a FunctionInfo twice, so we can cache the encoded bytes
+  /// and re-use then when calling FunctionInfo::encode(...).
+  ///
+  /// \returns The size in bytes of the FunctionInfo if it were to be encoded
+  /// into a byte stream.
+  uint64_t cacheEncoding();
 
   /// Lookup an address within a FunctionInfo object's data stream.
   ///
@@ -169,18 +183,15 @@ struct FunctionInfo {
                                              uint64_t FuncAddr,
                                              uint64_t Addr);
 
-  uint64_t startAddress() const { return Range.Start; }
-  uint64_t endAddress() const { return Range.End; }
+  uint64_t startAddress() const { return Range.start(); }
+  uint64_t endAddress() const { return Range.end(); }
   uint64_t size() const { return Range.size(); }
-  void setStartAddress(uint64_t Addr) { Range.Start = Addr; }
-  void setEndAddress(uint64_t Addr) { Range.End = Addr; }
-  void setSize(uint64_t Size) { Range.End = Range.Start + Size; }
 
   void clear() {
     Range = {0, 0};
     Name = 0;
-    OptLineTable = None;
-    Inline = None;
+    OptLineTable = std::nullopt;
+    Inline = std::nullopt;
   }
 };
 
@@ -202,8 +213,8 @@ inline bool operator<(const FunctionInfo &LHS, const FunctionInfo &RHS) {
     return LHS.Range < RHS.Range;
 
   // Then sort by inline
-  if (LHS.Inline.hasValue() != RHS.Inline.hasValue())
-    return RHS.Inline.hasValue();
+  if (LHS.Inline.has_value() != RHS.Inline.has_value())
+    return RHS.Inline.has_value();
 
   return LHS.OptLineTable < RHS.OptLineTable;
 }
@@ -213,4 +224,4 @@ raw_ostream &operator<<(raw_ostream &OS, const FunctionInfo &R);
 } // namespace gsym
 } // namespace llvm
 
-#endif // #ifndef LLVM_DEBUGINFO_GSYM_FUNCTIONINFO_H
+#endif // LLVM_DEBUGINFO_GSYM_FUNCTIONINFO_H

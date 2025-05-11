@@ -14,13 +14,15 @@
 #ifndef LLVM_LIB_TARGET_NVPTX_NVPTX_H
 #define LLVM_LIB_TARGET_NVPTX_NVPTX_H
 
+#include "llvm/IR/PassManager.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/CodeGen.h"
 
 namespace llvm {
-class NVPTXTargetMachine;
 class FunctionPass;
 class MachineFunctionPass;
+class NVPTXTargetMachine;
+class PassRegistry;
 
 namespace NVPTXCC {
 enum CondCodes {
@@ -36,16 +38,40 @@ enum CondCodes {
 FunctionPass *createNVPTXISelDag(NVPTXTargetMachine &TM,
                                  llvm::CodeGenOpt::Level OptLevel);
 ModulePass *createNVPTXAssignValidGlobalNamesPass();
-ModulePass *createGenericToNVVMPass();
+ModulePass *createGenericToNVVMLegacyPass();
+ModulePass *createNVPTXCtorDtorLoweringLegacyPass();
 FunctionPass *createNVVMIntrRangePass(unsigned int SmVersion);
 FunctionPass *createNVVMReflectPass(unsigned int SmVersion);
 MachineFunctionPass *createNVPTXPrologEpilogPass();
 MachineFunctionPass *createNVPTXReplaceImageHandlesPass();
 FunctionPass *createNVPTXImageOptimizerPass();
-FunctionPass *createNVPTXLowerArgsPass(const NVPTXTargetMachine *TM);
+FunctionPass *createNVPTXLowerArgsPass();
 FunctionPass *createNVPTXLowerAllocaPass();
+FunctionPass *createNVPTXLowerUnreachablePass();
 MachineFunctionPass *createNVPTXPeephole();
 MachineFunctionPass *createNVPTXProxyRegErasurePass();
+
+struct NVVMIntrRangePass : PassInfoMixin<NVVMIntrRangePass> {
+  NVVMIntrRangePass();
+  NVVMIntrRangePass(unsigned SmVersion) : SmVersion(SmVersion) {}
+  PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
+
+private:
+  unsigned SmVersion;
+};
+
+struct NVVMReflectPass : PassInfoMixin<NVVMReflectPass> {
+  NVVMReflectPass();
+  NVVMReflectPass(unsigned SmVersion) : SmVersion(SmVersion) {}
+  PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
+
+private:
+  unsigned SmVersion;
+};
+
+struct GenericToNVVMPass : PassInfoMixin<GenericToNVVMPass> {
+  PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM);
+};
 
 namespace NVPTX {
 enum DrvInterface {
@@ -118,10 +144,12 @@ enum CvtMode {
   RZ,
   RM,
   RP,
+  RNA,
 
   BASE_MASK = 0x0F,
   FTZ_FLAG = 0x10,
-  SAT_FLAG = 0x20
+  SAT_FLAG = 0x20,
+  RELU_FLAG = 0x40
 };
 }
 
@@ -153,7 +181,8 @@ enum CmpMode {
 };
 }
 }
-} // end namespace llvm;
+void initializeNVPTXDAGToDAGISelPass(PassRegistry &);
+} // namespace llvm
 
 // Defines symbolic names for NVPTX registers.  This defines a mapping from
 // register name to register number.
@@ -162,6 +191,7 @@ enum CmpMode {
 
 // Defines symbolic names for the NVPTX instructions.
 #define GET_INSTRINFO_ENUM
+#define GET_INSTRINFO_MC_HELPER_DECLS
 #include "NVPTXGenInstrInfo.inc"
 
 #endif

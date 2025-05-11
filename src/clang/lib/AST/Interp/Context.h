@@ -16,15 +16,12 @@
 #ifndef LLVM_CLANG_AST_INTERP_CONTEXT_H
 #define LLVM_CLANG_AST_INTERP_CONTEXT_H
 
-#include "Context.h"
 #include "InterpStack.h"
 #include "clang/AST/APValue.h"
-#include "llvm/ADT/PointerIntPair.h"
 
 namespace clang {
 class ASTContext;
 class LangOptions;
-class Stmt;
 class FunctionDecl;
 class VarDecl;
 
@@ -35,7 +32,7 @@ class State;
 enum PrimType : unsigned;
 
 /// Holds all information required to evaluate constexpr code in a module.
-class Context {
+class Context final {
 public:
   /// Initialises the constexpr VM.
   Context(ASTContext &Ctx);
@@ -60,18 +57,32 @@ public:
   InterpStack &getStack() { return Stk; }
   /// Returns CHAR_BIT.
   unsigned getCharBit() const;
+  /// Return the floating-point semantics for T.
+  const llvm::fltSemantics &getFloatSemantics(QualType T) const;
 
   /// Classifies an expression.
-  llvm::Optional<PrimType> classify(QualType T);
+  std::optional<PrimType> classify(QualType T) const;
+
+  const CXXMethodDecl *
+  getOverridingFunction(const CXXRecordDecl *DynamicDecl,
+                        const CXXRecordDecl *StaticDecl,
+                        const CXXMethodDecl *InitialFunction) const;
+  /// Returns whether we should create a global variable for the
+  /// given ValueDecl.
+  static bool shouldBeGloballyIndexed(const ValueDecl *VD) {
+    if (const auto *V = dyn_cast<VarDecl>(VD))
+      return V->hasGlobalStorage() || V->isConstexpr();
+
+    return false;
+  }
 
 private:
   /// Runs a function.
-  bool Run(State &Parent, Function *Func, APValue &Result);
+  bool Run(State &Parent, const Function *Func, APValue &Result);
 
-  /// Checks a result fromt the interpreter.
+  /// Checks a result from the interpreter.
   bool Check(State &Parent, llvm::Expected<bool> &&R);
 
-private:
   /// Current compilation context.
   ASTContext &Ctx;
   /// Interpreter stack, shared across invocations.

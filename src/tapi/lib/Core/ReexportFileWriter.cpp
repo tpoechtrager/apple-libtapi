@@ -1,9 +1,8 @@
 //===- lib/Core/ReexportFileWriter.cpp - Reexport File Writer ---*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 ///
@@ -15,9 +14,11 @@
 #include "tapi/Core/ReexportFileWriter.h"
 #include "tapi/Core/LLVM.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/TextAPI/Symbol.h"
 #include <system_error>
 
 using namespace llvm;
+using namespace llvm::MachO;
 using namespace clang;
 
 TAPI_NAMESPACE_INTERNAL_BEGIN
@@ -45,6 +46,9 @@ void ReexportFileWriter::visitGlobal(const GlobalRecord &record) {
   // Skip non exported symbol.
   if (!record.isExported())
     return;
+  // Skip unavailable symbol.
+  if (record.availability.isUnavailable())
+    return;
 
   impl.symbols.emplace_back(record.name);
 }
@@ -53,15 +57,18 @@ void ReexportFileWriter::visitObjCInterface(const ObjCInterfaceRecord &record) {
   if (!record.isExported())
     return;
 
+  if (record.availability.isUnavailable())
+    return;
+
   if (impl.isFragileABI)
-    impl.symbols.emplace_back((".objc_class_name_" + record.name).str());
+    impl.symbols.emplace_back((ObjC1ClassNamePrefix + record.name).str());
   else {
-    impl.symbols.emplace_back(("_OBJC_CLASS_$_" + record.name).str());
-    impl.symbols.emplace_back(("_OBJC_METACLASS_$_" + record.name).str());
+    impl.symbols.emplace_back((ObjC2ClassNamePrefix + record.name).str());
+    impl.symbols.emplace_back((ObjC2MetaClassNamePrefix + record.name).str());
   }
 
-  if (record.hasExceptionAttribute)
-    impl.symbols.emplace_back(("_OBJC_EHTYPE_$_" + record.name).str());
+  if (record.hasExceptionAttribute())
+    impl.symbols.emplace_back((ObjC2EHTypePrefix + record.name).str());
 
   auto addIvars = [&](ArrayRef<const ObjCInstanceVariableRecord *> ivars) {
     for (const auto *ivar : ivars) {
@@ -75,7 +82,7 @@ void ReexportFileWriter::visitObjCInterface(const ObjCInterfaceRecord &record) {
         continue;
 
       impl.symbols.emplace_back(
-          ("_OBJC_IVAR_$_" + record.name + "." + ivar->name).str());
+          (ObjC2IVarPrefix + record.name + "." + ivar->name).str());
     }
   };
   addIvars(record.ivars);

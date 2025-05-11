@@ -1,9 +1,8 @@
 //===- tapi/SDKDB/BitcodeWriter.cpp - TAPI SDKDB Bitcode Writer -*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 ///
@@ -26,6 +25,7 @@
 #include "llvm/Support/EndianStream.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/OnDiskHashTable.h"
+#include "llvm/Support/Path.h"
 
 using namespace llvm;
 
@@ -96,7 +96,7 @@ private:
   void writeBinaryInfoBlock(const BinaryInfo &info);
   void writeLibraryTable();
 
-  Optional<StringRef> getShallowFrameworkPath(StringRef installName);
+  std::optional<StringRef> getShallowFrameworkPath(StringRef installName);
 
   const SDKDBBuilder &builder;
 
@@ -132,6 +132,12 @@ static StringMap<std::string> symlinkMap = {
      "/usr/lib/swift/libswiftPencilKit.dylib"},
     {"/System/Library/Frameworks/PencilKit.framework/Versions/A/PencilKit",
      "/usr/lib/swift/libswiftPencilKit.dylib"},
+    {"/System/iOSSupport/System/Library/Frameworks/PencilKit.framework/"
+     "PencilKit",
+     "/System/iOSSupport/usr/lib/swift/libswiftPencilKit.dylib"},
+    {"/System/iOSSupport/System/Library/Frameworks/PencilKit.framework/"
+     "Versions/A/PencilKit",
+     "/System/iOSSupport/usr/lib/swift/libswiftPencilKit.dylib"},
 };
 
 void SDKDBBitcodeWriter::writeSDKDBToStream(const SDKDBBuilder &builder,
@@ -144,19 +150,19 @@ SDKDBWriter::SDKDBWriter(const SDKDBBuilder &builder) : builder(builder) {
   writer.reset(new BitstreamWriter(buffer));
 }
 
-static Optional<StringRef> getPreviousInstallName(StringRef sym) {
+static std::optional<StringRef> getPreviousInstallName(StringRef sym) {
   if (sym.consume_front("$ld$install_name$os"))
     return sym.split('$').second;
-  return llvm::None;
+  return std::nullopt;
 }
 
-Optional<StringRef>
+std::optional<StringRef>
 SDKDBWriter::getShallowFrameworkPath(StringRef installName) {
   // For install name like /S/L/F/Foo.framework/Versions/A/Foo, return the
   // shallow path /S/L/F/Foo.framework/Foo
   auto versionDir = sys::path::parent_path(sys::path::parent_path(installName));
   if (sys::path::filename(versionDir) != "Versions")
-    return llvm::None;
+    return std::nullopt;
 
   SmallString<PATH_MAX> shallowPath(sys::path::parent_path(versionDir));
   sys::path::append(shallowPath, sys::path::filename(installName));
@@ -186,6 +192,7 @@ enum {
   API_FLAGS_ABBREV,
   API_SWIFT_VERSION_ABBREV,
   API_POTENTIALLY_DEFINED_SELECTOR_ABBREV,
+  API_PROJECT_NAME_ABBREV,
 
   // GLOBAL_BLOCK abbrev id's.
   GLOBAL_INFO_ABBREV = bitc::FIRST_APPLICATION_ABBREV,
@@ -235,6 +242,24 @@ enum {
   // LIBRARY_TABLE_BLOCK abbrev id's
   LIBRARY_TABLE_TARGET_TRIPLE_ABBREV = bitc::FIRST_APPLICATION_ABBREV,
   LIBRARY_TABLE_LOOKUP_TABLE_ABBREV,
+
+  // ENUM_BLOCK abbrev id's.
+  ENUM_INFO_ABBREV = bitc::FIRST_APPLICATION_ABBREV,
+  ENUM_AVAILABILITY_ABBREV,
+  ENUM_FILENAME_ABBREV,
+  ENUM_LOCATION_ABBREV,
+
+  // ENUM_CONSTANT_BLOCK abbrev id's.
+  ENUM_CONSTANT_INFO_ABBREV = bitc::FIRST_APPLICATION_ABBREV,
+  ENUM_CONSTANT_AVAILABILITY_ABBREV,
+  ENUM_CONSTANT_FILENAME_ABBREV,
+  ENUM_CONSTANT_LOCATION_ABBREV,
+
+  // TYPEDEF_BLOCK abbrev id's.
+  TYPEDEF_INFO_ABBREV = bitc::FIRST_APPLICATION_ABBREV,
+  TYPEDEF_AVAILABILITY_ABBREV,
+  TYPEDEF_FILENAME_ABBREV,
+  TYPEDEF_LOCATION_ABBREV,
 };
 
 class APICollector : public APIVisitor {
@@ -254,7 +279,7 @@ public:
       return;
     processAPIRecord(record);
     processObjCContainer(record);
-    strTable.add(record.superClassName);
+    strTable.add(record.superClass);
   }
 
   void visitObjCCategory(const ObjCCategoryRecord &record) override {
@@ -262,7 +287,7 @@ public:
       return;
     processAPIRecord(record);
     processObjCContainer(record);
-    strTable.add(record.interfaceName);
+    strTable.add(record.interface);
   }
 
   void visitObjCProtocol(const ObjCProtocolRecord &record) override {
@@ -270,6 +295,21 @@ public:
       return;
     processAPIRecord(record);
     processObjCContainer(record);
+  }
+
+  void visitEnum(const EnumRecord &record) override {
+    if (builder.excludeEnumTypes())
+      return;
+    processAPIRecord(record);
+    strTable.add(record.usr);
+    for (auto *constant : record.constants)
+      processAPIRecord(*constant);
+  }
+
+  void visitTypeDef(const TypedefRecord &record) override {
+    if (builder.excludeEnumTypes())
+      return;
+    processAPIRecord(record);
   }
 
 private:
@@ -280,6 +320,9 @@ private:
   const SDKDBBuilder &builder;
 };
 
+// TODO: handle newly added fields in BitCode:
+//   - USR
+//   - docComment
 class APISerializer : public APIVisitor {
 public:
   APISerializer(BitstreamWriter &writer, StringTableBuilder &table,
@@ -295,6 +338,10 @@ public:
   void visitObjCCategory(const ObjCCategoryRecord &record) override;
 
   void visitObjCProtocol(const ObjCProtocolRecord &record) override;
+
+  void visitEnum(const EnumRecord &record) override;
+
+  void visitTypeDef(const TypedefRecord &record) override;
 
 private:
   // Return true if loaded, false if skipped.
@@ -326,9 +373,20 @@ private:
 // of the slice.
 void SDKDBWriter::addSDKDB(const SDKDB &sdkdb) {
   APICollector collector(stringBuilder, builder);
-  for (auto &api : sdkdb.api()) {
+  for (auto *api : sdkdb.api()) {
+    api->visit(collector);
+
+    for (auto &selector : api->getPotentiallyDefinedSelectors())
+      stringBuilder.add(selector.first());
+
+    auto project = api->getProjectName();
+    if (!project.empty())
+      stringBuilder.add(project);
+
     // add binary info string.
-    auto &binaryInfo = api.getBinaryInfo();
+    if (!api->hasBinaryInfo())
+      continue;
+    auto &binaryInfo = api->getBinaryInfo();
     if (builder.excludeBundles() &&
         binaryInfo.fileType == FileType::MachO_Bundle)
       continue;
@@ -341,17 +399,14 @@ void SDKDBWriter::addSDKDB(const SDKDB &sdkdb) {
     for (auto reexport : binaryInfo.reexportedLibraries)
       stringBuilder.add(reexport);
     stringBuilder.add(binaryInfo.parentUmbrella);
-    api.visit(collector);
-    for (auto &selector : api.getPotentiallyDefinedSelectors())
-      stringBuilder.add(selector.first());
   }
 }
 
 // Write SDKDB binary output.
 void SDKDBWriter::writeToStream(raw_ostream &os) {
   // Collect all the string first.
-  for (auto &sdkdb : builder.getDatabases())
-    addSDKDB(sdkdb);
+  for (auto *sdkdb : builder.getDatabases())
+    addSDKDB(*sdkdb);
 
   // Finalize StringBuilder.
   stringBuilder.finalize();
@@ -364,8 +419,8 @@ void SDKDBWriter::writeToStream(raw_ostream &os) {
   writeBlockInfoBlock();
   writeControlBlock();
   writeIdentifierBlock();
-  for (auto &db : builder.getDatabases())
-    writeSDKDBBlock(db);
+  for (auto *db : builder.getDatabases())
+    writeSDKDBBlock(*db);
   writeLibraryTable();
 
   // Write the buffer to the stream.
@@ -491,6 +546,7 @@ void SDKDBWriter::writeBlockInfoBlock() {
   BLOCK_RECORD(api_block, FLAGS);
   BLOCK_RECORD(api_block, SWIFT_VERSION);
   BLOCK_RECORD(api_block, POTENTIALLY_DEFINED_SELECTOR);
+  BLOCK_RECORD(api_block, PROJECT_NAME);
 
   BLOCK(GLOBAL_BLOCK);
   BLOCK_RECORD(global_block, INFO);
@@ -541,6 +597,23 @@ void SDKDBWriter::writeBlockInfoBlock() {
   BLOCK_RECORD(library_table_block, TARGET_TRIPLE);
   BLOCK_RECORD(library_table_block, LOOKUP_TABLE);
 
+  BLOCK(ENUM_BLOCK);
+  BLOCK_RECORD(enum_block, INFO);
+  BLOCK_RECORD(enum_block, AVAILABILITY);
+  BLOCK_RECORD(enum_block, FILENAME);
+  BLOCK_RECORD(enum_block, LOCATION);
+
+  BLOCK(ENUM_CONSTANT_BLOCK);
+  BLOCK_RECORD(enum_constant_block, INFO);
+  BLOCK_RECORD(enum_constant_block, AVAILABILITY);
+  BLOCK_RECORD(enum_constant_block, FILENAME);
+  BLOCK_RECORD(enum_constant_block, LOCATION);
+
+  BLOCK(TYPEDEF_BLOCK);
+  BLOCK_RECORD(typedef_block, INFO);
+  BLOCK_RECORD(typedef_block, AVAILABILITY);
+  BLOCK_RECORD(typedef_block, FILENAME);
+  BLOCK_RECORD(typedef_block, LOCATION);
 #undef BLOCK
 #undef BLOCK_RECORD
 
@@ -651,6 +724,16 @@ void SDKDBWriter::writeBlockInfoBlock() {
         API_POTENTIALLY_DEFINED_SELECTOR_ABBREV)
       llvm_unreachable("Unexpected abbrev ordering!");
   }
+  { // Project name.
+    auto abbv = std::make_shared<BitCodeAbbrev>();
+    abbv->Add(BitCodeAbbrevOp(api_block::PROJECT_NAME));
+    // Project name.
+    abbv->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::VBR, 8));
+    abbv->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::VBR, 6));
+    if (writer->EmitBlockInfoAbbrev(API_BLOCK_ID, abbv) !=
+        API_PROJECT_NAME_ABBREV)
+      llvm_unreachable("Unexpected abbrev ordering!");
+  }
   // Global Entry.
   {
     // INFO.
@@ -679,6 +762,8 @@ void SDKDBWriter::writeBlockInfoBlock() {
     // SuperClass Name.
     abbv->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::VBR, 8));
     abbv->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::VBR, 6));
+    // Exception attribute.
+    abbv->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Fixed, 1));
     if (writer->EmitBlockInfoAbbrev(OBJC_CLASS_BLOCK_ID, abbv) !=
         OBJC_CLASS_INFO_ABBREV)
       llvm_unreachable("Unexpected abbrev ordering!");
@@ -788,6 +873,8 @@ void SDKDBWriter::writeBlockInfoBlock() {
     auto abbv = std::make_shared<BitCodeAbbrev>();
     abbv->Add(BitCodeAbbrevOp(objc_ivar_block::INFO));
     addAPIRecordAbbrev(abbv.get());
+    // access control.
+    abbv->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Fixed, 3));
     if (writer->EmitBlockInfoAbbrev(OBJC_IVAR_BLOCK_ID, abbv) !=
         OBJC_IVAR_ABBREV)
       llvm_unreachable("Unexpected abbrev ordering!");
@@ -818,6 +905,60 @@ void SDKDBWriter::writeBlockInfoBlock() {
     if (writer->EmitBlockInfoAbbrev(LIBRARY_TABLE_BLOCK_ID, abbv) !=
         LIBRARY_TABLE_LOOKUP_TABLE_ABBREV)
       llvm_unreachable("Unexpected abbrev ordering!");
+  }
+  // Enum Entry.
+  {
+    // INFO.
+    auto abbv = std::make_shared<BitCodeAbbrev>();
+    abbv->Add(BitCodeAbbrevOp(enum_block::INFO));
+    addAPIRecordAbbrev(abbv.get());
+    // USR.
+    abbv->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::VBR, 8));
+    abbv->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::VBR, 6));
+    if (writer->EmitBlockInfoAbbrev(ENUM_BLOCK_ID, abbv) != ENUM_INFO_ABBREV)
+      llvm_unreachable("Unexpected abbrev ordering!");
+
+    addAvailabilityAbbrev(*writer, enum_block::AVAILABILITY, ENUM_BLOCK_ID,
+                          ENUM_AVAILABILITY_ABBREV);
+    addFileNameAbbrev(*writer, enum_block::FILENAME, ENUM_BLOCK_ID,
+                      ENUM_FILENAME_ABBREV);
+    addLocationAbbrev(*writer, enum_block::LOCATION, ENUM_BLOCK_ID,
+                      ENUM_LOCATION_ABBREV);
+  }
+  // Enum Constant Entry.
+  {
+    // INFO.
+    auto abbv = std::make_shared<BitCodeAbbrev>();
+    abbv->Add(BitCodeAbbrevOp(enum_constant_block::INFO));
+    addAPIRecordAbbrev(abbv.get());
+    if (writer->EmitBlockInfoAbbrev(ENUM_CONSTANT_BLOCK_ID, abbv) !=
+        ENUM_CONSTANT_INFO_ABBREV)
+      llvm_unreachable("Unexpected abbrev ordering!");
+
+    addAvailabilityAbbrev(*writer, enum_constant_block::AVAILABILITY,
+                          ENUM_CONSTANT_BLOCK_ID,
+                          ENUM_CONSTANT_AVAILABILITY_ABBREV);
+    addFileNameAbbrev(*writer, enum_constant_block::FILENAME,
+                      ENUM_CONSTANT_BLOCK_ID, ENUM_CONSTANT_FILENAME_ABBREV);
+    addLocationAbbrev(*writer, enum_constant_block::LOCATION,
+                      ENUM_CONSTANT_BLOCK_ID, ENUM_CONSTANT_LOCATION_ABBREV);
+  }
+  // typedef Entry.
+  {
+    // INFO.
+    auto abbv = std::make_shared<BitCodeAbbrev>();
+    abbv->Add(BitCodeAbbrevOp(typedef_block::INFO));
+    addAPIRecordAbbrev(abbv.get());
+    if (writer->EmitBlockInfoAbbrev(TYPEDEF_BLOCK_ID, abbv) !=
+        TYPEDEF_INFO_ABBREV)
+      llvm_unreachable("Unexpected abbrev ordering!");
+
+    addAvailabilityAbbrev(*writer, typedef_block::AVAILABILITY,
+                          TYPEDEF_BLOCK_ID, TYPEDEF_AVAILABILITY_ABBREV);
+    addFileNameAbbrev(*writer, typedef_block::FILENAME, TYPEDEF_BLOCK_ID,
+                      TYPEDEF_FILENAME_ABBREV);
+    addLocationAbbrev(*writer, typedef_block::LOCATION, TYPEDEF_BLOCK_ID,
+                      TYPEDEF_LOCATION_ABBREV);
   }
 }
 
@@ -889,19 +1030,23 @@ void SDKDBWriter::writeSDKDBBlock(const SDKDB &db) {
   writer->EmitRecordWithBlob(SDKDB_TARGET_TRIPLE_ABBREV, scratchRecord,
                              db.getTargetTriple().str());
   currentTriple = db.getTargetTriple();
-  for (auto &api : db.api()) {
+  for (auto *api : db.api()) {
     currentAPIStart = writer->GetCurrentBitNo();
-    writeAPIBlock(api);
+    writeAPIBlock(*api);
   }
 }
 
 void SDKDBWriter::writeAPIBlock(const API& api) {
-  auto &binaryInfo = api.getBinaryInfo();
-  if (builder.excludeBundles() && binaryInfo.fileType == FileType::MachO_Bundle)
+  if (api.isEmpty())
+    return;
+
+  if (builder.excludeBundles() && api.hasBinaryInfo() &&
+      api.getBinaryInfo().fileType == FileType::MachO_Bundle)
     return;
 
   BCBlockRAII restoreBlock(*writer, API_BLOCK_ID, /*abbrevLen=*/5);
-  writeBinaryInfoBlock(binaryInfo);
+  if (api.hasBinaryInfo())
+    writeBinaryInfoBlock(api.getBinaryInfo());
 
   APISerializer serializer(*writer, stringBuilder, currentAPIStart,
                            libraryIndex[currentTriple.str()], builder);
@@ -914,6 +1059,13 @@ void SDKDBWriter::writeAPIBlock(const API& api) {
                      selector.first().size()};
     writer->EmitRecordWithAbbrev(API_POTENTIALLY_DEFINED_SELECTOR_ABBREV,
                                  scratchRecord);
+  }
+
+  auto project = api.getProjectName();
+  if (!project.empty()) {
+    unsigned nameOffset = stringBuilder.getOffset(project);
+    scratchRecord = {api_block::PROJECT_NAME, nameOffset, project.size()};
+    writer->EmitRecordWithAbbrev(API_PROJECT_NAME_ABBREV, scratchRecord);
   }
 }
 
@@ -957,9 +1109,9 @@ void SDKDBWriter::writeBinaryInfoBlock(const BinaryInfo &info) {
     writer->EmitRecordWithAbbrev(API_PARENT_UMBRELLA_ABBREV, scratchRecord);
   }
 
-  if (info.currentVersion._version || info.compatibilityVersion._version) {
-    scratchRecord = {api_block::DYLIB_VERSION, info.currentVersion._version,
-                     info.compatibilityVersion._version};
+  if (info.currentVersion.rawValue() || info.compatibilityVersion.rawValue()) {
+    scratchRecord = {api_block::DYLIB_VERSION, info.currentVersion.rawValue(),
+                     info.compatibilityVersion.rawValue()};
     writer->EmitRecordWithAbbrev(API_DYLIB_VERSION_ABBREV, scratchRecord);
   }
 
@@ -1005,8 +1157,7 @@ void APICollector::processAPIRecord(const APIRecord &record) {
   if (builder.isPublicOnly() && (record.access < APIAccess::Public))
     return;
   strTable.add(record.name);
-  if (builder.preserveLocation())
-    strTable.add(record.loc.getFilename());
+  strTable.add(record.loc.getFilename());
 }
 
 void APICollector::processObjCContainer(const ObjCContainerRecord &record) {
@@ -1054,9 +1205,10 @@ void APISerializer::visitObjCInterface(const ObjCInterfaceRecord &record) {
     return;
 
   BCBlockRAII restoreBlock(writer, OBJC_CLASS_BLOCK_ID, /*abbrevLen=*/4);
-  unsigned superOffset = stringBuilder.getOffset(record.superClassName);
+  unsigned superOffset = stringBuilder.getOffset(record.superClass);
   scratchRecord.push_back(superOffset);
-  scratchRecord.push_back(record.superClassName.size());
+  scratchRecord.push_back(record.superClass.size());
+  scratchRecord.push_back(record.hasExceptionAttribute());
   writer.EmitRecordWithAbbrev(OBJC_CLASS_INFO_ABBREV, scratchRecord);
   writeAvailabilityBlock(record.availability, objc_class_block::AVAILABILITY,
                          OBJC_CLASS_AVAILABILITY_ABBREV);
@@ -1075,9 +1227,9 @@ void APISerializer::visitObjCCategory(const ObjCCategoryRecord &record) {
     return;
 
   BCBlockRAII restoreBlock(writer, OBJC_CATEGORY_BLOCK_ID, /*abbrevLen=*/4);
-  unsigned interfaceOffset = stringBuilder.getOffset(record.interfaceName);
+  unsigned interfaceOffset = stringBuilder.getOffset(record.interface);
   scratchRecord.push_back(interfaceOffset);
-  scratchRecord.push_back(record.interfaceName.size());
+  scratchRecord.push_back(record.interface.size());
   writer.EmitRecordWithAbbrev(OBJC_CATEGORY_INFO_ABBREV, scratchRecord);
   writeAvailabilityBlock(record.availability, objc_category_block::AVAILABILITY,
                          OBJC_CATEGORY_AVAILABILITY_ABBREV);
@@ -1106,6 +1258,54 @@ void APISerializer::visitObjCProtocol(const ObjCProtocolRecord &record) {
                      OBJC_PROTOCOL_PROTOCOL_ABBREV);
 }
 
+void APISerializer::visitEnum(const EnumRecord &record) {
+  if (builder.excludeEnumTypes())
+    return;
+
+  if(!loadRecordIntoScratch(enum_block::INFO, record))
+    return;
+
+  BCBlockRAII restoreBlock(writer, ENUM_BLOCK_ID, /*abbrevLen=*/3);
+  unsigned usrOffset = stringBuilder.getOffset(record.usr);
+  unsigned usrSize = record.usr.size();
+  scratchRecord.push_back(usrOffset);
+  scratchRecord.push_back(usrSize);
+  writer.EmitRecordWithAbbrev(ENUM_INFO_ABBREV, scratchRecord);
+  writeAvailabilityBlock(record.availability, enum_block::AVAILABILITY,
+                         ENUM_AVAILABILITY_ABBREV);
+  writeLocationBlock(record.loc, enum_block::FILENAME, ENUM_FILENAME_ABBREV,
+                     enum_block::LOCATION, ENUM_LOCATION_ABBREV);
+
+  for (auto *c : record.constants) {
+    if (!loadRecordIntoScratch(enum_constant_block::INFO, *c))
+      return;
+
+    BCBlockRAII restoreBlock(writer, ENUM_CONSTANT_BLOCK_ID, /*abbrevLen=*/3);
+    writer.EmitRecordWithAbbrev(ENUM_CONSTANT_INFO_ABBREV, scratchRecord);
+    writeAvailabilityBlock(c->availability, enum_constant_block::AVAILABILITY,
+                           ENUM_CONSTANT_AVAILABILITY_ABBREV);
+    writeLocationBlock(
+        c->loc, enum_constant_block::FILENAME, ENUM_CONSTANT_FILENAME_ABBREV,
+        enum_constant_block::LOCATION, ENUM_CONSTANT_LOCATION_ABBREV);
+  }
+}
+
+void APISerializer::visitTypeDef(const TypedefRecord &record) {
+  if (builder.excludeEnumTypes())
+    return;
+
+  if (!loadRecordIntoScratch(typedef_block::INFO, record))
+    return;
+
+  BCBlockRAII restoreBlock(writer, TYPEDEF_BLOCK_ID, /*abbrevLen=*/3);
+  writer.EmitRecordWithAbbrev(TYPEDEF_INFO_ABBREV, scratchRecord);
+  writeAvailabilityBlock(record.availability, typedef_block::AVAILABILITY,
+                         TYPEDEF_AVAILABILITY_ABBREV);
+  writeLocationBlock(record.loc, typedef_block::FILENAME,
+                     TYPEDEF_FILENAME_ABBREV, typedef_block::LOCATION,
+                     TYPEDEF_LOCATION_ABBREV);
+}
+
 bool APISerializer::loadRecordIntoScratch(unsigned abbrev,
                                           const APIRecord &record) {
   // skipped non public ones if we are in public only mode.
@@ -1114,12 +1314,16 @@ bool APISerializer::loadRecordIntoScratch(unsigned abbrev,
 
   unsigned nameOffset = stringBuilder.getOffset(record.name);
   unsigned nameSize = record.name.size();
+  // Maskout the high bits of flags to prevent version mismatch.
+  // FIXME: The 3 bit restriction should be removed in the next major
+  // update.
+  const unsigned flags = (uint8_t)record.flags & 0x1f;
   scratchRecord = {abbrev,
                    nameOffset,
                    nameSize,
                    (unsigned)record.access,
                    (unsigned)record.linkage,
-                   (unsigned)record.flags};
+                   flags};
   return true;
 }
 
@@ -1128,7 +1332,7 @@ void APISerializer::writeAvailabilityBlock(const AvailabilityInfo &info,
   if (info.isDefault())
     return;
 
-  scratchRecord = {id, info._introduced._version, info._obsoleted._version,
+  scratchRecord = {id, info._introduced.rawValue(), info._obsoleted.rawValue(),
                    info._unavailable, info._isSPIAvailable};
   writer.EmitRecordWithAbbrev(abbrev, scratchRecord);
 }
@@ -1211,6 +1415,7 @@ void APISerializer::writeObjCInstanceVariable(
     return;
 
   BCBlockRAII restoreBlock(writer, OBJC_IVAR_BLOCK_ID, /*abbrevLen=*/3);
+  scratchRecord.push_back((unsigned)record.accessControl);
   writer.EmitRecordWithAbbrev(OBJC_IVAR_ABBREV, scratchRecord);
   writeAvailabilityBlock(record.availability, objc_ivar_block::AVAILABILITY,
                          OBJC_IVAR_AVAILABILITY_ABBREV);

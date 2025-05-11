@@ -1,9 +1,8 @@
 //===--- tapi/Driver/Options.h - Options ------------------------*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 
@@ -11,25 +10,25 @@
 #define TAPI_DRIVER_OPTIONS_H
 
 #include "tapi/Core/FileManager.h"
-#include "tapi/Core/InterfaceFile.h"
 #include "tapi/Core/LLVM.h"
-#include "tapi/Core/PackedVersion.h"
 #include "tapi/Core/Path.h"
+#include "tapi/Core/SymbolVerifier.h"
 #include "tapi/Defines.h"
 #include "tapi/Diagnostics/Diagnostics.h"
 #include "tapi/Driver/DriverOptions.h"
 #include "clang/Frontend/FrontendOptions.h"
-#include "llvm/ADT/Triple.h"
+#include "llvm/Option/ArgList.h"
 #include "llvm/Option/Option.h"
-#include "llvm/TextAPI/MachO/Architecture.h"
-#include "llvm/TextAPI/MachO/Platform.h"
+#include "llvm/TargetParser/Triple.h"
+#include "llvm/TextAPI/Architecture.h"
+#include "llvm/TextAPI/InterfaceFile.h"
+#include "llvm/TextAPI/PackedVersion.h"
+#include "llvm/TextAPI/Platform.h"
 #include <set>
 #include <string>
 #include <vector>
 
 TAPI_NAMESPACE_INTERNAL_BEGIN
-
-class Snapshot;
 
 using Macro = std::pair<std::string, bool /*isUndef*/>;
 
@@ -41,16 +40,7 @@ enum class TAPICommand : unsigned {
   InstallAPI,
   Reexport,
   SDKDB,
-  GenerateAPITests,
   APIVerify,
-};
-
-/// \brief A list of InstallAPI verification modes.
-enum class VerificationMode {
-  Invalid,
-  ErrorsOnly,
-  ErrorsAndWarnings,
-  Pedantic,
 };
 
 /// \brief Archive action.
@@ -74,50 +64,6 @@ enum class ArchiveAction {
 
   /// \brief List the exported symbols.
   ListSymbols,
-};
-
-/// \brief Snapshot mode.
-enum class SnapshotMode {
-  /// \brief Record all options and accessed files. Only creates the snapshot in
-  ///        case of an error.
-  Create,
-
-  /// \brief Always create a snapshot and record all options and accessed files.
-  ForceCreate,
-
-  /// \brief Load an existing snapshot and reply it.
-  Load,
-};
-
-struct LibraryRef {
-  std::string installName;
-  ArchitectureSet architectures;
-
-  LibraryRef() = default;
-
-  LibraryRef(const std::string &name, ArchitectureSet architectures)
-      : installName(name), architectures(architectures) {}
-};
-
-static inline bool operator==(const LibraryRef &lhs, const LibraryRef &rhs) {
-  return std::tie(lhs.installName, lhs.architectures) ==
-         std::tie(rhs.installName, rhs.architectures);
-}
-
-struct SnapshotOptions {
-  /// \brief Snapshot mode.
-  SnapshotMode snapshotMode = SnapshotMode::Create;
-
-  /// \brief Snapshot output directory.
-  std::string snapshotOutputDir;
-
-  /// \brief Snapshot input path. This can be a snapshot directory or a
-  ///        runscript inside a snapshot directory).
-  std::string snapshotInputPath;
-
-  /// \brief Use own ressource directory. Override the content of the ressource
-  ///        directory provided by the snapshot with our own files.
-  bool useOwnResourceDir = false;
 };
 
 struct DriverOptions {
@@ -168,10 +114,10 @@ struct LinkerOptions {
   bool isDynamicLibrary = false;
 
   /// \brief List of allowable clients to use for the dynamic library.
-  std::vector<LibraryRef> allowableClients;
+  std::vector<std::pair<std::string, ArchitectureSet>> allowableClients;
 
   /// \brief List of reexported libraries to use for the dynamic library.
-  std::vector<LibraryRef> reexportInstallNames;
+  std::vector<std::pair<std::string, ArchitectureSet>> reexportInstallNames;
 
   /// \brief List of reexported libraries to use for the dynamic library.
   std::vector<std::pair<std::string, ArchitectureSet>> reexportedLibraries;
@@ -185,8 +131,17 @@ struct LinkerOptions {
   /// \brief Is application extension safe.
   bool isApplicationExtensionSafe = false;
 
+  /// \brief Is OS library that is not for shared cache.
+  bool isOSLibNotForSharedCache = false;
+
   /// \brief Path to the alias list file.
-  std::vector<std::pair<std::string, ArchitectureSet>> aliasLists;
+  PathSeq aliasLists;
+
+  /// \brief List of run search paths.
+  std::vector<std::pair<std::string, ArchitectureSet>> rpaths;
+
+  /// \brief List of relinked libraries to use for dynamic library.
+  std::vector<InterfaceFileRef> relinkedLibraries;
 };
 
 struct FrontendOptions {
@@ -220,6 +175,9 @@ struct FrontendOptions {
   /// \brief Additional SYSTEM include paths.
   PathSeq systemIncludePaths;
 
+  /// \brief Additional AFTER include paths.
+  PathSeq afterIncludePaths;
+
   /// \brief Additional include paths.
   PathSeq includePaths;
 
@@ -246,6 +204,9 @@ struct FrontendOptions {
   /// \brief Module cache path.
   std::string moduleCachePath;
 
+  /// \brief The name of the product being built.
+  std::string productName;
+
   /// \brief Validate system headers when using modules.
   bool validateSystemHeaders = false;
 
@@ -263,6 +224,12 @@ struct FrontendOptions {
 
   /// \brief Verbose, show scan content and options.
   bool verbose = false;
+
+  /// \brief Unique clang options to pass per key in map.
+  std::map<std::string, std::vector<std::string>> uniqueClangArgs;
+
+  /// \brief Prefix headers to include before parsing.
+  std::vector<std::string> prefixHeaders;
 };
 
 struct DiagnosticsOptions {
@@ -274,8 +241,8 @@ struct DiagnosticsOptions {
 };
 
 struct TAPIOptions {
-  /// Path to file list (JSON).
-  std::string fileList;
+  /// Path to file lists (JSON).
+  std::vector<std::string> fileLists;
 
   /// \brief Path to public umbrella header.
   std::string publicUmbrellaHeaderPath;
@@ -316,8 +283,15 @@ struct TAPIOptions {
   /// \brief Generate additional symbols for code coverage.
   bool generateCodeCoverageSymbols = false;
 
-  /// \brief Demangle symbols (C++) when printing.
+  /// \brief Demangle symbols (C++, Swift) when printing.
   bool demangle = false;
+
+  /// \brief Log each library path that was consumed.
+  bool traceLibraryLocation = false;
+
+  /// \brief Specify whether to verify that all symbols from swift interface
+  /// are represented in the binary.
+  bool verifySwift = false;
 
   /// \brief Delete input file after stubbing.
   bool deleteInputFile = false;
@@ -328,15 +302,12 @@ struct TAPIOptions {
   /// \brief Delete private frameworks.
   bool deletePrivateFrameworks = false;
 
-  /// \brief Record UUIDs.
-  bool recordUUIDs = true;
-
-  /// \brief Set 'installapi' flag.
-  bool setInstallAPIFlag = false;
+  /// \brief Remove shared cache flags.
+  bool removeSharedCacheFlag = false;
 
 
   /// \brief Specify the output file type.
-  VersionedFileType fileType = TBDv4;
+  llvm::MachO::FileType fileType = llvm::MachO::FileType::TBD_V5;
 
   /// \bried Scan Bundles and Extensions for SDKDB.
   bool scanAll = true;
@@ -344,6 +315,7 @@ struct TAPIOptions {
   /// \brief Infer the include paths based on the provided/found header files.
   bool inferIncludePaths = true;
 
+  // FIXME: re-implement printAfter to work with SymbolVerifier.
   /// \brief Print the API/XPI after a certain phase.
   std::string printAfter;
 
@@ -362,6 +334,12 @@ struct TAPIOptions {
 
   /// \brief SDKDB output location.
   std::string sdkdbOutputPath;
+
+  /// \brief Path to dSYM.
+  std::string dSYM;
+
+  /// \brief Specify whether tapi is running in B&I environment.
+  bool isBnI = false;
 };
 
 /// Specify the actions for SDKDB Driver.
@@ -402,15 +380,26 @@ struct SDKDBOptions {
 
 class Options {
 private:
-  /// Helper methods for handling the various options.
-  bool processSnapshotOptions(DiagnosticsEngine &diag,
-                              llvm::opt::InputArgList &args);
+  // Handle options passed that must bind with pre-determined condition.
+  // e.g. architecture specific options.
+  bool processXOptions(DiagnosticsEngine &diag, llvm::opt::InputArgList &args,
+                       bool clearOptions = true);
 
+  bool processOptionList(DiagnosticsEngine &diag,
+                         llvm::opt::InputArgList &args);
+
+  using arg_iterator = llvm::opt::arg_iterator<llvm::opt::Arg **>;
   bool processXarchOptions(DiagnosticsEngine &diag,
-                           llvm::opt::InputArgList &args);
+                           llvm::opt::InputArgList &args, arg_iterator curr);
 
   bool processXplatformOptions(DiagnosticsEngine &diag,
-                               llvm::opt::InputArgList &args);
+                               llvm::opt::InputArgList &args,
+                               arg_iterator curr);
+
+  void processXparserOptions(llvm::opt::InputArgList &args, arg_iterator curr);
+
+  bool processXprojectOptions(DiagnosticsEngine &diag,
+                              llvm::opt::InputArgList &args, arg_iterator curr);
 
   bool processDriverOptions(DiagnosticsEngine &diag,
                             llvm::opt::InputArgList &args);
@@ -433,14 +422,11 @@ private:
   bool processSDKDBOptions(DiagnosticsEngine &diag,
                            llvm::opt::InputArgList &args);
 
-  void initOptionsFromSnapshot(const Snapshot &snapshot);
-
 public:
   /// \brief The TAPI command to run.
   TAPICommand command = TAPICommand::Driver;
 
   /// The various options grouped together.
-  SnapshotOptions snapshotOptions;
   DriverOptions driverOptions;
   ArchiveOptions archiveOptions;
   LinkerOptions linkerOptions;
@@ -456,6 +442,10 @@ public:
 
   FileManager &getFileManager() const { return *fm; }
 
+  const FrontendOptions &getProjectHeaderOptions() {
+    return projectLevelOptions;
+  }
+
   /// \brief Print the help depending on the recognized coomand.
   void printHelp() const;
 
@@ -464,9 +454,9 @@ private:
   std::unique_ptr<llvm::opt::OptTable> table;
   IntrusiveRefCntPtr<FileManager> fm;
   std::map<const llvm::opt::Arg *, Architecture> argToArchMap;
-  std::map<const llvm::opt::Arg *, PlatformKind> argToPlatformMap;
+  std::map<const llvm::opt::Arg *, PlatformType> argToPlatformMap;
+  FrontendOptions projectLevelOptions;
 
-  friend class Snapshot;
   friend class Context;
 };
 

@@ -18,13 +18,14 @@
 #include "AMDGPUGenRegisterInfo.inc"
 
 #include "SIDefines.h"
-#include "llvm/CodeGen/MachineRegisterInfo.h"
 
 namespace llvm {
 
 class GCNSubtarget;
 class LiveIntervals;
-class SIMachineFunctionInfo;
+class LivePhysRegs;
+class RegisterBank;
+struct SGPRSpillBuilder;
 
 class SIRegisterInfo final : public AMDGPUGenRegisterInfo {
 private:
@@ -50,6 +51,17 @@ private:
 public:
   SIRegisterInfo(const GCNSubtarget &ST);
 
+  struct SpilledReg {
+    Register VGPR;
+    int Lane = -1;
+
+    SpilledReg() = default;
+    SpilledReg(Register R, int L) : VGPR(R), Lane(L) {}
+
+    bool hasLane() { return Lane != -1; }
+    bool hasReg() { return VGPR != 0; }
+  };
+
   /// \returns the sub reg enum value for the given \p Channel
   /// (e.g. getSubRegFromChannel(0) -> AMDGPU::sub0)
   static unsigned getSubRegFromChannel(unsigned Channel, unsigned NumRegs = 1);
@@ -58,11 +70,19 @@ public:
     return SpillSGPRToVGPR;
   }
 
+  /// Return the largest available SGPR aligned to \p Align for the register
+  /// class \p RC.
+  MCRegister getAlignedHighSGPRForRC(const MachineFunction &MF,
+                                     const unsigned Align,
+                                     const TargetRegisterClass *RC) const;
+
   /// Return the end register initially reserved for the scratch buffer in case
   /// spilling is needed.
   MCRegister reservedPrivateSegmentBufferReg(const MachineFunction &MF) const;
 
   BitVector getReservedRegs(const MachineFunction &MF) const override;
+  bool isAsmClobberable(const MachineFunction &MF,
+                        MCRegister PhysReg) const override;
 
   const MCPhysReg *getCalleeSavedRegs(const MachineFunction *MF) const override;
   const MCPhysReg *getCalleeSavedRegsViaCopy(const MachineFunction *MF) const;
@@ -76,12 +96,16 @@ public:
     return 100;
   }
 
+  const TargetRegisterClass *
+  getLargestLegalSuperClass(const TargetRegisterClass *RC,
+                            const MachineFunction &MF) const override;
+
   Register getFrameRegister(const MachineFunction &MF) const override;
 
   bool hasBasePointer(const MachineFunction &MF) const;
   Register getBaseRegister() const;
 
-  bool canRealignStack(const MachineFunction &MF) const override;
+  bool shouldRealignStack(const MachineFunction &MF) const override;
   bool requiresRegisterScavenging(const MachineFunction &Fn) const override;
 
   bool requiresFrameIndexScavenging(const MachineFunction &MF) const override;
@@ -96,9 +120,8 @@ public:
 
   bool needsFrameBaseReg(MachineInstr *MI, int64_t Offset) const override;
 
-  void materializeFrameBaseRegister(MachineBasicBlock *MBB, Register BaseReg,
-                                    int FrameIdx,
-                                    int64_t Offset) const override;
+  Register materializeFrameBaseRegister(MachineBasicBlock *MBB, int FrameIdx,
+                                        int64_t Offset) const override;
 
   void resolveFrameIndex(MachineInstr &MI, Register BaseReg,
                          int64_t Offset) const override;
@@ -109,26 +132,41 @@ public:
   const TargetRegisterClass *getPointerRegClass(
     const MachineFunction &MF, unsigned Kind = 0) const override;
 
-  void buildSGPRSpillLoadStore(MachineBasicBlock::iterator MI, int Index,
-                               int Offset, unsigned EltSize, Register VGPR,
-                               int64_t VGPRLanes, RegScavenger *RS,
-                               bool IsLoad) const;
+  /// Returns a legal register class to copy a register in the specified class
+  /// to or from. If it is possible to copy the register directly without using
+  /// a cross register class copy, return the specified RC. Returns NULL if it
+  /// is not possible to copy between two registers of the specified class.
+  const TargetRegisterClass *
+  getCrossCopyRegClass(const TargetRegisterClass *RC) const override;
+
+  void buildVGPRSpillLoadStore(SGPRSpillBuilder &SB, int Index, int Offset,
+                               bool IsLoad, bool IsKill = true) const;
 
   /// If \p OnlyToVGPR is true, this will only succeed if this
-  bool spillSGPR(MachineBasicBlock::iterator MI,
-                 int FI, RegScavenger *RS,
+  bool spillSGPR(MachineBasicBlock::iterator MI, int FI, RegScavenger *RS,
+                 SlotIndexes *Indexes = nullptr, LiveIntervals *LIS = nullptr,
                  bool OnlyToVGPR = false) const;
 
-  bool restoreSGPR(MachineBasicBlock::iterator MI,
-                   int FI, RegScavenger *RS,
+  bool restoreSGPR(MachineBasicBlock::iterator MI, int FI, RegScavenger *RS,
+                   SlotIndexes *Indexes = nullptr, LiveIntervals *LIS = nullptr,
                    bool OnlyToVGPR = false) const;
 
-  void eliminateFrameIndex(MachineBasicBlock::iterator MI, int SPAdj,
+  bool spillEmergencySGPR(MachineBasicBlock::iterator MI,
+                          MachineBasicBlock &RestoreMBB, Register SGPR,
+                          RegScavenger *RS) const;
+
+  bool supportsBackwardScavenger() const override {
+    return true;
+  }
+
+  bool eliminateFrameIndex(MachineBasicBlock::iterator MI, int SPAdj,
                            unsigned FIOperandNum,
                            RegScavenger *RS) const override;
 
   bool eliminateSGPRToVGPRSpillFrameIndex(MachineBasicBlock::iterator MI,
-                                          int FI, RegScavenger *RS) const;
+                                          int FI, RegScavenger *RS,
+                                          SlotIndexes *Indexes = nullptr,
+                                          LiveIntervals *LIS = nullptr) const;
 
   StringRef getRegAsmName(MCRegister Reg) const override;
 
@@ -137,17 +175,22 @@ public:
     return getEncodingValue(Reg) & 0xff;
   }
 
-  static const TargetRegisterClass *getVGPRClassForBitWidth(unsigned BitWidth);
-  static const TargetRegisterClass *getAGPRClassForBitWidth(unsigned BitWidth);
+  LLVM_READONLY
+  const TargetRegisterClass *getVGPRClassForBitWidth(unsigned BitWidth) const;
+
+  LLVM_READONLY
+  const TargetRegisterClass *getAGPRClassForBitWidth(unsigned BitWidth) const;
+
+  LLVM_READONLY
+  const TargetRegisterClass *
+  getVectorSuperClassForBitWidth(unsigned BitWidth) const;
+
+  LLVM_READONLY
   static const TargetRegisterClass *getSGPRClassForBitWidth(unsigned BitWidth);
 
-  /// Return the 'base' register class for this register.
-  /// e.g. SGPR0 => SReg_32, VGPR => VGPR_32 SGPR0_SGPR1 -> SReg_32, etc.
-  const TargetRegisterClass *getPhysRegClass(MCRegister Reg) const;
-
   /// \returns true if this class contains only SGPR registers
-  bool isSGPRClass(const TargetRegisterClass *RC) const {
-    return !hasVGPRs(RC) && !hasAGPRs(RC);
+  static bool isSGPRClass(const TargetRegisterClass *RC) {
+    return hasSGPRs(RC) && !hasVGPRs(RC) && !hasAGPRs(RC);
   }
 
   /// \returns true if this class ID contains only SGPR registers
@@ -155,28 +198,45 @@ public:
     return isSGPRClass(getRegClass(RCID));
   }
 
-  bool isSGPRReg(const MachineRegisterInfo &MRI, Register Reg) const {
-    const TargetRegisterClass *RC;
-    if (Reg.isVirtual())
-      RC = MRI.getRegClass(Reg);
-    else
-      RC = getPhysRegClass(Reg);
-    return isSGPRClass(RC);
+  bool isSGPRReg(const MachineRegisterInfo &MRI, Register Reg) const;
+
+  /// \returns true if this class contains only VGPR registers
+  static bool isVGPRClass(const TargetRegisterClass *RC) {
+    return hasVGPRs(RC) && !hasAGPRs(RC) && !hasSGPRs(RC);
   }
 
   /// \returns true if this class contains only AGPR registers
-  bool isAGPRClass(const TargetRegisterClass *RC) const {
-    return hasAGPRs(RC) && !hasVGPRs(RC);
+  static bool isAGPRClass(const TargetRegisterClass *RC) {
+    return hasAGPRs(RC) && !hasVGPRs(RC) && !hasSGPRs(RC);
+  }
+
+  /// \returns true only if this class contains both VGPR and AGPR registers
+  bool isVectorSuperClass(const TargetRegisterClass *RC) const {
+    return hasVGPRs(RC) && hasAGPRs(RC) && !hasSGPRs(RC);
+  }
+
+  /// \returns true only if this class contains both VGPR and SGPR registers
+  bool isVSSuperClass(const TargetRegisterClass *RC) const {
+    return hasVGPRs(RC) && hasSGPRs(RC) && !hasAGPRs(RC);
   }
 
   /// \returns true if this class contains VGPR registers.
-  bool hasVGPRs(const TargetRegisterClass *RC) const;
+  static bool hasVGPRs(const TargetRegisterClass *RC) {
+    return RC->TSFlags & SIRCFlags::HasVGPR;
+  }
 
   /// \returns true if this class contains AGPR registers.
-  bool hasAGPRs(const TargetRegisterClass *RC) const;
+  static bool hasAGPRs(const TargetRegisterClass *RC) {
+    return RC->TSFlags & SIRCFlags::HasAGPR;
+  }
+
+  /// \returns true if this class contains SGPR registers.
+  static bool hasSGPRs(const TargetRegisterClass *RC) {
+    return RC->TSFlags & SIRCFlags::HasSGPR;
+  }
 
   /// \returns true if this class contains any vector registers.
-  bool hasVectorRegisters(const TargetRegisterClass *RC) const {
+  static bool hasVectorRegisters(const TargetRegisterClass *RC) {
     return hasVGPRs(RC) || hasAGPRs(RC);
   }
 
@@ -192,11 +252,14 @@ public:
   const TargetRegisterClass *
   getEquivalentSGPRClass(const TargetRegisterClass *VRC) const;
 
-  /// \returns The register class that is used for a sub-register of \p RC for
-  /// the given \p SubIdx.  If \p SubIdx equals NoSubRegister, \p RC will
-  /// be returned.
-  const TargetRegisterClass *getSubRegClass(const TargetRegisterClass *RC,
-                                            unsigned SubIdx) const;
+  /// Returns a register class which is compatible with \p SuperRC, such that a
+  /// subregister exists with class \p SubRC with subregister index \p
+  /// SubIdx. If this is impossible (e.g., an unaligned subregister index within
+  /// a register tuple), return null.
+  const TargetRegisterClass *
+  getCompatibleSubRegClass(const TargetRegisterClass *SuperRC,
+                           const TargetRegisterClass *SubRC,
+                           unsigned SubIdx) const;
 
   bool shouldRewriteCopySrc(const TargetRegisterClass *DefRC,
                             unsigned DefSubReg,
@@ -205,11 +268,7 @@ public:
 
   /// \returns True if operands defined with this operand type can accept
   /// a literal constant (i.e. any 32-bit immediate).
-  bool opCanUseLiteralConstant(unsigned OpType) const {
-    // TODO: 64-bit operands have extending behavior from 32-bit literal.
-    return OpType >= AMDGPU::OPERAND_REG_IMM_FIRST &&
-           OpType <= AMDGPU::OPERAND_REG_IMM_LAST;
-  }
+  bool opCanUseLiteralConstant(unsigned OpType) const;
 
   /// \returns True if operands defined with this operand type can accept
   /// an inline constant. i.e. An integer value in the range (-16, 64) or
@@ -223,17 +282,26 @@ public:
 
   const TargetRegisterClass *getRegClassForReg(const MachineRegisterInfo &MRI,
                                                Register Reg) const;
+  const TargetRegisterClass *
+  getRegClassForOperandReg(const MachineRegisterInfo &MRI,
+                           const MachineOperand &MO) const;
+
   bool isVGPR(const MachineRegisterInfo &MRI, Register Reg) const;
   bool isAGPR(const MachineRegisterInfo &MRI, Register Reg) const;
   bool isVectorRegister(const MachineRegisterInfo &MRI, Register Reg) const {
     return isVGPR(MRI, Reg) || isAGPR(MRI, Reg);
   }
 
-  bool isConstantPhysReg(MCRegister PhysReg) const override;
-
+  // FIXME: SGPRs are assumed to be uniform, but this is not true for i1 SGPRs
+  // (such as VCC) which hold a wave-wide vector of boolean values. Examining
+  // just the register class is not suffcient; it needs to be combined with a
+  // value type. The next predicate isUniformReg() does this correctly.
   bool isDivergentRegClass(const TargetRegisterClass *RC) const override {
     return !isSGPRClass(RC);
   }
+
+  bool isUniformReg(const MachineRegisterInfo &MRI, const RegisterBankInfo &RBI,
+                    Register Reg) const override;
 
   ArrayRef<int16_t> getRegSplitParts(const TargetRegisterClass *RC,
                                      unsigned EltSize) const;
@@ -257,15 +325,11 @@ public:
   MCRegister getReturnAddressReg(const MachineFunction &MF) const;
 
   const TargetRegisterClass *
-  getRegClassForSizeOnBank(unsigned Size,
-                           const RegisterBank &Bank,
-                           const MachineRegisterInfo &MRI) const;
+  getRegClassForSizeOnBank(unsigned Size, const RegisterBank &Bank) const;
 
   const TargetRegisterClass *
-  getRegClassForTypeOnBank(LLT Ty,
-                           const RegisterBank &Bank,
-                           const MachineRegisterInfo &MRI) const {
-    return getRegClassForSizeOnBank(Ty.getSizeInBits(), Bank, MRI);
+  getRegClassForTypeOnBank(LLT Ty, const RegisterBank &Bank) const {
+    return getRegClassForSizeOnBank(Ty.getSizeInBits(), Bank);
   }
 
   const TargetRegisterClass *
@@ -282,7 +346,13 @@ public:
                     : &AMDGPU::SReg_64_XEXECRegClass;
   }
 
+  // Return the appropriate register class to use for 64-bit VGPRs for the
+  // subtarget.
+  const TargetRegisterClass *getVGPR64Class() const;
+
   MCRegister getVCC() const;
+
+  MCRegister getExec() const;
 
   const TargetRegisterClass *getRegClass(unsigned RCID) const;
 
@@ -293,6 +363,8 @@ public:
                                 LiveIntervals *LIS) const;
 
   const uint32_t *getAllVGPRRegMask() const;
+  const uint32_t *getAllAGPRRegMask() const;
+  const uint32_t *getAllVectorRegMask() const;
   const uint32_t *getAllAllocatableSRegMask() const;
 
   // \returns number of 32 bit registers covered by a \p LM
@@ -303,7 +375,7 @@ public:
     uint64_t Even = Mask & 0xAAAAAAAAAAAAAAAAULL;
     Mask = (Even >> 1) | Mask;
     uint64_t Odd = Mask & 0x5555555555555555ULL;
-    return countPopulation(Odd);
+    return llvm::popcount(Odd);
   }
 
   // \returns a DWORD offset of a \p SubReg
@@ -320,6 +392,15 @@ public:
   // \returns \p Reg otherwise.
   MCPhysReg get32BitRegister(MCPhysReg Reg) const;
 
+  // Returns true if a given register class is properly aligned for
+  // the subtarget.
+  bool isProperlyAlignedRC(const TargetRegisterClass &RC) const;
+
+  // Given \p RC returns corresponding aligned register class if required
+  // by the subtarget.
+  const TargetRegisterClass *
+  getProperlyAlignedRC(const TargetRegisterClass *RC) const;
+
   /// Return all SGPR128 which satisfy the waves per execution unit requirement
   /// of the subtarget.
   ArrayRef<MCPhysReg> getAllSGPR128(const MachineFunction &MF) const;
@@ -332,16 +413,36 @@ public:
   /// of the subtarget.
   ArrayRef<MCPhysReg> getAllSGPR32(const MachineFunction &MF) const;
 
-private:
-  void buildSpillLoadStore(MachineBasicBlock::iterator MI,
-                           unsigned LoadStoreOp,
-                           int Index,
-                           Register ValueReg,
-                           bool ValueIsKill,
-                           MCRegister ScratchOffsetReg,
-                           int64_t InstrOffset,
-                           MachineMemOperand *MMO,
-                           RegScavenger *RS) const;
+  // Insert spill or restore instructions.
+  // When lowering spill pseudos, the RegScavenger should be set.
+  // For creating spill instructions during frame lowering, where no scavenger
+  // is available, LiveRegs can be used.
+  void buildSpillLoadStore(MachineBasicBlock &MBB,
+                           MachineBasicBlock::iterator MI, const DebugLoc &DL,
+                           unsigned LoadStoreOp, int Index, Register ValueReg,
+                           bool ValueIsKill, MCRegister ScratchOffsetReg,
+                           int64_t InstrOffset, MachineMemOperand *MMO,
+                           RegScavenger *RS,
+                           LivePhysRegs *LiveRegs = nullptr) const;
+
+  // Return alignment in register file of first register in a register tuple.
+  unsigned getRegClassAlignmentNumBits(const TargetRegisterClass *RC) const {
+    return (RC->TSFlags & SIRCFlags::RegTupleAlignUnitsMask) * 32;
+  }
+
+  // Check if register class RC has required alignment.
+  bool isRegClassAligned(const TargetRegisterClass *RC,
+                         unsigned AlignNumBits) const {
+    assert(AlignNumBits != 0);
+    unsigned RCAlign = getRegClassAlignmentNumBits(RC);
+    return RCAlign == AlignNumBits ||
+           (RCAlign > AlignNumBits && (RCAlign % AlignNumBits) == 0);
+  }
+
+  // Return alignment of a SubReg relative to start of a register in RC class.
+  // No check if the subreg is supported by the current RC is made.
+  unsigned getSubRegAlignmentNumBits(const TargetRegisterClass *RC,
+                                     unsigned SubReg) const;
 };
 
 } // End namespace llvm

@@ -1,9 +1,8 @@
 //===--- RefactoringOperations.h - Defines a refactoring operation --------===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 
@@ -16,8 +15,8 @@
 #include "clang/Tooling/Refactor/RefactoringOptionSet.h"
 #include "clang/Tooling/Refactor/RefactoringReplacement.h"
 #include "clang/Tooling/Refactor/SymbolOperation.h"
-#include "llvm/ADT/None.h"
 #include "llvm/Support/Error.h"
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -138,7 +137,7 @@ struct RefactoringOperationResult {
   StringRef FailureReason;
 
   RefactoringOperationResult() : Initiated(false) {}
-  RefactoringOperationResult(llvm::NoneType) : Initiated(false) {}
+  RefactoringOperationResult(std::nullopt_t) : Initiated(false) {}
   explicit RefactoringOperationResult(StringRef FailureReason)
       : Initiated(false), FailureReason(FailureReason) {}
 };

@@ -1,9 +1,8 @@
 //===--- ExtractionUtils.cpp - Extraction helper functions ----------------===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 
@@ -17,7 +16,8 @@
 
 using namespace clang;
 
-Optional<StringRef> tooling::extract::nameForExtractedVariable(const Expr *E) {
+std::optional<StringRef>
+tooling::extract::nameForExtractedVariable(const Expr *E) {
   if (const auto *Call = dyn_cast<CallExpr>(E)) {
     if (const auto *Fn = Call->getDirectCallee())
       return Fn->getName();
@@ -33,7 +33,7 @@ Optional<StringRef> tooling::extract::nameForExtractedVariable(const Expr *E) {
     } else if (const auto *Prop = PRE->getExplicitProperty())
       return Prop->getName();
   }
-  return None;
+  return std::nullopt;
 }
 
 namespace {

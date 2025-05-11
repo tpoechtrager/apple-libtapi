@@ -43,7 +43,7 @@ namespace ARMRI {
 
 /// isARMArea1Register - Returns true if the register is a low register (r0-r7)
 /// or a stack/pc register that we should push/pop.
-static inline bool isARMArea1Register(unsigned Reg, bool isIOS) {
+static inline bool isARMArea1Register(unsigned Reg, bool SplitFramePushPop) {
   using namespace ARM;
 
   switch (Reg) {
@@ -53,25 +53,52 @@ static inline bool isARMArea1Register(unsigned Reg, bool isIOS) {
       return true;
     case R8:  case R9:  case R10: case R11: case R12:
       // For iOS we want r7 and lr to be next to each other.
-      return !isIOS;
+      return !SplitFramePushPop;
     default:
       return false;
   }
 }
 
-static inline bool isARMArea2Register(unsigned Reg, bool isIOS) {
+static inline bool isARMArea2Register(unsigned Reg, bool SplitFramePushPop) {
   using namespace ARM;
 
   switch (Reg) {
     case R8: case R9: case R10: case R11: case R12:
       // iOS has this second area.
-      return isIOS;
+      return SplitFramePushPop;
     default:
       return false;
   }
 }
 
-static inline bool isARMArea3Register(unsigned Reg, bool isIOS) {
+static inline bool isSplitFPArea1Register(unsigned Reg,
+                                          bool SplitFramePushPop) {
+  using namespace ARM;
+
+  switch (Reg) {
+    case R0:  case R1:  case R2:  case R3:
+    case R4:  case R5:  case R6:  case R7:
+    case R8:  case R9:  case R10: case R12:
+    case SP:  case PC:
+      return true;
+    default:
+      return false;
+  }
+}
+
+static inline bool isSplitFPArea2Register(unsigned Reg,
+                                          bool SplitFramePushPop) {
+  using namespace ARM;
+
+  switch (Reg) {
+    case R11: case LR:
+      return true;
+    default:
+      return false;
+  }
+}
+
+static inline bool isARMArea3Register(unsigned Reg, bool SplitFramePushPop) {
   using namespace ARM;
 
   switch (Reg) {
@@ -106,9 +133,6 @@ protected:
 
   // Can be only subclassed.
   explicit ARMBaseRegisterInfo();
-
-  // Return the opcode that implements 'Op', or 0 if no opcode
-  unsigned getOpcode(int Op) const;
 
 public:
   /// Code Generation virtual methods...
@@ -168,9 +192,8 @@ public:
   int64_t getFrameIndexInstrOffset(const MachineInstr *MI,
                                    int Idx) const override;
   bool needsFrameBaseReg(MachineInstr *MI, int64_t Offset) const override;
-  void materializeFrameBaseRegister(MachineBasicBlock *MBB, Register BaseReg,
-                                    int FrameIdx,
-                                    int64_t Offset) const override;
+  Register materializeFrameBaseRegister(MachineBasicBlock *MBB, int FrameIdx,
+                                        int64_t Offset) const override;
   void resolveFrameIndex(MachineInstr &MI, Register BaseReg,
                          int64_t Offset) const override;
   bool isFrameOffsetLegal(const MachineInstr *MI, Register BaseReg,
@@ -198,7 +221,7 @@ public:
 
   bool requiresVirtualBaseRegisters(const MachineFunction &MF) const override;
 
-  void eliminateFrameIndex(MachineBasicBlock::iterator II,
+  bool eliminateFrameIndex(MachineBasicBlock::iterator II,
                            int SPAdj, unsigned FIOperandNum,
                            RegScavenger *RS = nullptr) const override;
 
@@ -210,6 +233,13 @@ public:
                       unsigned DstSubReg,
                       const TargetRegisterClass *NewRC,
                       LiveIntervals &LIS) const override;
+
+  bool shouldRewriteCopySrc(const TargetRegisterClass *DefRC,
+                            unsigned DefSubReg,
+                            const TargetRegisterClass *SrcRC,
+                            unsigned SrcSubReg) const override;
+
+  int getSEHRegNum(unsigned i) const { return getEncodingValue(i); }
 };
 
 } // end namespace llvm

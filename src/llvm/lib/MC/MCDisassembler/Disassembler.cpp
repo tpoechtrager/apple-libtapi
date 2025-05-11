@@ -10,7 +10,6 @@
 #include "llvm-c/Disassembler.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallVector.h"
-#include "llvm/ADT/Triple.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCDisassembler/MCDisassembler.h"
@@ -25,12 +24,12 @@
 #include "llvm/MC/MCSchedule.h"
 #include "llvm/MC/MCSubtargetInfo.h"
 #include "llvm/MC/MCTargetOptions.h"
+#include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FormattedStream.h"
-#include "llvm/Support/TargetRegistry.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/TargetParser/Triple.h"
 #include <cassert>
-#include <cstddef>
 #include <cstring>
 
 using namespace llvm;
@@ -74,7 +73,8 @@ LLVMCreateDisasmCPUFeatures(const char *TT, const char *CPU,
     return nullptr;
 
   // Set up the MCContext for creating symbols and MCExpr's.
-  std::unique_ptr<MCContext> Ctx(new MCContext(MAI.get(), MRI.get(), nullptr));
+  std::unique_ptr<MCContext> Ctx(
+      new MCContext(Triple(TT), MAI.get(), MRI.get(), STI.get()));
   if (!Ctx)
     return nullptr;
 

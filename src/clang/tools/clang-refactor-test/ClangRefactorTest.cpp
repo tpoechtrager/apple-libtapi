@@ -1,9 +1,8 @@
 //===--- ClangRefactorTest.cpp - ------------------------------------------===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -15,7 +14,7 @@
 #include "clang-c/Refactor.h"
 #include "clang/Basic/LangOptions.h"
 #include "clang/Frontend/CommandLineSourceLoc.h"
-#include "clang/Tooling/Refactor/SymbolName.h"
+#include "clang/Tooling/Refactoring/Rename/SymbolName.h"
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/FileSystem.h"
@@ -363,8 +362,8 @@ static int apply(ArrayRef<CXRefactoringReplacement> Replacements,
 /// this occurrence.
 static std::string
 occurrenceToString(const CXSymbolOccurrence &Occurrence, bool IsLocal,
-                   const tooling::OldSymbolName &NewName,
-                   const tooling::OldSymbolName &ExpectedReplacementStrings,
+                   const tooling::SymbolName &NewName,
+                   const tooling::SymbolName &ExpectedReplacementStrings,
                    StringRef Filename) {
   std::string Str;
   llvm::raw_string_ostream OS(Str);
@@ -375,15 +374,16 @@ occurrenceToString(const CXSymbolOccurrence &Occurrence, bool IsLocal,
     OS << '"' << Filename << "\" ";
 
   bool FirstRange = true;
-  assert(NewName.size() >= Occurrence.NumNamePieces &&
+  assert(NewName.getNamePieces().size() >= Occurrence.NumNamePieces &&
          "new name doesn't match the number of pieces");
   for (unsigned J = 0; J != Occurrence.NumNamePieces; ++J) {
     if (!FirstRange) // TODO
       OS << ", ";
 
     // Print the replacement string if it doesn't match the expected string.
-    if (NewName[J] != ExpectedReplacementStrings[J])
-      OS << '"' << NewName[J] << "\" ";
+    if (NewName.getNamePieces()[J] !=
+        ExpectedReplacementStrings.getNamePieces()[J])
+      OS << '"' << NewName.getNamePieces()[J] << "\" ";
 
     CXFileRange Range = Occurrence.NamePieces[J];
     OS << Range.Begin.Line << ":" << Range.Begin.Column << " -> "
@@ -438,7 +438,7 @@ parseIndexedOccurrence(StringRef IndexedOccurrence,
 static bool compareOccurrences(ArrayRef<std::string> ExpectedReplacements,
                                CXSymbolOccurrencesResult Occurrences,
                                bool IsLocal,
-                               const tooling::OldSymbolName &NewSymbolName,
+                               const tooling::SymbolName &NewSymbolName,
                                bool PrintFilenames) {
   unsigned NumFiles = clang_SymbolOccurrences_getNumFiles(Occurrences);
   size_t ExpectedReplacementIndex = 0;
@@ -595,7 +595,7 @@ int rename(CXTranslationUnit TU, CXIndex CIdx, ArrayRef<const char *> Args) {
     // FIXME: This is a hack
     LangOptions LangOpts;
     LangOpts.ObjC = true;
-    tooling::OldSymbolName NewSymbolName(opts::rename::NewName, LangOpts);
+    tooling::SymbolName NewSymbolName(opts::rename::NewName, LangOpts);
 
     if (ExpectedReplacements.empty()) {
       if (opts::Apply) {
@@ -730,7 +730,7 @@ int renameIndexedFile(CXIndex CIdx, ArrayRef<const char *> Args) {
 
   LangOptions LangOpts;
   LangOpts.ObjC = true;
-  tooling::OldSymbolName ExpectedReplacementStrings(
+  tooling::SymbolName ExpectedReplacementStrings(
       opts::rename::IndexedNewNames[0], LangOpts);
 
   // Print the occurrences.
@@ -751,7 +751,7 @@ int renameIndexedFile(CXIndex CIdx, ArrayRef<const char *> Args) {
               .c_str();
       LangOptions LangOpts;
       LangOpts.ObjC = true;
-      tooling::OldSymbolName NewSymbolName(NewName, LangOpts);
+      tooling::SymbolName NewSymbolName(NewName, LangOpts);
 
       outs() << occurrenceToString(FileResult.Occurrences[I], /*IsLocal*/ false,
                                    NewSymbolName, ExpectedReplacementStrings,
@@ -786,7 +786,7 @@ struct ParsedSourceLineRange : ParsedSourceLocation {
   ParsedSourceLineRange(const ParsedSourceLocation &Loc)
       : ParsedSourceLocation(Loc), MaxColumn(Loc.Column) {}
 
-  static Optional<ParsedSourceLineRange> FromString(StringRef Str) {
+  static std::optional<ParsedSourceLineRange> FromString(StringRef Str) {
     std::pair<StringRef, StringRef> RangeSplit = Str.rsplit('-');
     auto PSL = ParsedSourceLocation::FromString(RangeSplit.first);
     ParsedSourceLineRange Result;
@@ -794,13 +794,13 @@ struct ParsedSourceLineRange : ParsedSourceLocation {
     Result.Line = PSL.Line;
     Result.Column = PSL.Column;
     if (Result.FileName.empty())
-      return None;
+      return std::nullopt;
     if (RangeSplit.second == "end")
       Result.MaxColumn = lastColumnForFile(Result.FileName, Result.Line);
     else if (RangeSplit.second.getAsInteger(10, Result.MaxColumn))
-      return None;
+      return std::nullopt;
     if (Result.MaxColumn < Result.Column)
-      return None;
+      return std::nullopt;
     return Result;
   }
 };
@@ -812,15 +812,15 @@ struct OldParsedSourceRange {
                     const ParsedSourceLocation &End)
       : Begin(Begin), End(End) {}
 
-  static Optional<OldParsedSourceRange> FromString(StringRef Str) {
+  static std::optional<OldParsedSourceRange> FromString(StringRef Str) {
     std::pair<StringRef, StringRef> RangeSplit = Str.rsplit('-');
     auto Begin = ParsedSourceLocation::FromString(RangeSplit.first);
     if (Begin.FileName.empty())
-      return None;
+      return std::nullopt;
     std::string EndString = Begin.FileName + ":" + RangeSplit.second.str();
     auto End = ParsedSourceLocation::FromString(EndString);
     if (End.FileName.empty())
-      return None;
+      return std::nullopt;
     return OldParsedSourceRange(Begin, End);
   }
 };
@@ -841,8 +841,8 @@ int listRefactoringActions(CXTranslationUnit TU) {
                 "<file:line:column-line:column> format\n";
       return 1;
     }
-    auto Begin = SelectionRange.getValue().Begin;
-    auto End = SelectionRange.getValue().End;
+    auto Begin = SelectionRange->Begin;
+    auto End = SelectionRange->End;
     CXFile File = clang_getFile(TU, Begin.FileName.c_str());
     Range =
         clang_getRange(clang_getLocation(TU, File, Begin.Line, Begin.Column),
@@ -943,7 +943,7 @@ bool printRefactoringReplacements(
     const CXRefactoringFileReplacementSet &FileSet =
         Replacements.FileReplacementSets[FileIndex];
     if (opts::Apply) {
-      apply(llvm::makeArrayRef(FileSet.Replacements, FileSet.NumReplacements),
+      apply(ArrayRef(FileSet.Replacements, FileSet.NumReplacements),
             clang_getCString(FileSet.Filename));
       continue;
     }
@@ -965,14 +965,14 @@ bool printRefactoringReplacements(
             clang_RefactoringReplacement_getAssociatedSymbolOccurrences(
                 Replacement);
         for (const CXSymbolOccurrence &SymbolOccurrence :
-             llvm::makeArrayRef(Info.AssociatedSymbolOccurrences,
+             ArrayRef(Info.AssociatedSymbolOccurrences,
                                 Info.NumAssociatedSymbolOccurrences)) {
           outs() << " [Symbol " << renameOccurrenceKindString(
                                        SymbolOccurrence.Kind, /*IsLocal*/ false,
                                        SymbolOccurrence.IsMacroExpansion)
                  << ' ' << SymbolOccurrence.SymbolIndex;
           for (const auto &Piece :
-               llvm::makeArrayRef(SymbolOccurrence.NamePieces,
+               ArrayRef(SymbolOccurrence.NamePieces,
                                   SymbolOccurrence.NumNamePieces)) {
             outs() << ' ' << Piece.Begin.Line << ":" << Piece.Begin.Column
                    << " -> " << Piece.End.Line << ":" << Piece.End.Column;
@@ -1004,17 +1004,17 @@ static std::string queryResultsForFile(StringRef Filename, StringRef Name,
                                Sub1);
 }
 
-static Optional<std::pair<unsigned, unsigned>>
+static std::optional<std::pair<unsigned, unsigned>>
 findSelectionLocInSource(StringRef Buffer, StringRef Label) {
   size_t I = Buffer.find(Label);
   if (I == StringRef::npos)
-    return None;
+    return std::nullopt;
   I = I + Label.size();
   auto LocParts =
       Buffer.substr(I, Buffer.find_first_of("\n/", I) - I).trim().split(":");
   unsigned CurrentLine = Buffer.take_front(I).count('\n') + 1;
   if (LocParts.second.empty())
-    return None;
+    return std::nullopt;
   StringRef LineString = LocParts.first;
   unsigned Line, Column;
   enum ExprKind { Literal, Add, Sub };
@@ -1022,27 +1022,27 @@ findSelectionLocInSource(StringRef Buffer, StringRef Label) {
                       ? Add
                       : LineString.startswith("-") ? Sub : Literal;
   if (LineString.drop_front(Expr != Literal ? 1 : 0).getAsInteger(10, Line))
-    return None;
+    return std::nullopt;
   if (Expr == Add)
     Line += CurrentLine;
   else if (Expr == Sub)
     Line = CurrentLine - Line;
   if (LocParts.second.getAsInteger(10, Column))
-    return None;
+    return std::nullopt;
   return std::make_pair(Line, Column);
 }
 
-static Optional<ParsedSourceLocation> selectionLocForFile(StringRef Filename,
-                                                          StringRef Name) {
+static std::optional<ParsedSourceLocation>
+selectionLocForFile(StringRef Filename, StringRef Name) {
   auto Buf = llvm::MemoryBuffer::getFile(Filename);
   if (!Buf)
-    return None;
+    return std::nullopt;
 
   StringRef Buffer = (*Buf)->getBuffer();
   std::string Label = Name.str() + ":";
   auto Start = findSelectionLocInSource(Buffer, Label);
   if (!Start)
-    return None;
+    return std::nullopt;
   // Create the resulting source location.
   // FIXME: Parse can be avoided.
   std::string Str;
@@ -1051,11 +1051,11 @@ static Optional<ParsedSourceLocation> selectionLocForFile(StringRef Filename,
   return ParsedSourceLocation::FromString(OS.str());
 }
 
-static Optional<OldParsedSourceRange> selectionRangeForFile(StringRef Filename,
-                                                         StringRef Name) {
+static std::optional<OldParsedSourceRange>
+selectionRangeForFile(StringRef Filename, StringRef Name) {
   auto Buf = llvm::MemoryBuffer::getFile(Filename);
   if (!Buf)
-    return None;
+    return std::nullopt;
 
   StringRef Buffer = (*Buf)->getBuffer();
   std::string BeginLabel = Name.str() + "-begin:";
@@ -1063,7 +1063,7 @@ static Optional<OldParsedSourceRange> selectionRangeForFile(StringRef Filename,
   auto Start = findSelectionLocInSource(Buffer, BeginLabel);
   auto End = findSelectionLocInSource(Buffer, EndLabel);
   if (!Start || !End)
-    return None;
+    return std::nullopt;
   // Create the resulting source range.
   // FIXME: Parse can be avoided.
   std::string Str;
@@ -1173,7 +1173,7 @@ int initiateAndPerformAction(CXTranslationUnit TU, ArrayRef<const char *> Args,
              "format\n";
       return 1;
     }
-    Ranges.push_back(ParsedLineRange.getValue());
+    Ranges.push_back(*ParsedLineRange);
   }
   for (const auto &Range : opts::initiateAndPerform::AtLocations) {
     if (!StringRef(Range).contains(':')) {
@@ -1206,7 +1206,7 @@ int initiateAndPerformAction(CXTranslationUnit TU, ArrayRef<const char *> Args,
                 "the selection specifier in the source\n";
       return 1;
     }
-    SelectionRanges.push_back(ParsedRange.getValue());
+    SelectionRanges.push_back(*ParsedRange);
   }
   if (Ranges.empty() && SelectionRanges.empty()) {
     errs() << "error: -in or -at options must be specified at least once!";
@@ -1217,14 +1217,14 @@ int initiateAndPerformAction(CXTranslationUnit TU, ArrayRef<const char *> Args,
     return 1;
   }
 
-  auto ActionTypeOrNone = StringSwitch<Optional<CXRefactoringActionType>>(
+  auto ActionTypeOrNone = StringSwitch<std::optional<CXRefactoringActionType>>(
                               opts::initiateAndPerform::ActionName)
 #define REFACTORING_OPERATION_ACTION(Name, Spelling, Command)                  \
   .Case(Command, CXRefactor_##Name)
 #define REFACTORING_OPERATION_SUB_ACTION(Name, Parent, Spelling, Command)      \
   .Case(Command, CXRefactor_##Parent##_##Name)
 #include "clang/Tooling/Refactor/RefactoringActions.def"
-                              .Default(None);
+                              .Default(std::nullopt);
   if (!ActionTypeOrNone) {
     errs() << "error: invalid action '" << opts::initiateAndPerform::ActionName
            << "'\n";
@@ -1232,19 +1232,20 @@ int initiateAndPerformAction(CXTranslationUnit TU, ArrayRef<const char *> Args,
   }
   CXRefactoringActionType ActionType = *ActionTypeOrNone;
 
-  Optional<bool> Initiated;
-  Optional<std::string> InitiationFailureReason;
-  Optional<std::string> LocationCandidateInformation;
+  std::optional<bool> Initiated;
+  std::optional<std::string> InitiationFailureReason;
+  std::optional<std::string> LocationCandidateInformation;
   auto InitiateAndPerform =
       [&](const ParsedSourceLocation &Location, unsigned Column,
-          Optional<OldParsedSourceRange> SelectionRange = None) -> bool {
+          std::optional<OldParsedSourceRange> SelectionRange =
+              std::nullopt) -> bool {
     CXSourceLocation Loc =
         clang_getLocation(TU, clang_getFile(TU, Location.FileName.c_str()),
                           Location.Line, Column);
     CXSourceRange Range;
     if (SelectionRange) {
-      auto Begin = SelectionRange.getValue().Begin;
-      auto End = SelectionRange.getValue().End;
+      auto Begin = SelectionRange->Begin;
+      auto End = SelectionRange->End;
       CXFile File = clang_getFile(TU, Begin.FileName.c_str());
       Range =
           clang_getRange(clang_getLocation(TU, File, Begin.Line, Begin.Column),
@@ -1260,21 +1261,20 @@ int initiateAndPerformAction(CXTranslationUnit TU, ArrayRef<const char *> Args,
     if (const char *Reason = clang_getCString(FailureReason))
       ReasonString = Reason;
     clang_disposeString(FailureReason);
-    if (InitiationFailureReason.hasValue() &&
-        InitiationFailureReason.getValue() != ReasonString) {
+    if (InitiationFailureReason && *InitiationFailureReason != ReasonString) {
       errs() << "error: inconsistent results in a single action range!\n";
       return true;
     }
     InitiationFailureReason = std::move(ReasonString);
     if (Err == CXError_RefactoringActionUnavailable) {
-      if (Initiated.hasValue() && Initiated.getValue()) {
+      if (Initiated && *Initiated) {
         errs() << "error: inconsistent results in a single action range!\n";
         return true;
       }
       Initiated = false;
     } else if (Err != CXError_Success)
       return true;
-    else if (Initiated.hasValue() && !Initiated.getValue()) {
+    else if (Initiated && !*Initiated) {
       errs() << "error: inconsistent results in a single action range!\n";
       return true;
     } else
@@ -1302,9 +1302,9 @@ int initiateAndPerformAction(CXTranslationUnit TU, ArrayRef<const char *> Args,
                ? SelectionRange ? rangeToString(Range)
                                 : locationToString(clang_getRangeStart(Range))
                : "<unknown>");
-      if (!LocationCandidateInformation.hasValue())
+      if (!LocationCandidateInformation)
         LocationCandidateInformation = LocationString;
-      else if (LocationCandidateInformation.getValue() != LocationString) {
+      else if (*LocationCandidateInformation != LocationString) {
         errs() << "error: inconsistent results in a single action range!\n";
         return true;
       }
@@ -1336,11 +1336,10 @@ int initiateAndPerformAction(CXTranslationUnit TU, ArrayRef<const char *> Args,
       return 1;
   }
 
-  if (!Initiated.getValue()) {
+  if (!*Initiated) {
     errs() << "Failed to initiate the refactoring action";
-    if (InitiationFailureReason.hasValue() &&
-        !InitiationFailureReason.getValue().empty())
-      errs() << " (" << InitiationFailureReason.getValue() << ')';
+    if (InitiationFailureReason && !InitiationFailureReason->empty())
+      errs() << " (" << *InitiationFailureReason << ')';
     errs() << "!\n";
     return 1;
   }
@@ -1348,7 +1347,7 @@ int initiateAndPerformAction(CXTranslationUnit TU, ArrayRef<const char *> Args,
     outs() << "Initiated the '" << opts::initiateAndPerform::ActionName
            << "' action";
     if (!opts::initiateAndPerform::LocationAgnostic)
-      outs() << ' ' << LocationCandidateInformation.getValue();
+      outs() << ' ' << *LocationCandidateInformation;
     outs() << "\n";
   }
   return 0;

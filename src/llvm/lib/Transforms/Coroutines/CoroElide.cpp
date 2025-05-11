@@ -9,17 +9,27 @@
 #include "llvm/Transforms/Coroutines/CoroElide.h"
 #include "CoroInternal.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/InstructionSimplify.h"
+#include "llvm/Analysis/OptimizationRemarkEmitter.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/InstIterator.h"
-#include "llvm/InitializePasses.h"
-#include "llvm/Pass.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/FileSystem.h"
+#include <optional>
 
 using namespace llvm;
 
 #define DEBUG_TYPE "coro-elide"
+
+STATISTIC(NumOfCoroElided, "The # of coroutine get elided.");
+
+#ifndef NDEBUG
+static cl::opt<std::string> CoroElideInfoOutputFilename(
+    "coro-elide-info-output-file", cl::value_desc("filename"),
+    cl::desc("File to record the coroutines got elided"), cl::Hidden);
+#endif
 
 namespace {
 // Created on demand if the coro-elide pass has work to do.
@@ -29,7 +39,6 @@ struct Lowerer : coro::LowererBase {
   SmallVector<CoroAllocInst *, 1> CoroAllocs;
   SmallVector<CoroSubFnInst *, 4> ResumeAddr;
   DenseMap<CoroBeginInst *, SmallVector<CoroSubFnInst *, 4>> DestroyAddr;
-  SmallVector<CoroFreeInst *, 1> CoroFrees;
   SmallPtrSet<const SwitchInst *, 4> CoroSuspendSwitches;
 
   Lowerer(Module &M) : LowererBase(M) {}
@@ -38,7 +47,8 @@ struct Lowerer : coro::LowererBase {
                             AAResults &AA);
   bool shouldElide(Function *F, DominatorTree &DT) const;
   void collectPostSplitCoroIds(Function *F);
-  bool processCoroId(CoroIdInst *, AAResults &AA, DominatorTree &DT);
+  bool processCoroId(CoroIdInst *, AAResults &AA, DominatorTree &DT,
+                     OptimizationRemarkEmitter &ORE);
   bool hasEscapePath(const CoroBeginInst *,
                      const SmallPtrSetImpl<BasicBlock *> &) const;
 };
@@ -71,7 +81,7 @@ static void replaceWithConstant(Constant *Value,
 // See if any operand of the call instruction references the coroutine frame.
 static bool operandReferences(CallInst *CI, AllocaInst *Frame, AAResults &AA) {
   for (Value *Op : CI->operand_values())
-    if (AA.alias(Op, Frame) != NoAlias)
+    if (!AA.isNoAlias(Op, Frame))
       return true;
   return false;
 }
@@ -79,37 +89,28 @@ static bool operandReferences(CallInst *CI, AllocaInst *Frame, AAResults &AA) {
 // Look for any tail calls referencing the coroutine frame and remove tail
 // attribute from them, since now coroutine frame resides on the stack and tail
 // call implies that the function does not references anything on the stack.
+// However if it's a musttail call, we cannot remove the tailcall attribute.
+// It's safe to keep it there as the musttail call is for symmetric transfer,
+// and by that point the frame should have been destroyed and hence not
+// interfering with operands.
 static void removeTailCallAttribute(AllocaInst *Frame, AAResults &AA) {
   Function &F = *Frame->getFunction();
   for (Instruction &I : instructions(F))
     if (auto *Call = dyn_cast<CallInst>(&I))
-      if (Call->isTailCall() && operandReferences(Call, Frame, AA)) {
-        // FIXME: If we ever hit this check. Evaluate whether it is more
-        // appropriate to retain musttail and allow the code to compile.
-        if (Call->isMustTailCall())
-          report_fatal_error("Call referring to the coroutine frame cannot be "
-                             "marked as musttail");
+      if (Call->isTailCall() && operandReferences(Call, Frame, AA) &&
+          !Call->isMustTailCall())
         Call->setTailCall(false);
-      }
 }
 
 // Given a resume function @f.resume(%f.frame* %frame), returns the size
 // and expected alignment of %f.frame type.
-static std::pair<uint64_t, Align> getFrameLayout(Function *Resume) {
-  // Prefer to pull information from the function attributes.
+static std::optional<std::pair<uint64_t, Align>>
+getFrameLayout(Function *Resume) {
+  // Pull information from the function attributes.
   auto Size = Resume->getParamDereferenceableBytes(0);
-  auto Align = Resume->getParamAlign(0);
-
-  // If those aren't given, extract them from the type.
-  if (Size == 0 || !Align) {
-    auto *FrameTy = Resume->arg_begin()->getType()->getPointerElementType();
-
-    const DataLayout &DL = Resume->getParent()->getDataLayout();
-    if (!Size) Size = DL.getTypeAllocSize(FrameTy);
-    if (!Align) Align = DL.getABITypeAlign(FrameTy);
-  }
-
-  return std::make_pair(Size, *Align);
+  if (!Size)
+    return std::nullopt;
+  return std::make_pair(Size, Resume->getParamAlign(0).valueOrOne());
 }
 
 // Finds first non alloca instruction in the entry block of a function.
@@ -119,6 +120,21 @@ static Instruction *getFirstNonAllocaInTheEntryBlock(Function *F) {
       return &I;
   llvm_unreachable("no terminator in the entry block");
 }
+
+#ifndef NDEBUG
+static std::unique_ptr<raw_fd_ostream> getOrCreateLogFile() {
+  assert(!CoroElideInfoOutputFilename.empty() &&
+         "coro-elide-info-output-file shouldn't be empty");
+  std::error_code EC;
+  auto Result = std::make_unique<raw_fd_ostream>(CoroElideInfoOutputFilename,
+                                                 EC, sys::fs::OF_Append);
+  if (!EC)
+    return Result;
+  llvm::errs() << "Error opening coro-elide-info-output-file '"
+               << CoroElideInfoOutputFilename << " for appending!\n";
+  return std::make_unique<raw_fd_ostream>(2, false); // stderr.
+}
+#endif
 
 // To elide heap allocations we need to suppress code blocks guarded by
 // llvm.coro.alloc and llvm.coro.free instructions.
@@ -178,12 +194,49 @@ bool Lowerer::hasEscapePath(const CoroBeginInst *CB,
   for (auto *DA : It->second)
     Visited.insert(DA->getParent());
 
+  SmallPtrSet<const BasicBlock *, 32> EscapingBBs;
+  for (auto *U : CB->users()) {
+    // The use from coroutine intrinsics are not a problem.
+    if (isa<CoroFreeInst, CoroSubFnInst, CoroSaveInst>(U))
+      continue;
+
+    // Think all other usages may be an escaping candidate conservatively.
+    //
+    // Note that the major user of switch ABI coroutine (the C++) will store
+    // resume.fn, destroy.fn and the index to the coroutine frame immediately.
+    // So the parent of the coro.begin in C++ will be always escaping.
+    // Then we can't get any performance benefits for C++ by improving the
+    // precision of the method.
+    //
+    // The reason why we still judge it is we want to make LLVM Coroutine in
+    // switch ABIs to be self contained as much as possible instead of a
+    // by-product of C++20 Coroutines.
+    EscapingBBs.insert(cast<Instruction>(U)->getParent());
+  }
+
+  bool PotentiallyEscaped = false;
+
   do {
     const auto *BB = Worklist.pop_back_val();
     if (!Visited.insert(BB).second)
       continue;
-    if (TIs.count(BB))
-      return true;
+
+    // A Path insensitive marker to test whether the coro.begin escapes.
+    // It is intentional to make it path insensitive while it may not be
+    // precise since we don't want the process to be too slow.
+    PotentiallyEscaped |= EscapingBBs.count(BB);
+
+    if (TIs.count(BB)) {
+      if (!BB->getTerminator()->isExceptionalTerminator() || PotentiallyEscaped)
+        return true;
+
+      // If the function ends with the exceptional terminator, the memory used
+      // by the coroutine frame can be released by stack unwinding
+      // automatically. So we can think the coro.begin doesn't escape if it
+      // exits the function by exceptional terminator.
+
+      continue;
+    }
 
     // Conservatively say that there is potentially a path.
     if (!--Limit)
@@ -220,31 +273,36 @@ bool Lowerer::shouldElide(Function *F, DominatorTree &DT) const {
   // memory location storing that value and not the virtual register.
 
   SmallPtrSet<BasicBlock *, 8> Terminators;
-  // First gather all of the non-exceptional terminators for the function.
+  // First gather all of the terminators for the function.
   // Consider the final coro.suspend as the real terminator when the current
   // function is a coroutine.
-    for (BasicBlock &B : *F) {
-      auto *TI = B.getTerminator();
-      if (TI->getNumSuccessors() == 0 && !TI->isExceptionalTerminator() &&
-          !isa<UnreachableInst>(TI))
-        Terminators.insert(&B);
-    }
+  for (BasicBlock &B : *F) {
+    auto *TI = B.getTerminator();
+
+    if (TI->getNumSuccessors() != 0 || isa<UnreachableInst>(TI))
+      continue;
+
+    Terminators.insert(&B);
+  }
 
   // Filter out the coro.destroy that lie along exceptional paths.
   SmallPtrSet<CoroBeginInst *, 8> ReferencedCoroBegins;
-  for (auto &It : DestroyAddr) {
-    for (Instruction *DA : It.second) {
-      for (BasicBlock *TI : Terminators) {
-        if (DT.dominates(DA, TI->getTerminator())) {
-          ReferencedCoroBegins.insert(It.first);
-          break;
-        }
-      }
-    }
-
-    // Whether there is any paths from coro.begin to Terminators which not pass
-    // through any of the coro.destroys.
-    if (!ReferencedCoroBegins.count(It.first) &&
+  for (const auto &It : DestroyAddr) {
+    // If every terminators is dominated by coro.destroy, we could know the
+    // corresponding coro.begin wouldn't escape.
+    //
+    // Otherwise hasEscapePath would decide whether there is any paths from
+    // coro.begin to Terminators which not pass through any of the
+    // coro.destroys.
+    //
+    // hasEscapePath is relatively slow, so we avoid to run it as much as
+    // possible.
+    if (llvm::all_of(Terminators,
+                     [&](auto *TI) {
+                       return llvm::any_of(It.second, [&](auto *DA) {
+                         return DT.dominates(DA, TI->getTerminator());
+                       });
+                     }) ||
         !hasEscapePath(It.first, Terminators))
       ReferencedCoroBegins.insert(It.first);
   }
@@ -280,10 +338,9 @@ void Lowerer::collectPostSplitCoroIds(Function *F) {
 }
 
 bool Lowerer::processCoroId(CoroIdInst *CoroId, AAResults &AA,
-                            DominatorTree &DT) {
+                            DominatorTree &DT, OptimizationRemarkEmitter &ORE) {
   CoroBegins.clear();
   CoroAllocs.clear();
-  CoroFrees.clear();
   ResumeAddr.clear();
   DestroyAddr.clear();
 
@@ -293,8 +350,6 @@ bool Lowerer::processCoroId(CoroIdInst *CoroId, AAResults &AA,
       CoroBegins.push_back(CB);
     else if (auto *CA = dyn_cast<CoroAllocInst>(U))
       CoroAllocs.push_back(CA);
-    else if (auto *CF = dyn_cast<CoroFreeInst>(U))
-      CoroFrees.push_back(CF);
   }
 
   // Collect all coro.subfn.addrs associated with coro.begin.
@@ -322,45 +377,68 @@ bool Lowerer::processCoroId(CoroIdInst *CoroId, AAResults &AA,
   assert(Resumers && "PostSplit coro.id Info argument must refer to an array"
                      "of coroutine subfunctions");
   auto *ResumeAddrConstant =
-      ConstantExpr::getExtractValue(Resumers, CoroSubFnInst::ResumeIndex);
+      Resumers->getAggregateElement(CoroSubFnInst::ResumeIndex);
 
   replaceWithConstant(ResumeAddrConstant, ResumeAddr);
 
   bool ShouldElide = shouldElide(CoroId->getFunction(), DT);
+  if (!ShouldElide)
+    ORE.emit([&]() {
+      if (auto FrameSizeAndAlign =
+              getFrameLayout(cast<Function>(ResumeAddrConstant)))
+        return OptimizationRemarkMissed(DEBUG_TYPE, "CoroElide", CoroId)
+               << "'" << ore::NV("callee", CoroId->getCoroutine()->getName())
+               << "' not elided in '"
+               << ore::NV("caller", CoroId->getFunction()->getName())
+               << "' (frame_size="
+               << ore::NV("frame_size", FrameSizeAndAlign->first) << ", align="
+               << ore::NV("align", FrameSizeAndAlign->second.value()) << ")";
+      else
+        return OptimizationRemarkMissed(DEBUG_TYPE, "CoroElide", CoroId)
+               << "'" << ore::NV("callee", CoroId->getCoroutine()->getName())
+               << "' not elided in '"
+               << ore::NV("caller", CoroId->getFunction()->getName())
+               << "' (frame_size=unknown, align=unknown)";
+    });
 
-  auto *DestroyAddrConstant = ConstantExpr::getExtractValue(
-      Resumers,
+  auto *DestroyAddrConstant = Resumers->getAggregateElement(
       ShouldElide ? CoroSubFnInst::CleanupIndex : CoroSubFnInst::DestroyIndex);
 
   for (auto &It : DestroyAddr)
     replaceWithConstant(DestroyAddrConstant, It.second);
 
   if (ShouldElide) {
-    auto FrameSizeAndAlign = getFrameLayout(cast<Function>(ResumeAddrConstant));
-    elideHeapAllocations(CoroId->getFunction(), FrameSizeAndAlign.first,
-                         FrameSizeAndAlign.second, AA);
-    coro::replaceCoroFree(CoroId, /*Elide=*/true);
+    if (auto FrameSizeAndAlign =
+            getFrameLayout(cast<Function>(ResumeAddrConstant))) {
+      elideHeapAllocations(CoroId->getFunction(), FrameSizeAndAlign->first,
+                           FrameSizeAndAlign->second, AA);
+      coro::replaceCoroFree(CoroId, /*Elide=*/true);
+      NumOfCoroElided++;
+#ifndef NDEBUG
+      if (!CoroElideInfoOutputFilename.empty())
+        *getOrCreateLogFile()
+            << "Elide " << CoroId->getCoroutine()->getName() << " in "
+            << CoroId->getFunction()->getName() << "\n";
+#endif
+      ORE.emit([&]() {
+        return OptimizationRemark(DEBUG_TYPE, "CoroElide", CoroId)
+               << "'" << ore::NV("callee", CoroId->getCoroutine()->getName())
+               << "' elided in '"
+               << ore::NV("caller", CoroId->getFunction()->getName())
+               << "' (frame_size="
+               << ore::NV("frame_size", FrameSizeAndAlign->first) << ", align="
+               << ore::NV("align", FrameSizeAndAlign->second.value()) << ")";
+      });
+    } else {
+      ORE.emit([&]() {
+        return OptimizationRemarkMissed(DEBUG_TYPE, "CoroElide", CoroId)
+               << "'" << ore::NV("callee", CoroId->getCoroutine()->getName())
+               << "' not elided in '"
+               << ore::NV("caller", CoroId->getFunction()->getName())
+               << "' (frame_size=unknown, align=unknown)";
+      });
+    }
   }
-
-  return true;
-}
-
-// See if there are any coro.subfn.addr instructions referring to coro.devirt
-// trigger, if so, replace them with a direct call to devirt trigger function.
-static bool replaceDevirtTrigger(Function &F) {
-  SmallVector<CoroSubFnInst *, 1> DevirtAddr;
-  for (auto &I : instructions(F))
-    if (auto *SubFn = dyn_cast<CoroSubFnInst>(&I))
-      if (SubFn->getIndex() == CoroSubFnInst::RestartTrigger)
-        DevirtAddr.push_back(SubFn);
-
-  if (DevirtAddr.empty())
-    return false;
-
-  Module &M = *F.getParent();
-  Function *DevirtFn = M.getFunction(CORO_DEVIRT_TRIGGER_FN);
-  assert(DevirtFn && "coro.devirt.fn not found");
-  replaceWithConstant(DevirtFn, DevirtAddr);
 
   return true;
 }
@@ -383,69 +461,11 @@ PreservedAnalyses CoroElidePass::run(Function &F, FunctionAnalysisManager &AM) {
 
   AAResults &AA = AM.getResult<AAManager>(F);
   DominatorTree &DT = AM.getResult<DominatorTreeAnalysis>(F);
+  auto &ORE = AM.getResult<OptimizationRemarkEmitterAnalysis>(F);
 
   bool Changed = false;
   for (auto *CII : L.CoroIds)
-    Changed |= L.processCoroId(CII, AA, DT);
+    Changed |= L.processCoroId(CII, AA, DT, ORE);
 
   return Changed ? PreservedAnalyses::none() : PreservedAnalyses::all();
 }
-
-namespace {
-struct CoroElideLegacy : FunctionPass {
-  static char ID;
-  CoroElideLegacy() : FunctionPass(ID) {
-    initializeCoroElideLegacyPass(*PassRegistry::getPassRegistry());
-  }
-
-  std::unique_ptr<Lowerer> L;
-
-  bool doInitialization(Module &M) override {
-    if (declaresCoroElideIntrinsics(M))
-      L = std::make_unique<Lowerer>(M);
-    return false;
-  }
-
-  bool runOnFunction(Function &F) override {
-    if (!L)
-      return false;
-
-    bool Changed = false;
-
-    if (F.hasFnAttribute(CORO_PRESPLIT_ATTR))
-      Changed = replaceDevirtTrigger(F);
-
-    L->CoroIds.clear();
-    L->collectPostSplitCoroIds(&F);
-    // If we did not find any coro.id, there is nothing to do.
-    if (L->CoroIds.empty())
-      return Changed;
-
-    AAResults &AA = getAnalysis<AAResultsWrapperPass>().getAAResults();
-    DominatorTree &DT = getAnalysis<DominatorTreeWrapperPass>().getDomTree();
-
-    for (auto *CII : L->CoroIds)
-      Changed |= L->processCoroId(CII, AA, DT);
-
-    return Changed;
-  }
-  void getAnalysisUsage(AnalysisUsage &AU) const override {
-    AU.addRequired<AAResultsWrapperPass>();
-    AU.addRequired<DominatorTreeWrapperPass>();
-  }
-  StringRef getPassName() const override { return "Coroutine Elision"; }
-};
-}
-
-char CoroElideLegacy::ID = 0;
-INITIALIZE_PASS_BEGIN(
-    CoroElideLegacy, "coro-elide",
-    "Coroutine frame allocation elision and indirect calls replacement", false,
-    false)
-INITIALIZE_PASS_DEPENDENCY(AAResultsWrapperPass)
-INITIALIZE_PASS_END(
-    CoroElideLegacy, "coro-elide",
-    "Coroutine frame allocation elision and indirect calls replacement", false,
-    false)
-
-Pass *llvm::createCoroElideLegacyPass() { return new CoroElideLegacy(); }

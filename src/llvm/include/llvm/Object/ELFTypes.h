@@ -15,6 +15,7 @@
 #include "llvm/Object/Error.h"
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/Error.h"
+#include "llvm/Support/MathExtras.h"
 #include <cassert>
 #include <cstdint>
 #include <cstring>
@@ -124,6 +125,7 @@ using ELF64BE = ELFType<support::big, true>;
   using Elf_Versym = typename ELFT::Versym;                                    \
   using Elf_Hash = typename ELFT::Hash;                                        \
   using Elf_GnuHash = typename ELFT::GnuHash;                                  \
+  using Elf_Chdr = typename ELFT::Chdr;                                        \
   using Elf_Nhdr = typename ELFT::Nhdr;                                        \
   using Elf_Note = typename ELFT::Note;                                        \
   using Elf_Note_Iterator = typename ELFT::NoteIterator;                       \
@@ -134,7 +136,7 @@ using ELF64BE = ELFType<support::big, true>;
   using Elf_Rel_Range = typename ELFT::RelRange;                               \
   using Elf_Rela_Range = typename ELFT::RelaRange;                             \
   using Elf_Relr_Range = typename ELFT::RelrRange;                             \
-  using Elf_Phdr_Range = typename ELFT::PhdrRange;                             \
+  using Elf_Phdr_Range = typename ELFT::PhdrRange;
 
 #define LLVM_ELF_COMMA ,
 #define LLVM_ELF_IMPORT_TYPES(E, W)                                            \
@@ -597,15 +599,13 @@ struct Elf_Nhdr_Impl {
   Elf_Word n_descsz;
   Elf_Word n_type;
 
-  /// The alignment of the name and descriptor.
-  ///
-  /// Implementations differ from the specification here: in practice all
-  /// variants align both the name and descriptor to 4-bytes.
-  static const unsigned int Align = 4;
-
-  /// Get the size of the note, including name, descriptor, and padding.
-  size_t getSize() const {
-    return sizeof(*this) + alignTo<Align>(n_namesz) + alignTo<Align>(n_descsz);
+  /// Get the size of the note, including name, descriptor, and padding. Both
+  /// the start and the end of the descriptor are aligned by the section
+  /// alignment. In practice many 64-bit systems deviate from the generic ABI by
+  /// using sh_addralign=4.
+  size_t getSize(size_t Align) const {
+    return alignToPowerOf2(sizeof(*this) + n_namesz, Align) +
+           alignToPowerOf2(n_descsz, Align);
   }
 };
 
@@ -633,18 +633,18 @@ public:
   }
 
   /// Get the note's descriptor.
-  ArrayRef<uint8_t> getDesc() const {
+  ArrayRef<uint8_t> getDesc(size_t Align) const {
     if (!Nhdr.n_descsz)
       return ArrayRef<uint8_t>();
     return ArrayRef<uint8_t>(
-        reinterpret_cast<const uint8_t *>(&Nhdr) + sizeof(Nhdr) +
-          alignTo<Elf_Nhdr_Impl<ELFT>::Align>(Nhdr.n_namesz),
+        reinterpret_cast<const uint8_t *>(&Nhdr) +
+            alignToPowerOf2(sizeof(Nhdr) + Nhdr.n_namesz, Align),
         Nhdr.n_descsz);
   }
 
   /// Get the note's descriptor as StringRef
-  StringRef getDescAsStringRef() const {
-    ArrayRef<uint8_t> Desc = getDesc();
+  StringRef getDescAsStringRef(size_t Align) const {
+    ArrayRef<uint8_t> Desc = getDesc(Align);
     return StringRef(reinterpret_cast<const char *>(Desc.data()), Desc.size());
   }
 
@@ -652,12 +652,19 @@ public:
   Elf_Word getType() const { return Nhdr.n_type; }
 };
 
-template <class ELFT>
-class Elf_Note_Iterator_Impl
-    : std::iterator<std::forward_iterator_tag, Elf_Note_Impl<ELFT>> {
+template <class ELFT> class Elf_Note_Iterator_Impl {
+public:
+  using iterator_category = std::forward_iterator_tag;
+  using value_type = Elf_Note_Impl<ELFT>;
+  using difference_type = std::ptrdiff_t;
+  using pointer = value_type *;
+  using reference = value_type &;
+
+private:
   // Nhdr being a nullptr marks the end of iteration.
   const Elf_Nhdr_Impl<ELFT> *Nhdr = nullptr;
   size_t RemainingSize = 0u;
+  size_t Align = 0;
   Error *Err = nullptr;
 
   template <class ELFFileELFT> friend class ELFFile;
@@ -685,17 +692,18 @@ class Elf_Note_Iterator_Impl
       stopWithOverflowError();
     else {
       Nhdr = reinterpret_cast<const Elf_Nhdr_Impl<ELFT> *>(NhdrPos + NoteSize);
-      if (Nhdr->getSize() > RemainingSize)
+      if (Nhdr->getSize(Align) > RemainingSize)
         stopWithOverflowError();
       else
         *Err = Error::success();
     }
   }
 
-  Elf_Note_Iterator_Impl() {}
+  Elf_Note_Iterator_Impl() = default;
   explicit Elf_Note_Iterator_Impl(Error &Err) : Err(&Err) {}
-  Elf_Note_Iterator_Impl(const uint8_t *Start, size_t Size, Error &Err)
-      : RemainingSize(Size), Err(&Err) {
+  Elf_Note_Iterator_Impl(const uint8_t *Start, size_t Size, size_t Align,
+                         Error &Err)
+      : RemainingSize(Size), Align(Align), Err(&Err) {
     consumeError(std::move(Err));
     assert(Start && "ELF note iterator starting at NULL");
     advanceNhdr(Start, 0u);
@@ -705,7 +713,7 @@ public:
   Elf_Note_Iterator_Impl &operator++() {
     assert(Nhdr && "incremented ELF note end iterator");
     const uint8_t *NhdrPos = reinterpret_cast<const uint8_t *>(Nhdr);
-    size_t NoteSize = Nhdr->getSize();
+    size_t NoteSize = Nhdr->getSize(Align);
     advanceNhdr(NhdrPos, NoteSize);
     return *this;
   }
@@ -727,8 +735,6 @@ public:
 
 template <class ELFT> struct Elf_CGProfile_Impl {
   LLVM_ELF_IMPORT_TYPES_ELFT(ELFT)
-  Elf_Word cgp_from;
-  Elf_Word cgp_to;
   Elf_Xword cgp_weight;
 };
 
@@ -786,6 +792,78 @@ template <class ELFT> struct Elf_Mips_ABIFlags {
   Elf_Word ases;     // ASEs flags
   Elf_Word flags1;   // General flags
   Elf_Word flags2;   // General flags
+};
+
+// Struct representing the BBAddrMap for one function.
+struct BBAddrMap {
+  uint64_t Addr; // Function address
+  // Struct representing the BBAddrMap information for one basic block.
+  struct BBEntry {
+    struct Metadata {
+      bool HasReturn : 1;         // If this block ends with a return (or tail
+                                  // call).
+      bool HasTailCall : 1;       // If this block ends with a tail call.
+      bool IsEHPad : 1;           // If this is an exception handling block.
+      bool CanFallThrough : 1;    // If this block can fall through to its next.
+      bool HasIndirectBranch : 1; // If this block ends with an indirect branch
+                                  // (branch via a register).
+
+      bool operator==(const Metadata &Other) const {
+        return HasReturn == Other.HasReturn &&
+               HasTailCall == Other.HasTailCall && IsEHPad == Other.IsEHPad &&
+               CanFallThrough == Other.CanFallThrough &&
+               HasIndirectBranch == Other.HasIndirectBranch;
+      }
+
+      // Encodes this struct as a uint32_t value.
+      uint32_t encode() const {
+        return static_cast<uint32_t>(HasReturn) |
+               (static_cast<uint32_t>(HasTailCall) << 1) |
+               (static_cast<uint32_t>(IsEHPad) << 2) |
+               (static_cast<uint32_t>(CanFallThrough) << 3) |
+               (static_cast<uint32_t>(HasIndirectBranch) << 4);
+      }
+
+      // Decodes and returns a Metadata struct from a uint32_t value.
+      static Expected<Metadata> decode(uint32_t V) {
+        Metadata MD{/*HasReturn=*/static_cast<bool>(V & 1),
+                    /*HasTailCall=*/static_cast<bool>(V & (1 << 1)),
+                    /*IsEHPad=*/static_cast<bool>(V & (1 << 2)),
+                    /*CanFallThrough=*/static_cast<bool>(V & (1 << 3)),
+                    /*HasIndirectBranch=*/static_cast<bool>(V & (1 << 4))};
+        if (MD.encode() != V)
+          return createStringError(
+              std::error_code(), "invalid encoding for BBEntry::Metadata: 0x%x",
+              V);
+        return MD;
+      }
+    };
+
+    uint32_t ID;     // Unique ID of this basic block.
+    uint32_t Offset; // Offset of basic block relative to function start.
+    uint32_t Size;   // Size of the basic block.
+    Metadata MD;     // Metdata for this basic block.
+
+    BBEntry(uint32_t ID, uint32_t Offset, uint32_t Size, Metadata MD)
+        : ID(ID), Offset(Offset), Size(Size), MD(MD){};
+
+    bool operator==(const BBEntry &Other) const {
+      return ID == Other.ID && Offset == Other.Offset && Size == Other.Size &&
+             MD == Other.MD;
+    }
+
+    bool hasReturn() const { return MD.HasReturn; }
+    bool hasTailCall() const { return MD.HasTailCall; }
+    bool isEHPad() const { return MD.IsEHPad; }
+    bool canFallThrough() const { return MD.CanFallThrough; }
+  };
+  std::vector<BBEntry> BBEntries; // Basic block entries for this function.
+
+  // Equality operator for unit testing.
+  bool operator==(const BBAddrMap &Other) const {
+    return Addr == Other.Addr && std::equal(BBEntries.begin(), BBEntries.end(),
+                                            Other.BBEntries.begin());
+  }
 };
 
 } // end namespace object.

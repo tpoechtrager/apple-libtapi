@@ -28,6 +28,7 @@ def RawFrmImm8    : Format<7>;
 def RawFrmImm16   : Format<8>;
 def AddCCFrm      : Format<9>;
 def PrefixByte    : Format<10>;
+def MRMDestMem4VOp3CC : Format<20>;
 def MRMr0          : Format<21>;
 def MRMSrcMemFSIB  : Format<22>;
 def MRMDestMemFSIB : Format<23>;
@@ -149,8 +150,8 @@ def PS     : Prefix<4>; // Similar to NoPrfx, but disassembler uses this to know
                         // disable to ANDPS.
 
 // Class specifying the opcode map.
-class Map<bits<3> val> {
-  bits<3> Value = val;
+class Map<bits<4> val> {
+  bits<4> Value = val;
 }
 def OB        : Map<0>;
 def TB        : Map<1>;
@@ -160,6 +161,8 @@ def XOP8      : Map<4>;
 def XOP9      : Map<5>;
 def XOPA      : Map<6>;
 def ThreeDNow : Map<7>;
+def T_MAP5    : Map<8>;
+def T_MAP6    : Map<9>;
 
 // Class specifying the encoding
 class Encoding<bits<2> val> {
@@ -194,7 +197,7 @@ class OpSize32 { OperandSize OpSize = OpSize32; }
 class AdSize16 { AddressSize AdSize = AdSize16; }
 class AdSize32 { AddressSize AdSize = AdSize32; }
 class AdSize64 { AddressSize AdSize = AdSize64; }
-class REX_W  { bit hasREX_WPrefix = 1; }
+class REX_W  { bit hasREX_W = 1; }
 class LOCK   { bit hasLockPrefix = 1; }
 class REP    { bit hasREPPrefix = 1; }
 class TB     { Map OpMap = TB; }
@@ -204,6 +207,16 @@ class XOP8   { Map OpMap = XOP8; Prefix OpPrefix = PS; }
 class XOP9   { Map OpMap = XOP9; Prefix OpPrefix = PS; }
 class XOPA   { Map OpMap = XOPA; Prefix OpPrefix = PS; }
 class ThreeDNow { Map OpMap = ThreeDNow; }
+class T_MAP5     { Map OpMap = T_MAP5; }
+class T_MAP5PS : T_MAP5 { Prefix OpPrefix = PS; } // none
+class T_MAP5PD : T_MAP5 { Prefix OpPrefix = PD; } // 0x66
+class T_MAP5XS : T_MAP5 { Prefix OpPrefix = XS; } // 0xF3
+class T_MAP5XD : T_MAP5 { Prefix OpPrefix = XD; } // 0xF2
+class T_MAP6     { Map OpMap = T_MAP6; }
+class T_MAP6PS : T_MAP6 { Prefix OpPrefix = PS; }
+class T_MAP6PD : T_MAP6 { Prefix OpPrefix = PD; }
+class T_MAP6XS : T_MAP6 { Prefix OpPrefix = XS; }
+class T_MAP6XD : T_MAP6 { Prefix OpPrefix = XD; }
 class OBXS   { Prefix OpPrefix = XS; }
 class PS   : TB { Prefix OpPrefix = PS; }
 class PD   : TB { Prefix OpPrefix = PD; }
@@ -218,10 +231,9 @@ class TAPD : TA { Prefix OpPrefix = PD; }
 class TAXD : TA { Prefix OpPrefix = XD; }
 class TAXS : TA { Prefix OpPrefix = XS; }
 class VEX    { Encoding OpEnc = EncVEX; }
-class VEX_W    { bit HasVEX_W = 1; }
-class VEX_WIG  { bit IgnoresVEX_W = 1; }
-// Special version of VEX_W that can be changed to VEX.W==0 for EVEX2VEX.
-class VEX_W1X  { bit HasVEX_W = 1; bit EVEX_W1_VEX_W0 = 1; }
+class WIG  { bit IgnoresW = 1; }
+// Special version of REX_W that can be changed to VEX.W==0 for EVEX2VEX.
+class VEX_W1X  { bit hasREX_W = 1; bit EVEX_W1_VEX_W0 = 1; }
 class VEX_4V : VEX { bit hasVEX_4V = 1; }
 class VEX_L  { bit hasVEX_L = 1; }
 class VEX_LIG { bit ignoresVEX_L = 1; }
@@ -247,19 +259,10 @@ class EVEX_CD8<int esize, CD8VForm form> {
 class XOP { Encoding OpEnc = EncXOP; }
 class XOP_4V : XOP { bit hasVEX_4V = 1; }
 
-// Specify the alternative register form instruction to replace the current
-// instruction in case it was picked during generation of memory folding tables
-class FoldGenData<string _RegisterForm> {
-  string FoldGenRegForm = _RegisterForm;
-}
-
 // Provide a specific instruction to be used by the EVEX2VEX conversion.
 class EVEX2VEXOverride<string VEXInstrName> {
   string EVEX2VEXOverride = VEXInstrName;
 }
-
-// Mark the instruction as "illegal to memory fold/unfold"
-class NotMemoryFoldable { bit isMemoryFoldable = 0; }
 
 // Prevent EVEX->VEX conversion from considering this instruction.
 class NotEVEX2VEXConvertible { bit notEVEX2VEXConvertible = 1; }
@@ -284,6 +287,8 @@ class X86Inst<bits<8> opcod, Format f, ImmType i, dag outs, dag ins,
   // If this is a pseudo instruction, mark it isCodeGenOnly.
   let isCodeGenOnly = !eq(!cast<string>(f), "Pseudo");
 
+  let HasPositionOrder = 1;
+
   //
   // Attributes specific to X86 instructions...
   //
@@ -301,16 +306,15 @@ class X86Inst<bits<8> opcod, Format f, ImmType i, dag outs, dag ins,
   Prefix OpPrefix = NoPrfx; // Which prefix byte does this inst have?
   bits<3> OpPrefixBits = OpPrefix.Value;
   Map OpMap = OB;           // Which opcode map does this inst have?
-  bits<3> OpMapBits = OpMap.Value;
-  bit hasREX_WPrefix  = 0;  // Does this inst require the REX.W prefix?
+  bits<4> OpMapBits = OpMap.Value;
+  bit hasREX_W  = 0;  // Does this inst require the REX.W prefix?
   FPFormat FPForm = NotFP;  // What flavor of FP instruction is this?
   bit hasLockPrefix = 0;    // Does this inst have a 0xF0 prefix?
   Domain ExeDomain = d;
   bit hasREPPrefix = 0;     // Does this inst have a REP prefix?
   Encoding OpEnc = EncNormal; // Encoding used by this instruction
   bits<2> OpEncBits = OpEnc.Value;
-  bit HasVEX_W = 0;         // Does this inst set the VEX_W field?
-  bit IgnoresVEX_W = 0;     // Does this inst ignore VEX_W field?
+  bit IgnoresW = 0;         // Does this inst ignore REX_W field?
   bit EVEX_W1_VEX_W0 = 0;   // This EVEX inst with VEX.W==1 can become a VEX
                             // instruction with VEX.W == 0.
   bit hasVEX_4V = 0;        // Does this inst require the VEX.VVVV field?
@@ -342,45 +346,38 @@ class X86Inst<bits<8> opcod, Format f, ImmType i, dag outs, dag ins,
                                      CD8_EltSize,
                                      !srl(VectSize, CD8_Form{1-0}))), 0);
 
-  // Used in the memory folding generation (TableGen backend) to point to an alternative
-  // instruction to replace the current one in case it got picked during generation.
-  string FoldGenRegForm = ?;
-
   // Used to prevent an explicit EVEX2VEX override for this instruction.
   string EVEX2VEXOverride = ?;
 
-  bit isMemoryFoldable = 1;     // Is it allowed to memory fold/unfold this instruction?
   bit notEVEX2VEXConvertible = 0; // Prevent EVEX->VEX conversion.
   bit ExplicitVEXPrefix = 0; // Force the instruction to use VEX encoding.
-
+  // Force to check predicate before compress EVEX to VEX encoding.
+  bit checkVEXPredicate = 0;
   // TSFlags layout should be kept in sync with X86BaseInfo.h.
   let TSFlags{6-0}   = FormBits;
   let TSFlags{8-7}   = OpSizeBits;
   let TSFlags{10-9}  = AdSizeBits;
   // No need for 3rd bit, we don't need to distinguish NoPrfx from PS.
   let TSFlags{12-11} = OpPrefixBits{1-0};
-  let TSFlags{15-13} = OpMapBits;
-  let TSFlags{16}    = hasREX_WPrefix;
-  let TSFlags{20-17} = ImmT.Value;
-  let TSFlags{23-21} = FPForm.Value;
-  let TSFlags{24}    = hasLockPrefix;
-  let TSFlags{25}    = hasREPPrefix;
-  let TSFlags{27-26} = ExeDomain.Value;
-  let TSFlags{29-28} = OpEncBits;
-  let TSFlags{37-30} = Opcode;
-  // Currently no need for second bit in TSFlags - W Ignore is equivalent to 0.
-  let TSFlags{38}    = HasVEX_W;
+  let TSFlags{16-13} = OpMapBits;
+  let TSFlags{17}    = hasREX_W;
+  let TSFlags{21-18} = ImmT.Value;
+  let TSFlags{24-22} = FPForm.Value;
+  let TSFlags{25}    = hasLockPrefix;
+  let TSFlags{26}    = hasREPPrefix;
+  let TSFlags{28-27} = ExeDomain.Value;
+  let TSFlags{30-29} = OpEncBits;
+  let TSFlags{38-31} = Opcode;
   let TSFlags{39}    = hasVEX_4V;
   let TSFlags{40}    = hasVEX_L;
   let TSFlags{41}    = hasEVEX_K;
   let TSFlags{42}    = hasEVEX_Z;
   let TSFlags{43}    = hasEVEX_L2;
   let TSFlags{44}    = hasEVEX_B;
-  // If we run out of TSFlags bits, it's possible to encode this in 3 bits.
-  let TSFlags{51-45} = CD8_Scale;
-  let TSFlags{52}    = hasEVEX_RC;
-  let TSFlags{53}    = hasNoTrackPrefix;
-  let TSFlags{54}    = ExplicitVEXPrefix;
+  let TSFlags{47-45} = !if(!eq(CD8_Scale, 0), 0, !add(!logtwo(CD8_Scale), 1));
+  let TSFlags{48}    = hasEVEX_RC;
+  let TSFlags{49}    = hasNoTrackPrefix;
+  let TSFlags{50}    = ExplicitVEXPrefix;
 }
 
 class PseudoI<dag oops, dag iops, list<dag> pattern>
@@ -457,13 +454,15 @@ class Ii32PCRel<bits<8> o, Format f, dag outs, dag ins, string asm,
 class FPI<bits<8> o, Format F, dag outs, dag ins, string asm>
   : I<o, F, outs, ins, asm, []> {
   let Defs = [FPSW];
+  let Predicates = [HasX87];
 }
 
-// FpI_ - Floating Point Pseudo Instruction template. Not Predicated.
+// FpI_ - Floating Point Pseudo Instruction template.
 class FpI_<dag outs, dag ins, FPFormat fp, list<dag> pattern>
   : PseudoI<outs, ins, pattern> {
   let FPForm = fp;
   let Defs = [FPSW];
+  let Predicates = [HasX87];
 }
 
 // Templates for instructions that use a 16- or 32-bit segmented address as
@@ -737,17 +736,18 @@ class SS428I<bits<8> o, Format F, dag outs, dag ins, string asm,
       : I<o, F, outs, ins, asm, pattern, SSEPackedInt>, T8PD,
         Requires<[UseSSE42]>;
 
-//   SS42FI - SSE 4.2 instructions with T8XD prefix.
-// NOTE: 'HasSSE42' is used as SS42FI is only used for CRC32 insns.
-class SS42FI<bits<8> o, Format F, dag outs, dag ins, string asm,
-             list<dag> pattern>
-      : I<o, F, outs, ins, asm, pattern>, T8XD, Requires<[HasSSE42]>;
-
 //   SS42AI = SSE 4.2 instructions with TA prefix
 class SS42AI<bits<8> o, Format F, dag outs, dag ins, string asm,
              list<dag> pattern>
       : Ii8<o, F, outs, ins, asm, pattern, SSEPackedInt>, TAPD,
         Requires<[UseSSE42]>;
+
+//   CRC32I - SSE 4.2 CRC32 instructions.
+// NOTE: 'HasCRC32' is used as CRC32 instructions are GPR only and not directly
+// controlled by the SSE42 flag.
+class CRC32I<bits<8> o, Format F, dag outs, dag ins, string asm,
+             list<dag> pattern>
+      : I<o, F, outs, ins, asm, pattern>, T8XD, Requires<[HasCRC32]>;
 
 // AVX Instruction Templates:
 //   Instructions introduced in AVX (no SSE equivalent forms)
@@ -869,7 +869,6 @@ class AVX512FMA3S<bits<8> o, Format F, dag outs, dag ins, string asm,
            list<dag>pattern>
       : I<o, F, outs, ins, asm, pattern>, T8PD,
         EVEX_4V, Requires<[HasAVX512]>;
-class AVX512FMA3Base : T8PD, EVEX_4V;
 
 class AVX512<bits<8> o, Format F, dag outs, dag ins, string asm,
            list<dag>pattern>
@@ -972,7 +971,7 @@ class RS2I<bits<8> o, Format F, dag outs, dag ins, string asm,
       : S2I<o, F, outs, ins, asm, pattern>, REX_W;
 class VRS2I<bits<8> o, Format F, dag outs, dag ins, string asm,
            list<dag> pattern>
-      : VS2I<o, F, outs, ins, asm, pattern>, VEX_W;
+      : VS2I<o, F, outs, ins, asm, pattern>, REX_W;
 
 // MMX Instruction templates
 //
@@ -996,7 +995,8 @@ class MMXI64<bits<8> o, Format F, dag outs, dag ins, string asm,
       : I<o, F, outs, ins, asm, pattern>, PS, Requires<[HasMMX,In64BitMode]>;
 class MMXRI<bits<8> o, Format F, dag outs, dag ins, string asm,
             list<dag> pattern>
-      : I<o, F, outs, ins, asm, pattern>, PS, REX_W, Requires<[HasMMX]>;
+      : I<o, F, outs, ins, asm, pattern>, PS, REX_W,
+        Requires<[HasMMX,In64BitMode]>;
 class MMX2I<bits<8> o, Format F, dag outs, dag ins, string asm,
             list<dag> pattern>
       : I<o, F, outs, ins, asm, pattern>, PD, Requires<[HasMMX]>;

@@ -1,9 +1,8 @@
 //===--- RefactoringOperation.cpp - Defines a refactoring operation -------===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 
@@ -34,12 +33,12 @@ RefactoringOperationResult clang::tooling::initiateRefactoringOperationAt(
     SourceLocation Location, SourceRange SelectionRange, ASTContext &Context,
     RefactoringActionType ActionType, bool CreateOperation) {
   if (Location.isInvalid())
-    return None;
+    return std::nullopt;
   if (ActionType == RefactoringActionType::Rename ||
       ActionType == RefactoringActionType::Rename_Local) {
     const NamedDecl *FoundDecl = rename::getNamedDeclAt(Context, Location);
     if (!FoundDecl)
-      return None;
+      return std::nullopt;
     RefactoringOperationResult Result;
     Result.Initiated = true;
     if (CreateOperation)
@@ -82,10 +81,10 @@ RefactoringOperationResult clang::tooling::initiateRefactoringOperationAt(
 RefactoringOperationResult clang::tooling::initiateRefactoringOperationOnDecl(
     StringRef DeclUSR, ASTContext &Context, RefactoringActionType ActionType) {
   if (ActionType != RefactoringActionType::Rename)
-    return None;
+    return std::nullopt;
   const NamedDecl *FoundDecl = rename::getNamedDeclWithUSR(Context, DeclUSR);
   if (!FoundDecl)
-    return None;
+    return std::nullopt;
   RefactoringOperationResult Result;
   Result.Initiated = true;
   Result.SymbolOp = std::make_unique<SymbolOperation>(FoundDecl, Context);

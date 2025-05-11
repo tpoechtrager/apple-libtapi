@@ -456,8 +456,7 @@ public:
     int Level = 0;
     OS << formatv("{0,-5} {1,-60} {2,+12} {3,+16}\n", "lvl", "function",
                   "count", "sum");
-    for (auto *F :
-         reverse(make_range(CurrentStack.begin() + 1, CurrentStack.end()))) {
+    for (auto *F : reverse(drop_begin(CurrentStack))) {
       auto Sum = std::accumulate(F->ExtraData.IntermediateDurations.begin(),
                                  F->ExtraData.IntermediateDurations.end(), 0LL);
       auto FuncId = FN.SymbolOrNumber(F->FuncId);
@@ -479,7 +478,7 @@ public:
 
   /// Prints top stacks for each thread.
   void printPerThread(raw_ostream &OS, FuncIdConversionHelper &FN) {
-    for (auto iter : Roots) {
+    for (const auto &iter : Roots) {
       OS << "Thread " << iter.first << ":\n";
       print(OS, FN, iter.second);
       OS << "\n";
@@ -490,12 +489,8 @@ public:
   template <AggregationType AggType>
   void printAllPerThread(raw_ostream &OS, FuncIdConversionHelper &FN,
                          StackOutputFormat format) {
-    for (auto iter : Roots) {
-      uint32_t threadId = iter.first;
-      RootVector &perThreadRoots = iter.second;
-      bool reportThreadId = true;
-      printAll<AggType>(OS, FN, perThreadRoots, threadId, reportThreadId);
-    }
+    for (const auto &iter : Roots)
+      printAll<AggType>(OS, FN, iter.second, iter.first, true);
   }
 
   /// Prints top stacks from looking at all the leaves and ignoring thread IDs.
@@ -522,7 +517,7 @@ public:
   /// thread IDs.
   RootVector mergeAcrossThreads(std::forward_list<StackTrieNode> &NodeStore) {
     RootVector MergedByThreadRoots;
-    for (auto MapIter : Roots) {
+    for (const auto &MapIter : Roots) {
       const auto &RootNodeVector = MapIter.second;
       for (auto *Node : RootNodeVector) {
         auto MaybeFoundIter =

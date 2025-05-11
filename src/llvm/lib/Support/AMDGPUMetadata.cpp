@@ -12,9 +12,9 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "llvm/ADT/Twine.h"
 #include "llvm/Support/AMDGPUMetadata.h"
 #include "llvm/Support/YAMLTraits.h"
+#include <optional>
 
 using namespace llvm::AMDGPU;
 using namespace llvm::AMDGPU::HSAMD;
@@ -113,7 +113,7 @@ struct MappingTraits<Kernel::Arg::Metadata> {
     YIO.mapRequired(Kernel::Arg::Key::ValueKind, MD.mValueKind);
 
     // Removed. Accepted for parsing compatibility, but not emitted.
-    Optional<ValueType> Unused;
+    std::optional<ValueType> Unused;
     YIO.mapOptional(Kernel::Arg::Key::ValueType, Unused);
 
     YIO.mapOptional(Kernel::Arg::Key::PointeeAlign, MD.mPointeeAlign,
@@ -211,7 +211,7 @@ struct MappingTraits<HSAMD::Metadata> {
 namespace AMDGPU {
 namespace HSAMD {
 
-std::error_code fromString(std::string String, Metadata &HSAMetadata) {
+std::error_code fromString(StringRef String, Metadata &HSAMetadata) {
   yaml::Input YamlInput(String);
   YamlInput >> HSAMetadata;
   return YamlInput.error();

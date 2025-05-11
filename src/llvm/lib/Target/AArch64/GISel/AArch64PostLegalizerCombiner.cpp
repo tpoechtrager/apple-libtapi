@@ -20,10 +20,16 @@
 //===----------------------------------------------------------------------===//
 
 #include "AArch64TargetMachine.h"
+#include "llvm/CodeGen/GlobalISel/CSEInfo.h"
 #include "llvm/CodeGen/GlobalISel/Combiner.h"
 #include "llvm/CodeGen/GlobalISel/CombinerHelper.h"
 #include "llvm/CodeGen/GlobalISel/CombinerInfo.h"
+#include "llvm/CodeGen/GlobalISel/GIMatchTableExecutor.h"
+#include "llvm/CodeGen/GlobalISel/GIMatchTableExecutorImpl.h"
+#include "llvm/CodeGen/GlobalISel/GISelChangeObserver.h"
 #include "llvm/CodeGen/GlobalISel/GISelKnownBits.h"
+#include "llvm/CodeGen/GlobalISel/GenericMachineInstrs.h"
+#include "llvm/CodeGen/GlobalISel/MIPatternMatch.h"
 #include "llvm/CodeGen/GlobalISel/MachineIRBuilder.h"
 #include "llvm/CodeGen/GlobalISel/Utils.h"
 #include "llvm/CodeGen/MachineDominators.h"
@@ -33,9 +39,20 @@
 #include "llvm/CodeGen/TargetPassConfig.h"
 #include "llvm/Support/Debug.h"
 
+#define GET_GICOMBINER_DEPS
+#include "AArch64GenPostLegalizeGICombiner.inc"
+#undef GET_GICOMBINER_DEPS
+
 #define DEBUG_TYPE "aarch64-postlegalizer-combiner"
 
 using namespace llvm;
+using namespace MIPatternMatch;
+
+namespace {
+
+#define GET_GICOMBINER_TYPES
+#include "AArch64GenPostLegalizeGICombiner.inc"
+#undef GET_GICOMBINER_TYPES
 
 /// This combine tries do what performExtractVectorEltCombine does in SDAG.
 /// Rewrite for pairwise fadd pattern
@@ -52,7 +69,7 @@ bool matchExtractVecEltPairwiseAdd(
   Register Src2 = MI.getOperand(2).getReg();
   LLT DstTy = MRI.getType(MI.getOperand(0).getReg());
 
-  auto Cst = getConstantVRegValWithLookThrough(Src2, MRI);
+  auto Cst = getIConstantVRegValWithLookThrough(Src2, MRI);
   if (!Cst || Cst->Value != 0)
     return false;
   // SDAG also checks for FullFP16, but this looks to be beneficial anyway.
@@ -88,7 +105,7 @@ bool matchExtractVecEltPairwiseAdd(
   return false;
 }
 
-bool applyExtractVecEltPairwiseAdd(
+void applyExtractVecEltPairwiseAdd(
     MachineInstr &MI, MachineRegisterInfo &MRI, MachineIRBuilder &B,
     std::tuple<unsigned, LLT, Register> &MatchInfo) {
   unsigned Opc = std::get<0>(MatchInfo);
@@ -102,16 +119,15 @@ bool applyExtractVecEltPairwiseAdd(
   auto Elt1 = B.buildExtractVectorElement(Ty, Src, B.buildConstant(s64, 1));
   B.buildInstr(Opc, {MI.getOperand(0).getReg()}, {Elt0, Elt1});
   MI.eraseFromParent();
-  return true;
 }
 
-static bool isSignExtended(Register R, MachineRegisterInfo &MRI) {
+bool isSignExtended(Register R, MachineRegisterInfo &MRI) {
   // TODO: check if extended build vector as well.
   unsigned Opc = MRI.getVRegDef(R)->getOpcode();
   return Opc == TargetOpcode::G_SEXT || Opc == TargetOpcode::G_SEXT_INREG;
 }
 
-static bool isZeroExtended(Register R, MachineRegisterInfo &MRI) {
+bool isZeroExtended(Register R, MachineRegisterInfo &MRI) {
   // TODO: check if extended build vector as well.
   return MRI.getVRegDef(R)->getOpcode() == TargetOpcode::G_ZEXT;
 }
@@ -126,11 +142,11 @@ bool matchAArch64MulConstCombine(
   const LLT Ty = MRI.getType(LHS);
 
   // The below optimizations require a constant RHS.
-  auto Const = getConstantVRegValWithLookThrough(RHS, MRI);
+  auto Const = getIConstantVRegValWithLookThrough(RHS, MRI);
   if (!Const)
     return false;
 
-  const APInt ConstValue = Const->Value.sextOrSelf(Ty.getSizeInBits());
+  APInt ConstValue = Const->Value.sext(Ty.getSizeInBits());
   // The following code is ported from AArch64ISelLowering.
   // Multiplication of a power of two plus/minus one can be done more
   // cheaply as as shift+add/sub. For now, this is true unilaterally. If
@@ -144,7 +160,7 @@ bool matchAArch64MulConstCombine(
   // which equals to (1+2)*16-(1+2).
   // TrailingZeroes is used to test if the mul can be lowered to
   // shift+add+shift.
-  unsigned TrailingZeroes = ConstValue.countTrailingZeros();
+  unsigned TrailingZeroes = ConstValue.countr_zero();
   if (TrailingZeroes) {
     // Conservatively do not lower to shift+add+shift if the mul might be
     // folded into smul or umul.
@@ -155,8 +171,9 @@ bool matchAArch64MulConstCombine(
     // folded into madd or msub.
     if (MRI.hasOneNonDBGUse(Dst)) {
       MachineInstr &UseMI = *MRI.use_instr_begin(Dst);
-      if (UseMI.getOpcode() == TargetOpcode::G_ADD ||
-          UseMI.getOpcode() == TargetOpcode::G_SUB)
+      unsigned UseOpc = UseMI.getOpcode();
+      if (UseOpc == TargetOpcode::G_ADD || UseOpc == TargetOpcode::G_PTR_ADD ||
+          UseOpc == TargetOpcode::G_SUB)
         return false;
     }
   }
@@ -228,30 +245,149 @@ bool matchAArch64MulConstCombine(
   return true;
 }
 
-bool applyAArch64MulConstCombine(
+void applyAArch64MulConstCombine(
     MachineInstr &MI, MachineRegisterInfo &MRI, MachineIRBuilder &B,
     std::function<void(MachineIRBuilder &B, Register DstReg)> &ApplyFn) {
   B.setInstrAndDebugLoc(MI);
   ApplyFn(B, MI.getOperand(0).getReg());
   MI.eraseFromParent();
-  return true;
 }
 
-#define AARCH64POSTLEGALIZERCOMBINERHELPER_GENCOMBINERHELPER_DEPS
-#include "AArch64GenPostLegalizeGICombiner.inc"
-#undef AARCH64POSTLEGALIZERCOMBINERHELPER_GENCOMBINERHELPER_DEPS
+/// Try to fold a G_MERGE_VALUES of 2 s32 sources, where the second source
+/// is a zero, into a G_ZEXT of the first.
+bool matchFoldMergeToZext(MachineInstr &MI, MachineRegisterInfo &MRI) {
+  auto &Merge = cast<GMerge>(MI);
+  LLT SrcTy = MRI.getType(Merge.getSourceReg(0));
+  if (SrcTy != LLT::scalar(32) || Merge.getNumSources() != 2)
+    return false;
+  return mi_match(Merge.getSourceReg(1), MRI, m_SpecificICst(0));
+}
 
-namespace {
-#define AARCH64POSTLEGALIZERCOMBINERHELPER_GENCOMBINERHELPER_H
+void applyFoldMergeToZext(MachineInstr &MI, MachineRegisterInfo &MRI,
+                          MachineIRBuilder &B, GISelChangeObserver &Observer) {
+  // Mutate %d(s64) = G_MERGE_VALUES %a(s32), 0(s32)
+  //  ->
+  // %d(s64) = G_ZEXT %a(s32)
+  Observer.changingInstr(MI);
+  MI.setDesc(B.getTII().get(TargetOpcode::G_ZEXT));
+  MI.removeOperand(2);
+  Observer.changedInstr(MI);
+}
+
+/// \returns True if a G_ANYEXT instruction \p MI should be mutated to a G_ZEXT
+/// instruction.
+bool matchMutateAnyExtToZExt(MachineInstr &MI, MachineRegisterInfo &MRI) {
+  // If this is coming from a scalar compare then we can use a G_ZEXT instead of
+  // a G_ANYEXT:
+  //
+  // %cmp:_(s32) = G_[I|F]CMP ... <-- produces 0/1.
+  // %ext:_(s64) = G_ANYEXT %cmp(s32)
+  //
+  // By doing this, we can leverage more KnownBits combines.
+  assert(MI.getOpcode() == TargetOpcode::G_ANYEXT);
+  Register Dst = MI.getOperand(0).getReg();
+  Register Src = MI.getOperand(1).getReg();
+  return MRI.getType(Dst).isScalar() &&
+         mi_match(Src, MRI,
+                  m_any_of(m_GICmp(m_Pred(), m_Reg(), m_Reg()),
+                           m_GFCmp(m_Pred(), m_Reg(), m_Reg())));
+}
+
+void applyMutateAnyExtToZExt(MachineInstr &MI, MachineRegisterInfo &MRI,
+                             MachineIRBuilder &B,
+                             GISelChangeObserver &Observer) {
+  Observer.changingInstr(MI);
+  MI.setDesc(B.getTII().get(TargetOpcode::G_ZEXT));
+  Observer.changedInstr(MI);
+}
+
+/// Match a 128b store of zero and split it into two 64 bit stores, for
+/// size/performance reasons.
+bool matchSplitStoreZero128(MachineInstr &MI, MachineRegisterInfo &MRI) {
+  GStore &Store = cast<GStore>(MI);
+  if (!Store.isSimple())
+    return false;
+  LLT ValTy = MRI.getType(Store.getValueReg());
+  if (!ValTy.isVector() || ValTy.getSizeInBits() != 128)
+    return false;
+  if (ValTy.getSizeInBits() != Store.getMemSizeInBits())
+    return false; // Don't split truncating stores.
+  if (!MRI.hasOneNonDBGUse(Store.getValueReg()))
+    return false;
+  auto MaybeCst = isConstantOrConstantSplatVector(
+      *MRI.getVRegDef(Store.getValueReg()), MRI);
+  return MaybeCst && MaybeCst->isZero();
+}
+
+void applySplitStoreZero128(MachineInstr &MI, MachineRegisterInfo &MRI,
+                            MachineIRBuilder &B,
+                            GISelChangeObserver &Observer) {
+  B.setInstrAndDebugLoc(MI);
+  GStore &Store = cast<GStore>(MI);
+  assert(MRI.getType(Store.getValueReg()).isVector() &&
+         "Expected a vector store value");
+  LLT NewTy = LLT::scalar(64);
+  Register PtrReg = Store.getPointerReg();
+  auto Zero = B.buildConstant(NewTy, 0);
+  auto HighPtr = B.buildPtrAdd(MRI.getType(PtrReg), PtrReg,
+                               B.buildConstant(LLT::scalar(64), 8));
+  auto &MF = *MI.getMF();
+  auto *LowMMO = MF.getMachineMemOperand(&Store.getMMO(), 0, NewTy);
+  auto *HighMMO = MF.getMachineMemOperand(&Store.getMMO(), 8, NewTy);
+  B.buildStore(Zero, PtrReg, *LowMMO);
+  B.buildStore(Zero, HighPtr, *HighMMO);
+  Store.eraseFromParent();
+}
+
+class AArch64PostLegalizerCombinerImpl : public GIMatchTableExecutor {
+protected:
+  CombinerHelper &Helper;
+  const AArch64PostLegalizerCombinerImplRuleConfig &RuleConfig;
+
+  const AArch64Subtarget &STI;
+  MachineRegisterInfo &MRI;
+  GISelChangeObserver &Observer;
+  MachineIRBuilder &B;
+  MachineFunction &MF;
+
+public:
+  AArch64PostLegalizerCombinerImpl(
+      const AArch64PostLegalizerCombinerImplRuleConfig &RuleConfig,
+      const AArch64Subtarget &STI, GISelChangeObserver &Observer,
+      MachineIRBuilder &B, CombinerHelper &Helper);
+
+  static const char *getName() { return "AArch64PostLegalizerCombiner"; }
+
+  bool tryCombineAll(MachineInstr &I) const;
+
+private:
+#define GET_GICOMBINER_CLASS_MEMBERS
 #include "AArch64GenPostLegalizeGICombiner.inc"
-#undef AARCH64POSTLEGALIZERCOMBINERHELPER_GENCOMBINERHELPER_H
+#undef GET_GICOMBINER_CLASS_MEMBERS
+};
+
+#define GET_GICOMBINER_IMPL
+#include "AArch64GenPostLegalizeGICombiner.inc"
+#undef GET_GICOMBINER_IMPL
+
+AArch64PostLegalizerCombinerImpl::AArch64PostLegalizerCombinerImpl(
+    const AArch64PostLegalizerCombinerImplRuleConfig &RuleConfig,
+    const AArch64Subtarget &STI, GISelChangeObserver &Observer,
+    MachineIRBuilder &B, CombinerHelper &Helper)
+    : Helper(Helper), RuleConfig(RuleConfig), STI(STI), MRI(*B.getMRI()),
+      Observer(Observer), B(B), MF(B.getMF()),
+#define GET_GICOMBINER_CONSTRUCTOR_INITS
+#include "AArch64GenPostLegalizeGICombiner.inc"
+#undef GET_GICOMBINER_CONSTRUCTOR_INITS
+{
+}
 
 class AArch64PostLegalizerCombinerInfo : public CombinerInfo {
   GISelKnownBits *KB;
   MachineDominatorTree *MDT;
 
 public:
-  AArch64GenPostLegalizerCombinerHelperRuleConfig GeneratedRuleCfg;
+  AArch64PostLegalizerCombinerImplRuleConfig RuleConfig;
 
   AArch64PostLegalizerCombinerInfo(bool EnableOpt, bool OptSize, bool MinSize,
                                    GISelKnownBits *KB,
@@ -259,27 +395,24 @@ public:
       : CombinerInfo(/*AllowIllegalOps*/ true, /*ShouldLegalizeIllegal*/ false,
                      /*LegalizerInfo*/ nullptr, EnableOpt, OptSize, MinSize),
         KB(KB), MDT(MDT) {
-    if (!GeneratedRuleCfg.parseCommandLineOption())
+    if (!RuleConfig.parseCommandLineOption())
       report_fatal_error("Invalid rule identifier");
   }
 
-  virtual bool combine(GISelChangeObserver &Observer, MachineInstr &MI,
-                       MachineIRBuilder &B) const override;
+  bool combine(GISelChangeObserver &Observer, MachineInstr &MI,
+               MachineIRBuilder &B) const override;
 };
 
 bool AArch64PostLegalizerCombinerInfo::combine(GISelChangeObserver &Observer,
                                                MachineInstr &MI,
                                                MachineIRBuilder &B) const {
-  const auto *LI =
-      MI.getParent()->getParent()->getSubtarget().getLegalizerInfo();
-  CombinerHelper Helper(Observer, B, KB, MDT, LI);
-  AArch64GenPostLegalizerCombinerHelper Generated(GeneratedRuleCfg);
-  return Generated.tryCombineAll(Observer, MI, B, Helper);
+  const auto &STI = MI.getMF()->getSubtarget<AArch64Subtarget>();
+  const auto *LI = STI.getLegalizerInfo();
+  CombinerHelper Helper(Observer, B, /*IsPreLegalize*/ false, KB, MDT, LI);
+  AArch64PostLegalizerCombinerImpl Impl(RuleConfig, STI, Observer, B, Helper);
+  Impl.setupMF(*MI.getMF(), KB);
+  return Impl.tryCombineAll(MI);
 }
-
-#define AARCH64POSTLEGALIZERCOMBINERHELPER_GENCOMBINERHELPER_CPP
-#include "AArch64GenPostLegalizeGICombiner.inc"
-#undef AARCH64POSTLEGALIZERCOMBINERHELPER_GENCOMBINERHELPER_CPP
 
 class AArch64PostLegalizerCombiner : public MachineFunctionPass {
 public:
@@ -308,6 +441,8 @@ void AArch64PostLegalizerCombiner::getAnalysisUsage(AnalysisUsage &AU) const {
   if (!IsOptNone) {
     AU.addRequired<MachineDominatorTree>();
     AU.addPreserved<MachineDominatorTree>();
+    AU.addRequired<GISelCSEAnalysisWrapperPass>();
+    AU.addPreserved<GISelCSEAnalysisWrapperPass>();
   }
   MachineFunctionPass::getAnalysisUsage(AU);
 }
@@ -333,8 +468,11 @@ bool AArch64PostLegalizerCombiner::runOnMachineFunction(MachineFunction &MF) {
       IsOptNone ? nullptr : &getAnalysis<MachineDominatorTree>();
   AArch64PostLegalizerCombinerInfo PCInfo(EnableOpt, F.hasOptSize(),
                                           F.hasMinSize(), KB, MDT);
+  GISelCSEAnalysisWrapper &Wrapper =
+      getAnalysis<GISelCSEAnalysisWrapperPass>().getCSEWrapper();
+  auto *CSEInfo = &Wrapper.get(TPC->getCSEConfig());
   Combiner C(PCInfo, TPC);
-  return C.combineMachineInstrs(MF, /*CSEInfo*/ nullptr);
+  return C.combineMachineInstrs(MF, CSEInfo);
 }
 
 char AArch64PostLegalizerCombiner::ID = 0;

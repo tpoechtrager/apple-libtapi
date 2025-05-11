@@ -12,7 +12,6 @@
 //===----------------------------------------------------------------------===//
 
 #include "Disassembler.h"
-#include "llvm/ADT/Triple.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCDisassembler/MCDisassembler.h"
@@ -20,10 +19,11 @@
 #include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/MC/MCSubtargetInfo.h"
+#include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/SourceMgr.h"
-#include "llvm/Support/TargetRegistry.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/TargetParser/Triple.h"
 
 using namespace llvm;
 
@@ -61,7 +61,7 @@ static bool PrintInsts(const MCDisassembler &DisAsm, const ByteArrayTy &Bytes,
       SM.PrintMessage(SMLoc::getFromPointer(Bytes.second[Index]),
                       SourceMgr::DK_Warning,
                       "potentially undefined instruction encoding");
-      LLVM_FALLTHROUGH;
+      [[fallthrough]];
 
     case MCDisassembler::Success:
       Streamer.emitInstruction(Inst, STI);
@@ -123,36 +123,36 @@ static bool ByteArrayFromString(ByteArrayTy &ByteArray, StringRef &Str,
   return false;
 }
 
-int Disassembler::disassemble(const Target &T, const std::string &Triple,
+int Disassembler::disassemble(const Target &T, const std::string &TripleName,
                               MCSubtargetInfo &STI, MCStreamer &Streamer,
                               MemoryBuffer &Buffer, SourceMgr &SM,
                               raw_ostream &Out) {
-  std::unique_ptr<const MCRegisterInfo> MRI(T.createMCRegInfo(Triple));
+  std::unique_ptr<const MCRegisterInfo> MRI(T.createMCRegInfo(TripleName));
   if (!MRI) {
-    errs() << "error: no register info for target " << Triple << "\n";
+    errs() << "error: no register info for target " << TripleName << "\n";
     return -1;
   }
 
   MCTargetOptions MCOptions;
   std::unique_ptr<const MCAsmInfo> MAI(
-      T.createMCAsmInfo(*MRI, Triple, MCOptions));
+      T.createMCAsmInfo(*MRI, TripleName, MCOptions));
   if (!MAI) {
-    errs() << "error: no assembly info for target " << Triple << "\n";
+    errs() << "error: no assembly info for target " << TripleName << "\n";
     return -1;
   }
 
   // Set up the MCContext for creating symbols and MCExpr's.
-  MCContext Ctx(MAI.get(), MRI.get(), nullptr);
+  MCContext Ctx(Triple(TripleName), MAI.get(), MRI.get(), &STI);
 
   std::unique_ptr<const MCDisassembler> DisAsm(
       T.createMCDisassembler(STI, Ctx));
   if (!DisAsm) {
-    errs() << "error: no disassembler for target " << Triple << "\n";
+    errs() << "error: no disassembler for target " << TripleName << "\n";
     return -1;
   }
 
   // Set up initial section manually here
-  Streamer.InitSections(false);
+  Streamer.initSections(false, STI);
 
   bool ErrorOccurred = false;
 

@@ -1,9 +1,8 @@
 //===--- BitstreamVisitor.h - Helper for reading a bitstream --------------===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 
@@ -27,7 +26,7 @@ struct SavedStreamPosition {
 
   ~SavedStreamPosition() {
     if (llvm::Error Err = Cursor.JumpToBit(Offset))
-      llvm::report_fatal_error("SavedStreamPosition failed jumping: " +
+      llvm::report_fatal_error(Twine("SavedStreamPosition failed jumping: ") +
                                toString(std::move(Err)));
   }
 
@@ -48,7 +47,7 @@ class BitstreamVisitor {
 
 protected:
   llvm::BitstreamCursor &Stream;
-  Optional<llvm::BitstreamBlockInfo> BlockInfo;
+  std::optional<llvm::BitstreamBlockInfo> BlockInfo;
   std::string *Error;
 
 public:
@@ -90,7 +89,7 @@ public:
 
       case llvm::BitstreamEntry::SubBlock: {
         if (Entry.ID == llvm::bitc::BLOCKINFO_BLOCK_ID) {
-          Expected<Optional<llvm::BitstreamBlockInfo>> MaybeBlockInfo = Stream.ReadBlockInfoBlock();
+          Expected<std::optional<llvm::BitstreamBlockInfo>> MaybeBlockInfo = Stream.ReadBlockInfoBlock();
           if (!MaybeBlockInfo) {
             Error = toString(MaybeBlockInfo.takeError());
             return false;

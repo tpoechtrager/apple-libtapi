@@ -12,7 +12,6 @@
 
 #include "llvm/IR/ValueSymbolTable.h"
 #include "llvm/ADT/SmallString.h"
-#include "llvm/ADT/Triple.h"
 #include "llvm/Config/llvm-config.h"
 #include "llvm/IR/GlobalValue.h"
 #include "llvm/IR/Module.h"
@@ -22,6 +21,7 @@
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/TargetParser/Triple.h"
 #include <cassert>
 #include <utility>
 
@@ -61,7 +61,7 @@ ValueName *ValueSymbolTable::makeUniqueName(Value *V,
     S << ++LastUnique;
 
     // Try insert the vmap entry with this suffix.
-    auto IterBool = vmap.insert(std::make_pair(UniqueName, V));
+    auto IterBool = vmap.insert(std::make_pair(UniqueName.str(), V));
     if (IterBool.second)
       return &*IterBool.first;
   }
@@ -100,6 +100,9 @@ void ValueSymbolTable::removeValueName(ValueName *V) {
 /// it into the symbol table with the specified name.  If it conflicts, it
 /// auto-renames the name and returns that instead.
 ValueName *ValueSymbolTable::createValueName(StringRef Name, Value *V) {
+  if (MaxNameSize > -1 && Name.size() > (unsigned)MaxNameSize)
+    Name = Name.substr(0, std::max(1u, (unsigned)MaxNameSize));
+
   // In the common case, the name is not already in the symbol table.
   auto IterBool = vmap.insert(std::make_pair(Name, V));
   if (IterBool.second) {

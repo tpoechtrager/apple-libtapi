@@ -18,6 +18,7 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SCCIterator.h"
 #include "llvm/ADT/Statistic.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/Analysis/CallGraph.h"
 #include "llvm/IR/AbstractCallSite.h"
 #include "llvm/IR/Function.h"
@@ -28,7 +29,6 @@
 #include "llvm/IR/OptBisect.h"
 #include "llvm/IR/PassTimingInfo.h"
 #include "llvm/IR/PrintPasses.h"
-#include "llvm/IR/StructuralHash.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
@@ -43,8 +43,10 @@ using namespace llvm;
 
 #define DEBUG_TYPE "cgscc-passmgr"
 
+namespace llvm {
 cl::opt<unsigned> MaxDevirtIterations("max-devirt-iterations", cl::ReallyHidden,
                                       cl::init(4));
+}
 
 STATISTIC(MaxSCCIterations, "Maximum CGSCCPassMgr iterations on one SCC");
 
@@ -59,7 +61,7 @@ class CGPassManager : public ModulePass, public PMDataManager {
 public:
   static char ID;
 
-  explicit CGPassManager() : ModulePass(ID), PMDataManager() {}
+  explicit CGPassManager() : ModulePass(ID) {}
 
   /// Execute all of the passes scheduled for execution.  Keep track of
   /// whether any of the passes modifies the module, and if so, return true.
@@ -266,15 +268,7 @@ bool CGPassManager::RefreshCallGraph(const CallGraphSCC &CurSCC, CallGraph &CG,
           // If we've already seen this call site, then the FunctionPass RAUW'd
           // one call with another, which resulted in two "uses" in the edge
           // list of the same call.
-          Calls.count(Call) ||
-
-          // If the call edge is not from a call or invoke, or it is a
-          // instrinsic call, then the function pass RAUW'd a call with
-          // another value. This can happen when constant folding happens
-          // of well known functions etc.
-          (Call->getCalledFunction() &&
-           Call->getCalledFunction()->isIntrinsic() &&
-           Intrinsic::isLeaf(Call->getCalledFunction()->getIntrinsicID()))) {
+          Calls.count(Call)) {
         assert(!CheckingMode &&
                "CallGraphSCCPass did not update the CallGraph correctly!");
 
@@ -454,10 +448,10 @@ bool CGPassManager::RunAllPassesOnSCC(CallGraphSCC &CurSCC, CallGraph &CG,
       std::string Functions;
   #ifndef NDEBUG
       raw_string_ostream OS(Functions);
-      for (CallGraphSCC::iterator I = CurSCC.begin(), E = CurSCC.end();
-           I != E; ++I) {
-        if (I != CurSCC.begin()) OS << ", ";
-        (*I)->print(OS);
+      ListSeparator LS;
+      for (const CallGraphNode *CGN : CurSCC) {
+        OS << LS;
+        CGN->print(OS);
       }
       OS.flush();
   #endif
@@ -468,7 +462,7 @@ bool CGPassManager::RunAllPassesOnSCC(CallGraphSCC &CurSCC, CallGraph &CG,
     initializeAnalysisImpl(P);
 
 #ifdef EXPENSIVE_CHECKS
-    uint64_t RefHash = StructuralHash(CG.getModule());
+    uint64_t RefHash = P->structuralHash(CG.getModule());
 #endif
 
     // Actually run this pass on the current SCC.
@@ -478,7 +472,7 @@ bool CGPassManager::RunAllPassesOnSCC(CallGraphSCC &CurSCC, CallGraph &CG,
     Changed |= LocalChanged;
 
 #ifdef EXPENSIVE_CHECKS
-    if (!LocalChanged && (RefHash != StructuralHash(CG.getModule()))) {
+    if (!LocalChanged && (RefHash != P->structuralHash(CG.getModule()))) {
       llvm::errs() << "Pass modifies its input and doesn't report it: "
                    << P->getPassName() << "\n";
       llvm_unreachable("Pass modifies its input and doesn't report it");
@@ -734,12 +728,9 @@ Pass *CallGraphSCCPass::createPrinterPass(raw_ostream &OS,
 
 static std::string getDescription(const CallGraphSCC &SCC) {
   std::string Desc = "SCC (";
-  bool First = true;
+  ListSeparator LS;
   for (CallGraphNode *CGN : SCC) {
-    if (First)
-      First = false;
-    else
-      Desc += ", ";
+    Desc += LS;
     Function *F = CGN->getFunction();
     if (F)
       Desc += F->getName();
@@ -753,7 +744,8 @@ static std::string getDescription(const CallGraphSCC &SCC) {
 bool CallGraphSCCPass::skipSCC(CallGraphSCC &SCC) const {
   OptPassGate &Gate =
       SCC.getCallGraph().getModule().getContext().getOptPassGate();
-  return Gate.isEnabled() && !Gate.shouldRunPass(this, getDescription(SCC));
+  return Gate.isEnabled() &&
+         !Gate.shouldRunPass(this->getPassName(), getDescription(SCC));
 }
 
 char DummyCGSCCPass::ID = 0;

@@ -124,32 +124,6 @@ frameworks:
 
 .SH OPTIONS
 .PP
-\-x <language>
-.RS 4
-Treat subsequent input files as having type <language>
-
-=c          -   C
-.br
-=c++        -   C++
-.br
-=objc       -   Objective-C
-.br
-=objc++     -   Objective-C++
-.RE
-
-.PP
-\-Xparser <arg>
-.RS 4
-Pass <arg> to the clang parser.
-.RE
-
-.PP
-\-std=<value>
-.RS 4
-Language standard to compile for.
-.RE
-
-.PP
 \-v
 .RS 4
 Verbose output, show scan content and driver options.
@@ -160,6 +134,8 @@ Verbose output, show scan content and driver options.
 .RS 4
 Prints the list of options.
 .RE
+
+.SS For information on the complete set of command line options, please use 'tapi api-verify --help'
 
 .SH SEE ALSO
 tapi(1), ld(1)

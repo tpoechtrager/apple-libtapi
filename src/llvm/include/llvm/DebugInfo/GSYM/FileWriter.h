@@ -113,6 +113,8 @@ public:
     return OS;
   }
 
+  llvm::support::endianness getByteOrder() const { return ByteOrder; }
+
 private:
   FileWriter(const FileWriter &rhs) = delete;
   void operator=(const FileWriter &rhs) = delete;
@@ -121,4 +123,4 @@ private:
 } // namespace gsym
 } // namespace llvm
 
-#endif // #ifndef LLVM_DEBUGINFO_GSYM_FILEWRITER_H
+#endif // LLVM_DEBUGINFO_GSYM_FILEWRITER_H

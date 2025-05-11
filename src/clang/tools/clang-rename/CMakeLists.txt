@@ -16,11 +16,12 @@ clang_target_link_libraries(clang-rename
   clangTooling
   clangToolingCore
   clangToolingRefactoring
+  clangToolingSyntax
   )
 
-install(PROGRAMS clang-rename.py
-  DESTINATION share/clang
+install(FILES clang-rename.py
+  DESTINATION "${CMAKE_INSTALL_DATADIR}/clang"
   COMPONENT clang-rename)
-install(PROGRAMS clang-rename.el
-  DESTINATION share/clang
+install(FILES clang-rename.el
+  DESTINATION "${CMAKE_INSTALL_DATADIR}/clang"
   COMPONENT clang-rename)

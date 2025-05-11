@@ -31,8 +31,6 @@ class MemoryBuffer;
 
 namespace clang {
 
-class DirectoryEntry;
-class FileEntry;
 class FileManager;
 class IdentifierIterator;
 class PCHContainerOperations;
@@ -137,12 +135,6 @@ public:
   ///
   /// The caller accepts ownership of the returned object.
   IdentifierIterator *createIdentifierIterator() const;
-
-  /// Retrieve the set of modules that have up-to-date indexes.
-  ///
-  /// \param ModuleFiles Will be populated with the set of module files that
-  /// have been indexed.
-  void getKnownModules(llvm::SmallVectorImpl<ModuleFile *> &ModuleFiles);
 
   /// Retrieve the set of module files on which the given module file
   /// directly depends.

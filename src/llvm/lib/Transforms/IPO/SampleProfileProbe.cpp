@@ -12,68 +12,158 @@
 
 #include "llvm/Transforms/IPO/SampleProfileProbe.h"
 #include "llvm/ADT/Statistic.h"
-#include "llvm/Analysis/TargetLibraryInfo.h"
+#include "llvm/Analysis/BlockFrequencyInfo.h"
+#include "llvm/Analysis/EHUtils.h"
+#include "llvm/Analysis/LoopInfo.h"
 #include "llvm/IR/BasicBlock.h"
-#include "llvm/IR/CFG.h"
-#include "llvm/IR/Constant.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DebugInfoMetadata.h"
-#include "llvm/IR/GlobalValue.h"
-#include "llvm/IR/GlobalVariable.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Instruction.h"
+#include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/MDBuilder.h"
+#include "llvm/IR/PseudoProbe.h"
 #include "llvm/ProfileData/SampleProf.h"
 #include "llvm/Support/CRC.h"
+#include "llvm/Support/CommandLine.h"
+#include "llvm/Target/TargetMachine.h"
 #include "llvm/Transforms/Instrumentation.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
+#include <unordered_set>
 #include <vector>
 
 using namespace llvm;
-#define DEBUG_TYPE "sample-profile-probe"
+#define DEBUG_TYPE "pseudo-probe"
 
 STATISTIC(ArtificialDbgLine,
           "Number of probes that have an artificial debug line");
 
-PseudoProbeManager::PseudoProbeManager(const Module &M) {
-  if (NamedMDNode *FuncInfo = M.getNamedMetadata(PseudoProbeDescMetadataName)) {
-    for (const auto *Operand : FuncInfo->operands()) {
-      const auto *MD = cast<MDNode>(Operand);
-      auto GUID =
-          mdconst::dyn_extract<ConstantInt>(MD->getOperand(0))->getZExtValue();
-      auto Hash =
-          mdconst::dyn_extract<ConstantInt>(MD->getOperand(1))->getZExtValue();
-      GUIDToProbeDescMap.try_emplace(GUID, PseudoProbeDescriptor(GUID, Hash));
-    }
+static cl::opt<bool>
+    VerifyPseudoProbe("verify-pseudo-probe", cl::init(false), cl::Hidden,
+                      cl::desc("Do pseudo probe verification"));
+
+static cl::list<std::string> VerifyPseudoProbeFuncList(
+    "verify-pseudo-probe-funcs", cl::Hidden,
+    cl::desc("The option to specify the name of the functions to verify."));
+
+static cl::opt<bool>
+    UpdatePseudoProbe("update-pseudo-probe", cl::init(true), cl::Hidden,
+                      cl::desc("Update pseudo probe distribution factor"));
+
+static uint64_t getCallStackHash(const DILocation *DIL) {
+  uint64_t Hash = 0;
+  const DILocation *InlinedAt = DIL ? DIL->getInlinedAt() : nullptr;
+  while (InlinedAt) {
+    Hash ^= MD5Hash(std::to_string(InlinedAt->getLine()));
+    Hash ^= MD5Hash(std::to_string(InlinedAt->getColumn()));
+    auto Name = InlinedAt->getSubprogramLinkageName();
+    Hash ^= MD5Hash(Name);
+    InlinedAt = InlinedAt->getInlinedAt();
   }
+  return Hash;
 }
 
-const PseudoProbeDescriptor *
-PseudoProbeManager::getDesc(const Function &F) const {
-  auto I = GUIDToProbeDescMap.find(
-      Function::getGUID(FunctionSamples::getCanonicalFnName(F)));
-  return I == GUIDToProbeDescMap.end() ? nullptr : &I->second;
+static uint64_t computeCallStackHash(const Instruction &Inst) {
+  return getCallStackHash(Inst.getDebugLoc());
 }
 
-bool PseudoProbeManager::moduleIsProbed(const Module &M) const {
-  return M.getNamedMetadata(PseudoProbeDescMetadataName);
-}
-
-bool PseudoProbeManager::profileIsValid(const Function &F,
-                                        const FunctionSamples &Samples) const {
-  const auto *Desc = getDesc(F);
-  if (!Desc) {
-    LLVM_DEBUG(dbgs() << "Probe descriptor missing for Function " << F.getName()
-                      << "\n");
+bool PseudoProbeVerifier::shouldVerifyFunction(const Function *F) {
+  // Skip function declaration.
+  if (F->isDeclaration())
     return false;
-  } else {
-    if (Desc->getFunctionHash() != Samples.getFunctionHash()) {
-      LLVM_DEBUG(dbgs() << "Hash mismatch for Function " << F.getName()
-                        << "\n");
-      return false;
+  // Skip function that will not be emitted into object file. The prevailing
+  // defintion will be verified instead.
+  if (F->hasAvailableExternallyLinkage())
+    return false;
+  // Do a name matching.
+  static std::unordered_set<std::string> VerifyFuncNames(
+      VerifyPseudoProbeFuncList.begin(), VerifyPseudoProbeFuncList.end());
+  return VerifyFuncNames.empty() || VerifyFuncNames.count(F->getName().str());
+}
+
+void PseudoProbeVerifier::registerCallbacks(PassInstrumentationCallbacks &PIC) {
+  if (VerifyPseudoProbe) {
+    PIC.registerAfterPassCallback(
+        [this](StringRef P, Any IR, const PreservedAnalyses &) {
+          this->runAfterPass(P, IR);
+        });
+  }
+}
+
+// Callback to run after each transformation for the new pass manager.
+void PseudoProbeVerifier::runAfterPass(StringRef PassID, Any IR) {
+  std::string Banner =
+      "\n*** Pseudo Probe Verification After " + PassID.str() + " ***\n";
+  dbgs() << Banner;
+  if (const auto **M = any_cast<const Module *>(&IR))
+    runAfterPass(*M);
+  else if (const auto **F = any_cast<const Function *>(&IR))
+    runAfterPass(*F);
+  else if (const auto **C = any_cast<const LazyCallGraph::SCC *>(&IR))
+    runAfterPass(*C);
+  else if (const auto **L = any_cast<const Loop *>(&IR))
+    runAfterPass(*L);
+  else
+    llvm_unreachable("Unknown IR unit");
+}
+
+void PseudoProbeVerifier::runAfterPass(const Module *M) {
+  for (const Function &F : *M)
+    runAfterPass(&F);
+}
+
+void PseudoProbeVerifier::runAfterPass(const LazyCallGraph::SCC *C) {
+  for (const LazyCallGraph::Node &N : *C)
+    runAfterPass(&N.getFunction());
+}
+
+void PseudoProbeVerifier::runAfterPass(const Function *F) {
+  if (!shouldVerifyFunction(F))
+    return;
+  ProbeFactorMap ProbeFactors;
+  for (const auto &BB : *F)
+    collectProbeFactors(&BB, ProbeFactors);
+  verifyProbeFactors(F, ProbeFactors);
+}
+
+void PseudoProbeVerifier::runAfterPass(const Loop *L) {
+  const Function *F = L->getHeader()->getParent();
+  runAfterPass(F);
+}
+
+void PseudoProbeVerifier::collectProbeFactors(const BasicBlock *Block,
+                                              ProbeFactorMap &ProbeFactors) {
+  for (const auto &I : *Block) {
+    if (std::optional<PseudoProbe> Probe = extractProbe(I)) {
+      uint64_t Hash = computeCallStackHash(I);
+      ProbeFactors[{Probe->Id, Hash}] += Probe->Factor;
     }
   }
-  return true;
+}
+
+void PseudoProbeVerifier::verifyProbeFactors(
+    const Function *F, const ProbeFactorMap &ProbeFactors) {
+  bool BannerPrinted = false;
+  auto &PrevProbeFactors = FunctionProbeFactors[F->getName()];
+  for (const auto &I : ProbeFactors) {
+    float CurProbeFactor = I.second;
+    if (PrevProbeFactors.count(I.first)) {
+      float PrevProbeFactor = PrevProbeFactors[I.first];
+      if (std::abs(CurProbeFactor - PrevProbeFactor) >
+          DistributionFactorVariance) {
+        if (!BannerPrinted) {
+          dbgs() << "Function " << F->getName() << ":\n";
+          BannerPrinted = true;
+        }
+        dbgs() << "Probe " << I.first.first << "\tprevious factor "
+               << format("%0.2f", PrevProbeFactor) << "\tcurrent factor "
+               << format("%0.2f", CurProbeFactor) << "\n";
+      }
+    }
+
+    // Update
+    PrevProbeFactors[I.first] = I.second;
+  }
 }
 
 SampleProfileProber::SampleProfileProber(Function &Func,
@@ -119,8 +209,14 @@ void SampleProfileProber::computeCFGHash() {
 }
 
 void SampleProfileProber::computeProbeIdForBlocks() {
+  DenseSet<BasicBlock *> KnownColdBlocks;
+  computeEHOnlyBlocks(*F, KnownColdBlocks);
+  // Insert pseudo probe to non-cold blocks only. This will reduce IR size as
+  // well as the binary size while retaining the profile quality.
   for (auto &BB : *F) {
-    BlockProbeIds[&BB] = ++LastProbeId;
+    ++LastProbeId;
+    if (!KnownColdBlocks.contains(&BB))
+      BlockProbeIds[&BB] = LastProbeId;
   }
 }
 
@@ -149,9 +245,16 @@ uint32_t SampleProfileProber::getCallsiteId(const Instruction *Call) const {
 void SampleProfileProber::instrumentOneFunc(Function &F, TargetMachine *TM) {
   Module *M = F.getParent();
   MDBuilder MDB(F.getContext());
-  // Compute a GUID without considering the function's linkage type. This is
-  // fine since function name is the only key in the profile database.
-  uint64_t Guid = Function::getGUID(F.getName());
+  // Since the GUID from probe desc and inline stack are computed seperately, we
+  // need to make sure their names are consistent, so here also use the name
+  // from debug info.
+  StringRef FName = F.getName();
+  if (auto *SP = F.getSubprogram()) {
+    FName = SP->getLinkageName();
+    if (FName.empty())
+      FName = SP->getName();
+  }
+  uint64_t Guid = Function::getGUID(FName);
 
   // Assign an artificial debug line to a probe that doesn't come with a real
   // line. A probe not having a debug line will get an incomplete inline
@@ -201,9 +304,18 @@ void SampleProfileProber::instrumentOneFunc(Function &F, TargetMachine *TM) {
     Function *ProbeFn =
         llvm::Intrinsic::getDeclaration(M, Intrinsic::pseudoprobe);
     Value *Args[] = {Builder.getInt64(Guid), Builder.getInt64(Index),
-                     Builder.getInt32(0)};
+                     Builder.getInt32(0),
+                     Builder.getInt64(PseudoProbeFullDistributionFactor)};
     auto *Probe = Builder.CreateCall(ProbeFn, Args);
     AssignDebugLoc(Probe);
+    // Reset the dwarf discriminator if the debug location comes with any. The
+    // discriminator field may be used by FS-AFDO later in the pipeline.
+    if (auto DIL = Probe->getDebugLoc()) {
+      if (DIL->getDiscriminator()) {
+        DIL = DIL->cloneWithDiscriminator(0);
+        Probe->setDebugLoc(DIL);
+      }
+    }
   }
 
   // Probe both direct calls and indirect calls. Direct calls are probed so that
@@ -216,11 +328,13 @@ void SampleProfileProber::instrumentOneFunc(Function &F, TargetMachine *TM) {
                         ? (uint32_t)PseudoProbeType::DirectCall
                         : (uint32_t)PseudoProbeType::IndirectCall;
     AssignDebugLoc(Call);
-    // Levarge the 32-bit discriminator field of debug data to store the ID and
-    // type of a callsite probe. This gets rid of the dependency on plumbing a
-    // customized metadata through the codegen pipeline.
-    uint32_t V = PseudoProbeDwarfDiscriminator::packProbeData(Index, Type);
     if (auto DIL = Call->getDebugLoc()) {
+      // Levarge the 32-bit discriminator field of debug data to store the ID
+      // and type of a callsite probe. This gets rid of the dependency on
+      // plumbing a customized metadata through the codegen pipeline.
+      uint32_t V = PseudoProbeDwarfDiscriminator::packProbeData(
+          Index, Type, 0,
+          PseudoProbeDwarfDiscriminator::FullDistributionFactor);
       DIL = DIL->cloneWithDiscriminator(V);
       Call->setDebugLoc(DIL);
     }
@@ -232,29 +346,10 @@ void SampleProfileProber::instrumentOneFunc(Function &F, TargetMachine *TM) {
   // - FunctionHash.
   // - FunctionName
   auto Hash = getFunctionHash();
-  auto *MD = MDB.createPseudoProbeDesc(Guid, Hash, &F);
+  auto *MD = MDB.createPseudoProbeDesc(Guid, Hash, FName);
   auto *NMD = M->getNamedMetadata(PseudoProbeDescMetadataName);
   assert(NMD && "llvm.pseudo_probe_desc should be pre-created");
   NMD->addOperand(MD);
-
-  // Preserve a comdat group to hold all probes materialized later. This
-  // allows that when the function is considered dead and removed, the
-  // materialized probes are disposed too.
-  // Imported functions are defined in another module. They do not need
-  // the following handling since same care will be taken for them in their
-  // original module. The pseudo probes inserted into an imported functions
-  // above will naturally not be emitted since the imported function is free
-  // from object emission. However they will be emitted together with the
-  // inliner functions that the imported function is inlined into. We are not
-  // creating a comdat group for an import function since it's useless anyway.
-  if (!F.isDeclarationForLinker()) {
-    if (TM) {
-      auto Triple = TM->getTargetTriple();
-      if (Triple.supportsCOMDAT() && TM->getFunctionSections()) {
-        GetOrCreateFunctionComdat(F, Triple, CurModuleUniqueId);
-      }
-    }
-  }
 }
 
 PreservedAnalyses SampleProfileProbePass::run(Module &M,
@@ -272,5 +367,50 @@ PreservedAnalyses SampleProfileProbePass::run(Module &M,
     ProbeManager.instrumentOneFunc(F, TM);
   }
 
+  return PreservedAnalyses::none();
+}
+
+void PseudoProbeUpdatePass::runOnFunction(Function &F,
+                                          FunctionAnalysisManager &FAM) {
+  BlockFrequencyInfo &BFI = FAM.getResult<BlockFrequencyAnalysis>(F);
+  auto BBProfileCount = [&BFI](BasicBlock *BB) {
+    return BFI.getBlockProfileCount(BB).value_or(0);
+  };
+
+  // Collect the sum of execution weight for each probe.
+  ProbeFactorMap ProbeFactors;
+  for (auto &Block : F) {
+    for (auto &I : Block) {
+      if (std::optional<PseudoProbe> Probe = extractProbe(I)) {
+        uint64_t Hash = computeCallStackHash(I);
+        ProbeFactors[{Probe->Id, Hash}] += BBProfileCount(&Block);
+      }
+    }
+  }
+
+  // Fix up over-counted probes.
+  for (auto &Block : F) {
+    for (auto &I : Block) {
+      if (std::optional<PseudoProbe> Probe = extractProbe(I)) {
+        uint64_t Hash = computeCallStackHash(I);
+        float Sum = ProbeFactors[{Probe->Id, Hash}];
+        if (Sum != 0)
+          setProbeDistributionFactor(I, BBProfileCount(&Block) / Sum);
+      }
+    }
+  }
+}
+
+PreservedAnalyses PseudoProbeUpdatePass::run(Module &M,
+                                             ModuleAnalysisManager &AM) {
+  if (UpdatePseudoProbe) {
+    for (auto &F : M) {
+      if (F.isDeclaration())
+        continue;
+      FunctionAnalysisManager &FAM =
+          AM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
+      runOnFunction(F, FAM);
+    }
+  }
   return PreservedAnalyses::none();
 }

@@ -15,7 +15,6 @@
 #ifndef LLVM_CODEGEN_TARGETSCHEDULE_H
 #define LLVM_CODEGEN_TARGETSCHEDULE_H
 
-#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/Config/llvm-config.h"
@@ -91,7 +90,7 @@ public:
   bool hasInstrSchedModelOrItineraries() const {
     return hasInstrSchedModel() || hasInstrItineraries();
   }
-
+  bool enableIntervals() const { return SchedModel.EnableIntervals; }
   /// Identify the processor corresponding to the current subtarget.
   unsigned getProcessorID() const { return SchedModel.getProcessorID(); }
 

@@ -1,21 +1,17 @@
-set(LLVM_EXPORTED_SYMBOL_FILE ${CMAKE_CURRENT_SOURCE_DIR}/tapi-run.exports)
-
 add_tapi_executable(tapi-run
   tapi-run.cpp
   )
 
-target_link_libraries(tapi-run PRIVATE
+target_link_libraries(tapi-run
   tapiCore
   libtapi
   )
 
 if(APPLE)
-
-set_property(TARGET tapi-run APPEND_STRING
-  PROPERTY
-  LINK_FLAGS " -client_name ld"
+  set_property(TARGET tapi-run APPEND_STRING
+    PROPERTY
+    LINK_FLAGS " -client_name ld"
   )
-
 endif()
 
 install(TARGETS tapi-run

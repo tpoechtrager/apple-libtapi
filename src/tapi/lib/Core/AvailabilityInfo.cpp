@@ -1,9 +1,8 @@
 //===- lib/Core/AvailabilityInfo.cpp - Availability Info --------*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 
@@ -23,7 +22,7 @@ std::string AvailabilityInfo::str() const {
 }
 
 void AvailabilityInfo::print(raw_ostream &os) const {
-  os << "i:" << _introduced << " o:" << _obsoleted
+  os << "i:" << _introduced << " d:" << _deprecated << " o:" << _obsoleted
      << " u:" << static_cast<int>((bool)_unavailable);
   if (_isSPIAvailable)
     os << " (spi)";

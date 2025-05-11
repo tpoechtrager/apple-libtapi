@@ -1,9 +1,8 @@
 //===- lib/Driver/DirectoryScanner.cpp - Directory Scanner ------*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 ///
@@ -42,9 +41,7 @@ static bool isFramework(StringRef path) {
 bool ScannerMode::scanBinaries() const {
   return mode != ScanPublicSDK && mode != ScanInternalSDK;
 }
-bool ScannerMode::scanBundles() const {
-  return mode == ScanRuntimeRoot;;
-}
+bool ScannerMode::scanBundles() const { return mode == ScanRuntimeRoot; }
 
 bool ScannerMode::scanHeaders() const {
   return mode != ScanRuntimeRoot;
@@ -104,12 +101,12 @@ bool DirectoryScanner::scanDylibDirectory(
 
   if (directoryEntryPublic) {
     if (!scanHeaders(dylib, (*directoryEntryPublic)->getName(),
-                     HeaderType::Public, directory, /*isDylib=*/true))
+                     HeaderType::Public, directory))
       return false;
   }
   if (directoryEntryPrivate) {
     if (!scanHeaders(dylib, (*directoryEntryPrivate)->getName(),
-                     HeaderType::Private, directory, /*isDylib=*/true))
+                     HeaderType::Private, directory))
       return false;
   }
 
@@ -211,7 +208,7 @@ bool DirectoryScanner::scanFrameworkDirectory(Framework &framework,
 
   // If the framework is inside Kernel or IOKit, scan headers in the different
   // directory separately.
-  bool splitHeaderDir =
+  framework.isDynamicLibrary =
       path.contains("Kernel.framework") || path.contains("IOKit.framework");
 
   for (vfs::directory_iterator i = fs.dir_begin(path, ec), ie;
@@ -235,31 +232,30 @@ bool DirectoryScanner::scanFrameworkDirectory(Framework &framework,
     StringRef fileName = sys::path::filename(path);
     // Scan all "public" headers.
     if (fileName.compare("Headers") == 0) {
-      if (!scanHeaders(framework, path, HeaderType::Public, path,
-                       /*isDylib=*/splitHeaderDir))
+      if (!scanHeaders(framework, path, HeaderType::Public, path))
         return false;
       continue;
     }
     // Scan all "private" headers.
-    else if (fileName.compare("PrivateHeaders") == 0) {
-      if (!scanHeaders(framework, path, HeaderType::Private, path,
-                       /*isDylib=*/splitHeaderDir))
+    if (fileName.compare("PrivateHeaders") == 0) {
+      if (!scanHeaders(framework, path, HeaderType::Private, path))
         return false;
       continue;
     }
     // Scan for module maps.
-    else if (fileName.compare("Modules") == 0) {
+    if (fileName.compare("Modules") == 0) {
       if (!scanModules(framework, path))
         return false;
+      continue;
     }
     // Check for sub frameworks.
-    else if (fileName.compare("Frameworks") == 0) {
+    if (fileName.compare("Frameworks") == 0) {
       if (!scanSubFrameworksDirectory(framework._subFrameworks, path))
         return false;
       continue;
     }
     // Check for versioned frameworks.
-    else if (fileName.compare("Versions") == 0) {
+    if (fileName.compare("Versions") == 0) {
       if (!scanFrameworkVersionsDirectory(framework, path))
         return false;
       continue;
@@ -291,7 +287,7 @@ bool DirectoryScanner::scanFrameworkDirectory(Framework &framework,
 
 bool DirectoryScanner::scanHeaders(Framework &framework, StringRef path,
                                    HeaderType type, StringRef basePath,
-                                   bool isDynamicLibrary) const {
+                                   StringRef parentPath) const {
   if (!mode.scanHeaders())
     return true;
 
@@ -301,7 +297,6 @@ bool DirectoryScanner::scanHeaders(Framework &framework, StringRef path,
   std::error_code ec;
   auto &fs = _fm.getVirtualFileSystem();
   std::vector<std::string> subDirectories;
-  bool containsHeaders = false;
   for (vfs::directory_iterator i = fs.dir_begin(path, ec), ie; i != ie;
        i.increment(ec)) {
     auto headerPath = i->path();
@@ -329,25 +324,28 @@ bool DirectoryScanner::scanHeaders(Framework &framework, StringRef path,
     if (fs.status(headerPath) == std::errc::no_such_file_or_directory)
       continue;
 
-    framework.addHeaderFile(headerPath, type,
-                            headerPath.drop_front(basePath.size()));
-    containsHeaders = true;
+    auto relativePath =
+        sys::path::relative_path(headerPath.drop_front(basePath.size()));
+
+    auto includeName = createIncludeHeaderName(headerPath);
+    framework.addHeaderFile(headerPath, type, relativePath,
+                            includeName.has_value() ? includeName.value() : "");
   }
 
   // Go through the subdirectores.
   // Sort the sub-directory first since different file system might have 
   // different traverse order.
   llvm::sort(subDirectories);
-  // If the current directory contains no headers, create subframework for
-  // each containing subdirectories, otherwise, just scan all headers together.
+  parentPath = parentPath.empty() ? path : parentPath;
   for (auto &dir : subDirectories) {
-    if (isDynamicLibrary && !containsHeaders) {
+    if (useSplitHeaderDir) {
       auto &sub = getOrCreateFramework(dir, framework._subFrameworks);
-      sub.isDynamicLibrary = isDynamicLibrary;
-      sub.isSysRoot = true;
-      scanHeaders(sub, dir, type, dir, isDynamicLibrary);
-    } else
-      scanHeaders(framework, dir, type, basePath, false);
+      sub.isDynamicLibrary = framework.isDynamicLibrary;
+      sub.isSysRoot = framework.isSysRoot;
+      scanHeaders(sub, dir, type, dir, parentPath);
+      continue;
+    }
+    scanHeaders(framework, dir, type, basePath, parentPath);
   }
 
   return true;
@@ -384,6 +382,12 @@ bool DirectoryScanner::scanModules(Framework &framework,
 bool DirectoryScanner::scanSwiftModules(Framework &framework,
                                         StringRef path) const {
   if (!_fm.isDirectory(path, /*CacheFailure=*/false))
+    return false;
+
+  // Skip symlinked Swift module directory.
+  // Some frameworks also install a Framework.swiftmodule under /usr/lib/swift.
+  // We don't need to scan it again.
+  if (_fm.isSymlink(path))
     return false;
 
   framework._swiftModules.emplace_back(path);
@@ -497,6 +501,11 @@ Expected<bool> DirectoryScanner::isDynamicLibrary(StringRef path) const {
     return errorCodeToError(ec);
   }
 
+  // Metal Libraries pretend to be MachOs, but they do not contain any
+  // framework code that developers can use, so we will just skip them.
+  if (path.endswith(".metallib"))
+    return false;
+
   auto fileType = _registry.getFileType(*bufferOrErr.get());
   if (!fileType)
     return fileType;
@@ -516,6 +525,7 @@ bool DirectoryScanner::scanSDKContent(StringRef directory) {
   rootPath = directory;
   auto &SDKFramework = getOrCreateFramework(directory, frameworks);
   SDKFramework.isSysRoot = true;
+  SDKFramework.isDynamicLibrary = true;
   auto getDirectory = [](StringRef subDirectory, StringRef root) {
     SmallString<PATH_MAX> path(root);
     sys::path::append(path, subDirectory);
@@ -528,10 +538,10 @@ bool DirectoryScanner::scanSDKContent(StringRef directory) {
 
     // Scan headers.
     if (!scanHeaders(SDKFramework, getDirectory("usr/include", root),
-                     HeaderType::Public, rootPath, /*isDylib=*/true))
+                     HeaderType::Public, rootPath))
       return false;
     if (!scanHeaders(SDKFramework, getDirectory("usr/local/include", root),
-                     HeaderType::Private, rootPath, /*isDylib=*/true))
+                     HeaderType::Private, rootPath))
       return false;
     // Scan dylibs.
     if (!scanLibraryDirectory(SDKFramework, getDirectory("usr/lib", root)))
@@ -564,15 +574,21 @@ bool DirectoryScanner::scanSDKContent(StringRef directory) {
     return false;
 
   // Adding iOSSupport locations.
-  if (!scanHeaderAndLibrary("System/iOSSupport"))
+  if (!scanHeaderAndLibrary(MACCATALYST_PREFIX_PATH))
     return false;
 
   // Adding DriverKit locations.
-  if (!scanHeaderAndLibrary("System/DriverKit"))
+  if (!scanHeaderAndLibrary(DRIVERKIT_PREFIX_PATH))
     return false;
 
   // On macOS, there is a special path for frameworks excluded from ROSP.
   if (!scanHeaderAndLibrary("Library/Apple"))
+    return false;
+
+  // On macOS and iOS, there is now a special path for SPLAT.
+  if (!scanHeaderAndLibrary(CRYPTEXES_PREFIX_PATH))
+    return false;
+  if (!scanHeaderAndLibrary(CRYPTEXES_PREFIX_PATH MACCATALYST_PREFIX_PATH))
     return false;
 
   // Scan the bundles and extensions in /System/Library.
@@ -586,7 +602,9 @@ bool DirectoryScanner::scanSDKContent(StringRef directory) {
     if (ec == std::errc::no_such_file_or_directory) {
       ec.clear();
       continue;
-    } else if (ec) {
+    }
+
+    if (ec) {
       diag.report(diag::err) << path << ec.message();
       return false;
     }
@@ -618,7 +636,7 @@ bool DirectoryScanner::scan(StringRef directory) {
 
 static std::string removeVersionsFromPath(StringRef path) {
   // Search for /Versions in the path.
-  auto components = path.split("/Versions/");
+  auto components = path.rsplit("/Versions/");
   // Return the original path if there is no Versions component.
   if (components.second.empty())
     return path.str();
@@ -632,16 +650,21 @@ static std::string removeVersionsFromPath(StringRef path) {
 }
 
 void DirectoryScanner::addVFSForFramework(FileMap &output, StringRef sysroot,
+                                          ArrayRef<StringRef> rootPaths,
                                           const Framework &framework) const {
   auto computeAndAddPath = [&](StringRef path) {
     StringRef relativePath = path;
-    relativePath.consume_front(rootPath);
-    SmallString<PATH_MAX> mappedPath(sysroot);
-    sys::path::append(mappedPath, relativePath);
-    output.emplace_back(mappedPath, path);
-    auto altPath = removeVersionsFromPath(mappedPath);
-    if (altPath != mappedPath)
-      output.emplace_back(altPath, path);
+    for (StringRef rootPath : rootPaths) {
+      if (!relativePath.consume_front(rootPath))
+        continue;
+      SmallString<PATH_MAX> mappedPath(sysroot);
+      sys::path::append(mappedPath, relativePath);
+      output.emplace_back(mappedPath, path);
+      auto altPath = removeVersionsFromPath(mappedPath);
+      if (altPath != mappedPath)
+        output.emplace_back(altPath, path);
+      break;
+    }
   };
 
   for (auto &header : framework._headerFiles)
@@ -654,16 +677,17 @@ void DirectoryScanner::addVFSForFramework(FileMap &output, StringRef sysroot,
   }
 
   for (auto &ver : framework._versions)
-    addVFSForFramework(output, sysroot, ver);
+    addVFSForFramework(output, sysroot, rootPaths, ver);
   for (auto &sub : framework._subFrameworks)
-    addVFSForFramework(output, sysroot, sub);
+    addVFSForFramework(output, sysroot, rootPaths, sub);
 }
 
 DirectoryScanner::FileMap
-DirectoryScanner::getVFSFileMap(StringRef sysroot) const {
+DirectoryScanner::getVFSFileMap(StringRef sysroot,
+                                ArrayRef<StringRef> rootPaths) const {
   DirectoryScanner::FileMap output;
   for (auto &framework : frameworks)
-    addVFSForFramework(output, sysroot, framework);
+    addVFSForFramework(output, sysroot, rootPaths, framework);
 
   return output;
 }

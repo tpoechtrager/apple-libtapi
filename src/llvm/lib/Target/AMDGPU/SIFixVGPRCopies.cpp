@@ -12,8 +12,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "AMDGPU.h"
-#include "AMDGPUSubtarget.h"
-#include "SIInstrInfo.h"
+#include "GCNSubtarget.h"
 #include "MCTargetDesc/AMDGPUMCTargetDesc.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 
@@ -30,6 +29,11 @@ public:
 public:
   SIFixVGPRCopies() : MachineFunctionPass(ID) {
     initializeSIFixVGPRCopiesPass(*PassRegistry::getPassRegistry());
+  }
+
+  void getAnalysisUsage(AnalysisUsage &AU) const override {
+    AU.setPreservesAll();
+    MachineFunctionPass::getAnalysisUsage(AU);
   }
 
   bool runOnMachineFunction(MachineFunction &MF) override;

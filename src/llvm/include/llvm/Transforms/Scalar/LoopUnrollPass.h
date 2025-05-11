@@ -9,10 +9,10 @@
 #ifndef LLVM_TRANSFORMS_SCALAR_LOOPUNROLLPASS_H
 #define LLVM_TRANSFORMS_SCALAR_LOOPUNROLLPASS_H
 
-#include "llvm/ADT/Optional.h"
 #include "llvm/Analysis/LoopAnalysisManager.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/Support/CommandLine.h"
+#include <optional>
 
 namespace llvm {
 
@@ -22,7 +22,7 @@ class Function;
 class Loop;
 class LPMUpdater;
 
-/// Loop unroll pass that only does full loop unrolling.
+/// Loop unroll pass that only does full loop unrolling and peeling.
 class LoopFullUnrollPass : public PassInfoMixin<LoopFullUnrollPass> {
   const int OptLevel;
 
@@ -59,12 +59,12 @@ public:
 /// additional setters and then pass it to LoopUnrollPass.
 ///
 struct LoopUnrollOptions {
-  Optional<bool> AllowPartial;
-  Optional<bool> AllowPeeling;
-  Optional<bool> AllowRuntime;
-  Optional<bool> AllowUpperBound;
-  Optional<bool> AllowProfileBasedPeeling;
-  Optional<unsigned> FullUnrollMaxCount;
+  std::optional<bool> AllowPartial;
+  std::optional<bool> AllowPeeling;
+  std::optional<bool> AllowRuntime;
+  std::optional<bool> AllowUpperBound;
+  std::optional<bool> AllowProfileBasedPeeling;
+  std::optional<unsigned> FullUnrollMaxCount;
   int OptLevel;
 
   /// If false, use a cost model to determine whether unrolling of a loop is
@@ -140,6 +140,8 @@ public:
       : UnrollOpts(UnrollOpts) {}
 
   PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
+  void printPipeline(raw_ostream &OS,
+                     function_ref<StringRef(StringRef)> MapClassName2PassName);
 };
 
 } // end namespace llvm

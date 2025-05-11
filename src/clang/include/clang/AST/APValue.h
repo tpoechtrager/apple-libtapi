@@ -238,7 +238,7 @@ public:
     }
   };
   class LValuePathSerializationHelper {
-    const void *ElemTy;
+    const void *Ty;
 
   public:
     ArrayRef<LValuePathEntry> Path;
@@ -267,9 +267,9 @@ private:
   };
   struct LV;
   struct Vec {
-    APValue *Elts;
-    unsigned NumElts;
-    Vec() : Elts(nullptr), NumElts(0) {}
+    APValue *Elts = nullptr;
+    unsigned NumElts = 0;
+    Vec() = default;
     ~Vec() { delete[] Elts; }
   };
   struct Arr {
@@ -537,10 +537,12 @@ public:
   }
   APValue &getStructBase(unsigned i) {
     assert(isStruct() && "Invalid accessor");
+    assert(i < getStructNumBases() && "base class index OOB");
     return ((StructData *)(char *)&Data)->Elts[i];
   }
   APValue &getStructField(unsigned i) {
     assert(isStruct() && "Invalid accessor");
+    assert(i < getStructNumFields() && "field index OOB");
     return ((StructData *)(char *)&Data)->Elts[getStructNumBases() + i];
   }
   const APValue &getStructBase(unsigned i) const {

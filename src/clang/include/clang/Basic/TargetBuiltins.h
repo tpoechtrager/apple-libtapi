@@ -27,6 +27,7 @@ namespace clang {
   enum {
     LastTIBuiltin = clang::Builtin::FirstTSBuiltin - 1,
 #define BUILTIN(ID, TYPE, ATTRS) BI##ID,
+#define TARGET_BUILTIN(ID, TYPE, ATTRS, FEATURE) BI##ID,
 #include "clang/Basic/BuiltinsNEON.def"
     FirstTSBuiltin
   };
@@ -47,7 +48,18 @@ namespace clang {
   enum {
     LastNEONBuiltin = NEON::FirstTSBuiltin - 1,
 #define BUILTIN(ID, TYPE, ATTRS) BI##ID,
+#define TARGET_BUILTIN(ID, TYPE, ATTRS, FEATURE) BI##ID,
 #include "clang/Basic/BuiltinsSVE.def"
+    FirstTSBuiltin,
+  };
+  }
+
+  namespace SME {
+  enum {
+    LastSVEBuiltin = SVE::FirstTSBuiltin - 1,
+#define BUILTIN(ID, TYPE, ATTRS) BI##ID,
+#define TARGET_BUILTIN(ID, TYPE, ATTRS, FEATURE) BI##ID,
+#include "clang/Basic/BuiltinsSME.def"
     FirstTSBuiltin,
   };
   }
@@ -59,6 +71,8 @@ namespace clang {
     LastNEONBuiltin = NEON::FirstTSBuiltin - 1,
     FirstSVEBuiltin = NEON::FirstTSBuiltin,
     LastSVEBuiltin = SVE::FirstTSBuiltin - 1,
+    FirstSMEBuiltin = SVE::FirstTSBuiltin,
+    LastSMEBuiltin = SME::FirstTSBuiltin - 1,
   #define BUILTIN(ID, TYPE, ATTRS) BI##ID,
   #include "clang/Basic/BuiltinsAArch64.def"
     LastTSBuiltin
@@ -121,8 +135,44 @@ namespace clang {
 
   /// VE builtins
   namespace VE {
-  enum { LastTIBuiltin = clang::Builtin::FirstTSBuiltin - 1, LastTSBuiltin };
+  enum {
+    LastTIBuiltin = clang::Builtin::FirstTSBuiltin - 1,
+#define BUILTIN(ID, TYPE, ATTRS) BI##ID,
+#include "clang/Basic/BuiltinsVE.def"
+    LastTSBuiltin
+  };
   }
+
+  namespace RISCVVector {
+  enum {
+    LastTIBuiltin = clang::Builtin::FirstTSBuiltin - 1,
+#define BUILTIN(ID, TYPE, ATTRS) BI##ID,
+#include "clang/Basic/BuiltinsRISCVVector.def"
+    FirstTSBuiltin,
+  };
+  }
+
+  /// RISCV builtins
+  namespace RISCV {
+  enum {
+    LastTIBuiltin = clang::Builtin::FirstTSBuiltin - 1,
+    FirstRVVBuiltin = clang::Builtin::FirstTSBuiltin,
+    LastRVVBuiltin = RISCVVector::FirstTSBuiltin - 1,
+#define BUILTIN(ID, TYPE, ATTRS) BI##ID,
+#include "clang/Basic/BuiltinsRISCV.def"
+    LastTSBuiltin
+  };
+  } // namespace RISCV
+
+  /// LoongArch builtins
+  namespace LoongArch {
+  enum {
+    LastTIBuiltin = clang::Builtin::FirstTSBuiltin - 1,
+#define BUILTIN(ID, TYPE, ATTRS) BI##ID,
+#include "clang/Basic/BuiltinsLoongArch.def"
+    LastTSBuiltin
+  };
+  } // namespace LoongArch
 
   /// Flags to identify the types for overloaded Neon builtins.
   ///
@@ -206,10 +256,10 @@ namespace clang {
     };
 
     SVETypeFlags(uint64_t F) : Flags(F) {
-      EltTypeShift = llvm::countTrailingZeros(EltTypeMask);
-      MemEltTypeShift = llvm::countTrailingZeros(MemEltTypeMask);
-      MergeTypeShift = llvm::countTrailingZeros(MergeTypeMask);
-      SplatOperandMaskShift = llvm::countTrailingZeros(SplatOperandMask);
+      EltTypeShift = llvm::countr_zero(EltTypeMask);
+      MemEltTypeShift = llvm::countr_zero(MemEltTypeMask);
+      MergeTypeShift = llvm::countr_zero(MergeTypeMask);
+      SplatOperandMaskShift = llvm::countr_zero(SplatOperandMask);
     }
 
     EltType getEltType() const {
@@ -251,10 +301,14 @@ namespace clang {
     bool isInsertOp1SVALL() const { return Flags & IsInsertOp1SVALL; }
     bool isGatherPrefetch() const { return Flags & IsGatherPrefetch; }
     bool isReverseUSDOT() const { return Flags & ReverseUSDOT; }
+    bool isReverseMergeAnyBinOp() const { return Flags & ReverseMergeAnyBinOp; }
+    bool isReverseMergeAnyAccOp() const { return Flags & ReverseMergeAnyAccOp; }
     bool isUndef() const { return Flags & IsUndef; }
     bool isTupleCreate() const { return Flags & IsTupleCreate; }
     bool isTupleGet() const { return Flags & IsTupleGet; }
     bool isTupleSet() const { return Flags & IsTupleSet; }
+    bool isReadZA() const { return Flags & IsReadZA; }
+    bool isWriteZA() const { return Flags & IsWriteZA; }
 
     uint64_t getBits() const { return Flags; }
     bool isFlagSet(uint64_t Flag) const { return Flags & Flag; }
@@ -290,16 +344,6 @@ namespace clang {
     };
   }
 
-  /// Le64 builtins
-  namespace Le64 {
-  enum {
-    LastTIBuiltin = clang::Builtin::FirstTSBuiltin - 1,
-  #define BUILTIN(ID, TYPE, ATTRS) BI##ID,
-  #include "clang/Basic/BuiltinsLe64.def"
-    LastTSBuiltin
-  };
-  }
-
   /// SystemZ builtins
   namespace SystemZ {
     enum {
@@ -321,12 +365,11 @@ namespace clang {
   }
 
   static constexpr uint64_t LargestBuiltinID = std::max<uint64_t>(
-      {NEON::FirstTSBuiltin, ARM::LastTSBuiltin, SVE::FirstTSBuiltin,
-       AArch64::LastTSBuiltin, BPF::LastTSBuiltin, PPC::LastTSBuiltin,
-       NVPTX::LastTSBuiltin, AMDGPU::LastTSBuiltin, X86::LastTSBuiltin,
+      {ARM::LastTSBuiltin, AArch64::LastTSBuiltin, BPF::LastTSBuiltin,
+       PPC::LastTSBuiltin, NVPTX::LastTSBuiltin, AMDGPU::LastTSBuiltin,
+       X86::LastTSBuiltin, VE::LastTSBuiltin, RISCV::LastTSBuiltin,
        Hexagon::LastTSBuiltin, Mips::LastTSBuiltin, XCore::LastTSBuiltin,
-       Le64::LastTSBuiltin, SystemZ::LastTSBuiltin,
-       WebAssembly::LastTSBuiltin});
+       SystemZ::LastTSBuiltin, WebAssembly::LastTSBuiltin});
 
 } // end namespace clang.
 

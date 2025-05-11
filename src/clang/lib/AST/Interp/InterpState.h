@@ -15,6 +15,7 @@
 
 #include "Context.h"
 #include "Function.h"
+#include "InterpFrame.h"
 #include "InterpStack.h"
 #include "State.h"
 #include "clang/AST/APValue.h"
@@ -41,12 +42,14 @@ public:
   // Stack frame accessors.
   Frame *getSplitFrame() { return Parent.getCurrentFrame(); }
   Frame *getCurrentFrame() override;
-  unsigned getCallStackDepth() override { return CallStackDepth; }
+  unsigned getCallStackDepth() override {
+    return Current ? (Current->getDepth() + 1) : 1;
+  }
   const Frame *getBottomFrame() const override {
     return Parent.getBottomFrame();
   }
 
-  // Acces objects from the walker context.
+  // Access objects from the walker context.
   Expr::EvalStatus &getEvalStatus() const override {
     return Parent.getEvalStatus();
   }
@@ -65,6 +68,7 @@ public:
   bool noteUndefinedBehavior() override {
     return Parent.noteUndefinedBehavior();
   }
+  bool inConstantContext() const { return Parent.InConstantContext; }
   bool hasActiveDiagnostic() override { return Parent.hasActiveDiagnostic(); }
   void setActiveDiagnostic(bool Flag) override {
     Parent.setActiveDiagnostic(Flag);
@@ -81,9 +85,11 @@ public:
   void deallocate(Block *B);
 
   /// Delegates source mapping to the mapper.
-  SourceInfo getSource(Function *F, CodePtr PC) const override {
+  SourceInfo getSource(const Function *F, CodePtr PC) const override {
     return M ? M->getSource(F, PC) : F->getSource(PC);
   }
+
+  Context &getContext() const { return Ctx; }
 
 private:
   /// AST Walker state.
@@ -102,8 +108,6 @@ public:
   Context &Ctx;
   /// The current frame.
   InterpFrame *Current = nullptr;
-  /// Call stack depth.
-  unsigned CallStackDepth;
 };
 
 } // namespace interp

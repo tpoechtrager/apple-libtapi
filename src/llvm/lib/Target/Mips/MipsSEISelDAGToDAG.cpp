@@ -38,7 +38,7 @@ using namespace llvm;
 #define DEBUG_TYPE "mips-isel"
 
 bool MipsSEDAGToDAGISel::runOnMachineFunction(MachineFunction &MF) {
-  Subtarget = &static_cast<const MipsSubtarget &>(MF.getSubtarget());
+  Subtarget = &MF.getSubtarget<MipsSubtarget>();
   if (Subtarget->inMips16Mode())
     return false;
   return MipsDAGToDAGISel::runOnMachineFunction(MF);
@@ -172,7 +172,7 @@ void MipsSEDAGToDAGISel::processFunctionAfterISel(MachineFunction &MF) {
           MI.addOperand(MachineOperand::CreateReg(Mips::SP, false, true));
           break;
         }
-        LLVM_FALLTHROUGH;
+        [[fallthrough]];
       case Mips::BuildPairF64:
       case Mips::ExtractElementF64:
         if (Subtarget->isABI_FPXX() && !Subtarget->hasMTHC1())
@@ -204,15 +204,15 @@ void MipsSEDAGToDAGISel::processFunctionAfterISel(MachineFunction &MF) {
 }
 
 void MipsSEDAGToDAGISel::selectAddE(SDNode *Node, const SDLoc &DL) const {
-  SDValue InFlag = Node->getOperand(2);
-  unsigned Opc = InFlag.getOpcode();
+  SDValue InGlue = Node->getOperand(2);
+  unsigned Opc = InGlue.getOpcode();
   SDValue LHS = Node->getOperand(0), RHS = Node->getOperand(1);
   EVT VT = LHS.getValueType();
 
   // In the base case, we can rely on the carry bit from the addsc
   // instruction.
   if (Opc == ISD::ADDC) {
-    SDValue Ops[3] = {LHS, RHS, InFlag};
+    SDValue Ops[3] = {LHS, RHS, InGlue};
     CurDAG->SelectNodeTo(Node, Mips::ADDWC, VT, MVT::Glue, Ops);
     return;
   }
@@ -236,7 +236,7 @@ void MipsSEDAGToDAGISel::selectAddE(SDNode *Node, const SDLoc &DL) const {
   SDValue OuFlag = CurDAG->getTargetConstant(20, DL, MVT::i32);
 
   SDNode *DSPCtrlField = CurDAG->getMachineNode(Mips::RDDSP, DL, MVT::i32,
-                                                MVT::Glue, CstOne, InFlag);
+                                                MVT::Glue, CstOne, InGlue);
 
   SDNode *Carry = CurDAG->getMachineNode(
       Mips::EXT, DL, MVT::i32, SDValue(DSPCtrlField, 0), OuFlag, CstOne);
@@ -282,7 +282,7 @@ bool MipsSEDAGToDAGISel::selectAddrFrameIndexOffset(
     SDValue Addr, SDValue &Base, SDValue &Offset, unsigned OffsetBits,
     unsigned ShiftAmount = 0) const {
   if (CurDAG->isBaseWithConstantOffset(Addr)) {
-    ConstantSDNode *CN = dyn_cast<ConstantSDNode>(Addr.getOperand(1));
+    auto *CN = cast<ConstantSDNode>(Addr.getOperand(1));
     if (isIntN(OffsetBits + ShiftAmount, CN->getSExtValue())) {
       EVT ValTy = Addr.getValueType();
 
@@ -670,8 +670,7 @@ bool MipsSEDAGToDAGISel::selectVSplatMaskL(SDValue N, SDValue &Imm) const {
     // as the original value.
     if (ImmValue == ~(~ImmValue & ~(~ImmValue + 1))) {
 
-      Imm = CurDAG->getTargetConstant(ImmValue.countPopulation() - 1, SDLoc(N),
-                                      EltTy);
+      Imm = CurDAG->getTargetConstant(ImmValue.popcount() - 1, SDLoc(N), EltTy);
       return true;
     }
   }
@@ -702,8 +701,7 @@ bool MipsSEDAGToDAGISel::selectVSplatMaskR(SDValue N, SDValue &Imm) const {
     // Extract the run of set bits starting with bit zero, and test that the
     // result is the same as the original value
     if (ImmValue == (ImmValue & ~(ImmValue + 1))) {
-      Imm = CurDAG->getTargetConstant(ImmValue.countPopulation() - 1, SDLoc(N),
-                                      EltTy);
+      Imm = CurDAG->getTargetConstant(ImmValue.popcount() - 1, SDLoc(N), EltTy);
       return true;
     }
   }
@@ -956,6 +954,38 @@ bool MipsSEDAGToDAGISel::trySelect(SDNode *Node) {
     break;
   }
 
+  case MipsISD::FAbs: {
+    MVT ResTy = Node->getSimpleValueType(0);
+    assert((ResTy == MVT::f64 || ResTy == MVT::f32) &&
+           "Unsupported float type!");
+    unsigned Opc = 0;
+    if (ResTy == MVT::f64)
+      Opc = (Subtarget->isFP64bit() ? Mips::FABS_D64 : Mips::FABS_D32);
+    else
+      Opc = Mips::FABS_S;
+
+    if (Subtarget->inMicroMipsMode()) {
+      switch (Opc) {
+      case Mips::FABS_D64:
+        Opc = Mips::FABS_D64_MM;
+        break;
+      case Mips::FABS_D32:
+        Opc = Mips::FABS_D32_MM;
+        break;
+      case Mips::FABS_S:
+        Opc = Mips::FABS_S_MM;
+        break;
+      default:
+        llvm_unreachable("Unknown opcode for MIPS floating point abs!");
+      }
+    }
+
+    ReplaceNode(Node,
+                CurDAG->getMachineNode(Opc, DL, ResTy, Node->getOperand(0)));
+
+    return true;
+  }
+
   // Manually match MipsISD::Ins nodes to get the correct instruction. It has
   // to be done in this fashion so that we respect the differences between
   // dins and dinsm, as the difference is that the size operand has the range
@@ -964,7 +994,7 @@ bool MipsSEDAGToDAGISel::trySelect(SDNode *Node) {
   // match the instruction.
   case MipsISD::Ins: {
 
-    // Sanity checking for the node operands.
+    // Validating the node operands.
     if (Node->getValueType(0) != MVT::i32 && Node->getValueType(0) != MVT::i64)
       return false;
 
@@ -1027,12 +1057,13 @@ bool MipsSEDAGToDAGISel::trySelect(SDNode *Node) {
     }
 
     SDNode *Rdhwr =
-        CurDAG->getMachineNode(RdhwrOpc, DL, Node->getValueType(0),
+        CurDAG->getMachineNode(RdhwrOpc, DL, Node->getValueType(0), MVT::Glue,
                                CurDAG->getRegister(Mips::HWR29, MVT::i32),
                                CurDAG->getTargetConstant(0, DL, MVT::i32));
     SDValue Chain = CurDAG->getCopyToReg(CurDAG->getEntryNode(), DL, DestReg,
-                                         SDValue(Rdhwr, 0));
-    SDValue ResNode = CurDAG->getCopyFromReg(Chain, DL, DestReg, PtrVT);
+                                         SDValue(Rdhwr, 0), SDValue(Rdhwr, 1));
+    SDValue ResNode = CurDAG->getCopyFromReg(Chain, DL, DestReg, PtrVT,
+                                             Chain.getValue(1));
     ReplaceNode(Node, ResNode.getNode());
     return true;
   }

@@ -52,8 +52,6 @@
 // Include legacy support for instruction itineraries.
 include "llvm/Target/TargetItinerary.td"
 
-class Instruction; // Forward def
-
 class Predicate; // Forward def
 
 // DAG operator that interprets the DAG args as Instruction defs.
@@ -119,6 +117,11 @@ class SchedMachineModel {
   list<Predicate> UnsupportedFeatures = [];
 
   bit NoModel = false; // Special tag to indicate missing machine model.
+
+  // Tells the MachineScheduler whether or not to track resource usage
+  // using intervals via ResourceSegments (see
+  // llvm/include/llvm/CodeGen/MachineScheduler.h).
+  bit EnableIntervals = false;
 }
 
 def NoSchedModel : SchedMachineModel {
@@ -252,6 +255,7 @@ class WriteSequence<list<SchedWrite> writes, int rep = 1> : SchedWrite {
 class ProcWriteResources<list<ProcResourceKind> resources> {
   list<ProcResourceKind> ProcResources = resources;
   list<int> ResourceCycles = [];
+  list<int> StartAtCycles = [];
   int Latency = 1;
   int NumMicroOps = 1;
   bit BeginGroup = false;
@@ -262,6 +266,10 @@ class ProcWriteResources<list<ProcResourceKind> resources> {
   // Allow a processor to mark some scheduling classes as single-issue.
   // SingleIssue is an alias for Begin/End Group.
   bit SingleIssue = false;
+  // An instruction is allowed to retire out-of-order if RetireOOO is
+  // true for at least one of its writes. This field is only used by
+  // MCA for in-order subtargets, and is ignored for other targets.
+  bit RetireOOO = false;
   SchedMachineModel SchedModel = ?;
 }
 

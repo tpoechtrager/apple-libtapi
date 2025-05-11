@@ -1,9 +1,8 @@
 //===- tapi/Core/LLVM.h - Import various common LLVM datatypes --*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -15,7 +14,7 @@
 #ifndef TAPI_CORE_LLVM_H
 #define TAPI_CORE_LLVM_H
 
-#include <stdint.h>
+#include "llvm/BinaryFormat/MachO.h"
 #include "llvm/Support/Casting.h"
 
 namespace llvm {
@@ -37,8 +36,22 @@ class MemoryBufferRef;
 namespace MachO {
 enum Architecture : uint8_t;
 class ArchitectureSet;
-enum class PlatformKind : unsigned;
 class Target;
+enum class EncodeKind : uint8_t;
+enum class SymbolFlags : uint8_t;
+enum class ObjCIFSymbolKind : uint8_t;
+enum FileType : unsigned;
+class InterfaceFile;
+class PackedVersion;
+class SymbolSet;
+using TargetList = SmallVector<Target, 5>;
+class TextAPIReader;
+class TextAPIWriter;
+class TextAPIError;
+enum class TextAPIErrorCode;
+class InterfaceFileRef;
+struct SimpleSymbol;
+
 } // namespace MachO
 
 } // end namespace llvm.
@@ -82,11 +95,27 @@ using clang::FileEntry;
 using clang::DiagnosticBuilder;
 using clang::StreamingDiagnostic;
 
+// BinaryFormat
+using llvm::MachO::PlatformType;
+
 // TextAPI types
 using llvm::MachO::Architecture;
 using llvm::MachO::ArchitectureSet;
-using llvm::MachO::PlatformKind;
+using llvm::MachO::EncodeKind;
+using llvm::MachO::FileType;
+using llvm::MachO::InterfaceFile;
+using llvm::MachO::InterfaceFileRef;
+using llvm::MachO::ObjCIFSymbolKind;
+using llvm::MachO::PackedVersion;
+using llvm::MachO::SimpleSymbol;
+using llvm::MachO::SymbolFlags;
+using llvm::MachO::SymbolSet;
 using llvm::MachO::Target;
+using llvm::MachO::TargetList;
+using llvm::MachO::TextAPIError;
+using llvm::MachO::TextAPIErrorCode;
+using llvm::MachO::TextAPIReader;
+using llvm::MachO::TextAPIWriter;
 
 } // end namespace tapi.
 

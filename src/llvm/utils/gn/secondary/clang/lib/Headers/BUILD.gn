@@ -22,6 +22,13 @@ clang_tablegen("arm_sve") {
   output_name = "arm_sve.h"
 }
 
+# Generate arm_sme_draft_spec_subject_to_change.h
+clang_tablegen("arm_sme_draft_spec_subject_to_change") {
+  args = [ "-gen-arm-sme-header" ]
+  td_file = "//clang/include/clang/Basic/arm_sme.td"
+  output_name = "arm_sme_draft_spec_subject_to_change.h"
+}
+
 # Generate arm_bf16.h
 clang_tablegen("arm_bf16") {
   args = [ "-gen-arm-bf16" ]
@@ -43,7 +50,14 @@ clang_tablegen("arm_cde") {
   output_name = "arm_cde.h"
 }
 
-copy("arm_headers") {
+# Generate riscv_vector.h
+clang_tablegen("riscv_vector") {
+  args = [ "-gen-riscv-vector-header" ]
+  td_file = "//clang/include/clang/Basic/riscv_vector.td"
+  output_name = "riscv_vector.h"
+}
+
+copy("tablegen_headers") {
   visibility = [ ":Headers" ]
   deps = [
     ":arm_bf16",
@@ -51,7 +65,9 @@ copy("arm_headers") {
     ":arm_fp16",
     ":arm_mve",
     ":arm_neon",
+    ":arm_sme_draft_spec_subject_to_change",
     ":arm_sve",
+    ":riscv_vector",
   ]
   sources = []
   foreach(dep, deps) {
@@ -61,7 +77,7 @@ copy("arm_headers") {
 }
 
 copy("Headers") {
-  deps = [ ":arm_headers" ]
+  deps = [ ":tablegen_headers" ]
 
   sources = [
     "__clang_cuda_builtin_vars.h",
@@ -73,20 +89,41 @@ copy("Headers") {
     "__clang_cuda_math.h",
     "__clang_cuda_math_forward_declares.h",
     "__clang_cuda_runtime_wrapper.h",
+    "__clang_cuda_texture_intrinsics.h",
     "__clang_hip_cmath.h",
     "__clang_hip_libdevice_declares.h",
     "__clang_hip_math.h",
     "__clang_hip_runtime_wrapper.h",
+    "__clang_hip_stdlib.h",
+    "__stdarg___gnuc_va_list.h",
+    "__stdarg___va_copy.h",
+    "__stdarg_header_macro.h",
+    "__stdarg_va_arg.h",
+    "__stdarg_va_copy.h",
+    "__stdarg_va_list.h",
+    "__stddef_header_macro.h",
     "__stddef_max_align_t.h",
+    "__stddef_null.h",
+    "__stddef_nullptr_t.h",
+    "__stddef_offsetof.h",
+    "__stddef_ptrdiff_t.h",
+    "__stddef_rsize_t.h",
+    "__stddef_size_t.h",
+    "__stddef_unreachable.h",
+    "__stddef_wchar_t.h",
+    "__stddef_wint_t.h",
     "__wmmintrin_aes.h",
     "__wmmintrin_pclmul.h",
     "adxintrin.h",
     "altivec.h",
     "ammintrin.h",
+    "amxcomplexintrin.h",
+    "amxfp16intrin.h",
     "amxintrin.h",
     "arm64intr.h",
     "arm_acle.h",
     "arm_cmse.h",
+    "arm_neon_sve_bridge.h",
     "armintr.h",
     "avx2intrin.h",
     "avx512bf16intrin.h",
@@ -96,6 +133,7 @@ copy("Headers") {
     "avx512dqintrin.h",
     "avx512erintrin.h",
     "avx512fintrin.h",
+    "avx512fp16intrin.h",
     "avx512ifmaintrin.h",
     "avx512ifmavlintrin.h",
     "avx512pfintrin.h",
@@ -107,6 +145,7 @@ copy("Headers") {
     "avx512vlbwintrin.h",
     "avx512vlcdintrin.h",
     "avx512vldqintrin.h",
+    "avx512vlfp16intrin.h",
     "avx512vlintrin.h",
     "avx512vlvbmi2intrin.h",
     "avx512vlvnniintrin.h",
@@ -115,18 +154,26 @@ copy("Headers") {
     "avx512vp2intersectintrin.h",
     "avx512vpopcntdqintrin.h",
     "avx512vpopcntdqvlintrin.h",
+    "avxifmaintrin.h",
     "avxintrin.h",
+    "avxneconvertintrin.h",
+    "avxvnniint16intrin.h",
+    "avxvnniint8intrin.h",
     "avxvnniintrin.h",
     "bmi2intrin.h",
     "bmiintrin.h",
+    "builtins.h",
     "cet.h",
     "cetintrin.h",
     "cldemoteintrin.h",
     "clflushoptintrin.h",
     "clwbintrin.h",
     "clzerointrin.h",
+    "cmpccxaddintrin.h",
     "cpuid.h",
+    "crc32intrin.h",
     "cuda_wrappers/algorithm",
+    "cuda_wrappers/bits/shared_ptr_base.h",
     "cuda_wrappers/complex",
     "cuda_wrappers/new",
     "emmintrin.h",
@@ -137,9 +184,16 @@ copy("Headers") {
     "fmaintrin.h",
     "fxsrintrin.h",
     "gfniintrin.h",
+    "hexagon_circ_brev_intrinsics.h",
+    "hexagon_protos.h",
+    "hexagon_types.h",
+    "hlsl.h",
+    "hlsl/hlsl_basic_types.h",
+    "hlsl/hlsl_intrinsics.h",
     "hresetintrin.h",
     "htmintrin.h",
     "htmxlintrin.h",
+    "hvx_hexagon_protos.h",
     "ia32intrin.h",
     "immintrin.h",
     "intrin.h",
@@ -147,7 +201,13 @@ copy("Headers") {
     "invpcidintrin.h",
     "iso646.h",
     "keylockerintrin.h",
+    "larchintrin.h",
     "limits.h",
+    "llvm_libc_wrappers/ctype.h",
+    "llvm_libc_wrappers/inttypes.h",
+    "llvm_libc_wrappers/stdio.h",
+    "llvm_libc_wrappers/stdlib.h",
+    "llvm_libc_wrappers/string.h",
     "lwpintrin.h",
     "lzcntintrin.h",
     "mm3dnow.h",
@@ -169,21 +229,34 @@ copy("Headers") {
     "pkuintrin.h",
     "pmmintrin.h",
     "popcntintrin.h",
+    "ppc_wrappers/bmi2intrin.h",
+    "ppc_wrappers/bmiintrin.h",
     "ppc_wrappers/emmintrin.h",
+    "ppc_wrappers/immintrin.h",
     "ppc_wrappers/mm_malloc.h",
     "ppc_wrappers/mmintrin.h",
     "ppc_wrappers/pmmintrin.h",
     "ppc_wrappers/smmintrin.h",
     "ppc_wrappers/tmmintrin.h",
+    "ppc_wrappers/x86gprintrin.h",
+    "ppc_wrappers/x86intrin.h",
     "ppc_wrappers/xmmintrin.h",
+    "prfchiintrin.h",
     "prfchwintrin.h",
     "ptwriteintrin.h",
+    "raointintrin.h",
+    "rdpruintrin.h",
     "rdseedintrin.h",
+    "riscv_ntlh.h",
     "rtmintrin.h",
     "s390intrin.h",
     "serializeintrin.h",
     "sgxintrin.h",
+    "sha512intrin.h",
     "shaintrin.h",
+    "sifive_vector.h",
+    "sm3intrin.h",
+    "sm4intrin.h",
     "smmintrin.h",
     "stdalign.h",
     "stdarg.h",
@@ -202,6 +275,9 @@ copy("Headers") {
     "vaesintrin.h",
     "varargs.h",
     "vecintrin.h",
+    "velintrin.h",
+    "velintrin_approx.h",
+    "velintrin_gen.h",
     "vpclmulqdqintrin.h",
     "waitpkgintrin.h",
     "wasm_simd128.h",

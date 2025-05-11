@@ -17,6 +17,7 @@
 
 #include "llvm/ADT/DenseMapInfo.h"
 #include "llvm/ADT/PointerSumType.h"
+#include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/ilist.h"
 #include "llvm/ADT/ilist_node.h"
 #include "llvm/ADT/iterator_range.h"
@@ -28,6 +29,7 @@
 #include "llvm/MC/MCInstrDesc.h"
 #include "llvm/MC/MCSymbol.h"
 #include "llvm/Support/ArrayRecycler.h"
+#include "llvm/Support/MathExtras.h"
 #include "llvm/Support/TrailingObjects.h"
 #include <algorithm>
 #include <cassert>
@@ -36,6 +38,9 @@
 
 namespace llvm {
 
+class DILabel;
+class Instruction;
+class MDNode;
 class AAResults;
 template <typename T> class ArrayRef;
 class DIExpression;
@@ -76,38 +81,39 @@ public:
   };
 
   enum MIFlag {
-    NoFlags      = 0,
-    FrameSetup   = 1 << 0,              // Instruction is used as a part of
-                                        // function frame setup code.
-    FrameDestroy = 1 << 1,              // Instruction is used as a part of
-                                        // function frame destruction code.
-    BundledPred  = 1 << 2,              // Instruction has bundled predecessors.
-    BundledSucc  = 1 << 3,              // Instruction has bundled successors.
-    FmNoNans     = 1 << 4,              // Instruction does not support Fast
-                                        // math nan values.
-    FmNoInfs     = 1 << 5,              // Instruction does not support Fast
-                                        // math infinity values.
-    FmNsz        = 1 << 6,              // Instruction is not required to retain
-                                        // signed zero values.
-    FmArcp       = 1 << 7,              // Instruction supports Fast math
-                                        // reciprocal approximations.
-    FmContract   = 1 << 8,              // Instruction supports Fast math
-                                        // contraction operations like fma.
-    FmAfn        = 1 << 9,              // Instruction may map to Fast math
-                                        // instrinsic approximation.
-    FmReassoc    = 1 << 10,             // Instruction supports Fast math
-                                        // reassociation of operand order.
-    NoUWrap      = 1 << 11,             // Instruction supports binary operator
-                                        // no unsigned wrap.
-    NoSWrap      = 1 << 12,             // Instruction supports binary operator
-                                        // no signed wrap.
-    IsExact      = 1 << 13,             // Instruction supports division is
-                                        // known to be exact.
-    NoFPExcept   = 1 << 14,             // Instruction does not raise
-                                        // floatint-point exceptions.
-    NoMerge      = 1 << 15,             // Passes that drop source location info
-                                        // (e.g. branch folding) should skip
-                                        // this instruction.
+    NoFlags = 0,
+    FrameSetup = 1 << 0,     // Instruction is used as a part of
+                             // function frame setup code.
+    FrameDestroy = 1 << 1,   // Instruction is used as a part of
+                             // function frame destruction code.
+    BundledPred = 1 << 2,    // Instruction has bundled predecessors.
+    BundledSucc = 1 << 3,    // Instruction has bundled successors.
+    FmNoNans = 1 << 4,       // Instruction does not support Fast
+                             // math nan values.
+    FmNoInfs = 1 << 5,       // Instruction does not support Fast
+                             // math infinity values.
+    FmNsz = 1 << 6,          // Instruction is not required to retain
+                             // signed zero values.
+    FmArcp = 1 << 7,         // Instruction supports Fast math
+                             // reciprocal approximations.
+    FmContract = 1 << 8,     // Instruction supports Fast math
+                             // contraction operations like fma.
+    FmAfn = 1 << 9,          // Instruction may map to Fast math
+                             // intrinsic approximation.
+    FmReassoc = 1 << 10,     // Instruction supports Fast math
+                             // reassociation of operand order.
+    NoUWrap = 1 << 11,       // Instruction supports binary operator
+                             // no unsigned wrap.
+    NoSWrap = 1 << 12,       // Instruction supports binary operator
+                             // no signed wrap.
+    IsExact = 1 << 13,       // Instruction supports division is
+                             // known to be exact.
+    NoFPExcept = 1 << 14,    // Instruction does not raise
+                             // floatint-point exceptions.
+    NoMerge = 1 << 15,       // Passes that drop source location info
+                             // (e.g. branch folding) should skip
+                             // this instruction.
+    Unpredictable = 1 << 16, // Instruction with unpredictable condition.
   };
 
 private:
@@ -116,23 +122,26 @@ private:
 
   // Operands are allocated by an ArrayRecycler.
   MachineOperand *Operands = nullptr;   // Pointer to the first operand.
-  unsigned NumOperands = 0;             // Number of operands on instruction.
 
-  uint16_t Flags = 0;                   // Various bits of additional
-                                        // information about machine
-                                        // instruction.
+#define LLVM_MI_NUMOPERANDS_BITS 24
+#define LLVM_MI_FLAGS_BITS 24
+#define LLVM_MI_ASMPRINTERFLAGS_BITS 8
 
-  uint8_t AsmPrinterFlags = 0;          // Various bits of information used by
-                                        // the AsmPrinter to emit helpful
-                                        // comments.  This is *not* semantic
-                                        // information.  Do not use this for
-                                        // anything other than to convey comment
-                                        // information to AsmPrinter.
+  /// Number of operands on instruction.
+  uint32_t NumOperands : LLVM_MI_NUMOPERANDS_BITS;
 
-  // OperandCapacity has uint8_t size, so it should be next to AsmPrinterFlags
+  // OperandCapacity has uint8_t size, so it should be next to NumOperands
   // to properly pack.
   using OperandCapacity = ArrayRecycler<MachineOperand>::Capacity;
   OperandCapacity CapOperands;          // Capacity of the Operands array.
+
+  /// Various bits of additional information about the machine instruction.
+  uint32_t Flags : LLVM_MI_FLAGS_BITS;
+
+  /// Various bits of information used by the AsmPrinter to emit helpful
+  /// comments.  This is *not* semantic information.  Do not use this for
+  /// anything other than to convey comment information to AsmPrinter.
+  uint8_t AsmPrinterFlags : LLVM_MI_ASMPRINTERFLAGS_BITS;
 
   /// Internal implementation detail class that provides out-of-line storage for
   /// extra info used by the machine instruction when this info cannot be stored
@@ -140,24 +149,28 @@ private:
   ///
   /// This has to be defined eagerly due to the implementation constraints of
   /// `PointerSumType` where it is used.
-  class ExtraInfo final
-      : TrailingObjects<ExtraInfo, MachineMemOperand *, MCSymbol *, MDNode *> {
+  class ExtraInfo final : TrailingObjects<ExtraInfo, MachineMemOperand *,
+                                          MCSymbol *, MDNode *, uint32_t> {
   public:
     static ExtraInfo *create(BumpPtrAllocator &Allocator,
                              ArrayRef<MachineMemOperand *> MMOs,
                              MCSymbol *PreInstrSymbol = nullptr,
                              MCSymbol *PostInstrSymbol = nullptr,
-                             MDNode *HeapAllocMarker = nullptr) {
+                             MDNode *HeapAllocMarker = nullptr,
+                             MDNode *PCSections = nullptr,
+                             uint32_t CFIType = 0) {
       bool HasPreInstrSymbol = PreInstrSymbol != nullptr;
       bool HasPostInstrSymbol = PostInstrSymbol != nullptr;
       bool HasHeapAllocMarker = HeapAllocMarker != nullptr;
+      bool HasCFIType = CFIType != 0;
+      bool HasPCSections = PCSections != nullptr;
       auto *Result = new (Allocator.Allocate(
-          totalSizeToAlloc<MachineMemOperand *, MCSymbol *, MDNode *>(
+          totalSizeToAlloc<MachineMemOperand *, MCSymbol *, MDNode *, uint32_t>(
               MMOs.size(), HasPreInstrSymbol + HasPostInstrSymbol,
-              HasHeapAllocMarker),
+              HasHeapAllocMarker + HasPCSections, HasCFIType),
           alignof(ExtraInfo)))
           ExtraInfo(MMOs.size(), HasPreInstrSymbol, HasPostInstrSymbol,
-                    HasHeapAllocMarker);
+                    HasHeapAllocMarker, HasPCSections, HasCFIType);
 
       // Copy the actual data into the trailing objects.
       std::copy(MMOs.begin(), MMOs.end(),
@@ -170,12 +183,17 @@ private:
             PostInstrSymbol;
       if (HasHeapAllocMarker)
         Result->getTrailingObjects<MDNode *>()[0] = HeapAllocMarker;
+      if (HasPCSections)
+        Result->getTrailingObjects<MDNode *>()[HasHeapAllocMarker] =
+            PCSections;
+      if (HasCFIType)
+        Result->getTrailingObjects<uint32_t>()[0] = CFIType;
 
       return Result;
     }
 
     ArrayRef<MachineMemOperand *> getMMOs() const {
-      return makeArrayRef(getTrailingObjects<MachineMemOperand *>(), NumMMOs);
+      return ArrayRef(getTrailingObjects<MachineMemOperand *>(), NumMMOs);
     }
 
     MCSymbol *getPreInstrSymbol() const {
@@ -192,6 +210,16 @@ private:
       return HasHeapAllocMarker ? getTrailingObjects<MDNode *>()[0] : nullptr;
     }
 
+    MDNode *getPCSections() const {
+      return HasPCSections
+                 ? getTrailingObjects<MDNode *>()[HasHeapAllocMarker]
+                 : nullptr;
+    }
+
+    uint32_t getCFIType() const {
+      return HasCFIType ? getTrailingObjects<uint32_t>()[0] : 0;
+    }
+
   private:
     friend TrailingObjects;
 
@@ -204,6 +232,8 @@ private:
     const bool HasPreInstrSymbol;
     const bool HasPostInstrSymbol;
     const bool HasHeapAllocMarker;
+    const bool HasPCSections;
+    const bool HasCFIType;
 
     // Implement the `TrailingObjects` internal API.
     size_t numTrailingObjects(OverloadToken<MachineMemOperand *>) const {
@@ -213,16 +243,20 @@ private:
       return HasPreInstrSymbol + HasPostInstrSymbol;
     }
     size_t numTrailingObjects(OverloadToken<MDNode *>) const {
-      return HasHeapAllocMarker;
+      return HasHeapAllocMarker + HasPCSections;
+    }
+    size_t numTrailingObjects(OverloadToken<uint32_t>) const {
+      return HasCFIType;
     }
 
     // Just a boring constructor to allow us to initialize the sizes. Always use
     // the `create` routine above.
     ExtraInfo(int NumMMOs, bool HasPreInstrSymbol, bool HasPostInstrSymbol,
-              bool HasHeapAllocMarker)
+              bool HasHeapAllocMarker, bool HasPCSections, bool HasCFIType)
         : NumMMOs(NumMMOs), HasPreInstrSymbol(HasPreInstrSymbol),
           HasPostInstrSymbol(HasPostInstrSymbol),
-          HasHeapAllocMarker(HasHeapAllocMarker) {}
+          HasHeapAllocMarker(HasHeapAllocMarker), HasPCSections(HasPCSections),
+          HasCFIType(HasCFIType) {}
   };
 
   /// Enumeration of the kinds of inline extra info available. It is important
@@ -247,7 +281,7 @@ private:
                  PointerSumTypeMember<EIIK_OutOfLine, ExtraInfo *>>
       Info;
 
-  DebugLoc debugLoc;                    // Source line information.
+  DebugLoc DbgLoc; // Source line information.
 
   /// Unique instruction number. Used by DBG_INSTR_REFs to refer to the values
   /// defined by this instruction.
@@ -265,7 +299,7 @@ private:
   /// This constructor create a MachineInstr and add the implicit operands.
   /// It reserves space for number of operands specified by
   /// MCInstrDesc.  An explicit DebugLoc is supplied.
-  MachineInstr(MachineFunction &, const MCInstrDesc &tid, DebugLoc dl,
+  MachineInstr(MachineFunction &, const MCInstrDesc &TID, DebugLoc DL,
                bool NoImp = false);
 
   // MachineInstrs are pool-allocated and owned by MachineFunction.
@@ -274,6 +308,14 @@ private:
   void
   dumprImpl(const MachineRegisterInfo &MRI, unsigned Depth, unsigned MaxDepth,
             SmallPtrSetImpl<const MachineInstr *> &AlreadySeenInstrs) const;
+
+  static bool opIsRegDef(const MachineOperand &Op) {
+    return Op.isReg() && Op.isDef();
+  }
+
+  static bool opIsRegUse(const MachineOperand &Op) {
+    return Op.isReg() && Op.isUse();
+  }
 
 public:
   MachineInstr(const MachineInstr &) = delete;
@@ -306,35 +348,47 @@ public:
 
   /// Return whether an AsmPrinter flag is set.
   bool getAsmPrinterFlag(CommentFlag Flag) const {
+    assert(isUInt<LLVM_MI_ASMPRINTERFLAGS_BITS>(unsigned(Flag)) &&
+           "Flag is out of range for the AsmPrinterFlags field");
     return AsmPrinterFlags & Flag;
   }
 
   /// Set a flag for the AsmPrinter.
   void setAsmPrinterFlag(uint8_t Flag) {
+    assert(isUInt<LLVM_MI_ASMPRINTERFLAGS_BITS>(unsigned(Flag)) &&
+           "Flag is out of range for the AsmPrinterFlags field");
     AsmPrinterFlags |= Flag;
   }
 
   /// Clear specific AsmPrinter flags.
   void clearAsmPrinterFlag(CommentFlag Flag) {
+    assert(isUInt<LLVM_MI_ASMPRINTERFLAGS_BITS>(unsigned(Flag)) &&
+           "Flag is out of range for the AsmPrinterFlags field");
     AsmPrinterFlags &= ~Flag;
   }
 
   /// Return the MI flags bitvector.
-  uint16_t getFlags() const {
+  uint32_t getFlags() const {
     return Flags;
   }
 
   /// Return whether an MI flag is set.
   bool getFlag(MIFlag Flag) const {
+    assert(isUInt<LLVM_MI_FLAGS_BITS>(unsigned(Flag)) &&
+           "Flag is out of range for the Flags field");
     return Flags & Flag;
   }
 
   /// Set a MI flag.
   void setFlag(MIFlag Flag) {
-    Flags |= (uint16_t)Flag;
+    assert(isUInt<LLVM_MI_FLAGS_BITS>(unsigned(Flag)) &&
+           "Flag is out of range for the Flags field");
+    Flags |= (uint32_t)Flag;
   }
 
   void setFlags(unsigned flags) {
+    assert(isUInt<LLVM_MI_FLAGS_BITS>(flags) &&
+           "flags to be set are out of range for the Flags field");
     // Filter out the automatically maintained flags.
     unsigned Mask = BundledPred | BundledSucc;
     Flags = (Flags & Mask) | (flags & ~Mask);
@@ -342,7 +396,9 @@ public:
 
   /// clearFlag - Clear a MI flag.
   void clearFlag(MIFlag Flag) {
-    Flags &= ~((uint16_t)Flag);
+    assert(isUInt<LLVM_MI_FLAGS_BITS>(unsigned(Flag)) &&
+           "Flag to clear is out of range for the Flags field");
+    Flags &= ~((uint32_t)Flag);
   }
 
   /// Return true if MI is in a bundle (but not the first MI in a bundle).
@@ -413,17 +469,17 @@ public:
   void unbundleFromSucc();
 
   /// Returns the debug location id of this MachineInstr.
-  const DebugLoc &getDebugLoc() const { return debugLoc; }
+  const DebugLoc &getDebugLoc() const { return DbgLoc; }
 
   /// Return the operand containing the offset to be used if this DBG_VALUE
   /// instruction is indirect; will be an invalid register if this value is
   /// not indirect, and an immediate with value 0 otherwise.
   const MachineOperand &getDebugOffset() const {
-    assert(isDebugValue() && "not a DBG_VALUE");
+    assert(isNonListDebugValue() && "not a DBG_VALUE");
     return getOperand(1);
   }
   MachineOperand &getDebugOffset() {
-    assert(isDebugValue() && "not a DBG_VALUE");
+    assert(isNonListDebugValue() && "not a DBG_VALUE");
     return getOperand(1);
   }
 
@@ -438,6 +494,7 @@ public:
 
   /// Return the operand for the complex address expression referenced by
   /// this DBG_VALUE instruction.
+  const MachineOperand &getDebugExpressionOp() const;
   MachineOperand &getDebugExpressionOp();
 
   /// Return the complex address expression referenced by
@@ -452,6 +509,11 @@ public:
   /// one already, a new and unique number will be assigned.
   unsigned getDebugInstrNum();
 
+  /// Fetch instruction number of this MachineInstr -- but before it's inserted
+  /// into \p MF. Needed for transformations that create an instruction but
+  /// don't immediately insert them.
+  unsigned getDebugInstrNum(MachineFunction &MF);
+
   /// Examine the instruction number of this MachineInstr. May be zero if
   /// it hasn't been assigned a number yet.
   unsigned peekDebugInstrNum() const { return DebugInstrNum; }
@@ -459,6 +521,12 @@ public:
   /// Set instruction number of this MachineInstr. Avoid using unless you're
   /// deserializing this information.
   void setDebugInstrNum(unsigned Num) { DebugInstrNum = Num; }
+
+  /// Drop any variable location debugging information associated with this
+  /// instruction. Use when an instruction is modified in such a way that it no
+  /// longer defines the value it used to. Variable locations using that value
+  /// will be dropped.
+  void dropDebugNumber() { DebugInstrNum = 0; }
 
   /// Emit an error referring to the source location of this instruction.
   /// This should only be used for inline assembly that is somehow
@@ -500,42 +568,65 @@ public:
     return *(debug_operands().begin() + Index);
   }
 
-  /// Returns a pointer to the operand corresponding to a debug use of Reg, or
-  /// nullptr if Reg is not used in any debug operand.
-  const MachineOperand *getDebugOperandForReg(Register Reg) const {
-    const MachineOperand *RegOp =
-        find_if(debug_operands(), [Reg](const MachineOperand &Op) {
-          return Op.isReg() && Op.getReg() == Reg;
-        });
-    return RegOp == adl_end(debug_operands()) ? nullptr : RegOp;
+  SmallSet<Register, 4> getUsedDebugRegs() const {
+    assert(isDebugValue() && "not a DBG_VALUE*");
+    SmallSet<Register, 4> UsedRegs;
+    for (const auto &MO : debug_operands())
+      if (MO.isReg() && MO.getReg())
+        UsedRegs.insert(MO.getReg());
+    return UsedRegs;
   }
-  MachineOperand *getDebugOperandForReg(Register Reg) {
-    MachineOperand *RegOp =
-        find_if(debug_operands(), [Reg](const MachineOperand &Op) {
-          return Op.isReg() && Op.getReg() == Reg;
-        });
-    return RegOp == adl_end(debug_operands()) ? nullptr : RegOp;
+
+  /// Returns whether this debug value has at least one debug operand with the
+  /// register \p Reg.
+  bool hasDebugOperandForReg(Register Reg) const {
+    return any_of(debug_operands(), [Reg](const MachineOperand &Op) {
+      return Op.isReg() && Op.getReg() == Reg;
+    });
+  }
+
+  /// Returns a range of all of the operands that correspond to a debug use of
+  /// \p Reg.
+  template <typename Operand, typename Instruction>
+  static iterator_range<
+      filter_iterator<Operand *, std::function<bool(Operand &Op)>>>
+  getDebugOperandsForReg(Instruction *MI, Register Reg) {
+    std::function<bool(Operand & Op)> OpUsesReg(
+        [Reg](Operand &Op) { return Op.isReg() && Op.getReg() == Reg; });
+    return make_filter_range(MI->debug_operands(), OpUsesReg);
+  }
+  iterator_range<filter_iterator<const MachineOperand *,
+                                 std::function<bool(const MachineOperand &Op)>>>
+  getDebugOperandsForReg(Register Reg) const {
+    return MachineInstr::getDebugOperandsForReg<const MachineOperand,
+                                                const MachineInstr>(this, Reg);
+  }
+  iterator_range<filter_iterator<MachineOperand *,
+                                 std::function<bool(MachineOperand &Op)>>>
+  getDebugOperandsForReg(Register Reg) {
+    return MachineInstr::getDebugOperandsForReg<MachineOperand, MachineInstr>(
+        this, Reg);
+  }
+
+  bool isDebugOperand(const MachineOperand *Op) const {
+    return Op >= adl_begin(debug_operands()) && Op <= adl_end(debug_operands());
   }
 
   unsigned getDebugOperandIndex(const MachineOperand *Op) const {
-    assert(Op >= adl_begin(debug_operands()) &&
-           Op <= adl_end(debug_operands()) && "Expected a debug operand.");
+    assert(isDebugOperand(Op) && "Expected a debug operand.");
     return std::distance(adl_begin(debug_operands()), Op);
   }
 
   /// Returns the total number of definitions.
   unsigned getNumDefs() const {
-    return getNumExplicitDefs() + MCID->getNumImplicitDefs();
+    return getNumExplicitDefs() + MCID->implicit_defs().size();
   }
 
   /// Returns true if the instruction has implicit definition.
   bool hasImplicitDef() const {
-    for (unsigned I = getNumExplicitOperands(), E = getNumOperands();
-      I != E; ++I) {
-      const MachineOperand &MO = getOperand(I);
+    for (const MachineOperand &MO : implicit_operands())
       if (MO.isDef() && MO.isImplicit())
         return true;
-    }
     return false;
   }
 
@@ -546,8 +637,7 @@ public:
 
   /// Return true if operand \p OpIdx is a subregister index.
   bool isOperandSubregIdx(unsigned OpIdx) const {
-    assert(getOperand(OpIdx).getType() == MachineOperand::MO_Immediate &&
-           "Expected MO_Immediate operand type.");
+    assert(getOperand(OpIdx).isImm() && "Expected MO_Immediate operand type.");
     if (isExtractSubreg() && OpIdx == 2)
       return true;
     if (isInsertSubreg() && OpIdx == 3)
@@ -598,13 +688,17 @@ public:
   /// Returns a range over all operands that are used to determine the variable
   /// location for this DBG_VALUE instruction.
   iterator_range<mop_iterator> debug_operands() {
-    assert(isDebugValue() && "Must be a debug value instruction.");
-    return make_range(operands_begin(), operands_begin() + 1);
+    assert((isDebugValueLike()) && "Must be a debug value instruction.");
+    return isNonListDebugValue()
+               ? make_range(operands_begin(), operands_begin() + 1)
+               : make_range(operands_begin() + 2, operands_end());
   }
   /// \copydoc debug_operands()
   iterator_range<const_mop_iterator> debug_operands() const {
-    assert(isDebugValue() && "Must be a debug value instruction.");
-    return make_range(operands_begin(), operands_begin() + 1);
+    assert((isDebugValueLike()) && "Must be a debug value instruction.");
+    return isNonListDebugValue()
+               ? make_range(operands_begin(), operands_begin() + 1)
+               : make_range(operands_begin() + 2, operands_end());
   }
   /// Returns a range over all explicit operands that are register definitions.
   /// Implicit definition are not included!
@@ -635,6 +729,31 @@ public:
                       operands_begin() + getNumExplicitOperands());
   }
 
+  using filtered_mop_iterator =
+      filter_iterator<mop_iterator, bool (*)(const MachineOperand &)>;
+  using filtered_const_mop_iterator =
+      filter_iterator<const_mop_iterator, bool (*)(const MachineOperand &)>;
+
+  /// Returns an iterator range over all operands that are (explicit or
+  /// implicit) register defs.
+  iterator_range<filtered_mop_iterator> all_defs() {
+    return make_filter_range(operands(), opIsRegDef);
+  }
+  /// \copydoc all_defs()
+  iterator_range<filtered_const_mop_iterator> all_defs() const {
+    return make_filter_range(operands(), opIsRegDef);
+  }
+
+  /// Returns an iterator range over all operands that are (explicit or
+  /// implicit) register uses.
+  iterator_range<filtered_mop_iterator> all_uses() {
+    return make_filter_range(uses(), opIsRegUse);
+  }
+  /// \copydoc all_uses()
+  iterator_range<filtered_const_mop_iterator> all_uses() const {
+    return make_filter_range(uses(), opIsRegUse);
+  }
+
   /// Returns the number of the operand iterator \p I points to.
   unsigned getOperandNo(const_mop_iterator I) const {
     return I - operands_begin();
@@ -648,7 +767,7 @@ public:
       return {};
 
     if (Info.is<EIIK_MMO>())
-      return makeArrayRef(Info.getAddrOfZeroTagPointer(), 1);
+      return ArrayRef(Info.getAddrOfZeroTagPointer(), 1);
 
     if (ExtraInfo *EI = Info.get<EIIK_OutOfLine>())
       return EI->getMMOs();
@@ -715,6 +834,26 @@ public:
     return nullptr;
   }
 
+  /// Helper to extract PCSections metadata target sections.
+  MDNode *getPCSections() const {
+    if (!Info)
+      return nullptr;
+    if (ExtraInfo *EI = Info.get<EIIK_OutOfLine>())
+      return EI->getPCSections();
+
+    return nullptr;
+  }
+
+  /// Helper to extract a CFI type hash if one has been added.
+  uint32_t getCFIType() const {
+    if (!Info)
+      return 0;
+    if (ExtraInfo *EI = Info.get<EIIK_OutOfLine>())
+      return EI->getCFIType();
+
+    return 0;
+  }
+
   /// API for querying MachineInstr properties. They are the same as MCInstrDesc
   /// queries but they are bundle aware.
 
@@ -764,6 +903,12 @@ public:
   /// correspond to a real machine instruction.
   bool isPseudo(QueryType Type = IgnoreBundle) const {
     return hasProperty(MCID::Pseudo, Type);
+  }
+
+  /// Return true if this instruction doesn't produce any output in the form of
+  /// executable instructions.
+  bool isMetaInstruction(QueryType Type = IgnoreBundle) const {
+    return hasProperty(MCID::Meta, Type);
   }
 
   bool isReturn(QueryType Type = AnyInBundle) const {
@@ -875,6 +1020,8 @@ public:
   /// For example, if the instruction has a unique labels attached
   /// to it, duplicating it would cause multiple definition errors.
   bool isNotDuplicable(QueryType Type = AnyInBundle) const {
+    if (getPreInstrSymbol() || getPostInstrSymbol())
+      return true;
     return hasProperty(MCID::NotDuplicable, Type);
   }
 
@@ -1108,6 +1255,13 @@ public:
   bool isIdenticalTo(const MachineInstr &Other,
                      MICheckType Check = CheckDefs) const;
 
+  /// Returns true if this instruction is a debug instruction that represents an
+  /// identical debug value to \p Other.
+  /// This function considers these debug instructions equivalent if they have
+  /// identical variables, debug locations, and debug operands, and if the
+  /// DIExpressions combined with the directness flags are equivalent.
+  bool isEquivalentDbgInstr(const MachineInstr &Other) const;
+
   /// Unlink 'this' from the containing basic block, and return it without
   /// deleting it.
   ///
@@ -1128,12 +1282,6 @@ public:
   /// This function can not be used for instructions inside a bundle, use
   /// eraseFromBundle() to erase individual bundled instructions.
   void eraseFromParent();
-
-  /// Unlink 'this' from the containing basic block and delete it.
-  ///
-  /// For all definitions mark their uses in DBG_VALUE nodes
-  /// as undefined. Otherwise like eraseFromParent().
-  void eraseFromParentAndMarkDBGValuesForRemoval();
 
   /// Unlink 'this' form its basic block and delete it.
   ///
@@ -1156,22 +1304,41 @@ public:
     return getOpcode() == TargetOpcode::CFI_INSTRUCTION;
   }
 
+  bool isPseudoProbe() const {
+    return getOpcode() == TargetOpcode::PSEUDO_PROBE;
+  }
+
   // True if the instruction represents a position in the function.
   bool isPosition() const { return isLabel() || isCFIInstruction(); }
 
-  bool isDebugValue() const { return getOpcode() == TargetOpcode::DBG_VALUE; }
+  bool isNonListDebugValue() const {
+    return getOpcode() == TargetOpcode::DBG_VALUE;
+  }
+  bool isDebugValueList() const {
+    return getOpcode() == TargetOpcode::DBG_VALUE_LIST;
+  }
+  bool isDebugValue() const {
+    return isNonListDebugValue() || isDebugValueList();
+  }
   bool isDebugLabel() const { return getOpcode() == TargetOpcode::DBG_LABEL; }
   bool isDebugRef() const { return getOpcode() == TargetOpcode::DBG_INSTR_REF; }
+  bool isDebugValueLike() const { return isDebugValue() || isDebugRef(); }
+  bool isDebugPHI() const { return getOpcode() == TargetOpcode::DBG_PHI; }
   bool isDebugInstr() const {
-    return isDebugValue() || isDebugLabel() || isDebugRef();
+    return isDebugValue() || isDebugLabel() || isDebugRef() || isDebugPHI();
+  }
+  bool isDebugOrPseudoInstr() const {
+    return isDebugInstr() || isPseudoProbe();
   }
 
-  bool isDebugOffsetImm() const { return getDebugOffset().isImm(); }
+  bool isDebugOffsetImm() const {
+    return isNonListDebugValue() && getDebugOffset().isImm();
+  }
 
   /// A DBG_VALUE is indirect iff the location operand is a register and
   /// the offset operand is an immediate.
   bool isIndirectDebugValue() const {
-    return isDebugValue() && getDebugOperand(0).isReg() && isDebugOffsetImm();
+    return isDebugOffsetImm() && getDebugOperand(0).isReg();
   }
 
   /// A DBG_VALUE is an entry value iff its debug expression contains the
@@ -1181,8 +1348,13 @@ public:
   /// Return true if the instruction is a debug value which describes a part of
   /// a variable as unavailable.
   bool isUndefDebugValue() const {
-    return isDebugValue() && getDebugOperand(0).isReg() &&
-           !getDebugOperand(0).getReg().isValid();
+    if (!isDebugValue())
+      return false;
+    // If any $noreg locations are given, this DV is undef.
+    for (const MachineOperand &Op : debug_operands())
+      if (Op.isReg() && !Op.getReg().isValid())
+        return true;
+    return false;
   }
 
   bool isPHI() const {
@@ -1243,27 +1415,6 @@ public:
   bool isIdentityCopy() const {
     return isCopy() && getOperand(0).getReg() == getOperand(1).getReg() &&
       getOperand(0).getSubReg() == getOperand(1).getSubReg();
-  }
-
-  /// Return true if this instruction doesn't produce any output in the form of
-  /// executable instructions.
-  bool isMetaInstruction() const {
-    switch (getOpcode()) {
-    default:
-      return false;
-    case TargetOpcode::IMPLICIT_DEF:
-    case TargetOpcode::KILL:
-    case TargetOpcode::CFI_INSTRUCTION:
-    case TargetOpcode::EH_LABEL:
-    case TargetOpcode::GC_LABEL:
-    case TargetOpcode::DBG_VALUE:
-    case TargetOpcode::DBG_INSTR_REF:
-    case TargetOpcode::DBG_LABEL:
-    case TargetOpcode::LIFETIME_START:
-    case TargetOpcode::LIFETIME_END:
-    case TargetOpcode::PSEUDO_PROBE:
-      return true;
-    }
   }
 
   /// Return true if this is a transient instruction that is either very likely
@@ -1411,9 +1562,6 @@ public:
   ///
   /// If GroupNo is not NULL, it will receive the number of the operand group
   /// containing OpIdx.
-  ///
-  /// The flag operand is an immediate that can be decoded with methods like
-  /// InlineAsm::hasRegClassConstraint().
   int findInlineAsmFlagIdx(unsigned OpIdx, unsigned *GroupNo = nullptr) const;
 
   /// Compute the static register class constraint for operand OpIdx.
@@ -1576,7 +1724,7 @@ public:
   /// argument area of a function (if it does not change).  If the instruction
   /// does multiple loads, this returns true only if all of the loads are
   /// dereferenceable and invariant.
-  bool isDereferenceableInvariantLoad(AAResults *AA) const;
+  bool isDereferenceableInvariantLoad() const;
 
   /// If the specified instruction is a PHI that always merges together the
   /// same virtual register, return the register, otherwise return 0.
@@ -1598,16 +1746,16 @@ public:
   bool allDefsAreDead() const;
 
   /// Return a valid size if the instruction is a spill instruction.
-  Optional<unsigned> getSpillSize(const TargetInstrInfo *TII) const;
+  std::optional<unsigned> getSpillSize(const TargetInstrInfo *TII) const;
 
   /// Return a valid size if the instruction is a folded spill instruction.
-  Optional<unsigned> getFoldedSpillSize(const TargetInstrInfo *TII) const;
+  std::optional<unsigned> getFoldedSpillSize(const TargetInstrInfo *TII) const;
 
   /// Return a valid size if the instruction is a restore instruction.
-  Optional<unsigned> getRestoreSize(const TargetInstrInfo *TII) const;
+  std::optional<unsigned> getRestoreSize(const TargetInstrInfo *TII) const;
 
   /// Return a valid size if the instruction is a folded restore instruction.
-  Optional<unsigned>
+  std::optional<unsigned>
   getFoldedRestoreSize(const TargetInstrInfo *TII) const;
 
   /// Copy implicit register operands from specified
@@ -1672,18 +1820,18 @@ public:
 
   /// Replace the instruction descriptor (thus opcode) of
   /// the current instruction with a new one.
-  void setDesc(const MCInstrDesc &tid) { MCID = &tid; }
+  void setDesc(const MCInstrDesc &TID) { MCID = &TID; }
 
   /// Replace current source information with new such.
   /// Avoid using this, the constructor argument is preferable.
-  void setDebugLoc(DebugLoc dl) {
-    debugLoc = std::move(dl);
-    assert(debugLoc.hasTrivialDestructor() && "Expected trivial destructor");
+  void setDebugLoc(DebugLoc DL) {
+    DbgLoc = std::move(DL);
+    assert(DbgLoc.hasTrivialDestructor() && "Expected trivial destructor");
   }
 
   /// Erase an operand from an instruction, leaving it with one
   /// fewer operand than it started with.
-  void RemoveOperand(unsigned OpNo);
+  void removeOperand(unsigned OpNo);
 
   /// Clear this MachineInstr's memory reference descriptor list.  This resets
   /// the memrefs to their most conservative state.  This should be used only
@@ -1745,12 +1893,19 @@ public:
   /// instruction is removed or duplicated.
   void setHeapAllocMarker(MachineFunction &MF, MDNode *MD);
 
+  // Set metadata on instructions that say which sections to emit instruction
+  // addresses into.
+  void setPCSections(MachineFunction &MF, MDNode *MD);
+
+  /// Set the CFI type for the instruction.
+  void setCFIType(MachineFunction &MF, uint32_t Type);
+
   /// Return the MIFlags which represent both MachineInstrs. This
   /// should be used when merging two MachineInstrs into one. This routine does
   /// not modify the MIFlags of this MachineInstr.
-  uint16_t mergeFlagsWith(const MachineInstr& Other) const;
+  uint32_t mergeFlagsWith(const MachineInstr& Other) const;
 
-  static uint16_t copyFlagsFromInstruction(const Instruction &I);
+  static uint32_t copyFlagsFromInstruction(const Instruction &I);
 
   /// Copy all flags to MachineInst MIFlags
   void copyIRFlags(const Instruction &I);
@@ -1793,21 +1948,57 @@ public:
     }
   }
 
+  std::tuple<Register, Register> getFirst2Regs() const {
+    return std::tuple(getOperand(0).getReg(), getOperand(1).getReg());
+  }
+
+  std::tuple<Register, Register, Register> getFirst3Regs() const {
+    return std::tuple(getOperand(0).getReg(), getOperand(1).getReg(),
+                      getOperand(2).getReg());
+  }
+
+  std::tuple<Register, Register, Register, Register> getFirst4Regs() const {
+    return std::tuple(getOperand(0).getReg(), getOperand(1).getReg(),
+                      getOperand(2).getReg(), getOperand(3).getReg());
+  }
+
+  std::tuple<Register, Register, Register, Register, Register>
+  getFirst5Regs() const {
+    return std::tuple(getOperand(0).getReg(), getOperand(1).getReg(),
+                      getOperand(2).getReg(), getOperand(3).getReg(),
+                      getOperand(4).getReg());
+  }
+
+  std::tuple<LLT, LLT> getFirst2LLTs() const;
+  std::tuple<LLT, LLT, LLT> getFirst3LLTs() const;
+  std::tuple<LLT, LLT, LLT, LLT> getFirst4LLTs() const;
+  std::tuple<LLT, LLT, LLT, LLT, LLT> getFirst5LLTs() const;
+
+  std::tuple<Register, LLT, Register, LLT> getFirst2RegLLTs() const;
+  std::tuple<Register, LLT, Register, LLT, Register, LLT>
+  getFirst3RegLLTs() const;
+  std::tuple<Register, LLT, Register, LLT, Register, LLT, Register, LLT>
+  getFirst4RegLLTs() const;
+  std::tuple<Register, LLT, Register, LLT, Register, LLT, Register, LLT,
+             Register, LLT>
+  getFirst5RegLLTs() const;
+
 private:
   /// If this instruction is embedded into a MachineFunction, return the
   /// MachineRegisterInfo object for the current function, otherwise
   /// return null.
   MachineRegisterInfo *getRegInfo();
+  const MachineRegisterInfo *getRegInfo() const;
 
   /// Unlink all of the register operands in this instruction from their
   /// respective use lists.  This requires that the operands already be on their
   /// use lists.
-  void RemoveRegOperandsFromUseLists(MachineRegisterInfo&);
+  void removeRegOperandsFromUseLists(MachineRegisterInfo&);
 
   /// Add all of the register operands in this instruction from their
   /// respective use lists.  This requires that the operands not be on their
   /// use lists yet.
-  void AddRegOperandsToUseLists(MachineRegisterInfo&);
+  void addRegOperandsToUseLists(MachineRegisterInfo&);
 
   /// Slow path for hasProperty when we're dealing with a bundle.
   bool hasPropertyInBundle(uint64_t Mask, QueryType Type) const;
@@ -1823,7 +2014,8 @@ private:
   /// based on the number of pointers.
   void setExtraInfo(MachineFunction &MF, ArrayRef<MachineMemOperand *> MMOs,
                     MCSymbol *PreInstrSymbol, MCSymbol *PostInstrSymbol,
-                    MDNode *HeapAllocMarker);
+                    MDNode *HeapAllocMarker, MDNode *PCSections,
+                    uint32_t CFIType);
 };
 
 /// Special DenseMapInfo traits to compare MachineInstr* by *value* of the
@@ -1850,6 +2042,10 @@ struct MachineInstrExpressionTrait : DenseMapInfo<MachineInstr*> {
   }
 };
 
+// BEGIN SWIFT
+bool isSwiftAsyncContext(const MachineFunction &MF, Register Reg);
+// END SWIFT
+  
 //===----------------------------------------------------------------------===//
 // Debugging Support
 

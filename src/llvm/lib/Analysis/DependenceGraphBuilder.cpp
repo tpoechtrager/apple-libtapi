@@ -12,6 +12,7 @@
 #include "llvm/Analysis/DependenceGraphBuilder.h"
 #include "llvm/ADT/DepthFirstIterator.h"
 #include "llvm/ADT/EnumeratedArray.h"
+#include "llvm/ADT/PostOrderIterator.h"
 #include "llvm/ADT/SCCIterator.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/DDG.h"
@@ -498,8 +499,7 @@ void AbstractDependenceGraphBuilder<G>::sortNodesTopologically() {
 
   size_t OldSize = Graph.Nodes.size();
   Graph.Nodes.clear();
-  for (NodeType *N : reverse(NodesInPO))
-    Graph.Nodes.push_back(N);
+  append_range(Graph.Nodes, reverse(NodesInPO));
   if (Graph.Nodes.size() != OldSize)
     assert(false &&
            "Expected the number of nodes to stay the same after the sort");

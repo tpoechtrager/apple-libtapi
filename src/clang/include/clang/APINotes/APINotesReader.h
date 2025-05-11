@@ -1,9 +1,8 @@
 //===--- APINotesReader.h - API Notes Reader ----------------------*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -17,7 +16,6 @@
 #define LLVM_CLANG_API_NOTES_READER_H
 
 #include "clang/APINotes/Types.h"
-#include "llvm/ADT/Optional.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/VersionTuple.h"
 #include <memory>
@@ -63,7 +61,7 @@ public:
 
   /// Retrieve the size and modification time of the source file from
   /// which this API notes file was created, if known.
-  llvm::Optional<std::pair<off_t, time_t>> getSourceFileSizeAndModTime() const;
+  std::optional<std::pair<off_t, time_t>> getSourceFileSizeAndModTime() const;
 
   /// Retrieve the module options
   ModuleOptions getModuleOptions() const;
@@ -82,7 +80,7 @@ public:
 
   public:
     /// Form an empty set of versioned information.
-    VersionedInfo(llvm::NoneType) : Selected(0) { }
+    VersionedInfo(std::nullopt_t) : Selected(0) { }
     
     /// Form a versioned info set given the desired version and a set of
     /// results.
@@ -100,8 +98,8 @@ public:
     }
 
     /// Retrieve the selected index in the result set.
-    llvm::Optional<unsigned> getSelected() const {
-      if (Selected == Results.size()) return llvm::None;
+    std::optional<unsigned> getSelected() const {
+      if (Selected == Results.size()) return std::nullopt;
       return Selected;
     }
 
@@ -123,7 +121,7 @@ public:
   /// \param name The name of the class we're looking for.
   ///
   /// \returns The ID, if known.
-  llvm::Optional<ContextID> lookupObjCClassID(llvm::StringRef name);
+  std::optional<ContextID> lookupObjCClassID(llvm::StringRef name);
 
   /// Look for information regarding the given Objective-C class.
   ///
@@ -137,7 +135,7 @@ public:
   /// \param name The name of the protocol we're looking for.
   ///
   /// \returns The ID of the protocol, if known.
-  llvm::Optional<ContextID> lookupObjCProtocolID(llvm::StringRef name);
+  std::optional<ContextID> lookupObjCProtocolID(llvm::StringRef name);
 
   /// Look for information regarding the given Objective-C protocol.
   ///
@@ -176,14 +174,18 @@ public:
   /// \param name The name of the global variable.
   ///
   /// \returns information about the global variable, if known.
-  VersionedInfo<GlobalVariableInfo> lookupGlobalVariable(llvm::StringRef name);
+  VersionedInfo<GlobalVariableInfo>
+  lookupGlobalVariable(llvm::StringRef name,
+                       std::optional<Context> context = std::nullopt);
 
   /// Look for information regarding the given global function.
   ///
   /// \param name The name of the global function.
   ///
   /// \returns information about the global function, if known.
-  VersionedInfo<GlobalFunctionInfo> lookupGlobalFunction(llvm::StringRef name);
+  VersionedInfo<GlobalFunctionInfo>
+  lookupGlobalFunction(llvm::StringRef name,
+                       std::optional<Context> context = std::nullopt);
 
   /// Look for information regarding the given enumerator.
   ///
@@ -198,14 +200,27 @@ public:
   /// \param name The name of the tag.
   ///
   /// \returns information about the tag, if known.
-  VersionedInfo<TagInfo> lookupTag(llvm::StringRef name);
+  VersionedInfo<TagInfo>
+  lookupTag(llvm::StringRef name,
+            std::optional<Context> context = std::nullopt);
 
   /// Look for information regarding the given typedef.
   ///
   /// \param name The name of the typedef.
   ///
   /// \returns information about the typedef, if known.
-  VersionedInfo<TypedefInfo> lookupTypedef(llvm::StringRef name);
+  VersionedInfo<TypedefInfo>
+  lookupTypedef(llvm::StringRef name,
+                std::optional<Context> context = std::nullopt);
+
+  /// Look for the context ID of the given C++ namespace.
+  ///
+  /// \param name The name of the class we're looking for.
+  ///
+  /// \returns The ID, if known.
+  std::optional<ContextID>
+  lookupNamespaceID(llvm::StringRef name,
+                    std::optional<ContextID> parentNamespaceID = std::nullopt);
 };
 
 } // end namespace api_notes

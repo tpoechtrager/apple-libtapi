@@ -1,9 +1,8 @@
 //===- tapi/Core/AvailabilityInfo.h - TAPI Availability Info ----*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 ///
@@ -16,15 +15,16 @@
 #define TAPI_CORE_AVAILABILITY_INFO_H
 
 #include "tapi/Core/LLVM.h"
-#include "tapi/Core/PackedVersion.h"
 #include "tapi/Defines.h"
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/Support/Error.h"
+#include "llvm/TextAPI/PackedVersion.h"
 
 TAPI_NAMESPACE_INTERNAL_BEGIN
 
 struct AvailabilityInfo {
   PackedVersion _introduced{0};
+  PackedVersion _deprecated{0};
   PackedVersion _obsoleted{0};
   bool _unavailable{false};
   bool _isSPIAvailable{false};
@@ -32,10 +32,10 @@ struct AvailabilityInfo {
   constexpr AvailabilityInfo(bool unavailable = false)
       : _unavailable(unavailable) {}
 
-  constexpr AvailabilityInfo(PackedVersion i, PackedVersion o, bool u,
-                             bool isSPI = false)
-      : _introduced(i), _obsoleted(o), _unavailable(u), _isSPIAvailable(isSPI) {
-  }
+  constexpr AvailabilityInfo(PackedVersion i, PackedVersion d, PackedVersion o,
+                             bool u, bool ud, bool isSPI = false)
+      : _introduced(i), _deprecated(d), _obsoleted(o), _unavailable(u),
+        _isSPIAvailable(isSPI) {}
 
   bool isDefault() const { return *this == AvailabilityInfo(); }
 
@@ -59,6 +59,8 @@ struct AvailabilityInfo {
 
   bool isSPIAvailable() const { return _isSPIAvailable; }
 
+  bool isObsolete() const { return !_obsoleted.empty(); }
+
   void print(raw_ostream &os) const;
 
   friend bool operator==(const AvailabilityInfo &lhs,
@@ -71,10 +73,10 @@ struct AvailabilityInfo {
 
 inline bool operator==(const AvailabilityInfo &lhs,
                        const AvailabilityInfo &rhs) {
-  return std::tie(lhs._introduced, lhs._obsoleted, lhs._unavailable,
-                  lhs._isSPIAvailable) ==
-         std::tie(rhs._introduced, rhs._obsoleted, rhs._unavailable,
-                  rhs._isSPIAvailable);
+  return std::tie(lhs._introduced, lhs._deprecated, lhs._obsoleted,
+                  lhs._unavailable, lhs._isSPIAvailable) ==
+         std::tie(rhs._introduced, rhs._deprecated, rhs._obsoleted,
+                  rhs._unavailable, rhs._isSPIAvailable);
 }
 
 inline bool operator!=(const AvailabilityInfo &lhs,
@@ -84,10 +86,10 @@ inline bool operator!=(const AvailabilityInfo &lhs,
 
 inline bool operator<(const AvailabilityInfo &lhs,
                       const AvailabilityInfo &rhs) {
-  return std::tie(lhs._introduced, lhs._obsoleted, lhs._isSPIAvailable,
-                  lhs._unavailable) < std::tie(rhs._introduced, rhs._obsoleted,
-                                               rhs._isSPIAvailable,
-                                               rhs._unavailable);
+  return std::tie(lhs._introduced, lhs._deprecated, lhs._obsoleted,
+                  lhs._unavailable, lhs._isSPIAvailable) <
+         std::tie(rhs._introduced, rhs._deprecated, rhs._obsoleted,
+                  rhs._unavailable, rhs._isSPIAvailable);
 }
 
 inline raw_ostream &operator<<(raw_ostream &os, const AvailabilityInfo &avail) {

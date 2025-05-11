@@ -1,11 +1,13 @@
 add_llvm_component_library(LLVMMC
   ConstantPools.cpp
+  DXContainerPSVInfo.cpp
   ELFObjectWriter.cpp
   MCAsmBackend.cpp
   MCAsmInfo.cpp
   MCAsmInfoCOFF.cpp
   MCAsmInfoDarwin.cpp
   MCAsmInfoELF.cpp
+  MCAsmInfoGOFF.cpp
   MCAsmInfoWasm.cpp
   MCAsmInfoXCOFF.cpp
   MCAsmMacro.cpp
@@ -15,6 +17,8 @@ add_llvm_component_library(LLVMMC
   MCCodeView.cpp
   MCContext.cpp
   MCDwarf.cpp
+  MCDXContainerStreamer.cpp
+  MCDXContainerWriter.cpp
   MCELFObjectTargetWriter.cpp
   MCELFStreamer.cpp
   MCExpr.cpp
@@ -28,6 +32,7 @@ add_llvm_component_library(LLVMMC
   MCLinkerOptimizationHint.cpp
   MCMachOStreamer.cpp
   MCMachObjectTargetWriter.cpp
+  MachOCASWriter.cpp
   MCNullStreamer.cpp
   MCObjectFileInfo.cpp
   MCObjectStreamer.cpp
@@ -37,11 +42,13 @@ add_llvm_component_library(LLVMMC
   MCSchedule.cpp
   MCSection.cpp
   MCSectionCOFF.cpp
+  MCSectionDXContainer.cpp
   MCSectionELF.cpp
   MCSectionMachO.cpp
   MCSectionWasm.cpp
   MCSectionXCOFF.cpp
   MCStreamer.cpp
+  MCSPIRVStreamer.cpp
   MCSubtargetInfo.cpp
   MCSymbol.cpp
   MCSymbolELF.cpp
@@ -57,8 +64,9 @@ add_llvm_component_library(LLVMMC
   MCXCOFFObjectTargetWriter.cpp
   MCXCOFFStreamer.cpp
   MachObjectWriter.cpp
+  SPIRVObjectWriter.cpp
   StringTableBuilder.cpp
-  SubtargetFeature.cpp
+  TargetRegistry.cpp
   WasmObjectWriter.cpp
   WinCOFFObjectWriter.cpp
   XCOFFObjectWriter.cpp
@@ -68,8 +76,14 @@ add_llvm_component_library(LLVMMC
 
   LINK_COMPONENTS
   Support
+  TargetParser
   BinaryFormat
+  CAS
+  CASUtil
   DebugInfoCodeView
+
+  DEPENDS
+  intrinsics_gen
   )
 
 add_subdirectory(MCParser)

@@ -14,55 +14,17 @@
 #ifndef LLVM_OBJCMETADATA_OBJCMETADATA_H
 #define LLVM_OBJCMETADATA_OBJCMETADATA_H
 
+#include <llvm/ADT/SmallVector.h>
 #include <llvm/ADT/StringRef.h>
 #include <llvm/ADT/StringSet.h>
-#include <llvm/ADT/SmallVector.h>
-#include <llvm/IR/Constant.h>
-#include <llvm/Object/SymbolicFile.h>
+#include <llvm/Object/MachO.h>
 #include <llvm/Support/Error.h>
+#include <unordered_map>
 #include <utility>
 
 namespace llvm {
 
-class ObjCRef {
-public:
-  uint64_t getValue() const { return v.a; }
-  void setValue(uint64_t value) { v.a = value; }
-
-  Constant *getLLVMConstant() const { return v.c; }
-  void setLLVMConstant(Constant *C) { v.c = C; }
-
-  int64_t getOffset() const { return offset; }
-  void setOffset(int64_t bytes) { offset = bytes; }
-
-  ObjCRef() {
-    memset(&v, 0, sizeof(v));
-  }
-  ObjCRef(uint64_t value) : offset (0) {
-    v.a = value;
-  }
-  ObjCRef(Constant *C) : offset (0) {
-    v.c = C;
-  }
-  ObjCRef(Constant *C, int64_t offset) : offset(offset) {
-    v.c = C;
-  }
-
-  bool operator==(const ObjCRef &Other) const {
-    return std::memcmp(&v, &(Other.v), sizeof(v)) == 0;
-  }
-
-  bool operator!=(const ObjCRef &Other) const {
-    return !(*this == Other);
-  }
-
-private:
-  union {
-    uint64_t a;
-    Constant *c;
-  } v;
-  int64_t offset; // only used with v is Constant. FIXME: this is a hack.
-};
+typedef uint64_t ObjCRef;
 
 class ObjCMetaDataReader;
 class ObjCClassRef;
@@ -224,91 +186,122 @@ public:
 // ObjC Metadata Reader.
 class ObjCMetaDataReader {
 public:
-  virtual ~ObjCMetaDataReader() {}
+  ObjCMetaDataReader(object::MachOObjectFile *Binary, Error &Err);
 
-  // General
-  virtual bool isObjC1() const = 0;
-  virtual bool isObjC2() const = 0;
+  object::MachOObjectFile *getMachOObject() {
+    return cast<object::MachOObjectFile>(OwningBinary);
+  }
 
-  virtual Expected<StringRef> getSwiftVersion() const = 0;
+  bool isObjC1() const { return ObjCVersion == ObjC1; }
+  bool isObjC2() const { return ObjCVersion == ObjC2; }
+  Expected<StringRef> getSwiftVersion() const;
 
-  // ObjCClassRef.
-  virtual Expected<ObjCClassList> classes() const = 0;
-  virtual Expected<ObjCClass> getObjCClassFromRef(ObjCClassRef Ref) const = 0;
-  virtual bool isObjCClassExternal(ObjCClassRef Ref) const = 0;
+  const object::MachOObjectFile *getOwningBinary() const {
+    return OwningBinary;
+  }
 
-  // ObjCCategoryRef.
-  virtual Expected<ObjCCategoryList> categories() const = 0;
-  virtual Expected<ObjCCategory>
-  getObjCCategoryFromRef(ObjCCategoryRef Ref) const = 0;
+  // Overrides ObjC Class Ref Implementation.
+  Expected<ObjCClassList> classes() const;
+  Expected<ObjCClass> getObjCClassFromRef(ObjCClassRef Ref) const;
+  bool isObjCClassExternal(ObjCClassRef Ref) const;
 
-  // ObjCProtocolRef.
-  virtual Expected<ObjCProtocolList> protocols() const = 0;
-  virtual Expected<ObjCProtocol>
-  getObjCProtocolFromRef(ObjCProtocolRef Ref) const = 0;
+  // Overrides ObjC Category Ref Implementation.
+  Expected<ObjCCategoryList> categories() const;
+  Expected<ObjCCategory> getObjCCategoryFromRef(ObjCCategoryRef Ref) const;
 
-  // ObjCClass.
-  virtual Expected<StringRef> getObjCClassName(ObjCClass Data) const = 0;
-  virtual Expected<StringRef>
-  getObjCSuperClassName(ObjCClass Data) const = 0;
-  virtual Expected<bool> isObjCClassSwift(ObjCClass Data) const = 0;
-  virtual Expected<bool> isObjCClassMetaClass(ObjCClass Data) const = 0;
-  virtual Expected<ObjCPropertyList>
-  materializePropertyList(ObjCClass Data) const = 0;
-  virtual Expected<ObjCPropertyList>
-  materializeClassPropertyList(ObjCClass Data) const = 0;
-  virtual Expected<ObjCMethodList>
-  materializeInstanceMethodList(ObjCClass Data) const = 0;
-  virtual Expected<ObjCMethodList>
-  materializeClassMethodList(ObjCClass Data) const = 0;
+  // Overrides ObjC Protocol Ref Implementation.
+  Expected<ObjCProtocolList> protocols() const;
+  Expected<ObjCProtocol> getObjCProtocolFromRef(ObjCProtocolRef Ref) const;
 
-  // ObjCCategory.
-  virtual Expected<StringRef> getObjCCategoryName(ObjCCategory Data) const = 0;
-  virtual Expected<StringRef>
-  getObjCCategoryBaseClassName(ObjCCategory Data) const = 0;
-  virtual Expected<ObjCPropertyList>
-  materializePropertyList(ObjCCategory Data) const = 0;
-  virtual Expected<ObjCMethodList>
-  materializeInstanceMethodList(ObjCCategory Data) const = 0;
-  virtual Expected<ObjCMethodList>
-  materializeClassMethodList(ObjCCategory Data) const = 0;
+  // Overrides ObjC Class Implementation.
+  Expected<StringRef> getObjCClassName(ObjCClass ClassRef) const;
+  Expected<StringRef> getObjCSuperClassName(ObjCClass Data) const;
+  Expected<bool> isObjCClassSwift(ObjCClass Data) const;
+  Expected<bool> isObjCClassMetaClass(ObjCClass Data) const;
+  Expected<ObjCPropertyList> materializePropertyList(ObjCClass Data) const;
+  Expected<ObjCPropertyList> materializeClassPropertyList(ObjCClass Data) const;
+  Expected<ObjCMethodList> materializeInstanceMethodList(ObjCClass Data) const;
+  Expected<ObjCMethodList> materializeClassMethodList(ObjCClass Data) const;
 
-  // ObjCProtocol.
-  virtual Expected<StringRef> getObjCProtocolName(ObjCProtocol Data) const = 0;
-  virtual Expected<ObjCPropertyList>
-  materializePropertyList(ObjCProtocol Data) const = 0;
-  virtual Expected<ObjCMethodList>
-  materializeInstanceMethodList(ObjCProtocol Data) const = 0;
-  virtual Expected<ObjCMethodList>
-  materializeClassMethodList(ObjCProtocol Data) const = 0;
-  virtual Expected<ObjCMethodList>
-  materializeOptionalInstanceMethodList(ObjCProtocol Data) const = 0;
-  virtual Expected<ObjCMethodList>
-  materializeOptionalClassMethodList(ObjCProtocol Data) const = 0;
+  // Overrides ObjC Category Implementation.
+  Expected<StringRef> getObjCCategoryName(ObjCCategory Data) const;
+  Expected<StringRef> getObjCCategoryBaseClassName(ObjCCategory Data) const;
+  Expected<ObjCPropertyList> materializePropertyList(ObjCCategory Data) const;
+  Expected<ObjCMethodList>
+  materializeInstanceMethodList(ObjCCategory Data) const;
+  Expected<ObjCMethodList> materializeClassMethodList(ObjCCategory Data) const;
 
-  // ObjCProperty.
-  virtual Expected<StringRef> getPropertyName(ObjCProperty Data) const = 0;
-  virtual Expected<StringRef>
-  getPropertyAttribute(ObjCProperty Data) const = 0;
+  // Overrides ObjC Protocol Implementation.
+  Expected<StringRef> getObjCProtocolName(ObjCProtocol Data) const;
+  Expected<ObjCPropertyList> materializePropertyList(ObjCProtocol Data) const;
+  Expected<ObjCMethodList>
+  materializeInstanceMethodList(ObjCProtocol Data) const;
+  Expected<ObjCMethodList> materializeClassMethodList(ObjCProtocol Data) const;
+  Expected<ObjCMethodList>
+  materializeOptionalInstanceMethodList(ObjCProtocol Data) const;
+  Expected<ObjCMethodList>
+  materializeOptionalClassMethodList(ObjCProtocol Data) const;
 
-  // ObjCMethod.
-  virtual Expected<StringRef> getMethodName(ObjCMethod Data) const = 0;
-  virtual Expected<StringRef> getMethodType(ObjCMethod Data) const = 0;
+  // Override ObjC Property Implementation.
+  Expected<StringRef> getPropertyName(ObjCProperty Data) const;
+  Expected<StringRef> getPropertyAttribute(ObjCProperty Data) const;
 
-  // ObjCSelectorRef.
-  virtual Expected<ObjCSelectorList> referencedSelectors() const = 0;
-  virtual Expected<StringRef>
-  getObjCSelectorName(ObjCSelectorRef Ref) const = 0;
+  // Override ObjC Method Implementation.
+  Expected<StringRef> getMethodName(ObjCMethod Data) const;
+  Expected<StringRef> getMethodType(ObjCMethod Data) const;
 
-  // Potentially defined selectors.
-  virtual void getAllPotentiallyDefinedSelectors(StringSet<> &Set) const = 0;
+  // Override ObjC Selector Ref Implementation.
+  Expected<ObjCSelectorList> referencedSelectors() const;
+  Expected<StringRef> getObjCSelectorName(ObjCSelectorRef Ref) const;
+
+  // Override Potentially defined selectors Implemetation.
+  void getAllPotentiallyDefinedSelectors(StringSet<> &Set) const;
 
   // Other.
-  virtual StringRef getSymbolNameFromRef(ObjCRef Ref) const = 0;
-  virtual StringRef guessClassNameBasedOnSymbol(StringRef Sym) const = 0;
+  StringRef getSymbolNameFromRef(ObjCRef Ref) const;
+  StringRef guessClassNameBasedOnSymbol(StringRef Sym) const;
 
-  // Helper.
+  // Helper classes
   Expected<StringRef> convertSwiftVersion(unsigned raw) const;
+  const object::SectionRef getSection(const char *segname,
+                                      const char *sectname) const;
+  Expected<object::SectionRef> getSectionFromAddress(uint64_t Address) const;
+  bool isAddressEncrypted(uint64_t Address) const;
+
+  // ObjC2 helper classes
+  Expected<ObjCRef> getObjC2ClassRO64(ObjCClass Data) const;
+  Expected<ObjCRef> getObjC2ClassRO32(ObjCClass Data) const;
+  Expected<ObjCClass> getObjC2MetaClass64(ObjCClass Data) const;
+  Expected<ObjCClass> getObjC2MetaClass32(ObjCClass Data) const;
+  // ObjC1 helper classes
+  Expected<ObjCRefList> getObjC1Modules() const;
+  Expected<ObjCRef> getObjC1Symtab(ObjCRef ObjCModule) const;
+  Expected<ObjCClassList> getObjC1ClassesFromSymtab(ObjCRef Symtab) const;
+  Expected<ObjCCategoryList> getObjC1CategoriesFromSymtab(ObjCRef Symtab) const;
+  Expected<ObjCMethodList> getObjC1MethodList(ObjCRef Methods) const;
+
+  // Get symbol from VMAddr. If there is no symbol at vmaddr, return empty
+  // StringRef.
+  StringRef getSymbol(uint64_t VMAddr) const;
+  // Get data from VMAddr. Caller needs to make sure there are no
+  // relocations/rebases/binds in range.
+  template <typename T> Expected<T> getData(uint64_t VMAddr) const;
+  // Get string from VMAddr. Caller needs to make sure there are no
+  // relocations/rebases/binds in range.
+  Expected<StringRef> getString(uint64_t VMAddr, bool AllowEmpty = false) const;
+  // Get pointer value from VMAddr.
+  Expected<uint64_t> getPointerValue64(uint64_t VMAddr) const;
+  Expected<uint32_t> getPointerValue32(uint64_t VMAddr) const;
+
+private:
+  object::MachOObjectFile *OwningBinary;
+  enum ObjCRuntimeVersion { Unknown = 0, ObjC1 = 1, ObjC2 = 2 };
+  ObjCRuntimeVersion ObjCVersion;
+
+  // Cache all RawPointer has a name associated with it.
+  std::unordered_map<uint64_t, StringRef> VMAddrToSymbolMap;
+  // Cache all RawPointer that has a VM Addr associcated with it.
+  std::unordered_map<uint64_t, uint64_t> VMAddrPointToValueMap;
 };
 
 }

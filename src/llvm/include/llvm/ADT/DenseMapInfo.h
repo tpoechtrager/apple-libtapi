@@ -5,23 +5,20 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
-//
-// This file defines DenseMapInfo traits for DenseMap.
-//
+///
+/// \file
+/// This file defines DenseMapInfo traits for DenseMap.
+///
 //===----------------------------------------------------------------------===//
 
 #ifndef LLVM_ADT_DENSEMAPINFO_H
 #define LLVM_ADT_DENSEMAPINFO_H
 
-#include "llvm/ADT/APInt.h"
-#include "llvm/ADT/APSInt.h"
-#include "llvm/ADT/ArrayRef.h"
-#include "llvm/ADT/Hashing.h"
-#include "llvm/ADT/StringRef.h"
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
 #include <tuple>
+#include <type_traits>
 #include <utility>
 
 namespace llvm {
@@ -44,7 +41,12 @@ static inline unsigned combineHashValue(unsigned a, unsigned b) {
 
 } // end namespace detail
 
-template<typename T>
+/// An information struct used to provide DenseMap with the various necessary
+/// components for a given value type `T`. `Enable` is an optional additional
+/// parameter that is used to support SFINAE (generally using std::enable_if_t)
+/// in derived DenseMapInfo specializations; in non-SFINAE use cases this should
+/// just be `void`.
+template<typename T, typename Enable = void>
 struct DenseMapInfo {
   //static inline T getEmptyKey();
   //static inline T getTombstoneKey();
@@ -231,6 +233,14 @@ struct DenseMapInfo<std::pair<T, U>> {
                                     SecondInfo::getHashValue(PairVal.second));
   }
 
+  // Expose an additional function intended to be used by other
+  // specializations of DenseMapInfo without needing to know how
+  // to combine hash values manually
+  static unsigned getHashValuePiecewise(const T &First, const U &Second) {
+    return detail::combineHashValue(FirstInfo::getHashValue(First),
+                                    SecondInfo::getHashValue(Second));
+  }
+
   static bool isEqual(const Pair &LHS, const Pair &RHS) {
     return FirstInfo::isEqual(LHS.first, RHS.first) &&
            SecondInfo::isEqual(LHS.second, RHS.second);
@@ -251,7 +261,7 @@ template <typename... Ts> struct DenseMapInfo<std::tuple<Ts...>> {
 
   template <unsigned I>
   static unsigned getHashValueImpl(const Tuple &values, std::false_type) {
-    using EltType = typename std::tuple_element<I, Tuple>::type;
+    using EltType = std::tuple_element_t<I, Tuple>;
     std::integral_constant<bool, I + 1 == sizeof...(Ts)> atEnd;
     return detail::combineHashValue(
         DenseMapInfo<EltType>::getHashValue(std::get<I>(values)),
@@ -259,7 +269,7 @@ template <typename... Ts> struct DenseMapInfo<std::tuple<Ts...>> {
   }
 
   template <unsigned I>
-  static unsigned getHashValueImpl(const Tuple &values, std::true_type) {
+  static unsigned getHashValueImpl(const Tuple &, std::true_type) {
     return 0;
   }
 
@@ -270,126 +280,20 @@ template <typename... Ts> struct DenseMapInfo<std::tuple<Ts...>> {
 
   template <unsigned I>
   static bool isEqualImpl(const Tuple &lhs, const Tuple &rhs, std::false_type) {
-    using EltType = typename std::tuple_element<I, Tuple>::type;
+    using EltType = std::tuple_element_t<I, Tuple>;
     std::integral_constant<bool, I + 1 == sizeof...(Ts)> atEnd;
     return DenseMapInfo<EltType>::isEqual(std::get<I>(lhs), std::get<I>(rhs)) &&
            isEqualImpl<I + 1>(lhs, rhs, atEnd);
   }
 
   template <unsigned I>
-  static bool isEqualImpl(const Tuple &lhs, const Tuple &rhs, std::true_type) {
+  static bool isEqualImpl(const Tuple &, const Tuple &, std::true_type) {
     return true;
   }
 
   static bool isEqual(const Tuple &lhs, const Tuple &rhs) {
     std::integral_constant<bool, 0 == sizeof...(Ts)> atEnd;
     return isEqualImpl<0>(lhs, rhs, atEnd);
-  }
-};
-
-// Provide DenseMapInfo for StringRefs.
-template <> struct DenseMapInfo<StringRef> {
-  static inline StringRef getEmptyKey() {
-    return StringRef(reinterpret_cast<const char *>(~static_cast<uintptr_t>(0)),
-                     0);
-  }
-
-  static inline StringRef getTombstoneKey() {
-    return StringRef(reinterpret_cast<const char *>(~static_cast<uintptr_t>(1)),
-                     0);
-  }
-
-  static unsigned getHashValue(StringRef Val) {
-    assert(Val.data() != getEmptyKey().data() && "Cannot hash the empty key!");
-    assert(Val.data() != getTombstoneKey().data() &&
-           "Cannot hash the tombstone key!");
-    return (unsigned)(hash_value(Val));
-  }
-
-  static bool isEqual(StringRef LHS, StringRef RHS) {
-    if (RHS.data() == getEmptyKey().data())
-      return LHS.data() == getEmptyKey().data();
-    if (RHS.data() == getTombstoneKey().data())
-      return LHS.data() == getTombstoneKey().data();
-    return LHS == RHS;
-  }
-};
-
-// Provide DenseMapInfo for ArrayRefs.
-template <typename T> struct DenseMapInfo<ArrayRef<T>> {
-  static inline ArrayRef<T> getEmptyKey() {
-    return ArrayRef<T>(reinterpret_cast<const T *>(~static_cast<uintptr_t>(0)),
-                       size_t(0));
-  }
-
-  static inline ArrayRef<T> getTombstoneKey() {
-    return ArrayRef<T>(reinterpret_cast<const T *>(~static_cast<uintptr_t>(1)),
-                       size_t(0));
-  }
-
-  static unsigned getHashValue(ArrayRef<T> Val) {
-    assert(Val.data() != getEmptyKey().data() && "Cannot hash the empty key!");
-    assert(Val.data() != getTombstoneKey().data() &&
-           "Cannot hash the tombstone key!");
-    return (unsigned)(hash_value(Val));
-  }
-
-  static bool isEqual(ArrayRef<T> LHS, ArrayRef<T> RHS) {
-    if (RHS.data() == getEmptyKey().data())
-      return LHS.data() == getEmptyKey().data();
-    if (RHS.data() == getTombstoneKey().data())
-      return LHS.data() == getTombstoneKey().data();
-    return LHS == RHS;
-  }
-};
-
-template <> struct DenseMapInfo<hash_code> {
-  static inline hash_code getEmptyKey() { return hash_code(-1); }
-  static inline hash_code getTombstoneKey() { return hash_code(-2); }
-  static unsigned getHashValue(hash_code val) { return val; }
-  static bool isEqual(hash_code LHS, hash_code RHS) { return LHS == RHS; }
-};
-
-/// Provide DenseMapInfo for APInt.
-template <> struct DenseMapInfo<APInt> {
-  static inline APInt getEmptyKey() {
-    APInt V(nullptr, 0);
-    V.U.VAL = 0;
-    return V;
-  }
-
-  static inline APInt getTombstoneKey() {
-    APInt V(nullptr, 0);
-    V.U.VAL = 1;
-    return V;
-  }
-
-  static unsigned getHashValue(const APInt &Key) {
-    return static_cast<unsigned>(hash_value(Key));
-  }
-
-  static bool isEqual(const APInt &LHS, const APInt &RHS) {
-    return LHS.getBitWidth() == RHS.getBitWidth() && LHS == RHS;
-  }
-};
-
-/// Provide DenseMapInfo for APSInt, using the DenseMapInfo for APInt.
-template <> struct DenseMapInfo<APSInt> {
-  static inline APSInt getEmptyKey() {
-    return APSInt(DenseMapInfo<APInt>::getEmptyKey());
-  }
-
-  static inline APSInt getTombstoneKey() {
-    return APSInt(DenseMapInfo<APInt>::getTombstoneKey());
-  }
-
-  static unsigned getHashValue(const APSInt &Key) {
-    return static_cast<unsigned>(hash_value(Key));
-  }
-
-  static bool isEqual(const APSInt &LHS, const APSInt &RHS) {
-    return LHS.getBitWidth() == RHS.getBitWidth() &&
-           LHS.isUnsigned() == RHS.isUnsigned() && LHS == RHS;
   }
 };
 

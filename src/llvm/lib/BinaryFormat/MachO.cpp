@@ -7,8 +7,8 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/BinaryFormat/MachO.h"
-#include "llvm/ADT/Triple.h"
-#include "llvm/Support/ARMTargetParser.h"
+#include "llvm/TargetParser/ARMTargetParser.h"
+#include "llvm/TargetParser/Triple.h"
 
 using namespace llvm;
 
@@ -104,4 +104,22 @@ Expected<uint32_t> MachO::getCPUSubType(const Triple &T) {
   if (T.getArch() == Triple::ppc || T.getArch() == Triple::ppc64)
     return getPowerPCSubType(T);
   return unsupported("subtype", T);
+}
+
+Expected<uint32_t> MachO::getCPUSubType(const Triple &T,
+                                        unsigned PtrAuthABIVersion,
+                                        bool PtrAuthKernelABIVersion) {
+  Expected<uint32_t> Result = MachO::getCPUSubType(T);
+  if (!Result)
+    return Result.takeError();
+  if (*Result != MachO::CPU_SUBTYPE_ARM64E)
+    return createStringError(
+        std::errc::invalid_argument,
+        "ptrauth ABI version is only supported on arm64e.");
+  if (PtrAuthABIVersion > 63)
+    return createStringError(
+        std::errc::invalid_argument,
+        "The ptrauth ABI version needs to fit within 6 bits.");
+  return CPU_SUBTYPE_ARM64E_WITH_PTRAUTH_VERSION(PtrAuthABIVersion,
+                                                 PtrAuthKernelABIVersion);
 }

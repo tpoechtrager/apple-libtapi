@@ -13,15 +13,11 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/StringRef.h"
-#include "llvm/Support/Debug.h"
-#include "llvm/Support/Format.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/TableGen/Error.h"
 #include "llvm/TableGen/Record.h"
 #include "llvm/TableGen/TableGenBackend.h"
-#include <algorithm>
 #include <cassert>
-#include <cstdint>
 #include <map>
 #include <string>
 #include <vector>
@@ -98,9 +94,9 @@ ExegesisEmitter::ExegesisEmitter(RecordKeeper &RK)
     : Records(RK), PfmCounterNameTable(collectPfmCounters(RK)) {
   std::vector<Record *> Targets = Records.getAllDerivedDefinitions("Target");
   if (Targets.size() == 0)
-    PrintFatalError("ERROR: No 'Target' subclasses defined!");
+    PrintFatalError("No 'Target' subclasses defined!");
   if (Targets.size() != 1)
-    PrintFatalError("ERROR: Multiple subclasses of Target defined!");
+    PrintFatalError("Multiple subclasses of Target defined!");
   Target = std::string(Targets[0]->getName());
 }
 
@@ -206,10 +202,5 @@ void ExegesisEmitter::run(raw_ostream &OS) const {
 
 } // end anonymous namespace
 
-namespace llvm {
-
-void EmitExegesis(RecordKeeper &RK, raw_ostream &OS) {
-  ExegesisEmitter(RK).run(OS);
-}
-
-} // end namespace llvm
+static TableGen::Emitter::OptClass<ExegesisEmitter>
+    X("gen-exegesis", "Generate llvm-exegesis tables");

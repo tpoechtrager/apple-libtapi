@@ -10,13 +10,15 @@
 #define LLVM_CLANG_LEX_PREPROCESSOROPTIONS_H_
 
 #include "clang/Basic/BitmaskEnum.h"
+#include "clang/Basic/FileEntry.h"
 #include "clang/Basic/LLVM.h"
-#include "clang/Lex/PreprocessorExcludedConditionalDirectiveSkipMapping.h"
+#include "clang/Lex/DependencyDirectivesScanner.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/StringSet.h"
 #include <functional>
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <utility>
@@ -59,6 +61,18 @@ enum class DisableValidationForModuleKind {
   LLVM_MARK_AS_BITMASK_ENUM(Module)
 };
 
+/// Diagnostic options for caching related behaviors.
+enum class CachingDiagKind {
+  /// Do not emit diagnosis for caching.
+  None = 0,
+
+  /// Warning about nondeterministic caching.
+  Warning = 1,
+
+  /// Error about nondeterministic caching.
+  Error = 2
+};
+
 /// PreprocessorOptions - This class is used for passing the various options
 /// used in preprocessor initialization to InitializePreprocessor().
 class PreprocessorOptions {
@@ -67,9 +81,15 @@ public:
   std::vector<std::string> Includes;
   std::vector<std::string> MacroIncludes;
 
+  /// Perform extra checks when loading PCM files for mutable file systems.
+  bool ModulesCheckRelocated = true;
+
   /// Initialize the preprocessor with the compiler and target specific
   /// predefines.
   bool UsePredefines = true;
+
+  /// Indicates whether to predefine target OS macros.
+  bool DefineTargetOSMacros = false;
 
   /// Whether we should maintain a detailed record of all macro
   /// definitions and expansions.
@@ -106,6 +126,10 @@ public:
   /// When true, a PCH with compiler errors will not be rejected.
   bool AllowPCHWithCompilerErrors = false;
 
+  /// When true, a PCH with modules cache path different to the current
+  /// compilation will not be rejected.
+  bool AllowPCHWithDifferentModulesCachePath = false;
+
   /// Dump declarations that are deserialized from PCH, for testing.
   bool DumpDeserializedPCHDecls = false;
 
@@ -124,7 +148,8 @@ public:
   ///
   /// When the lexer is done, one of the things that need to be preserved is the
   /// conditional #if stack, so the ASTWriter/ASTReader can save/restore it when
-  /// processing the rest of the file.
+  /// processing the rest of the file. Similarly, we track an unterminated
+  /// #pragma assume_nonnull.
   bool GeneratePreamble = false;
 
   /// Whether to write comment locations into the PCH when building it.
@@ -195,22 +220,30 @@ public:
   /// build it again.
   std::shared_ptr<FailedModulesSet> FailedModules;
 
-  /// A prefix map for __FILE__ and __BASE_FILE__.
-  std::map<std::string, std::string, std::greater<std::string>> MacroPrefixMap;
-
-  /// Contains the currently active skipped range mappings for skipping excluded
-  /// conditional directives.
+  /// Function for getting the dependency preprocessor directives of a file.
   ///
-  /// The pointer is passed to the Preprocessor when it's constructed. The
-  /// pointer is unowned, the client is responsible for its lifetime.
-  ExcludedPreprocessorDirectiveSkipMapping
-      *ExcludedConditionalDirectiveSkipMappings = nullptr;
+  /// These are directives derived from a special form of lexing where the
+  /// source input is scanned for the preprocessor directives that might have an
+  /// effect on the dependencies for a compilation unit.
+  ///
+  /// Enables a client to cache the directives for a file and provide them
+  /// across multiple compiler invocations.
+  /// FIXME: Allow returning an error.
+  std::function<std::optional<ArrayRef<dependency_directives_scan::Directive>>(
+      FileEntryRef)>
+      DependencyDirectivesForFile;
 
   /// Set up preprocessor for RunAnalysis action.
   bool SetUpStaticAnalyzer = false;
 
   /// Prevents intended crashes when using #pragma clang __debug. For testing.
   bool DisablePragmaDebugCrash = false;
+
+  /// Should diagnose caching related issues.
+  CachingDiagKind CachingDiagOption = CachingDiagKind::None;
+
+  /// If set, the UNIX timestamp specified by SOURCE_DATE_EPOCH.
+  std::optional<uint64_t> SourceDateEpoch;
 
 public:
   PreprocessorOptions() : PrecompiledPreambleBytes(0, false) {}

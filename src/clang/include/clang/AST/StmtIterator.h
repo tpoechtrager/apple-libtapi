@@ -74,14 +74,17 @@ protected:
 };
 
 template <typename DERIVED, typename REFERENCE>
-class StmtIteratorImpl : public StmtIteratorBase,
-                         public std::iterator<std::forward_iterator_tag,
-                                              REFERENCE, ptrdiff_t,
-                                              REFERENCE, REFERENCE> {
+class StmtIteratorImpl : public StmtIteratorBase {
 protected:
   StmtIteratorImpl(const StmtIteratorBase& RHS) : StmtIteratorBase(RHS) {}
 
 public:
+  using iterator_category = std::forward_iterator_tag;
+  using value_type = REFERENCE;
+  using difference_type = std::ptrdiff_t;
+  using pointer = REFERENCE;
+  using reference = REFERENCE;
+
   StmtIteratorImpl() = default;
   StmtIteratorImpl(Stmt **s) : StmtIteratorBase(s) {}
   StmtIteratorImpl(Decl **dgi, Decl **dge) : StmtIteratorBase(dgi, dge) {}
@@ -130,10 +133,10 @@ struct StmtIterator : public StmtIteratorImpl<StmtIterator, Stmt*&> {
   StmtIterator(const VariableArrayType *t)
       : StmtIteratorImpl<StmtIterator, Stmt*&>(t) {}
 
-private:
   StmtIterator(const StmtIteratorBase &RHS)
       : StmtIteratorImpl<StmtIterator, Stmt *&>(RHS) {}
 
+private:
   inline friend StmtIterator
   cast_away_const(const ConstStmtIterator &RHS);
 };

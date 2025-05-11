@@ -21,19 +21,27 @@
 #ifndef LLVM_TRANSFORMS_IPO_INTERNALIZE_H
 #define LLVM_TRANSFORMS_IPO_INTERNALIZE_H
 
-#include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/StringSet.h"
-#include "llvm/IR/GlobalValue.h"
 #include "llvm/IR/PassManager.h"
 #include <functional>
 
 namespace llvm {
 class Module;
-class CallGraph;
 
 /// A pass that internalizes all functions and variables other than those that
 /// must be preserved according to \c MustPreserveGV.
 class InternalizePass : public PassInfoMixin<InternalizePass> {
+  struct ComdatInfo {
+    // The number of members. A comdat with one member which is not externally
+    // visible can be freely dropped.
+    size_t Size = 0;
+    // Whether the comdat has an externally visible member.
+    bool External = false;
+  };
+
+  bool IsWasm = false;
+
   /// Client supplied callback to control wheter a symbol must be preserved.
   const std::function<bool(const GlobalValue &)> MustPreserveGV;
   /// Set of symbols private to the compiler that this pass should not touch.
@@ -44,11 +52,11 @@ class InternalizePass : public PassInfoMixin<InternalizePass> {
   /// Internalize GV if it is possible to do so, i.e. it is not externally
   /// visible and is not a member of an externally visible comdat.
   bool maybeInternalize(GlobalValue &GV,
-                        const DenseSet<const Comdat *> &ExternalComdats);
+                        DenseMap<const Comdat *, ComdatInfo> &ComdatMap);
   /// If GV is part of a comdat and is externally visible, keep track of its
   /// comdat so that we don't internalize any of its members.
-  void checkComdatVisibility(GlobalValue &GV,
-                             DenseSet<const Comdat *> &ExternalComdats);
+  void checkComdat(GlobalValue &GV,
+                   DenseMap<const Comdat *, ComdatInfo> &ComdatMap);
 
 public:
   InternalizePass();
@@ -57,10 +65,7 @@ public:
 
   /// Run the internalizer on \p TheModule, returns true if any changes was
   /// made.
-  ///
-  /// If the CallGraph \p CG is supplied, it will be updated when
-  /// internalizing a function (by removing any edge from the "external node")
-  bool internalizeModule(Module &TheModule, CallGraph *CG = nullptr);
+  bool internalizeModule(Module &TheModule);
 
   PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM);
 };
@@ -68,10 +73,9 @@ public:
 /// Helper function to internalize functions and variables in a Module.
 inline bool
 internalizeModule(Module &TheModule,
-                  std::function<bool(const GlobalValue &)> MustPreserveGV,
-                  CallGraph *CG = nullptr) {
+                  std::function<bool(const GlobalValue &)> MustPreserveGV) {
   return InternalizePass(std::move(MustPreserveGV))
-      .internalizeModule(TheModule, CG);
+      .internalizeModule(TheModule);
 }
 } // end namespace llvm
 

@@ -13,30 +13,24 @@
 #include "llvm/Transforms/Utils/LoopRotationUtils.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/AssumptionCache.h"
-#include "llvm/Analysis/BasicAliasAnalysis.h"
 #include "llvm/Analysis/CodeMetrics.h"
 #include "llvm/Analysis/DomTreeUpdater.h"
-#include "llvm/Analysis/GlobalsModRef.h"
 #include "llvm/Analysis/InstructionSimplify.h"
-#include "llvm/Analysis/LoopPass.h"
+#include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/MemorySSA.h"
 #include "llvm/Analysis/MemorySSAUpdater.h"
 #include "llvm/Analysis/ScalarEvolution.h"
-#include "llvm/Analysis/ScalarEvolutionAliasAnalysis.h"
-#include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/CFG.h"
-#include "llvm/IR/DebugInfoMetadata.h"
+#include "llvm/IR/DebugInfo.h"
 #include "llvm/IR/Dominators.h"
-#include "llvm/IR/Function.h"
 #include "llvm/IR/IntrinsicInst.h"
-#include "llvm/IR/Module.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
+#include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/Local.h"
-#include "llvm/Transforms/Utils/LoopUtils.h"
 #include "llvm/Transforms/Utils/SSAUpdater.h"
 #include "llvm/Transforms/Utils/ValueMapper.h"
 using namespace llvm;
@@ -45,6 +39,10 @@ using namespace llvm;
 
 STATISTIC(NumNotRotatedDueToHeaderSize,
           "Number of loops not rotated due to the header size");
+STATISTIC(NumInstrsHoisted,
+          "Number of instructions hoisted into loop preheader");
+STATISTIC(NumInstrsDuplicated,
+          "Number of instructions cloned into loop preheader");
 STATISTIC(NumRotated, "Number of loops rotated");
 
 static cl::opt<bool>
@@ -98,6 +96,7 @@ static void InsertNewValueIntoMap(ValueToValueMapTy &VM, Value *K, Value *V) {
 static void RewriteUsesOfClonedInstructions(BasicBlock *OrigHeader,
                                             BasicBlock *OrigPreheader,
                                             ValueToValueMapTy &ValueMap,
+                                            ScalarEvolution *SE,
                                 SmallVectorImpl<PHINode*> *InsertedPHIs) {
   // Remove PHI node entries that are no longer live.
   BasicBlock::iterator I, E = OrigHeader->end();
@@ -120,19 +119,15 @@ static void RewriteUsesOfClonedInstructions(BasicBlock *OrigHeader,
     // The value now exits in two versions: the initial value in the preheader
     // and the loop "next" value in the original header.
     SSA.Initialize(OrigHeaderVal->getType(), OrigHeaderVal->getName());
+    // Force re-computation of OrigHeaderVal, as some users now need to use the
+    // new PHI node.
+    if (SE)
+      SE->forgetValue(OrigHeaderVal);
     SSA.AddAvailableValue(OrigHeader, OrigHeaderVal);
     SSA.AddAvailableValue(OrigPreheader, OrigPreHeaderVal);
 
     // Visit each use of the OrigHeader instruction.
-    for (Value::use_iterator UI = OrigHeaderVal->use_begin(),
-                             UE = OrigHeaderVal->use_end();
-         UI != UE;) {
-      // Grab the use before incrementing the iterator.
-      Use &U = *UI;
-
-      // Increment the iterator before removing the use from the list.
-      ++UI;
-
+    for (Use &U : llvm::make_early_inc_range(OrigHeaderVal->uses())) {
       // SSAUpdater can't handle a non-PHI use in the same block as an
       // earlier def. We can easily handle those cases manually.
       Instruction *UserInst = cast<Instruction>(U.getUser());
@@ -178,9 +173,7 @@ static void RewriteUsesOfClonedInstructions(BasicBlock *OrigHeader,
         NewVal = SSA.GetValueInMiddleOfBlock(UserBB);
       else
         NewVal = UndefValue::get(OrigHeaderVal->getType());
-      DbgValue->setOperand(0,
-                           MetadataAsValue::get(OrigHeaderVal->getContext(),
-                                                ValueAsMetadata::get(NewVal)));
+      DbgValue->replaceVariableLocationOp(OrigHeaderVal, NewVal);
     }
   }
 }
@@ -317,6 +310,12 @@ bool LoopRotate::rotateLoop(Loop *L, bool SimplifiedLatch) {
                    L->dump());
         return Rotated;
       }
+      if (!Metrics.NumInsts.isValid()) {
+        LLVM_DEBUG(dbgs() << "LoopRotation: NOT rotating - contains instructions"
+                   " with invalid cost: ";
+                   L->dump());
+        return Rotated;
+      }
       if (Metrics.NumInsts > MaxHeaderSize) {
         LLVM_DEBUG(dbgs() << "LoopRotation: NOT rotating - contains "
                           << Metrics.NumInsts
@@ -346,8 +345,14 @@ bool LoopRotate::rotateLoop(Loop *L, bool SimplifiedLatch) {
     // all outer loops because insertion and deletion of blocks that happens
     // during the rotation may violate invariants related to backedge taken
     // infos in them.
-    if (SE)
+    if (SE) {
       SE->forgetTopmostLoop(L);
+      // We may hoist some instructions out of loop. In case if they were cached
+      // as "loop variant" or "loop computable", these caches must be dropped.
+      // We also may fold basic blocks, so cached block dispositions also need
+      // to be dropped.
+      SE->forgetBlockAndLoopDispositions();
+    }
 
     LLVM_DEBUG(dbgs() << "LoopRotation: rotating "; L->dump());
     if (MSSAU && VerifyMemorySSA)
@@ -385,20 +390,31 @@ bool LoopRotate::rotateLoop(Loop *L, bool SimplifiedLatch) {
     // possible or create a clone in the OldPreHeader if not.
     Instruction *LoopEntryBranch = OrigPreheader->getTerminator();
 
-    // Record all debug intrinsics preceding LoopEntryBranch to avoid duplication.
+    // Record all debug intrinsics preceding LoopEntryBranch to avoid
+    // duplication.
     using DbgIntrinsicHash =
-      std::pair<std::pair<Value *, DILocalVariable *>, DIExpression *>;
+        std::pair<std::pair<hash_code, DILocalVariable *>, DIExpression *>;
     auto makeHash = [](DbgVariableIntrinsic *D) -> DbgIntrinsicHash {
-      return {{D->getVariableLocation(), D->getVariable()}, D->getExpression()};
+      auto VarLocOps = D->location_ops();
+      return {{hash_combine_range(VarLocOps.begin(), VarLocOps.end()),
+               D->getVariable()},
+              D->getExpression()};
     };
     SmallDenseSet<DbgIntrinsicHash, 8> DbgIntrinsics;
-    for (auto I = std::next(OrigPreheader->rbegin()), E = OrigPreheader->rend();
-         I != E; ++I) {
-      if (auto *DII = dyn_cast<DbgVariableIntrinsic>(&*I))
+    for (Instruction &I : llvm::drop_begin(llvm::reverse(*OrigPreheader))) {
+      if (auto *DII = dyn_cast<DbgVariableIntrinsic>(&I))
         DbgIntrinsics.insert(makeHash(DII));
       else
         break;
     }
+
+    // Remember the local noalias scope declarations in the header. After the
+    // rotation, they must be duplicated and the scope must be cloned. This
+    // avoids unwanted interaction across iterations.
+    SmallVector<NoAliasScopeDeclInst *, 6> NoAliasDeclInstructions;
+    for (Instruction &I : *OrigHeader)
+      if (auto *Decl = dyn_cast<NoAliasScopeDeclInst>(&I))
+        NoAliasDeclInstructions.push_back(Decl);
 
     while (I != E) {
       Instruction *Inst = &*I++;
@@ -413,11 +429,15 @@ bool LoopRotate::rotateLoop(Loop *L, bool SimplifiedLatch) {
           !Inst->mayWriteToMemory() && !Inst->isTerminator() &&
           !isa<DbgInfoIntrinsic>(Inst) && !isa<AllocaInst>(Inst)) {
         Inst->moveBefore(LoopEntryBranch);
+        ++NumInstrsHoisted;
         continue;
       }
 
       // Otherwise, create a duplicate of the instruction.
       Instruction *C = Inst->clone();
+      C->insertBefore(LoopEntryBranch);
+
+      ++NumInstrsDuplicated;
 
       // Eagerly remap the operands of the instruction.
       RemapInstruction(C, ValueMap,
@@ -426,20 +446,20 @@ bool LoopRotate::rotateLoop(Loop *L, bool SimplifiedLatch) {
       // Avoid inserting the same intrinsic twice.
       if (auto *DII = dyn_cast<DbgVariableIntrinsic>(C))
         if (DbgIntrinsics.count(makeHash(DII))) {
-          C->deleteValue();
+          C->eraseFromParent();
           continue;
         }
 
       // With the operands remapped, see if the instruction constant folds or is
       // otherwise simplifyable.  This commonly occurs because the entry from PHI
       // nodes allows icmps and other instructions to fold.
-      Value *V = SimplifyInstruction(C, SQ);
+      Value *V = simplifyInstruction(C, SQ);
       if (V && LI->replacementPreservesLCSSAForm(C, V)) {
         // If so, then delete the temporary instruction and stick the folded value
         // in the map.
         InsertNewValueIntoMap(ValueMap, Inst, V);
         if (!C->mayHaveSideEffects()) {
-          C->deleteValue();
+          C->eraseFromParent();
           C = nullptr;
         }
       } else {
@@ -448,15 +468,76 @@ bool LoopRotate::rotateLoop(Loop *L, bool SimplifiedLatch) {
       if (C) {
         // Otherwise, stick the new instruction into the new block!
         C->setName(Inst->getName());
-        C->insertBefore(LoopEntryBranch);
 
-        if (auto *II = dyn_cast<IntrinsicInst>(C))
-          if (II->getIntrinsicID() == Intrinsic::assume)
-            AC->registerAssumption(II);
+        if (auto *II = dyn_cast<AssumeInst>(C))
+          AC->registerAssumption(II);
         // MemorySSA cares whether the cloned instruction was inserted or not, and
         // not whether it can be remapped to a simplified value.
         if (MSSAU)
           InsertNewValueIntoMap(ValueMapMSSA, Inst, C);
+      }
+    }
+
+    if (!NoAliasDeclInstructions.empty()) {
+      // There are noalias scope declarations:
+      // (general):
+      // Original:    OrigPre              { OrigHeader NewHeader ... Latch }
+      // after:      (OrigPre+OrigHeader') { NewHeader ... Latch OrigHeader }
+      //
+      // with D: llvm.experimental.noalias.scope.decl,
+      //      U: !noalias or !alias.scope depending on D
+      //       ... { D U1 U2 }   can transform into:
+      // (0) : ... { D U1 U2 }        // no relevant rotation for this part
+      // (1) : ... D' { U1 U2 D }     // D is part of OrigHeader
+      // (2) : ... D' U1' { U2 D U1 } // D, U1 are part of OrigHeader
+      //
+      // We now want to transform:
+      // (1) -> : ... D' { D U1 U2 D'' }
+      // (2) -> : ... D' U1' { D U2 D'' U1'' }
+      // D: original llvm.experimental.noalias.scope.decl
+      // D', U1': duplicate with replaced scopes
+      // D'', U1'': different duplicate with replaced scopes
+      // This ensures a safe fallback to 'may_alias' introduced by the rotate,
+      // as U1'' and U1' scopes will not be compatible wrt to the local restrict
+
+      // Clone the llvm.experimental.noalias.decl again for the NewHeader.
+      Instruction *NewHeaderInsertionPoint = &(*NewHeader->getFirstNonPHI());
+      for (NoAliasScopeDeclInst *NAD : NoAliasDeclInstructions) {
+        LLVM_DEBUG(dbgs() << "  Cloning llvm.experimental.noalias.scope.decl:"
+                          << *NAD << "\n");
+        Instruction *NewNAD = NAD->clone();
+        NewNAD->insertBefore(NewHeaderInsertionPoint);
+      }
+
+      // Scopes must now be duplicated, once for OrigHeader and once for
+      // OrigPreHeader'.
+      {
+        auto &Context = NewHeader->getContext();
+
+        SmallVector<MDNode *, 8> NoAliasDeclScopes;
+        for (NoAliasScopeDeclInst *NAD : NoAliasDeclInstructions)
+          NoAliasDeclScopes.push_back(NAD->getScopeList());
+
+        LLVM_DEBUG(dbgs() << "  Updating OrigHeader scopes\n");
+        cloneAndAdaptNoAliasScopes(NoAliasDeclScopes, {OrigHeader}, Context,
+                                   "h.rot");
+        LLVM_DEBUG(OrigHeader->dump());
+
+        // Keep the compile time impact low by only adapting the inserted block
+        // of instructions in the OrigPreHeader. This might result in slightly
+        // more aliasing between these instructions and those that were already
+        // present, but it will be much faster when the original PreHeader is
+        // large.
+        LLVM_DEBUG(dbgs() << "  Updating part of OrigPreheader scopes\n");
+        auto *FirstDecl =
+            cast<Instruction>(ValueMap[*NoAliasDeclInstructions.begin()]);
+        auto *LastInst = &OrigPreheader->back();
+        cloneAndAdaptNoAliasScopes(NoAliasDeclScopes, FirstDecl, LastInst,
+                                   Context, "pre.rot");
+        LLVM_DEBUG(OrigPreheader->dump());
+
+        LLVM_DEBUG(dbgs() << "  Updated NewHeader:\n");
+        LLVM_DEBUG(NewHeader->dump());
       }
     }
 
@@ -484,7 +565,7 @@ bool LoopRotate::rotateLoop(Loop *L, bool SimplifiedLatch) {
     SmallVector<PHINode*, 2> InsertedPHIs;
     // If there were any uses of instructions in the duplicated block outside the
     // loop, update them, inserting PHI nodes as required
-    RewriteUsesOfClonedInstructions(OrigHeader, OrigPreheader, ValueMap,
+    RewriteUsesOfClonedInstructions(OrigHeader, OrigPreheader, ValueMap, SE,
                                     &InsertedPHIs);
 
     // Attach dbg.value intrinsics to the new phis if that phi uses a value that
@@ -542,13 +623,13 @@ bool LoopRotate::rotateLoop(Loop *L, bool SimplifiedLatch) {
       // one predecessor. Note that Exit could be an exit block for multiple
       // nested loops, causing both of the edges to now be critical and need to
       // be split.
-      SmallVector<BasicBlock *, 4> ExitPreds(pred_begin(Exit), pred_end(Exit));
+      SmallVector<BasicBlock *, 4> ExitPreds(predecessors(Exit));
       bool SplitLatchEdge = false;
       for (BasicBlock *ExitPred : ExitPreds) {
         // We only need to split loop exit edges.
         Loop *PredLoop = LI->getLoopFor(ExitPred);
         if (!PredLoop || PredLoop->contains(Exit) ||
-            ExitPred->getTerminator()->isIndirectTerminator())
+            isa<IndirectBrInst>(ExitPred->getTerminator()))
           continue;
         SplitLatchEdge |= L->getLoopLatch() == ExitPred;
         BasicBlock *ExitSplit = SplitCriticalEdge(
@@ -558,6 +639,7 @@ bool LoopRotate::rotateLoop(Loop *L, bool SimplifiedLatch) {
       }
       assert(SplitLatchEdge &&
              "Despite splitting all preds, failed to split latch exit?");
+      (void)SplitLatchEdge;
     } else {
       // We can fold the conditional branch in the preheader, this makes things
       // simpler. The first step is to remove the extra edge to the Exit block.
@@ -638,7 +720,7 @@ static bool shouldSpeculateInstrs(BasicBlock::iterator Begin,
       if (!cast<GEPOperator>(I)->hasAllConstantIndices())
         return false;
       // fall-thru to increment case
-      LLVM_FALLTHROUGH;
+      [[fallthrough]];
     case Instruction::Add:
     case Instruction::Sub:
     case Instruction::And:
@@ -713,6 +795,11 @@ bool LoopRotate::simplifyLoopLatch(Loop *L) {
   DomTreeUpdater DTU(DT, DomTreeUpdater::UpdateStrategy::Eager);
   MergeBlockIntoPredecessor(Latch, &DTU, LI, MSSAU, nullptr,
                             /*PredecessorWithTwoSuccessors=*/true);
+
+    if (SE) {
+      // Merging blocks may remove blocks reference in the block disposition cache. Clear the cache.
+      SE->forgetBlockAndLoopDispositions();
+    }
 
   if (MSSAU && VerifyMemorySSA)
     MSSAU->getMemorySSA()->verifyMemorySSA();

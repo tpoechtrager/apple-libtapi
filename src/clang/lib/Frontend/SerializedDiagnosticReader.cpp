@@ -10,7 +10,6 @@
 #include "clang/Basic/FileManager.h"
 #include "clang/Basic/FileSystemOptions.h"
 #include "clang/Frontend/SerializedDiagnostics.h"
-#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Bitstream/BitCodes.h"
@@ -20,6 +19,7 @@
 #include "llvm/Support/ErrorOr.h"
 #include "llvm/Support/ManagedStatic.h"
 #include <cstdint>
+#include <optional>
 #include <system_error>
 
 using namespace clang;
@@ -34,8 +34,13 @@ std::error_code SerializedDiagnosticReader::readDiagnostics(StringRef File) {
   if (!Buffer)
     return SDError::CouldNotLoad;
 
-  llvm::BitstreamCursor Stream(**Buffer);
-  Optional<llvm::BitstreamBlockInfo> BlockInfo;
+  return readDiagnostics(**Buffer);
+}
+
+std::error_code
+SerializedDiagnosticReader::readDiagnostics(llvm::MemoryBufferRef Buffer) {
+  llvm::BitstreamCursor Stream(Buffer);
+  std::optional<llvm::BitstreamBlockInfo> BlockInfo;
 
   if (Stream.AtEndOfStream())
     return SDError::InvalidSignature;
@@ -73,7 +78,7 @@ std::error_code SerializedDiagnosticReader::readDiagnostics(StringRef File) {
 
     switch (MaybeSubBlockID.get()) {
     case llvm::bitc::BLOCKINFO_BLOCK_ID: {
-      Expected<Optional<llvm::BitstreamBlockInfo>> MaybeBlockInfo =
+      Expected<std::optional<llvm::BitstreamBlockInfo>> MaybeBlockInfo =
           Stream.ReadBlockInfoBlock();
       if (!MaybeBlockInfo) {
         // FIXME this drops the error on the floor.
@@ -184,7 +189,7 @@ SerializedDiagnosticReader::readMetaBlock(llvm::BitstreamCursor &Stream) {
         consumeError(std::move(Err));
         return SDError::MalformedMetadataBlock;
       }
-      LLVM_FALLTHROUGH;
+      [[fallthrough]];
     case Cursor::BlockEnd:
       if (!VersionChecked)
         return SDError::MissingVersion;
@@ -300,6 +305,16 @@ SerializedDiagnosticReader::readDiagnosticBlock(llvm::BitstreamCursor &Stream) {
       if ((EC = visitFixitRecord(
                Location(Record[0], Record[1], Record[2], Record[3]),
                Location(Record[4], Record[5], Record[6], Record[7]), Blob)))
+        return EC;
+      continue;
+    case RECORD_SOURCE_FILE_CONTENTS:
+      if (Record.size() != 10 || Record[9] != Blob.size())
+        return SDError::MalformedDiagnosticRecord;
+      if ((EC = visitSourceFileContentsRecord(
+               Record[0],
+               Location(Record[1], Record[2], Record[3], Record[4]),
+               Location(Record[5], Record[6], Record[7], Record[8]),
+               Blob)))
         return EC;
       continue;
     case RECORD_SOURCE_RANGE:

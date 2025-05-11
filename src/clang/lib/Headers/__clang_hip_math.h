@@ -9,26 +9,40 @@
 #ifndef __CLANG_HIP_MATH_H__
 #define __CLANG_HIP_MATH_H__
 
-#if !defined(__HIP__)
+#if !defined(__HIP__) && !defined(__OPENMP_AMDGCN__)
 #error "This file is for HIP and OpenMP AMDGCN device compilation only."
 #endif
 
+#if !defined(__HIPCC_RTC__)
 #if defined(__cplusplus)
 #include <algorithm>
 #endif
 #include <limits.h>
 #include <stdint.h>
+#ifdef __OPENMP_AMDGCN__
+#include <omp.h>
+#endif
+#endif // !defined(__HIPCC_RTC__)
 
 #pragma push_macro("__DEVICE__")
+
+#ifdef __OPENMP_AMDGCN__
+#define __DEVICE__ static inline __attribute__((always_inline, nothrow))
+#else
 #define __DEVICE__ static __device__ inline __attribute__((always_inline))
+#endif
 
 // A few functions return bool type starting only in C++11.
 #pragma push_macro("__RETURN_TYPE")
+#ifdef __OPENMP_AMDGCN__
+#define __RETURN_TYPE int
+#else
 #if defined(__cplusplus)
 #define __RETURN_TYPE bool
 #else
 #define __RETURN_TYPE int
 #endif
+#endif // __OPENMP_AMDGCN__
 
 #if defined (__cplusplus) && __cplusplus < 201103L
 // emulate static_assert on type sizes
@@ -36,7 +50,7 @@ template<bool>
 struct __compare_result{};
 template<>
 struct __compare_result<true> {
-  static const bool valid;
+  static const __device__ bool valid;
 };
 
 __DEVICE__
@@ -56,9 +70,9 @@ __DEVICE__ void __static_assert_equal_size() {
 #endif
 
 __DEVICE__
-uint64_t __make_mantissa_base8(const char *__tagp) {
+uint64_t __make_mantissa_base8(const char *__tagp __attribute__((nonnull))) {
   uint64_t __r = 0;
-  while (__tagp) {
+  while (*__tagp != '\0') {
     char __tmp = *__tagp;
 
     if (__tmp >= '0' && __tmp <= '7')
@@ -73,9 +87,9 @@ uint64_t __make_mantissa_base8(const char *__tagp) {
 }
 
 __DEVICE__
-uint64_t __make_mantissa_base10(const char *__tagp) {
+uint64_t __make_mantissa_base10(const char *__tagp __attribute__((nonnull))) {
   uint64_t __r = 0;
-  while (__tagp) {
+  while (*__tagp != '\0') {
     char __tmp = *__tagp;
 
     if (__tmp >= '0' && __tmp <= '9')
@@ -90,9 +104,9 @@ uint64_t __make_mantissa_base10(const char *__tagp) {
 }
 
 __DEVICE__
-uint64_t __make_mantissa_base16(const char *__tagp) {
+uint64_t __make_mantissa_base16(const char *__tagp __attribute__((nonnull))) {
   uint64_t __r = 0;
-  while (__tagp) {
+  while (*__tagp != '\0') {
     char __tmp = *__tagp;
 
     if (__tmp >= '0' && __tmp <= '9')
@@ -111,10 +125,7 @@ uint64_t __make_mantissa_base16(const char *__tagp) {
 }
 
 __DEVICE__
-uint64_t __make_mantissa(const char *__tagp) {
-  if (!__tagp)
-    return 0u;
-
+uint64_t __make_mantissa(const char *__tagp __attribute__((nonnull))) {
   if (*__tagp == '0') {
     ++__tagp;
 
@@ -171,10 +182,10 @@ __DEVICE__
 float cbrtf(float __x) { return __ocml_cbrt_f32(__x); }
 
 __DEVICE__
-float ceilf(float __x) { return __ocml_ceil_f32(__x); }
+float ceilf(float __x) { return __builtin_ceilf(__x); }
 
 __DEVICE__
-float copysignf(float __x, float __y) { return __ocml_copysign_f32(__x, __y); }
+float copysignf(float __x, float __y) { return __builtin_copysignf(__x, __y); }
 
 __DEVICE__
 float cosf(float __x) { return __ocml_cos_f32(__x); }
@@ -210,16 +221,16 @@ __DEVICE__
 float exp10f(float __x) { return __ocml_exp10_f32(__x); }
 
 __DEVICE__
-float exp2f(float __x) { return __ocml_exp2_f32(__x); }
+float exp2f(float __x) { return __builtin_exp2f(__x); }
 
 __DEVICE__
-float expf(float __x) { return __ocml_exp_f32(__x); }
+float expf(float __x) { return __builtin_expf(__x); }
 
 __DEVICE__
 float expm1f(float __x) { return __ocml_expm1_f32(__x); }
 
 __DEVICE__
-float fabsf(float __x) { return __ocml_fabs_f32(__x); }
+float fabsf(float __x) { return __builtin_fabsf(__x); }
 
 __DEVICE__
 float fdimf(float __x, float __y) { return __ocml_fdim_f32(__x, __y); }
@@ -228,30 +239,25 @@ __DEVICE__
 float fdividef(float __x, float __y) { return __x / __y; }
 
 __DEVICE__
-float floorf(float __x) { return __ocml_floor_f32(__x); }
+float floorf(float __x) { return __builtin_floorf(__x); }
 
 __DEVICE__
 float fmaf(float __x, float __y, float __z) {
-  return __ocml_fma_f32(__x, __y, __z);
+  return __builtin_fmaf(__x, __y, __z);
 }
 
 __DEVICE__
-float fmaxf(float __x, float __y) { return __ocml_fmax_f32(__x, __y); }
+float fmaxf(float __x, float __y) { return __builtin_fmaxf(__x, __y); }
 
 __DEVICE__
-float fminf(float __x, float __y) { return __ocml_fmin_f32(__x, __y); }
+float fminf(float __x, float __y) { return __builtin_fminf(__x, __y); }
 
 __DEVICE__
 float fmodf(float __x, float __y) { return __ocml_fmod_f32(__x, __y); }
 
 __DEVICE__
 float frexpf(float __x, int *__nptr) {
-  int __tmp;
-  float __r =
-      __ocml_frexp_f32(__x, (__attribute__((address_space(5))) int *)&__tmp);
-  *__nptr = __tmp;
-
-  return __r;
+  return __builtin_frexpf(__x, __nptr);
 }
 
 __DEVICE__
@@ -261,13 +267,13 @@ __DEVICE__
 int ilogbf(float __x) { return __ocml_ilogb_f32(__x); }
 
 __DEVICE__
-__RETURN_TYPE __finitef(float __x) { return __ocml_isfinite_f32(__x); }
+__RETURN_TYPE __finitef(float __x) { return __builtin_isfinite(__x); }
 
 __DEVICE__
-__RETURN_TYPE __isinff(float __x) { return __ocml_isinf_f32(__x); }
+__RETURN_TYPE __isinff(float __x) { return __builtin_isinf(__x); }
 
 __DEVICE__
-__RETURN_TYPE __isnanf(float __x) { return __ocml_isnan_f32(__x); }
+__RETURN_TYPE __isnanf(float __x) { return __builtin_isnan(__x); }
 
 __DEVICE__
 float j0f(float __x) { return __ocml_j0_f32(__x); }
@@ -297,41 +303,44 @@ float jnf(int __n, float __x) { // TODO: we could use Ahmes multiplication
 }
 
 __DEVICE__
-float ldexpf(float __x, int __e) { return __ocml_ldexp_f32(__x, __e); }
+float ldexpf(float __x, int __e) { return __builtin_amdgcn_ldexpf(__x, __e); }
 
 __DEVICE__
 float lgammaf(float __x) { return __ocml_lgamma_f32(__x); }
 
 __DEVICE__
-long long int llrintf(float __x) { return __ocml_rint_f32(__x); }
+long long int llrintf(float __x) { return __builtin_rintf(__x); }
 
 __DEVICE__
-long long int llroundf(float __x) { return __ocml_round_f32(__x); }
+long long int llroundf(float __x) { return __builtin_roundf(__x); }
 
 __DEVICE__
-float log10f(float __x) { return __ocml_log10_f32(__x); }
+float log10f(float __x) { return __builtin_log10f(__x); }
 
 __DEVICE__
 float log1pf(float __x) { return __ocml_log1p_f32(__x); }
 
 __DEVICE__
-float log2f(float __x) { return __ocml_log2_f32(__x); }
+float log2f(float __x) { return __builtin_log2f(__x); }
 
 __DEVICE__
 float logbf(float __x) { return __ocml_logb_f32(__x); }
 
 __DEVICE__
-float logf(float __x) { return __ocml_log_f32(__x); }
+float logf(float __x) { return __builtin_logf(__x); }
 
 __DEVICE__
-long int lrintf(float __x) { return __ocml_rint_f32(__x); }
+long int lrintf(float __x) { return __builtin_rintf(__x); }
 
 __DEVICE__
-long int lroundf(float __x) { return __ocml_round_f32(__x); }
+long int lroundf(float __x) { return __builtin_roundf(__x); }
 
 __DEVICE__
 float modff(float __x, float *__iptr) {
   float __tmp;
+#ifdef __OPENMP_AMDGCN__
+#pragma omp allocate(__tmp) allocator(omp_thread_mem_alloc)
+#endif
   float __r =
       __ocml_modf_f32(__x, (__attribute__((address_space(5))) float *)&__tmp);
   *__iptr = __tmp;
@@ -339,7 +348,7 @@ float modff(float __x, float *__iptr) {
 }
 
 __DEVICE__
-float nanf(const char *__tagp) {
+float nanf(const char *__tagp __attribute__((nonnull))) {
   union {
     float val;
     struct ieee_float {
@@ -360,7 +369,7 @@ float nanf(const char *__tagp) {
 }
 
 __DEVICE__
-float nearbyintf(float __x) { return __ocml_nearbyint_f32(__x); }
+float nearbyintf(float __x) { return __builtin_nearbyintf(__x); }
 
 __DEVICE__
 float nextafterf(float __x, float __y) {
@@ -412,6 +421,9 @@ float remainderf(float __x, float __y) {
 __DEVICE__
 float remquof(float __x, float __y, int *__quo) {
   int __tmp;
+#ifdef __OPENMP_AMDGCN__
+#pragma omp allocate(__tmp) allocator(omp_thread_mem_alloc)
+#endif
   float __r = __ocml_remquo_f32(
       __x, __y, (__attribute__((address_space(5))) int *)&__tmp);
   *__quo = __tmp;
@@ -423,7 +435,7 @@ __DEVICE__
 float rhypotf(float __x, float __y) { return __ocml_rhypot_f32(__x, __y); }
 
 __DEVICE__
-float rintf(float __x) { return __ocml_rint_f32(__x); }
+float rintf(float __x) { return __builtin_rintf(__x); }
 
 __DEVICE__
 float rnorm3df(float __x, float __y, float __z) {
@@ -448,26 +460,29 @@ float rnormf(int __dim,
 }
 
 __DEVICE__
-float roundf(float __x) { return __ocml_round_f32(__x); }
+float roundf(float __x) { return __builtin_roundf(__x); }
 
 __DEVICE__
 float rsqrtf(float __x) { return __ocml_rsqrt_f32(__x); }
 
 __DEVICE__
 float scalblnf(float __x, long int __n) {
-  return (__n < INT_MAX) ? __ocml_scalbn_f32(__x, __n)
+  return (__n < INT_MAX) ? __builtin_amdgcn_ldexpf(__x, __n)
                          : __ocml_scalb_f32(__x, __n);
 }
 
 __DEVICE__
-float scalbnf(float __x, int __n) { return __ocml_scalbn_f32(__x, __n); }
+float scalbnf(float __x, int __n) { return __builtin_amdgcn_ldexpf(__x, __n); }
 
 __DEVICE__
-__RETURN_TYPE __signbitf(float __x) { return __ocml_signbit_f32(__x); }
+__RETURN_TYPE __signbitf(float __x) { return __builtin_signbitf(__x); }
 
 __DEVICE__
 void sincosf(float __x, float *__sinptr, float *__cosptr) {
   float __tmp;
+#ifdef __OPENMP_AMDGCN__
+#pragma omp allocate(__tmp) allocator(omp_thread_mem_alloc)
+#endif
   *__sinptr =
       __ocml_sincos_f32(__x, (__attribute__((address_space(5))) float *)&__tmp);
   *__cosptr = __tmp;
@@ -476,6 +491,9 @@ void sincosf(float __x, float *__sinptr, float *__cosptr) {
 __DEVICE__
 void sincospif(float __x, float *__sinptr, float *__cosptr) {
   float __tmp;
+#ifdef __OPENMP_AMDGCN__
+#pragma omp allocate(__tmp) allocator(omp_thread_mem_alloc)
+#endif
   *__sinptr = __ocml_sincospi_f32(
       __x, (__attribute__((address_space(5))) float *)&__tmp);
   *__cosptr = __tmp;
@@ -503,7 +521,7 @@ __DEVICE__
 float tgammaf(float __x) { return __ocml_tgamma_f32(__x); }
 
 __DEVICE__
-float truncf(float __x) { return __ocml_trunc_f32(__x); }
+float truncf(float __x) { return __builtin_truncf(__x); }
 
 __DEVICE__
 float y0f(float __x) { return __ocml_y0_f32(__x); }
@@ -595,7 +613,7 @@ float __fmaf_rz(float __x, float __y, float __z) {
 #else
 __DEVICE__
 float __fmaf_rn(float __x, float __y, float __z) {
-  return __ocml_fma_f32(__x, __y, __z);
+  return __builtin_fmaf(__x, __y, __z);
 }
 #endif
 
@@ -628,7 +646,7 @@ float __frcp_rn(float __x) { return 1.0f / __x; }
 #endif
 
 __DEVICE__
-float __frsqrt_rn(float __x) { return __llvm_amdgcn_rsq_f32(__x); }
+float __frsqrt_rn(float __x) { return __builtin_amdgcn_rsqf(__x); }
 
 #if defined OCML_BASIC_ROUNDED_OPERATIONS
 __DEVICE__
@@ -713,11 +731,11 @@ __DEVICE__
 double cbrt(double __x) { return __ocml_cbrt_f64(__x); }
 
 __DEVICE__
-double ceil(double __x) { return __ocml_ceil_f64(__x); }
+double ceil(double __x) { return __builtin_ceil(__x); }
 
 __DEVICE__
 double copysign(double __x, double __y) {
-  return __ocml_copysign_f64(__x, __y);
+  return __builtin_copysign(__x, __y);
 }
 
 __DEVICE__
@@ -763,35 +781,31 @@ __DEVICE__
 double expm1(double __x) { return __ocml_expm1_f64(__x); }
 
 __DEVICE__
-double fabs(double __x) { return __ocml_fabs_f64(__x); }
+double fabs(double __x) { return __builtin_fabs(__x); }
 
 __DEVICE__
 double fdim(double __x, double __y) { return __ocml_fdim_f64(__x, __y); }
 
 __DEVICE__
-double floor(double __x) { return __ocml_floor_f64(__x); }
+double floor(double __x) { return __builtin_floor(__x); }
 
 __DEVICE__
 double fma(double __x, double __y, double __z) {
-  return __ocml_fma_f64(__x, __y, __z);
+  return __builtin_fma(__x, __y, __z);
 }
 
 __DEVICE__
-double fmax(double __x, double __y) { return __ocml_fmax_f64(__x, __y); }
+double fmax(double __x, double __y) { return __builtin_fmax(__x, __y); }
 
 __DEVICE__
-double fmin(double __x, double __y) { return __ocml_fmin_f64(__x, __y); }
+double fmin(double __x, double __y) { return __builtin_fmin(__x, __y); }
 
 __DEVICE__
 double fmod(double __x, double __y) { return __ocml_fmod_f64(__x, __y); }
 
 __DEVICE__
 double frexp(double __x, int *__nptr) {
-  int __tmp;
-  double __r =
-      __ocml_frexp_f64(__x, (__attribute__((address_space(5))) int *)&__tmp);
-  *__nptr = __tmp;
-  return __r;
+  return __builtin_frexp(__x, __nptr);
 }
 
 __DEVICE__
@@ -801,13 +815,13 @@ __DEVICE__
 int ilogb(double __x) { return __ocml_ilogb_f64(__x); }
 
 __DEVICE__
-__RETURN_TYPE __finite(double __x) { return __ocml_isfinite_f64(__x); }
+__RETURN_TYPE __finite(double __x) { return __builtin_isfinite(__x); }
 
 __DEVICE__
-__RETURN_TYPE __isinf(double __x) { return __ocml_isinf_f64(__x); }
+__RETURN_TYPE __isinf(double __x) { return __builtin_isinf(__x); }
 
 __DEVICE__
-__RETURN_TYPE __isnan(double __x) { return __ocml_isnan_f64(__x); }
+__RETURN_TYPE __isnan(double __x) { return __builtin_isnan(__x); }
 
 __DEVICE__
 double j0(double __x) { return __ocml_j0_f64(__x); }
@@ -837,16 +851,16 @@ double jn(int __n, double __x) { // TODO: we could use Ahmes multiplication
 }
 
 __DEVICE__
-double ldexp(double __x, int __e) { return __ocml_ldexp_f64(__x, __e); }
+double ldexp(double __x, int __e) { return __builtin_amdgcn_ldexp(__x, __e); }
 
 __DEVICE__
 double lgamma(double __x) { return __ocml_lgamma_f64(__x); }
 
 __DEVICE__
-long long int llrint(double __x) { return __ocml_rint_f64(__x); }
+long long int llrint(double __x) { return __builtin_rint(__x); }
 
 __DEVICE__
-long long int llround(double __x) { return __ocml_round_f64(__x); }
+long long int llround(double __x) { return __builtin_round(__x); }
 
 __DEVICE__
 double log(double __x) { return __ocml_log_f64(__x); }
@@ -864,14 +878,17 @@ __DEVICE__
 double logb(double __x) { return __ocml_logb_f64(__x); }
 
 __DEVICE__
-long int lrint(double __x) { return __ocml_rint_f64(__x); }
+long int lrint(double __x) { return __builtin_rint(__x); }
 
 __DEVICE__
-long int lround(double __x) { return __ocml_round_f64(__x); }
+long int lround(double __x) { return __builtin_round(__x); }
 
 __DEVICE__
 double modf(double __x, double *__iptr) {
   double __tmp;
+#ifdef __OPENMP_AMDGCN__
+#pragma omp allocate(__tmp) allocator(omp_thread_mem_alloc)
+#endif
   double __r =
       __ocml_modf_f64(__x, (__attribute__((address_space(5))) double *)&__tmp);
   *__iptr = __tmp;
@@ -908,7 +925,7 @@ double nan(const char *__tagp) {
 }
 
 __DEVICE__
-double nearbyint(double __x) { return __ocml_nearbyint_f64(__x); }
+double nearbyint(double __x) { return __builtin_nearbyint(__x); }
 
 __DEVICE__
 double nextafter(double __x, double __y) {
@@ -960,6 +977,9 @@ double remainder(double __x, double __y) {
 __DEVICE__
 double remquo(double __x, double __y, int *__quo) {
   int __tmp;
+#ifdef __OPENMP_AMDGCN__
+#pragma omp allocate(__tmp) allocator(omp_thread_mem_alloc)
+#endif
   double __r = __ocml_remquo_f64(
       __x, __y, (__attribute__((address_space(5))) int *)&__tmp);
   *__quo = __tmp;
@@ -971,7 +991,7 @@ __DEVICE__
 double rhypot(double __x, double __y) { return __ocml_rhypot_f64(__x, __y); }
 
 __DEVICE__
-double rint(double __x) { return __ocml_rint_f64(__x); }
+double rint(double __x) { return __builtin_rint(__x); }
 
 __DEVICE__
 double rnorm(int __dim,
@@ -996,21 +1016,21 @@ double rnorm4d(double __x, double __y, double __z, double __w) {
 }
 
 __DEVICE__
-double round(double __x) { return __ocml_round_f64(__x); }
+double round(double __x) { return __builtin_round(__x); }
 
 __DEVICE__
 double rsqrt(double __x) { return __ocml_rsqrt_f64(__x); }
 
 __DEVICE__
 double scalbln(double __x, long int __n) {
-  return (__n < INT_MAX) ? __ocml_scalbn_f64(__x, __n)
+  return (__n < INT_MAX) ? __builtin_amdgcn_ldexp(__x, __n)
                          : __ocml_scalb_f64(__x, __n);
 }
 __DEVICE__
-double scalbn(double __x, int __n) { return __ocml_scalbn_f64(__x, __n); }
+double scalbn(double __x, int __n) { return __builtin_amdgcn_ldexp(__x, __n); }
 
 __DEVICE__
-__RETURN_TYPE __signbit(double __x) { return __ocml_signbit_f64(__x); }
+__RETURN_TYPE __signbit(double __x) { return __builtin_signbit(__x); }
 
 __DEVICE__
 double sin(double __x) { return __ocml_sin_f64(__x); }
@@ -1018,6 +1038,9 @@ double sin(double __x) { return __ocml_sin_f64(__x); }
 __DEVICE__
 void sincos(double __x, double *__sinptr, double *__cosptr) {
   double __tmp;
+#ifdef __OPENMP_AMDGCN__
+#pragma omp allocate(__tmp) allocator(omp_thread_mem_alloc)
+#endif
   *__sinptr = __ocml_sincos_f64(
       __x, (__attribute__((address_space(5))) double *)&__tmp);
   *__cosptr = __tmp;
@@ -1026,6 +1049,9 @@ void sincos(double __x, double *__sinptr, double *__cosptr) {
 __DEVICE__
 void sincospi(double __x, double *__sinptr, double *__cosptr) {
   double __tmp;
+#ifdef __OPENMP_AMDGCN__
+#pragma omp allocate(__tmp) allocator(omp_thread_mem_alloc)
+#endif
   *__sinptr = __ocml_sincospi_f64(
       __x, (__attribute__((address_space(5))) double *)&__tmp);
   *__cosptr = __tmp;
@@ -1050,7 +1076,7 @@ __DEVICE__
 double tgamma(double __x) { return __ocml_tgamma_f64(__x); }
 
 __DEVICE__
-double trunc(double __x) { return __ocml_trunc_f64(__x); }
+double trunc(double __x) { return __builtin_trunc(__x); }
 
 __DEVICE__
 double y0(double __x) { return __ocml_y0_f64(__x); }
@@ -1217,7 +1243,7 @@ double __fma_rz(double __x, double __y, double __z) {
 #else
 __DEVICE__
 double __fma_rn(double __x, double __y, double __z) {
-  return __ocml_fma_f64(__x, __y, __z);
+  return __builtin_fma(__x, __y, __z);
 }
 #endif
 // END INTRINSICS
@@ -1249,17 +1275,18 @@ __DEVICE__ int max(int __arg1, int __arg2) {
 }
 
 __DEVICE__
-float max(float __x, float __y) { return fmaxf(__x, __y); }
+float max(float __x, float __y) { return __builtin_fmaxf(__x, __y); }
 
 __DEVICE__
-double max(double __x, double __y) { return fmax(__x, __y); }
+double max(double __x, double __y) { return __builtin_fmax(__x, __y); }
 
 __DEVICE__
-float min(float __x, float __y) { return fminf(__x, __y); }
+float min(float __x, float __y) { return __builtin_fminf(__x, __y); }
 
 __DEVICE__
-double min(double __x, double __y) { return fmin(__x, __y); }
+double min(double __x, double __y) { return __builtin_fmin(__x, __y); }
 
+#if !defined(__HIPCC_RTC__) && !defined(__OPENMP_AMDGCN__)
 __host__ inline static int min(int __arg1, int __arg2) {
   return std::min(__arg1, __arg2);
 }
@@ -1267,6 +1294,7 @@ __host__ inline static int min(int __arg1, int __arg2) {
 __host__ inline static int max(int __arg1, int __arg2) {
   return std::max(__arg1, __arg2);
 }
+#endif // !defined(__HIPCC_RTC__) && !defined(__OPENMP_AMDGCN__)
 #endif
 
 #pragma pop_macro("__DEVICE__")

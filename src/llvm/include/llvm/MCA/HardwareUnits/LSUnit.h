@@ -12,8 +12,8 @@
 ///
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_MCA_LSUNIT_H
-#define LLVM_MCA_LSUNIT_H
+#ifndef LLVM_MCA_HARDWAREUNITS_LSUNIT_H
+#define LLVM_MCA_HARDWAREUNITS_LSUNIT_H
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
@@ -33,13 +33,13 @@ namespace mca {
 /// Instruction::LSUTokenID of each dispatched instructions. That token is used
 /// internally by the LSUnit to track memory dependencies.
 class MemoryGroup {
-  unsigned NumPredecessors;
-  unsigned NumExecutingPredecessors;
-  unsigned NumExecutedPredecessors;
+  unsigned NumPredecessors = 0;
+  unsigned NumExecutingPredecessors = 0;
+  unsigned NumExecutedPredecessors = 0;
 
-  unsigned NumInstructions;
-  unsigned NumExecuting;
-  unsigned NumExecuted;
+  unsigned NumInstructions = 0;
+  unsigned NumExecuting = 0;
+  unsigned NumExecuted = 0;
   // Successors that are in a order dependency with this group.
   SmallVector<MemoryGroup *, 4> OrderSucc;
   // Successors that are in a data dependency with this group.
@@ -52,10 +52,7 @@ class MemoryGroup {
   MemoryGroup &operator=(const MemoryGroup &) = delete;
 
 public:
-  MemoryGroup()
-      : NumPredecessors(0), NumExecutingPredecessors(0),
-        NumExecutedPredecessors(0), NumInstructions(0), NumExecuting(0),
-        NumExecuted(0), CriticalPredecessor(), CriticalMemoryInstruction() {}
+  MemoryGroup() = default;
   MemoryGroup(MemoryGroup &&) = default;
 
   size_t getNumSuccessors() const {
@@ -160,10 +157,15 @@ public:
       MG->onGroupIssued(CriticalMemoryInstruction, true);
   }
 
-  void onInstructionExecuted() {
+  void onInstructionExecuted(const InstRef &IR) {
     assert(isReady() && !isExecuted() && "Invalid internal state!");
     --NumExecuting;
     ++NumExecuted;
+
+    if (CriticalMemoryInstruction &&
+        CriticalMemoryInstruction.getSourceIndex() == IR.getSourceIndex()) {
+      CriticalMemoryInstruction.invalidate();
+    }
 
     if (!isExecuted())
       return;
@@ -264,7 +266,7 @@ public:
   bool isLQFull() const { return LQSize && LQSize == UsedLQEntries; }
 
   bool isValidGroupID(unsigned Index) const {
-    return Index && (Groups.find(Index) != Groups.end());
+    return Index && Groups.contains(Index);
   }
 
   /// Check if a peviously dispatched instruction IR is now ready for execution.
@@ -472,4 +474,4 @@ public:
 } // namespace mca
 } // namespace llvm
 
-#endif // LLVM_MCA_LSUNIT_H
+#endif // LLVM_MCA_HARDWAREUNITS_LSUNIT_H

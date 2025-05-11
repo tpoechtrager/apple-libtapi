@@ -11,37 +11,38 @@
 //===----------------------------------------------------------------------===//
 
 #include "LLVMContextImpl.h"
+#include "AttributeImpl.h"
 #include "llvm/ADT/SetVector.h"
+#include "llvm/ADT/StringMapEntry.h"
+#include "llvm/ADT/iterator.h"
+#include "llvm/ADT/iterator_range.h"
+#include "llvm/IR/DiagnosticHandler.h"
+#include "llvm/IR/LLVMRemarkStreamer.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/OptBisect.h"
 #include "llvm/IR/Type.h"
-#include "llvm/Support/ManagedStatic.h"
+#include "llvm/IR/Use.h"
+#include "llvm/IR/User.h"
+#include "llvm/Remarks/RemarkStreamer.h"
+#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/Compiler.h"
+#include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/TypeSize.h"
 #include <cassert>
 #include <utility>
 
 using namespace llvm;
 
 LLVMContextImpl::LLVMContextImpl(LLVMContext &C)
-  : DiagHandler(std::make_unique<DiagnosticHandler>()),
-    VoidTy(C, Type::VoidTyID),
-    LabelTy(C, Type::LabelTyID),
-    HalfTy(C, Type::HalfTyID),
-    BFloatTy(C, Type::BFloatTyID),
-    FloatTy(C, Type::FloatTyID),
-    DoubleTy(C, Type::DoubleTyID),
-    MetadataTy(C, Type::MetadataTyID),
-    TokenTy(C, Type::TokenTyID),
-    X86_FP80Ty(C, Type::X86_FP80TyID),
-    FP128Ty(C, Type::FP128TyID),
-    PPC_FP128Ty(C, Type::PPC_FP128TyID),
-    X86_MMXTy(C, Type::X86_MMXTyID),
-    X86_AMXTy(C, Type::X86_AMXTyID),
-    Int1Ty(C, 1),
-    Int8Ty(C, 8),
-    Int16Ty(C, 16),
-    Int32Ty(C, 32),
-    Int64Ty(C, 64),
-    Int128Ty(C, 128) {}
+    : DiagHandler(std::make_unique<DiagnosticHandler>()),
+      VoidTy(C, Type::VoidTyID), LabelTy(C, Type::LabelTyID),
+      HalfTy(C, Type::HalfTyID), BFloatTy(C, Type::BFloatTyID),
+      FloatTy(C, Type::FloatTyID), DoubleTy(C, Type::DoubleTyID),
+      MetadataTy(C, Type::MetadataTyID), TokenTy(C, Type::TokenTyID),
+      X86_FP80Ty(C, Type::X86_FP80TyID), FP128Ty(C, Type::FP128TyID),
+      PPC_FP128Ty(C, Type::PPC_FP128TyID), X86_MMXTy(C, Type::X86_MMXTyID),
+      X86_AMXTy(C, Type::X86_AMXTyID), Int1Ty(C, 1), Int8Ty(C, 8),
+      Int16Ty(C, 16), Int32Ty(C, 32), Int64Ty(C, 64), Int128Ty(C, 128) {}
 
 LLVMContextImpl::~LLVMContextImpl() {
   // NOTE: We need to delete the contents of OwnedModules, but Module's dtor
@@ -59,8 +60,15 @@ LLVMContextImpl::~LLVMContextImpl() {
 
   // Drop references for MDNodes.  Do this before Values get deleted to avoid
   // unnecessary RAUW when nodes are still unresolved.
-  for (auto *I : DistinctMDNodes)
+  for (auto *I : DistinctMDNodes) {
+    // We may have DIArgList that were uniqued, and as it has a custom
+    // implementation of dropAllReferences, it needs to be explicitly invoked.
+    if (auto *AL = dyn_cast<DIArgList>(I)) {
+      AL->dropAllReferences();
+      continue;
+    }
     I->dropAllReferences();
+  }
 #define HANDLE_MDNODE_LEAF_UNIQUABLE(CLASS)                                    \
   for (auto *I : CLASS##s)                                                     \
     I->dropAllReferences();
@@ -97,8 +105,11 @@ LLVMContextImpl::~LLVMContextImpl() {
 
   CAZConstants.clear();
   CPNConstants.clear();
+  CTNConstants.clear();
   UVConstants.clear();
   PVConstants.clear();
+  IntZeroConstants.clear();
+  IntOneConstants.clear();
   IntConstants.clear();
   FPConstants.clear();
   CDSConstants.clear();
@@ -176,7 +187,7 @@ unsigned MDNodeOpsKey::calculateHash(MDNode *N, unsigned Offset) {
   unsigned Hash = hash_combine_range(N->op_begin() + Offset, N->op_end());
 #ifndef NDEBUG
   {
-    SmallVector<Metadata *, 8> MDs(N->op_begin() + Offset, N->op_end());
+    SmallVector<Metadata *, 8> MDs(drop_begin(N->operands(), Offset));
     unsigned RawHash = calculateHash(MDs);
     assert(Hash == RawHash &&
            "Expected hash of MDOperand to equal hash of Metadata*");
@@ -224,7 +235,7 @@ void LLVMContextImpl::getSyncScopeNames(
 /// singleton OptBisect if not explicitly set.
 OptPassGate &LLVMContextImpl::getOptPassGate() const {
   if (!OPG)
-    OPG = &(*OptBisector);
+    OPG = &getGlobalPassGate();
   return *OPG;
 }
 

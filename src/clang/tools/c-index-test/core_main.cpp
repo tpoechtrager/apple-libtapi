@@ -12,20 +12,23 @@
 #include "clang/DirectoryWatcher/DirectoryWatcher.h"
 #include "clang/AST/Mangle.h"
 #include "clang/Basic/LangOptions.h"
+#include "clang/Basic/PathRemapper.h"
 #include "clang/CodeGen/ObjectFilePCHContainerOperations.h"
 #include "clang/Frontend/ASTUnit.h"
 #include "clang/Frontend/CompilerInstance.h"
 #include "clang/Frontend/CompilerInvocation.h"
 #include "clang/Frontend/FrontendAction.h"
-#include "clang/Index/IndexingAction.h"
+#include "clang/Frontend/Utils.h"
 #include "clang/Index/IndexDataConsumer.h"
 #include "clang/Index/IndexDataStoreSymbolUtils.h"
 #include "clang/Index/IndexRecordReader.h"
 #include "clang/Index/IndexUnitReader.h"
+#include "clang/Index/IndexingAction.h"
 #include "clang/Index/USRGeneration.h"
 #include "clang/Lex/Preprocessor.h"
 #include "clang/Serialization/ASTReader.h"
 #include "llvm/ADT/FunctionExtras.h"
+#include "llvm/ADT/ScopeExit.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Path.h"
@@ -34,6 +37,7 @@
 #include "llvm/Support/Signals.h"
 #include "llvm/Support/StringSaver.h"
 #include "llvm/Support/raw_ostream.h"
+#include <future>
 #include <thread>
 
 using namespace clang;
@@ -53,6 +57,11 @@ enum class ActionType {
   PrintStoreFormatVersion,
   AggregateAsJSON,
   ScanDeps,
+  ScanDepsByModuleName,
+  UploadCachedJob,
+  MaterializeCachedJob,
+  ReplayCachedJob,
+  PruneCAS,
   WatchDir,
 };
 
@@ -75,6 +84,15 @@ Action(cl::desc("Action:"), cl::init(ActionType::None),
                      "aggregate-json", "Aggregate index data in JSON format"),
           clEnumValN(ActionType::ScanDeps, "scan-deps",
                      "Get file dependencies"),
+          clEnumValN(ActionType::ScanDepsByModuleName, "scan-deps-by-mod-name",
+                     "Get file dependencies by module name alone"),
+          clEnumValN(ActionType::UploadCachedJob, "upload-cached-job",
+                     "Upload cached compilation data to upstream CAS"),
+          clEnumValN(ActionType::MaterializeCachedJob, "materialize-cached-job",
+                     "Materialize cached compilation data from upstream CAS"),
+          clEnumValN(ActionType::ReplayCachedJob, "replay-cached-job",
+                     "Replay a cached compilation from the CAS"),
+          clEnumValN(ActionType::PruneCAS, "prune-cas", "Prune CAS data"),
           clEnumValN(ActionType::WatchDir,
                      "watch-dir", "Watch directory for file events")),
        cl::cat(IndexTestCoreCategory));
@@ -85,6 +103,9 @@ OutputFile("o", cl::desc("output file"),
 
 static cl::list<std::string>
 InputFiles(cl::Positional, cl::desc("<filename>..."));
+
+static cl::list<std::string>
+PrefixMap("index-store-prefix-map", cl::desc("<prefix=replacement>..."));
 
 static cl::extrahelp MoreHelp(
   "\nAdd \"-- <compiler arguments>\" at the end to setup the compiler "
@@ -112,6 +133,34 @@ static cl::opt<std::string>
 FilePathAndRange("filepath",
                cl::desc("File path that can optionally include a line range"));
 
+static cl::opt<std::string>
+    ModuleName("module-name", cl::desc("name of the module, of which we are "
+                                       "getting file and module dependencies"));
+
+static cl::opt<std::string>
+    OutputDir("output-dir", cl::desc("directory for module output files "
+                                     "(defaults 'module-outputs')"));
+static cl::opt<bool>
+    SerializeDiags("serialize-diagnostics",
+                   cl::desc("module builds should serialize diagnostics"));
+static cl::opt<bool>
+    DependencyFile("dependency-file",
+                   cl::desc("module builds should write dependency files"));
+static cl::list<std::string> DependencyTargets(
+    "dependency-target",
+    cl::desc("module builds should use the given dependency target(s)"));
+static llvm::cl::opt<std::string>
+    CASPath("cas-path", llvm::cl::desc("Path for on-disk CAS/cache."));
+static llvm::cl::opt<std::string>
+    CASPluginPath("fcas-plugin-path", llvm::cl::desc("Path for CAS plugin"));
+static cl::list<std::string> CASPluginOpts("fcas-plugin-option",
+                                           cl::desc("Plugin CAS Options"));
+static llvm::cl::opt<std::string>
+    WorkingDir("working-dir", llvm::cl::desc("Path for working directory"));
+static cl::opt<bool> TestCASCancellation(
+    "test-cas-cancellation",
+    cl::desc(
+        "perform extra CAS API invocation and cancel it for testing purposes"));
 }
 } // anonymous namespace
 
@@ -259,7 +308,10 @@ static bool printSourceSymbols(const char *Executable,
   ArgsWithProgName.append(Args.begin(), Args.end());
   IntrusiveRefCntPtr<DiagnosticsEngine>
     Diags(CompilerInstance::createDiagnostics(new DiagnosticOptions));
-  auto CInvok = createInvocationFromCommandLine(ArgsWithProgName, Diags);
+  CreateInvocationOptions CIOpts;
+  CIOpts.Diags = Diags;
+  CIOpts.ProbePrecompiled = true; // FIXME: historical default. Needed?
+  auto CInvok = createInvocation(ArgsWithProgName, std::move(CIOpts));
   if (!CInvok)
     return true;
 
@@ -305,11 +357,13 @@ static bool printSourceSymbolsFromModule(StringRef modulePath,
     return true;
   }
 
+  auto HSOpts = std::make_shared<HeaderSearchOptions>();
+
   IntrusiveRefCntPtr<DiagnosticsEngine> Diags =
       CompilerInstance::createDiagnostics(new DiagnosticOptions());
   std::unique_ptr<ASTUnit> AU = ASTUnit::LoadFromASTFile(
       std::string(modulePath), *pchRdr, ASTUnit::LoadASTOnly, Diags,
-      FileSystemOpts, /*UseDebugInfo=*/false,
+      FileSystemOpts, HSOpts,
       /*OnlyLocalDecls=*/true, CaptureDiagsKind::None,
       /*AllowASTWithCompilerErrors=*/true,
       /*UserFilesAreVolatile=*/false);
@@ -351,7 +405,7 @@ static int printRecord(StringRef Filename, raw_ostream &OS) {
   });
 
   return false;
-};
+}
 
 //===----------------------------------------------------------------------===//
 // Print Store Records
@@ -385,9 +439,10 @@ static bool printStoreRecord(indexstore::IndexStore &Store, StringRef RecName,
   return false;
 }
 
-static int printStoreRecords(StringRef StorePath, raw_ostream &OS) {
+static int printStoreRecords(StringRef StorePath, PathRemapper Remapper,
+                             raw_ostream &OS) {
   std::string Error;
-  indexstore::IndexStore Store(StorePath, Error);
+  indexstore::IndexStore Store(StorePath, Remapper, Error);
   if (!Store) {
     errs() << "error loading store: " << Error << "\n";
     return 1;
@@ -438,10 +493,10 @@ static std::string findRecordNameForFile(indexstore::IndexStore &store,
 }
 
 static int printStoreFileRecord(StringRef storePath, StringRef filePath,
-                                Optional<unsigned> lineStart, unsigned lineCount,
-                                raw_ostream &OS) {
+                                std::optional<unsigned> lineStart, unsigned lineCount,
+                                PathRemapper remapper, raw_ostream &OS) {
   std::string error;
-  indexstore::IndexStore store(storePath, error);
+  indexstore::IndexStore store(storePath, remapper, error);
   if (!store) {
     errs() << "error loading store: " << error << "\n";
     return 1;
@@ -453,7 +508,7 @@ static int printStoreFileRecord(StringRef storePath, StringRef filePath,
     return 1;
   }
 
-  if (!lineStart.hasValue())
+  if (!lineStart)
     return printStoreRecord(store, recName, filePath, OS);
 
   indexstore::IndexRecordReader Reader(store, recName, error);
@@ -475,9 +530,10 @@ static int printStoreFileRecord(StringRef storePath, StringRef filePath,
 // Print Unit
 //===----------------------------------------------------------------------===//
 
-static int printUnit(StringRef Filename, raw_ostream &OS) {
+static int printUnit(StringRef Filename, PathRemapper Remapper,
+                     raw_ostream &OS) {
   std::string Error;
-  auto Reader = IndexUnitReader::createWithFilePath(Filename, Error);
+  auto Reader = IndexUnitReader::createWithFilePath(Filename, Remapper, Error);
   if (!Reader) {
     errs() << Error << '\n';
     return true;
@@ -527,7 +583,7 @@ static int printUnit(StringRef Filename, raw_ostream &OS) {
   OS << "INCLUDE END (" << NumIncludes << ")\n";
 
   return false;
-};
+}
 
 //===----------------------------------------------------------------------===//
 // Print Store Units
@@ -588,9 +644,10 @@ static bool printStoreUnit(indexstore::IndexStore &Store, StringRef UnitName,
   return false;
 }
 
-static int printStoreUnits(StringRef StorePath, raw_ostream &OS) {
+static int printStoreUnits(StringRef StorePath, PathRemapper Remapper,
+                           raw_ostream &OS) {
   std::string Error;
-  indexstore::IndexStore Store(StorePath, Error);
+  indexstore::IndexStore Store(StorePath, Remapper, Error);
   if (!Store) {
     errs() << "error loading store: " << Error << "\n";
     return 1;
@@ -644,74 +701,435 @@ static void printSymbolNameAndUSR(const clang::Module *Mod, raw_ostream &OS) {
   generateFullUSRForModule(Mod, OS);
 }
 
-static int scanDeps(ArrayRef<const char *> Args, std::string WorkingDirectory) {
+static int scanDeps(ArrayRef<const char *> Args, std::string WorkingDirectory,
+                    bool SerializeDiags, bool DependencyFile,
+                    ArrayRef<std::string> DepTargets, std::string OutputPath,
+                    CXCASDatabases DBs,
+                    std::optional<std::string> ModuleName = std::nullopt) {
+  CXDependencyScannerServiceOptions Opts =
+      clang_experimental_DependencyScannerServiceOptions_create();
+  auto CleanupOpts = llvm::make_scope_exit([&] {
+    clang_experimental_DependencyScannerServiceOptions_dispose(Opts);
+  });
+  clang_experimental_DependencyScannerServiceOptions_setDependencyMode(
+      Opts, CXDependencyMode_Full);
+
+  if (DBs)
+    clang_experimental_DependencyScannerServiceOptions_setCASDatabases(Opts,
+                                                                       DBs);
+
   CXDependencyScannerService Service =
-      clang_experimental_DependencyScannerService_create_v0(
-          CXDependencyMode_Full);
+      clang_experimental_DependencyScannerService_create_v1(Opts);
   CXDependencyScannerWorker Worker =
       clang_experimental_DependencyScannerWorker_create_v0(Service);
-  CXString Error;
+  auto DisposeWorkerAndService = llvm::make_scope_exit([&]() {
+    clang_experimental_DependencyScannerWorker_dispose_v0(Worker);
+    clang_experimental_DependencyScannerService_dispose_v0(Service);
+  });
 
-  auto Callback = [&](CXModuleDependencySet *MDS) {
-    llvm::outs() << "modules:\n";
-    for (const auto &M : llvm::makeArrayRef(MDS->Modules, MDS->Count)) {
-      llvm::outs() << "  module:\n"
-                   << "    name: " << clang_getCString(M.Name) << "\n"
-                   << "    context-hash: " << clang_getCString(M.ContextHash)
-                   << "\n"
-                   << "    module-map-path: "
-                   << clang_getCString(M.ModuleMapPath) << "\n"
-                   << "    module-deps:\n";
-      for (const auto &ModuleName :
-           llvm::makeArrayRef(M.ModuleDeps->Strings, M.ModuleDeps->Count))
-        llvm::outs() << "      " << clang_getCString(ModuleName) << "\n";
-      llvm::outs() << "    file-deps:\n";
-      for (const auto &FileName :
-           llvm::makeArrayRef(M.FileDeps->Strings, M.FileDeps->Count))
-        llvm::outs() << "      " << clang_getCString(FileName) << "\n";
-      llvm::outs() << "    build-args:";
-      for (const auto &Arg : llvm::makeArrayRef(M.BuildArguments->Strings,
-                                                M.BuildArguments->Count))
-        llvm::outs() << " " << clang_getCString(Arg);
-      llvm::outs() << "\n";
+  auto LookupOutput = [&](const char *ModuleName, const char *ContextHash,
+                          CXOutputKind Kind, char *Output, size_t MaxLen) {
+    std::string Out = OutputPath + "/" + ModuleName + "_" + ContextHash;
+    switch (Kind) {
+    case CXOutputKind_ModuleFile:
+      Out += ".pcm";
+      break;
+    case CXOutputKind_Dependencies:
+      if (!DependencyFile)
+        return (size_t)0;
+      Out += ".d";
+      break;
+    case CXOutputKind_DependenciesTarget:
+      if (DepTargets.empty())
+        return (size_t)0;
+      Out = join(DepTargets, StringRef("\0", 1));
+      break;
+    case CXOutputKind_SerializedDiagnostics:
+      if (!SerializeDiags)
+        return (size_t)0;
+      Out += ".diag";
+      break;
     }
-    clang_experimental_ModuleDependencySet_dispose(MDS);
+    if (0 < Out.size() && Out.size() <= MaxLen)
+      memcpy(Output, Out.data(), Out.size());
+    return Out.size();
   };
 
-  auto CB =
-      functionObjectToCCallbackRef<void(CXModuleDependencySet *)>(Callback);
+  auto LookupOutputCB = functionObjectToCCallbackRef<size_t(
+      const char *ModuleName, const char *ContextHash, CXOutputKind Kind,
+      char *Output, size_t MaxLen)>(LookupOutput);
 
-  CXFileDependencies *Result =
-      clang_experimental_DependencyScannerWorker_getFileDependencies_v0(
-          Worker, Args.size(), Args.data(), WorkingDirectory.c_str(),
-          CB.Callback, CB.Context, &Error);
-  if (!Result) {
-    llvm::errs() << "error: failed to get dependencies\n";
-    llvm::errs() << clang_getCString(Error) << "\n";
-    clang_disposeString(Error);
+  unsigned CommandIndex = 0;
+  auto HandleCommand = [&](const char *ContextHash, CXCStringArray ModuleDeps,
+                           CXCStringArray FileDeps, CXCStringArray Args,
+                           const char *CacheKey) {
+    llvm::outs() << "  command " << CommandIndex++ << ":\n";
+    llvm::outs() << "    context-hash: " << ContextHash << "\n";
+    if (CacheKey)
+      llvm::outs() << "    cache-key: " << CacheKey << "\n";
+    llvm::outs() << "    module-deps:\n";
+    for (const auto &ModuleName :
+         ArrayRef(ModuleDeps.Strings, ModuleDeps.Count))
+      llvm::outs() << "      " << ModuleName << "\n";
+    llvm::outs() << "    file-deps:\n";
+    for (const auto &FileName : ArrayRef(FileDeps.Strings, FileDeps.Count))
+      llvm::outs() << "      " << FileName << "\n";
+    llvm::outs() << "    build-args:";
+    for (const auto &Arg : ArrayRef(Args.Strings, Args.Count))
+      llvm::outs() << " " << Arg;
+    llvm::outs() << "\n";
+  };
+
+  CXDependencyScannerWorkerScanSettings ScanSettings =
+      clang_experimental_DependencyScannerWorkerScanSettings_create(
+          Args.size(), Args.data(), ModuleName ? ModuleName->c_str() : nullptr,
+          WorkingDirectory.c_str(), LookupOutputCB.Context,
+          LookupOutputCB.Callback);
+  auto DisposeScanSettings = llvm::make_scope_exit([&]() {
+    clang_experimental_DependencyScannerWorkerScanSettings_dispose(
+        ScanSettings);
+  });
+  CXDepGraph Graph = nullptr;
+  auto DisposeDepGraph = llvm::make_scope_exit(
+      [&]() { clang_experimental_DepGraph_dispose(Graph); });
+  CXErrorCode Err = clang_experimental_DependencyScannerWorker_getDepGraph(
+      Worker, ScanSettings, &Graph);
+
+  if (Err == CXError_Success) {
+    llvm::outs() << "modules:\n";
+    for (size_t I = 0, E = clang_experimental_DepGraph_getNumModules(Graph);
+         I < E; ++I) {
+      CXDepGraphModule Mod = clang_experimental_DepGraph_getModule(Graph, I);
+      const char *Name = clang_experimental_DepGraphModule_getName(Mod);
+      const char *ContextHash =
+          clang_experimental_DepGraphModule_getContextHash(Mod);
+      const char *ModuleMapPath =
+          clang_experimental_DepGraphModule_getModuleMapPath(Mod);
+      const char *ModuleCacheKey =
+          clang_experimental_DepGraphModule_getCacheKey(Mod);
+      CXCStringArray ModuleDeps =
+          clang_experimental_DepGraphModule_getModuleDeps(Mod);
+      CXCStringArray FileDeps =
+          clang_experimental_DepGraphModule_getFileDeps(Mod);
+      CXCStringArray BuildArguments =
+          clang_experimental_DepGraphModule_getBuildArguments(Mod);
+      auto Dispose = llvm::make_scope_exit(
+          [&]() { clang_experimental_DepGraphModule_dispose(Mod); });
+      llvm::outs() << "  module:\n"
+                   << "    name: " << Name << "\n"
+                   << "    context-hash: " << ContextHash << "\n"
+                   << "    module-map-path: "
+                   << (ModuleMapPath ? ModuleMapPath : "<none>") << "\n";
+      if (ModuleCacheKey)
+        llvm::outs() << "    cache-key: " << ModuleCacheKey << "\n";
+      llvm::outs() << "    module-deps:\n";
+      for (const auto &ModuleName :
+           ArrayRef(ModuleDeps.Strings, ModuleDeps.Count))
+        llvm::outs() << "      " << ModuleName << "\n";
+      llvm::outs() << "    file-deps:\n";
+      for (const auto &FileName : ArrayRef(FileDeps.Strings, FileDeps.Count))
+        llvm::outs() << "      " << FileName << "\n";
+      llvm::outs() << "    build-args:";
+      for (const auto &Arg :
+           ArrayRef(BuildArguments.Strings, BuildArguments.Count))
+        llvm::outs() << " " << Arg;
+      llvm::outs() << "\n";
+    }
+
+    llvm::outs() << "dependencies:\n";
+    const char *TUContextHash =
+        clang_experimental_DepGraph_getTUContextHash(Graph);
+    CXCStringArray TUModuleDeps =
+        clang_experimental_DepGraph_getTUModuleDeps(Graph);
+    CXCStringArray TUFileDeps =
+        clang_experimental_DepGraph_getTUFileDeps(Graph);
+    for (size_t I = 0, E = clang_experimental_DepGraph_getNumTUCommands(Graph);
+         I < E; ++I) {
+      CXDepGraphTUCommand Cmd =
+          clang_experimental_DepGraph_getTUCommand(Graph, I);
+      CXCStringArray Args =
+          clang_experimental_DepGraphTUCommand_getBuildArguments(Cmd);
+      const char *CacheKey =
+          clang_experimental_DepGraphTUCommand_getCacheKey(Cmd);
+      auto Dispose = llvm::make_scope_exit(
+          [&]() { clang_experimental_DepGraphTUCommand_dispose(Cmd); });
+      HandleCommand(TUContextHash, TUModuleDeps, TUFileDeps, Args, CacheKey);
+    }
+    return 0;
+  }
+  llvm::errs() << "error: failed to get dependencies\n";
+  CXDiagnosticSet Diags = clang_experimental_DepGraph_getDiagnostics(Graph);
+  auto DisposeDiagnosticSet =
+      llvm::make_scope_exit([&]() { clang_disposeDiagnosticSet(Diags); });
+  for (unsigned I = 0, N = clang_getNumDiagnosticsInSet(Diags); I < N; ++I) {
+    CXDiagnostic Diag = clang_getDiagnosticInSet(Diags, I);
+    CXString Spelling =
+        clang_formatDiagnostic(Diag, clang_defaultDiagnosticDisplayOptions());
+    llvm::errs() << clang_getCString(Spelling) << "\n";
+    clang_disposeString(Spelling);
+    clang_disposeDiagnostic(Diag);
+  }
+  return 1;
+}
+
+static int uploadCachedJob(std::string CacheKey, CXCASDatabases DBs) {
+  CXError Err = nullptr;
+  CXCASCachedCompilation CComp = clang_experimental_cas_getCachedCompilation(
+      DBs, CacheKey.c_str(), /*Globally*/ false, &Err);
+  auto CleanupCachedComp = llvm::make_scope_exit(
+      [&] { clang_experimental_cas_CachedCompilation_dispose(CComp); });
+  if (!CComp) {
+    if (Err) {
+      llvm::errs() << clang_Error_getDescription(Err) << "\n";
+      clang_Error_dispose(Err);
+    } else {
+      llvm::errs() << "cache key was not found\n";
+    }
     return 1;
   }
-  llvm::outs() << "dependencies:\n";
-  llvm::outs() << "  context-hash: " << clang_getCString(Result->ContextHash)
-               << "\n"
-               << "  module-deps:\n";
-  for (const auto &ModuleName : llvm::makeArrayRef(Result->ModuleDeps->Strings,
-                                                   Result->ModuleDeps->Count))
-    llvm::outs() << "    " << clang_getCString(ModuleName) << "\n";
-  llvm::outs() << "  file-deps:\n";
-  for (const auto &FileName :
-       llvm::makeArrayRef(Result->FileDeps->Strings, Result->FileDeps->Count))
-    llvm::outs() << "    " << clang_getCString(FileName) << "\n";
-  llvm::outs() << "  additional-build-args:";
-  for (const auto &Arg :
-       llvm::makeArrayRef(Result->AdditionalArguments->Strings,
-                          Result->AdditionalArguments->Count))
-    llvm::outs() << " " << clang_getCString(Arg);
-  llvm::outs() << "\n";
 
-  clang_experimental_FileDependencies_dispose(Result);
-  clang_experimental_DependencyScannerWorker_dispose_v0(Worker);
-  clang_experimental_DependencyScannerService_dispose_v0(Service);
+  /// \returns true of an error occurred.
+  auto invokeMakeGlobal = [&](bool Cancel) -> bool {
+    CXCASCancellationToken CancelToken = nullptr;
+    auto CleanupCancelTok = llvm::make_scope_exit([&] {
+      if (Cancel)
+        clang_experimental_cas_CancellationToken_dispose(CancelToken);
+    });
+
+    std::promise<CXError> CallPromise;
+    clang_experimental_cas_CachedCompilation_makeGlobal(
+        CComp, &CallPromise,
+        [](void *Ctx, CXError Err) {
+          static_cast<std::promise<CXError> *>(Ctx)->set_value(Err);
+        },
+        Cancel ? &CancelToken : nullptr);
+    if (Cancel) {
+      clang_experimental_cas_CancellationToken_cancel(CancelToken);
+    }
+    CXError CallRes = CallPromise.get_future().get();
+    if (CallRes) {
+      llvm::errs() << clang_Error_getDescription(CallRes) << "\n";
+      return true;
+    }
+    return false;
+  };
+
+  if (options::TestCASCancellation) {
+    // Cancel an invocation for testing purposes.
+    if (invokeMakeGlobal(/*Cancel=*/true))
+      return 1;
+  }
+  if (invokeMakeGlobal(/*Cancel=*/false))
+    return 1;
+
+  return 0;
+}
+
+static int materializeCachedJob(std::string CacheKey, CXCASDatabases DBs) {
+  /// \returns true of an error occurred.
+  auto invokeGetCachedCompilation =
+      [&](bool Cancel, CXCASCachedCompilation &OutComp) -> bool {
+    OutComp = nullptr;
+    CXCASCancellationToken CancelToken = nullptr;
+    auto CleanupCancelTok = llvm::make_scope_exit([&] {
+      if (Cancel)
+        clang_experimental_cas_CancellationToken_dispose(CancelToken);
+    });
+
+    struct CompResult {
+      CXCASCachedCompilation Comp = nullptr;
+      CXError Err = nullptr;
+    };
+    std::promise<CompResult> CompPromise;
+    auto CompFuture = CompPromise.get_future();
+    struct CompCall {
+      std::promise<CompResult> Promise;
+    };
+    CompCall *CallCtx = new CompCall{std::move(CompPromise)};
+    clang_experimental_cas_getCachedCompilation_async(
+        DBs, CacheKey.c_str(), /*Globally*/ true, CallCtx,
+        [](void *Ctx, CXCASCachedCompilation Comp, CXError Err) {
+          std::unique_ptr<CompCall> CallCtx(static_cast<CompCall *>(Ctx));
+          CallCtx->Promise.set_value(CompResult{Comp, Err});
+        },
+        Cancel ? &CancelToken : nullptr);
+    if (Cancel) {
+      clang_experimental_cas_CancellationToken_cancel(CancelToken);
+    }
+    CompResult Res = CompFuture.get();
+    OutComp = Res.Comp;
+    if (!OutComp && !Cancel) {
+      if (Res.Err) {
+        llvm::errs() << clang_Error_getDescription(Res.Err) << "\n";
+        clang_Error_dispose(Res.Err);
+      } else {
+        llvm::errs() << "cache key was not found\n";
+      }
+      return true;
+    }
+    return false;
+  };
+
+  CXCASCachedCompilation CComp = nullptr;
+  auto CleanupCachedComp = llvm::make_scope_exit([&] {
+    if (CComp)
+      clang_experimental_cas_CachedCompilation_dispose(CComp);
+  });
+
+  if (options::TestCASCancellation) {
+    // Cancel an invocation for testing purposes.
+    if (invokeGetCachedCompilation(/*Cancel=*/true, CComp))
+      return 1;
+  }
+  if (invokeGetCachedCompilation(/*Cancel=*/false, CComp))
+    return 1;
+
+  for (unsigned
+           I = 0,
+           E = clang_experimental_cas_CachedCompilation_getNumOutputs(CComp);
+       I != E; ++I) {
+    if (clang_experimental_cas_CachedCompilation_isOutputMaterialized(CComp, I))
+      continue;
+    CXString OutputID =
+        clang_experimental_cas_CachedCompilation_getOutputCASIDString(CComp, I);
+    auto CleanupOutputID =
+        llvm::make_scope_exit([&] { clang_disposeString(OutputID); });
+
+    /// \returns true of an error occurred.
+    auto invokeLoadObject = [&](bool Cancel, CXCASObject &OutObj) -> bool {
+      OutObj = nullptr;
+      CXCASCancellationToken CancelToken = nullptr;
+      auto CleanupCancelTok = llvm::make_scope_exit([&] {
+        if (Cancel)
+          clang_experimental_cas_CancellationToken_dispose(CancelToken);
+      });
+
+      struct LoadResult {
+        CXCASObject Obj = nullptr;
+        CXError Err = nullptr;
+      };
+      std::promise<LoadResult> LoadPromise;
+      auto LoadFuture = LoadPromise.get_future();
+      struct LoadCall {
+        std::promise<LoadResult> Promise;
+      };
+      LoadCall *CallCtx = new LoadCall{std::move(LoadPromise)};
+      clang_experimental_cas_loadObjectByString_async(
+          DBs, clang_getCString(OutputID), CallCtx,
+          [](void *Ctx, CXCASObject Obj, CXError Err) {
+            std::unique_ptr<LoadCall> CallCtx(static_cast<LoadCall *>(Ctx));
+            CallCtx->Promise.set_value(LoadResult{Obj, Err});
+          },
+          Cancel ? &CancelToken : nullptr);
+      if (Cancel) {
+        clang_experimental_cas_CancellationToken_cancel(CancelToken);
+      }
+      LoadResult Res = LoadFuture.get();
+      OutObj = Res.Obj;
+      if (!OutObj && !Cancel) {
+        if (Res.Err) {
+          llvm::errs() << clang_Error_getDescription(Res.Err) << "\n";
+          clang_Error_dispose(Res.Err);
+        } else {
+          llvm::errs() << "cache key was not found\n";
+        }
+        return true;
+      }
+      return false;
+    };
+
+    CXCASObject CASObj = nullptr;
+    auto CleanupLoadObj = llvm::make_scope_exit([&] {
+      if (CASObj)
+        clang_experimental_cas_CASObject_dispose(CASObj);
+    });
+
+    if (options::TestCASCancellation) {
+      // Cancel an invocation for testing purposes.
+      if (invokeLoadObject(/*Cancel=*/true, CASObj))
+        return 1;
+    }
+    if (invokeLoadObject(/*Cancel=*/false, CASObj))
+      return 1;
+
+    if (!clang_experimental_cas_CachedCompilation_isOutputMaterialized(CComp,
+                                                                       I))
+      report_fatal_error("output was not materialized?");
+  }
+
+  return 0;
+}
+
+static int replayCachedJob(ArrayRef<const char *> Args,
+                           std::string WorkingDirectory, std::string CacheKey,
+                           CXCASDatabases DBs) {
+  CXError Err = nullptr;
+  CXCASCachedCompilation CComp = clang_experimental_cas_getCachedCompilation(
+      DBs, CacheKey.c_str(), /*Globally*/ false, &Err);
+  auto CleanupCachedComp = llvm::make_scope_exit(
+      [&] { clang_experimental_cas_CachedCompilation_dispose(CComp); });
+  if (!CComp) {
+    if (Err) {
+      llvm::errs() << clang_Error_getDescription(Err) << "\n";
+      clang_Error_dispose(Err);
+    } else {
+      llvm::errs() << "cache key was not found\n";
+    }
+    return 1;
+  }
+
+  CXCASReplayResult ReplayRes = clang_experimental_cas_replayCompilation(
+      CComp, Args.size(), Args.data(),
+      WorkingDirectory.empty() ? nullptr : WorkingDirectory.c_str(),
+      /*reserved*/ nullptr, &Err);
+  auto CleanupReplayRes = llvm::make_scope_exit(
+      [&] { clang_experimental_cas_ReplayResult_dispose(ReplayRes); });
+  if (!ReplayRes) {
+    llvm::errs() << clang_Error_getDescription(Err) << "\n";
+    clang_Error_dispose(Err);
+    return 1;
+  }
+
+  CXString DiagText = clang_experimental_cas_ReplayResult_getStderr(ReplayRes);
+  llvm::errs() << clang_getCString(DiagText);
+  clang_disposeString(DiagText);
+  return 0;
+}
+
+static int pruneCAS(int64_t Limit, CXCASDatabases DBs) {
+  CXError Err = nullptr;
+  int64_t Size = clang_experimental_cas_Databases_get_storage_size(DBs, &Err);
+  if (Size == -2) {
+    llvm::errs() << "clang_experimental_cas_Databases_get_storage_size: "
+                 << clang_Error_getDescription(Err) << "\n";
+    clang_Error_dispose(Err);
+    return 1;
+  }
+  if (Size == -1) {
+    llvm::errs()
+        << "unsupported clang_experimental_cas_Databases_get_storage_size";
+    return 1;
+  }
+  if (Size == 0) {
+    llvm::errs()
+        << "clang_experimental_cas_Databases_get_storage_size returned 0";
+    return 1;
+  }
+
+  if (CXError Err =
+          clang_experimental_cas_Databases_set_size_limit(DBs, Limit)) {
+    llvm::errs() << "clang_experimental_cas_Databases_set_size_limit: "
+                 << clang_Error_getDescription(Err) << "\n";
+    clang_Error_dispose(Err);
+    return 1;
+  }
+  if (CXError Err = clang_experimental_cas_Databases_prune_ondisk_data(DBs)) {
+    llvm::errs() << "clang_experimental_cas_Databases_prune_ondisk_data: "
+                 << clang_Error_getDescription(Err) << "\n";
+    clang_Error_dispose(Err);
+    return 1;
+  }
+
   return 0;
 }
 
@@ -879,7 +1297,7 @@ static int watchDirectory(StringRef dirPath) {
 
 bool deconstructPathAndRange(StringRef input,
                              std::string &filepath,
-                             Optional<unsigned> &lineStart,
+                             std::optional<unsigned> &lineStart,
                              unsigned &lineCount) {
   StringRef path, start, end;
   std::tie(path, end) = input.rsplit(':');
@@ -900,7 +1318,7 @@ bool deconstructPathAndRange(StringRef input,
     errs() << "couldn't convert to integer: " << end << '\n';
     return true;
   }
-  lineCount = num-lineStart.getValue();
+  lineCount = num - *lineStart;
   return false;
 }
 
@@ -929,6 +1347,18 @@ int indextest_core_main(int argc, const char **argv) {
     return 1;
   }
 
+  PathRemapper PathRemapper;
+  for (const auto &Mapping : options::PrefixMap) {
+    llvm::StringRef MappingRef(Mapping);
+    if (!MappingRef.contains('=')) {
+      errs() << "error: prefix map argument should be of form prefix=value,"
+             << " but got: " << MappingRef << "\n";
+      return 1;
+    }
+    auto Split = MappingRef.split('=');
+    PathRemapper.addMapping(Split.first, Split.second);
+  }
+
   if (options::Action == ActionType::PrintSourceSymbols) {
     if (!options::ModuleFilePath.empty()) {
       return printSourceSymbolsFromModule(options::ModuleFilePath,
@@ -946,7 +1376,7 @@ int indextest_core_main(int argc, const char **argv) {
   if (options::Action == ActionType::PrintRecord) {
     if (!options::FilePathAndRange.empty()) {
       std::string filepath;
-      Optional<unsigned> lineStart;
+      std::optional<unsigned> lineStart;
       unsigned lineCount;
       if (deconstructPathAndRange(options::FilePathAndRange,
                                   filepath, lineStart, lineCount))
@@ -956,7 +1386,8 @@ int indextest_core_main(int argc, const char **argv) {
         errs() << "error: missing index store path\n";
         return 1;
       }
-      return printStoreFileRecord(options::InputFiles[0], filepath, lineStart, lineCount, outs());
+      return printStoreFileRecord(options::InputFiles[0], filepath, lineStart,
+                                  lineCount, PathRemapper, outs());
     }
 
     if (options::InputFiles.empty()) {
@@ -965,7 +1396,7 @@ int indextest_core_main(int argc, const char **argv) {
     }
 
     if (sys::fs::is_directory(options::InputFiles[0]))
-      return printStoreRecords(options::InputFiles[0], outs());
+      return printStoreRecords(options::InputFiles[0], PathRemapper, outs());
     else
       return printRecord(options::InputFiles[0], outs());
   }
@@ -977,9 +1408,9 @@ int indextest_core_main(int argc, const char **argv) {
     }
 
     if (sys::fs::is_directory(options::InputFiles[0]))
-      return printStoreUnits(options::InputFiles[0], outs());
+      return printStoreUnits(options::InputFiles[0], PathRemapper, outs());
     else
-      return printUnit(options::InputFiles[0], outs());
+      return printUnit(options::InputFiles[0], PathRemapper, outs());
   }
 
   if (options::Action == ActionType::PrintStoreFormatVersion) {
@@ -993,22 +1424,131 @@ int indextest_core_main(int argc, const char **argv) {
     }
     StringRef storePath = options::InputFiles[0];
     if (options::OutputFile.empty())
-      return aggregateDataAsJSON(storePath, outs());
+      return aggregateDataAsJSON(storePath, PathRemapper, outs());
     std::error_code EC;
-    raw_fd_ostream OS(options::OutputFile, EC, llvm::sys::fs::F_None);
+    raw_fd_ostream OS(options::OutputFile, EC, llvm::sys::fs::OF_None);
     if (EC) {
       errs() << "failed to open output file: " << EC.message() << '\n';
       return 1;
     }
-    return aggregateDataAsJSON(storePath, OS);
+    return aggregateDataAsJSON(storePath, PathRemapper, OS);
   }
-  
-  if (options::Action == ActionType::ScanDeps) {
-    if (options::InputFiles.empty()) {
-      errs() << "error: missing working directory\n";
+
+  std::optional<std::string> CASPath = options::CASPath.empty()
+                                      ? std::nullopt
+                                      : std::optional<std::string>(options::CASPath);
+
+  CXCASOptions CASOpts = nullptr;
+  CXCASDatabases DBs = nullptr;
+  auto CleanupCASOpts = llvm::make_scope_exit([&] {
+    if (CASOpts)
+      clang_experimental_cas_Options_dispose(CASOpts);
+  });
+  auto CleanupCaches = llvm::make_scope_exit([&] {
+    if (DBs)
+      clang_experimental_cas_Databases_dispose(DBs);
+  });
+
+  if (CASPath) {
+    CASOpts = clang_experimental_cas_Options_create();
+    clang_experimental_cas_Options_setOnDiskPath(CASOpts, CASPath->c_str());
+    if (!options::CASPluginPath.empty())
+      clang_experimental_cas_Options_setPluginPath(
+          CASOpts, options::CASPluginPath.c_str());
+    for (const auto &PluginOpt : options::CASPluginOpts) {
+      auto [Name, Val] = StringRef(PluginOpt).split('=');
+      std::string NameStr(Name);
+      std::string ValStr(Val);
+      clang_experimental_cas_Options_setPluginOption(CASOpts, NameStr.c_str(),
+                                                     ValStr.c_str());
+    }
+    CXString Error;
+    DBs = clang_experimental_cas_Databases_create(CASOpts, &Error);
+    if (!DBs) {
+      llvm::errs() << "error: failed to create cas/cache databases\n";
+      llvm::errs() << clang_getCString(Error) << "\n";
+      clang_disposeString(Error);
       return 1;
     }
-    return scanDeps(CompArgs, options::InputFiles[0]);
+  }
+
+  if (options::Action == ActionType::ScanDeps) {
+    if (options::WorkingDir.empty()) {
+      errs() << "error: missing -working-dir\n";
+      return 1;
+    }
+    return scanDeps(CompArgs, options::WorkingDir, options::SerializeDiags,
+                    options::DependencyFile, options::DependencyTargets,
+                    options::OutputDir, DBs);
+  }
+
+  if (options::Action == ActionType::ScanDepsByModuleName) {
+    // InputFiles should be set to the working directory name.
+    if (options::WorkingDir.empty()) {
+      errs() << "error: missing -working-dir\n";
+      return 1;
+    }
+    if (options::ModuleName.empty()) {
+      errs() << "error: missing module name\n";
+      return 1;
+    }
+    return scanDeps(CompArgs, options::WorkingDir, options::SerializeDiags,
+                    options::DependencyFile, options::DependencyTargets,
+                    options::OutputDir, DBs, options::ModuleName);
+  }
+
+  if (options::Action == ActionType::UploadCachedJob) {
+    if (options::InputFiles.empty()) {
+      errs() << "error: missing cache key\n";
+      return 1;
+    }
+    if (!DBs) {
+      errs() << "error: CAS was not configured\n";
+      return 1;
+    }
+    return uploadCachedJob(options::InputFiles[0], DBs);
+  }
+
+  if (options::Action == ActionType::MaterializeCachedJob) {
+    if (options::InputFiles.empty()) {
+      errs() << "error: missing cache key\n";
+      return 1;
+    }
+    if (!DBs) {
+      errs() << "error: CAS was not configured\n";
+      return 1;
+    }
+    return materializeCachedJob(options::InputFiles[0], DBs);
+  }
+
+  if (options::Action == ActionType::ReplayCachedJob) {
+    if (options::InputFiles.empty()) {
+      errs() << "error: missing cache key\n";
+      return 1;
+    }
+    if (!DBs) {
+      errs() << "error: CAS was not configured\n";
+      return 1;
+    }
+    return replayCachedJob(CompArgs, options::WorkingDir,
+                           options::InputFiles[0], DBs);
+  }
+
+  if (options::Action == ActionType::PruneCAS) {
+    if (options::InputFiles.empty()) {
+      errs() << "error: missing size limit\n";
+      return 1;
+    }
+    int64_t Limit;
+    if (StringRef(options::InputFiles[0]).getAsInteger(10, Limit)) {
+      errs() << "error: size limit not an integer\n";
+      return 1;
+    }
+    if (!DBs) {
+      errs() << "error: CAS was not configured\n";
+      return 1;
+    }
+    return pruneCAS(Limit, DBs);
   }
 
   if (options::Action == ActionType::WatchDir) {

@@ -16,11 +16,10 @@
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/Register.h"
-#include "llvm/CodeGen/GlobalISel/RegisterBankInfo.h"
+#include "llvm/CodeGen/RegisterBankInfo.h"
 
 #define GET_REGBANK_DECLARATIONS
 #include "AMDGPUGenRegisterBank.inc"
-#undef GET_REGBANK_DECLARATIONS
 
 namespace llvm {
 
@@ -39,6 +38,7 @@ protected:
 #define GET_TARGET_REGBANK_CLASS
 #include "AMDGPUGenRegisterBank.inc"
 };
+
 class AMDGPURegisterBankInfo final : public AMDGPUGenRegisterBankInfo {
 public:
   const GCNSubtarget &Subtarget;
@@ -58,6 +58,9 @@ public:
     iterator_range<MachineBasicBlock::iterator> Range,
     SmallSet<Register, 4> &SGPROperandRegs,
     MachineRegisterInfo &MRI) const;
+
+  Register buildReadFirstLane(MachineIRBuilder &B, MachineRegisterInfo &MRI,
+                              Register Src) const;
 
   bool executeInWaterfallLoop(MachineIRBuilder &B,
                               MachineInstr &MI,
@@ -79,21 +82,20 @@ public:
   applyMappingImage(MachineInstr &MI,
                     const OperandsMapper &OpdMapper,
                     MachineRegisterInfo &MRI, int RSrcIdx) const;
+  unsigned setBufferOffsets(MachineIRBuilder &B, Register CombinedOffset,
+                            Register &VOffsetReg, Register &SOffsetReg,
+                            int64_t &InstOffsetVal, Align Alignment) const;
   bool applyMappingSBufferLoad(const OperandsMapper &OpdMapper) const;
 
-  bool applyMappingBFEIntrinsic(const OperandsMapper &OpdMapper,
-                                bool Signed) const;
+  bool applyMappingBFE(const OperandsMapper &OpdMapper, bool Signed) const;
 
-  void lowerScalarMinMax(MachineIRBuilder &B, MachineInstr &MI) const;
+  bool applyMappingMAD_64_32(const OperandsMapper &OpdMapper) const;
 
   Register handleD16VData(MachineIRBuilder &B, MachineRegisterInfo &MRI,
                           Register Reg) const;
 
   std::pair<Register, unsigned>
   splitBufferOffsets(MachineIRBuilder &B, Register Offset) const;
-
-  MachineInstr *selectStoreIntrinsic(MachineIRBuilder &B,
-                                     MachineInstr &MI) const;
 
   /// See RegisterBankInfo::applyMapping.
   void applyMappingImpl(const OperandsMapper &OpdMapper) const override;
@@ -165,6 +167,8 @@ public:
 
 public:
   AMDGPURegisterBankInfo(const GCNSubtarget &STI);
+
+  bool isDivergentRegBank(const RegisterBank *RB) const override;
 
   unsigned copyCost(const RegisterBank &A, const RegisterBank &B,
                     unsigned Size) const override;

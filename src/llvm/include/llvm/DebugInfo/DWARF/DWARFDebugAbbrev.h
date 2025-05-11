@@ -6,8 +6,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_DEBUGINFO_DWARFDEBUGABBREV_H
-#define LLVM_DEBUGINFO_DWARFDEBUGABBREV_H
+#ifndef LLVM_DEBUGINFO_DWARF_DWARFDEBUGABBREV_H
+#define LLVM_DEBUGINFO_DWARF_DWARFDEBUGABBREV_H
 
 #include "llvm/DebugInfo/DWARF/DWARFAbbreviationDeclaration.h"
 #include "llvm/Support/DataExtractor.h"
@@ -34,7 +34,7 @@ public:
 
   uint64_t getOffset() const { return Offset; }
   void dump(raw_ostream &OS) const;
-  bool extract(DataExtractor Data, uint64_t *OffsetPtr);
+  Error extract(DataExtractor Data, uint64_t *OffsetPtr);
 
   const DWARFAbbreviationDeclaration *
   getAbbreviationDeclaration(uint32_t AbbrCode) const;
@@ -47,6 +47,10 @@ public:
     return Decls.end();
   }
 
+  std::string getCodeRange() const;
+
+  uint32_t getFirstAbbrCode() const { return FirstAbbrCode; }
+
 private:
   void clear();
 };
@@ -57,31 +61,27 @@ class DWARFDebugAbbrev {
 
   mutable DWARFAbbreviationDeclarationSetMap AbbrDeclSets;
   mutable DWARFAbbreviationDeclarationSetMap::const_iterator PrevAbbrOffsetPos;
-  mutable Optional<DataExtractor> Data;
+  mutable std::optional<DataExtractor> Data;
 
 public:
-  DWARFDebugAbbrev();
+  DWARFDebugAbbrev(DataExtractor Data);
 
-  const DWARFAbbreviationDeclarationSet *
+  Expected<const DWARFAbbreviationDeclarationSet *>
   getAbbreviationDeclarationSet(uint64_t CUAbbrOffset) const;
 
   void dump(raw_ostream &OS) const;
-  void parse() const;
-  void extract(DataExtractor Data);
+  Error parse() const;
 
   DWARFAbbreviationDeclarationSetMap::const_iterator begin() const {
-    parse();
+    assert(!Data && "Must call parse before iterating over DWARFDebugAbbrev");
     return AbbrDeclSets.begin();
   }
 
   DWARFAbbreviationDeclarationSetMap::const_iterator end() const {
     return AbbrDeclSets.end();
   }
-
-private:
-  void clear();
 };
 
 } // end namespace llvm
 
-#endif // LLVM_DEBUGINFO_DWARFDEBUGABBREV_H
+#endif // LLVM_DEBUGINFO_DWARF_DWARFDEBUGABBREV_H

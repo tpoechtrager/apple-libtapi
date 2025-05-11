@@ -137,6 +137,8 @@ private:
   /// Machine instruction info used throughout the class.
   const X86InstrInfo *TII = nullptr;
 
+  const TargetRegisterInfo *TRI = nullptr;
+
   /// Local member for function's OptForSize attribute.
   bool OptForSize = false;
 
@@ -146,8 +148,8 @@ private:
   /// Register Liveness information after the current instruction.
   LivePhysRegs LiveRegs;
 
-  ProfileSummaryInfo *PSI;
-  MachineBlockFrequencyInfo *MBFI;
+  ProfileSummaryInfo *PSI = nullptr;
+  MachineBlockFrequencyInfo *MBFI = nullptr;
 };
 char FixupBWInstPass::ID = 0;
 }
@@ -162,6 +164,7 @@ bool FixupBWInstPass::runOnMachineFunction(MachineFunction &MF) {
 
   this->MF = &MF;
   TII = MF.getSubtarget<X86Subtarget>().getInstrInfo();
+  TRI = MF.getRegInfo().getTargetRegisterInfo();
   MLI = &getAnalysis<MachineLoopInfo>();
   PSI = &getAnalysis<ProfileSummaryInfoWrapperPass>().getPSI();
   MBFI = (PSI && PSI->hasProfileSummary()) ?
@@ -190,6 +193,7 @@ bool FixupBWInstPass::getSuperRegDestIfDead(MachineInstr *OrigMI,
   const X86RegisterInfo *TRI = &TII->getRegisterInfo();
   Register OrigDestReg = OrigMI->getOperand(0).getReg();
   SuperDestReg = getX86SubSuperRegister(OrigDestReg, 32);
+  assert(SuperDestReg.isValid() && "Invalid Operand");
 
   const auto SubRegIdx = TRI->getSubRegIndex(SuperDestReg, OrigDestReg);
 
@@ -210,9 +214,9 @@ bool FixupBWInstPass::getSuperRegDestIfDead(MachineInstr *OrigMI,
     // If the original destination register was the low 8-bit subregister and
     // we also need to check the 16-bit subregister and the high 8-bit
     // subregister.
+    MCRegister HighReg = getX86SubSuperRegister(SuperDestReg, 8, /*High=*/true);
     if (!LiveRegs.contains(getX86SubSuperRegister(OrigDestReg, 16)) &&
-        !LiveRegs.contains(getX86SubSuperRegister(SuperDestReg, 8,
-                                                  /*High=*/true)))
+        (!HighReg.isValid() || !LiveRegs.contains(HighReg)))
       return true;
     // Otherwise, we have a little more checking to do.
   }
@@ -295,13 +299,21 @@ MachineInstr *FixupBWInstPass::tryReplaceLoad(unsigned New32BitOpcode,
 
   // Safe to change the instruction.
   MachineInstrBuilder MIB =
-      BuildMI(*MF, MI->getDebugLoc(), TII->get(New32BitOpcode), NewDestReg);
+      BuildMI(*MF, MIMetadata(*MI), TII->get(New32BitOpcode), NewDestReg);
 
   unsigned NumArgs = MI->getNumOperands();
   for (unsigned i = 1; i < NumArgs; ++i)
     MIB.add(MI->getOperand(i));
 
   MIB.setMemRefs(MI->memoperands());
+
+  // If it was debug tracked, record a substitution.
+  if (unsigned OldInstrNum = MI->peekDebugInstrNum()) {
+    unsigned Subreg = TRI->getSubRegIndex(MIB->getOperand(0).getReg(),
+                                          MI->getOperand(0).getReg());
+    unsigned NewInstrNum = MIB->getDebugInstrNum(*MF);
+    MF->makeDebugValueSubstitution({OldInstrNum, 0}, {NewInstrNum, 0}, Subreg);
+  }
 
   return MIB;
 }
@@ -316,6 +328,7 @@ MachineInstr *FixupBWInstPass::tryReplaceCopy(MachineInstr *MI) const {
     return nullptr;
 
   Register NewSrcReg = getX86SubSuperRegister(OldSrc.getReg(), 32);
+  assert(NewSrcReg.isValid() && "Invalid Operand");
 
   // This is only correct if we access the same subregister index: otherwise,
   // we could try to replace "movb %ah, %al" with "movl %eax, %eax".
@@ -330,7 +343,7 @@ MachineInstr *FixupBWInstPass::tryReplaceCopy(MachineInstr *MI) const {
   // we don't care about the higher bits by reading it as Undef, and adding
   // an imp-use on the original subregister.
   MachineInstrBuilder MIB =
-      BuildMI(*MF, MI->getDebugLoc(), TII->get(X86::MOV32rr), NewDestReg)
+      BuildMI(*MF, MIMetadata(*MI), TII->get(X86::MOV32rr), NewDestReg)
           .addReg(NewSrcReg, RegState::Undef)
           .addReg(OldSrc.getReg(), RegState::Implicit);
 
@@ -358,13 +371,20 @@ MachineInstr *FixupBWInstPass::tryReplaceExtend(unsigned New32BitOpcode,
 
   // Safe to change the instruction.
   MachineInstrBuilder MIB =
-      BuildMI(*MF, MI->getDebugLoc(), TII->get(New32BitOpcode), NewDestReg);
+      BuildMI(*MF, MIMetadata(*MI), TII->get(New32BitOpcode), NewDestReg);
 
   unsigned NumArgs = MI->getNumOperands();
   for (unsigned i = 1; i < NumArgs; ++i)
     MIB.add(MI->getOperand(i));
 
   MIB.setMemRefs(MI->memoperands());
+
+  if (unsigned OldInstrNum = MI->peekDebugInstrNum()) {
+    unsigned Subreg = TRI->getSubRegIndex(MIB->getOperand(0).getReg(),
+                                          MI->getOperand(0).getReg());
+    unsigned NewInstrNum = MIB->getDebugInstrNum(*MF);
+    MF->makeDebugValueSubstitution({OldInstrNum, 0}, {NewInstrNum, 0}, Subreg);
+  }
 
   return MIB;
 }
@@ -375,12 +395,12 @@ MachineInstr *FixupBWInstPass::tryReplaceInstr(MachineInstr *MI,
   switch (MI->getOpcode()) {
 
   case X86::MOV8rm:
-    // Only replace 8 bit loads with the zero extending versions if
-    // in an inner most loop and not optimizing for size. This takes
-    // an extra byte to encode, and provides limited performance upside.
-    if (MachineLoop *ML = MLI->getLoopFor(&MBB))
-      if (ML->begin() == ML->end() && !OptForSize)
-        return tryReplaceLoad(X86::MOVZX32rm8, MI);
+    // Replace 8-bit loads with the zero-extending version if not optimizing
+    // for size. The extending op is cheaper across a wide range of uarch and
+    // it avoids a potentially expensive partial register stall. It takes an
+    // extra byte to encode, however, so don't do this when optimizing for size.
+    if (!OptForSize)
+      return tryReplaceLoad(X86::MOVZX32rm8, MI);
     break;
 
   case X86::MOV16rm:
@@ -439,14 +459,12 @@ void FixupBWInstPass::processBasicBlock(MachineFunction &MF,
   OptForSize = MF.getFunction().hasOptSize() ||
                llvm::shouldOptimizeForSize(&MBB, PSI, MBFI);
 
-  for (auto I = MBB.rbegin(); I != MBB.rend(); ++I) {
-    MachineInstr *MI = &*I;
-
-    if (MachineInstr *NewMI = tryReplaceInstr(MI, MBB))
-      MIReplacements.push_back(std::make_pair(MI, NewMI));
+  for (MachineInstr &MI : llvm::reverse(MBB)) {
+    if (MachineInstr *NewMI = tryReplaceInstr(&MI, MBB))
+      MIReplacements.push_back(std::make_pair(&MI, NewMI));
 
     // We're done with this instruction, update liveness for the next one.
-    LiveRegs.stepBackward(*MI);
+    LiveRegs.stepBackward(MI);
   }
 
   while (!MIReplacements.empty()) {

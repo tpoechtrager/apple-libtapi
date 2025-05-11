@@ -72,8 +72,7 @@ class MCJIT : public ExecutionEngine {
 
   class OwningModuleContainer {
   public:
-    OwningModuleContainer() {
-    }
+    OwningModuleContainer() = default;
     ~OwningModuleContainer() {
       freeModulePtrSet(AddedModules);
       freeModulePtrSet(LoadedModules);
@@ -102,22 +101,22 @@ class MCJIT : public ExecutionEngine {
     }
 
     bool hasModuleBeenAddedButNotLoaded(Module *M) {
-      return AddedModules.count(M) != 0;
+      return AddedModules.contains(M);
     }
 
     bool hasModuleBeenLoaded(Module *M) {
       // If the module is in either the "loaded" or "finalized" sections it
       // has been loaded.
-      return (LoadedModules.count(M) != 0 ) || (FinalizedModules.count(M) != 0);
+      return LoadedModules.contains(M) || FinalizedModules.contains(M);
     }
 
     bool hasModuleBeenFinalized(Module *M) {
-      return FinalizedModules.count(M) != 0;
+      return FinalizedModules.contains(M);
     }
 
     bool ownsModule(Module* M) {
-      return (AddedModules.count(M) != 0) || (LoadedModules.count(M) != 0) ||
-             (FinalizedModules.count(M) != 0);
+      return AddedModules.contains(M) || LoadedModules.contains(M) ||
+             FinalizedModules.contains(M);
     }
 
     void markModuleAsLoaded(Module *M) {
@@ -151,12 +150,8 @@ class MCJIT : public ExecutionEngine {
     }
 
     void markAllLoadedModulesAsFinalized() {
-      for (ModulePtrSet::iterator I = LoadedModules.begin(),
-                                  E = LoadedModules.end();
-           I != E; ++I) {
-        Module *M = *I;
+      for (Module *M : LoadedModules)
         FinalizedModules.insert(M);
-      }
       LoadedModules.clear();
     }
 
@@ -167,10 +162,8 @@ class MCJIT : public ExecutionEngine {
 
     void freeModulePtrSet(ModulePtrSet& MPS) {
       // Go through the module set and delete everything.
-      for (ModulePtrSet::iterator I = MPS.begin(), E = MPS.end(); I != E; ++I) {
-        Module *M = *I;
+      for (Module *M : MPS)
         delete M;
-      }
       MPS.clear();
     }
   };

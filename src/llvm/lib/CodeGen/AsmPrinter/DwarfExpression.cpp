@@ -99,7 +99,7 @@ void DwarfExpression::addAnd(unsigned Mask) {
 bool DwarfExpression::addMachineReg(const TargetRegisterInfo &TRI,
                                     llvm::Register MachineReg,
                                     unsigned MaxSize) {
-  if (!llvm::Register::isPhysicalRegister(MachineReg)) {
+  if (!MachineReg.isPhysical()) {
     if (isFrameRegister(TRI, MachineReg)) {
       DwarfRegs.push_back(Register::createRegister(-1, nullptr));
       return true;
@@ -117,10 +117,10 @@ bool DwarfExpression::addMachineReg(const TargetRegisterInfo &TRI,
 
   // Walk up the super-register chain until we find a valid number.
   // For example, EAX on x86_64 is a 32-bit fragment of RAX with offset 0.
-  for (MCSuperRegIterator SR(MachineReg, &TRI); SR.isValid(); ++SR) {
-    Reg = TRI.getDwarfRegNum(*SR, false);
+  for (MCPhysReg SR : TRI.superregs(MachineReg)) {
+    Reg = TRI.getDwarfRegNum(SR, false);
     if (Reg >= 0) {
-      unsigned Idx = TRI.getSubRegIndex(*SR, MachineReg);
+      unsigned Idx = TRI.getSubRegIndex(SR, MachineReg);
       unsigned Size = TRI.getSubRegIdxSize(Idx);
       unsigned RegOffset = TRI.getSubRegIdxOffset(Idx);
       DwarfRegs.push_back(Register::createRegister(Reg, "super-register"));
@@ -142,11 +142,11 @@ bool DwarfExpression::addMachineReg(const TargetRegisterInfo &TRI,
   // this doesn't find a combination of subregisters that fully cover
   // the register (even though one may exist).
   SmallBitVector Coverage(RegSize, false);
-  for (MCSubRegIterator SR(MachineReg, &TRI); SR.isValid(); ++SR) {
-    unsigned Idx = TRI.getSubRegIndex(MachineReg, *SR);
+  for (MCPhysReg SR : TRI.subregs(MachineReg)) {
+    unsigned Idx = TRI.getSubRegIndex(MachineReg, SR);
     unsigned Size = TRI.getSubRegIdxSize(Idx);
     unsigned Offset = TRI.getSubRegIdxOffset(Idx);
-    Reg = TRI.getDwarfRegNum(*SR, false);
+    Reg = TRI.getDwarfRegNum(SR, false);
     if (Reg < 0)
       continue;
 
@@ -287,9 +287,17 @@ bool DwarfExpression::addMachineRegExpression(const TargetRegisterInfo &TRI,
   // expression representing a value, rather than a location.
   if ((!isParameterValue() && !isMemoryLocation() && !HasComplexExpression) ||
       isEntryValue()) {
+    auto FragmentInfo = ExprCursor.getFragmentInfo();
+    unsigned RegSize = 0;
     for (auto &Reg : DwarfRegs) {
+      RegSize += Reg.SubRegSize;
       if (Reg.DwarfRegNo >= 0)
         addReg(Reg.DwarfRegNo, Reg.Comment);
+      if (FragmentInfo)
+        if (RegSize > FragmentInfo->SizeInBits)
+          // If the register is larger than the current fragment stop
+          // once the fragment is covered.
+          break;
       addOpPiece(Reg.SubRegSize);
     }
 
@@ -302,6 +310,12 @@ bool DwarfExpression::addMachineRegExpression(const TargetRegisterInfo &TRI,
     }
 
     DwarfRegs.clear();
+    // If we need to mask out a subregister, do it now, unless the next
+    // operation would emit an OpPiece anyway.
+    auto NextOp = ExprCursor.peek();
+    if (SubRegisterSizeInBits && NextOp &&
+        (NextOp->getOp() != dwarf::DW_OP_LLVM_fragment))
+      maskSubRegister();
     return true;
   }
 
@@ -315,7 +329,16 @@ bool DwarfExpression::addMachineRegExpression(const TargetRegisterInfo &TRI,
       return false;
     }
 
-  assert(DwarfRegs.size() == 1);
+  // TODO: We should not give up here but the following code needs to be changed
+  //       to deal with multiple (sub)registers first.
+  if (DwarfRegs.size() > 1) {
+    LLVM_DEBUG(dbgs() << "TODO: giving up on debug information due to "
+                         "multi-register usage.\n");
+    DwarfRegs.clear();
+    LocationKind = Unknown;
+    return false;
+  }
+
   auto Reg = DwarfRegs[0];
   bool FBReg = isFrameRegister(TRI, MachineReg);
   int SignedOffset = 0;
@@ -354,6 +377,14 @@ bool DwarfExpression::addMachineRegExpression(const TargetRegisterInfo &TRI,
   else
     addBReg(Reg.DwarfRegNo, SignedOffset);
   DwarfRegs.clear();
+
+  // If we need to mask out a subregister, do it now, unless the next
+  // operation would emit an OpPiece anyway.
+  auto NextOp = ExprCursor.peek();
+  if (SubRegisterSizeInBits && NextOp &&
+      (NextOp->getOp() != dwarf::DW_OP_LLVM_fragment))
+    maskSubRegister();
+
   return true;
 }
 
@@ -383,6 +414,7 @@ void DwarfExpression::beginEntryValueExpression(
 
   SavedLocationKind = LocationKind;
   LocationKind = Register;
+  LocationFlags |= EntryValue;
   IsEmittingEntryValue = true;
   enableTemporaryBuffer();
 }
@@ -402,7 +434,6 @@ void DwarfExpression::finalizeEntryValue() {
 
   LocationFlags &= ~EntryValue;
   LocationKind = SavedLocationKind;
-  IsEmittingEntryValue = true;
   IsEmittingEntryValue = false;
 }
 
@@ -450,19 +481,21 @@ static bool isMemoryLocation(DIExpressionCursor ExprCursor) {
   return true;
 }
 
-void DwarfExpression::addExpression(DIExpressionCursor &&ExprCursor,
-                                    unsigned FragmentOffsetInBits) {
+void DwarfExpression::addExpression(DIExpressionCursor &&ExprCursor) {
+  addExpression(std::move(ExprCursor),
+                [](unsigned Idx, DIExpressionCursor &Cursor) -> bool {
+                  llvm_unreachable("unhandled opcode found in expression");
+                });
+}
+
+bool DwarfExpression::addExpression(
+    DIExpressionCursor &&ExprCursor,
+    llvm::function_ref<bool(unsigned, DIExpressionCursor &)> InsertArg) {
   // Entry values can currently only cover the initial register location,
   // and not any other parts of the following DWARF expression.
   assert(!IsEmittingEntryValue && "Can't emit entry value around expression");
 
-  // If we need to mask out a subregister, do it now, unless the next
-  // operation would emit an OpPiece anyway.
-  auto N = ExprCursor.peek();
-  if (SubRegisterSizeInBits && N && (N->getOp() != dwarf::DW_OP_LLVM_fragment))
-    maskSubRegister();
-
-  Optional<DIExpression::ExprOperand> PrevConvertOp = None;
+  std::optional<DIExpression::ExprOperand> PrevConvertOp;
 
   while (ExprCursor) {
     auto Op = ExprCursor.take();
@@ -477,6 +510,12 @@ void DwarfExpression::addExpression(DIExpressionCursor &&ExprCursor,
     }
 
     switch (OpNum) {
+    case dwarf::DW_OP_LLVM_arg:
+      if (!InsertArg(Op->getArg(0), ExprCursor)) {
+        LocationKind = Unknown;
+        return false;
+      }
+      break;
     case dwarf::DW_OP_LLVM_fragment: {
       unsigned SizeInBits = Op->getArg(1);
       unsigned FragmentOffset = Op->getArg(0);
@@ -505,7 +544,7 @@ void DwarfExpression::addExpression(DIExpressionCursor &&ExprCursor,
       setSubRegisterPiece(0, 0);
       // Reset the location description kind.
       LocationKind = Unknown;
-      return;
+      return true;
     }
     case dwarf::DW_OP_plus_uconst:
       assert(!isRegisterLocation());
@@ -528,6 +567,12 @@ void DwarfExpression::addExpression(DIExpressionCursor &&ExprCursor,
     case dwarf::DW_OP_dup:
     case dwarf::DW_OP_push_object_address:
     case dwarf::DW_OP_over:
+    case dwarf::DW_OP_eq:
+    case dwarf::DW_OP_ne:
+    case dwarf::DW_OP_gt:
+    case dwarf::DW_OP_ge:
+    case dwarf::DW_OP_lt:
+    case dwarf::DW_OP_le:
       emitOp(OpNum);
       break;
     case dwarf::DW_OP_deref:
@@ -566,7 +611,7 @@ void DwarfExpression::addExpression(DIExpressionCursor &&ExprCursor,
             emitLegacySExt(PrevConvertOp->getArg(0));
           else if (Encoding == dwarf::DW_ATE_unsigned)
             emitLegacyZExt(PrevConvertOp->getArg(0));
-          PrevConvertOp = None;
+          PrevConvertOp = std::nullopt;
         } else {
           PrevConvertOp = Op;
         }
@@ -608,6 +653,8 @@ void DwarfExpression::addExpression(DIExpressionCursor &&ExprCursor,
   if (isImplicitLocation() && !isParameterValue())
     // Turn this into an implicit location description.
     addStackValue();
+
+  return true;
 }
 
 /// add masking operations to stencil out a subregister.
@@ -658,16 +705,37 @@ void DwarfExpression::emitLegacySExt(unsigned FromBits) {
 }
 
 void DwarfExpression::emitLegacyZExt(unsigned FromBits) {
-  // (X & (1 << FromBits - 1))
-  emitOp(dwarf::DW_OP_constu);
-  emitUnsigned((1ULL << FromBits) - 1);
+  // Heuristic to decide the most efficient encoding.
+  // A ULEB can encode 7 1-bits per byte.
+  if (FromBits / 7 < 1+1+1+1+1) {
+    // (X & (1 << FromBits - 1))
+    emitOp(dwarf::DW_OP_constu);
+    emitUnsigned((1ULL << FromBits) - 1);
+  } else {
+    // Note that the DWARF 4 stack consists of pointer-sized elements,
+    // so technically it doesn't make sense to shift left more than 64
+    // bits. We leave that for the consumer to decide though. LLDB for
+    // example uses APInt for the stack elements and can still deal
+    // with this.
+    emitOp(dwarf::DW_OP_lit1);
+    emitOp(dwarf::DW_OP_constu);
+    emitUnsigned(FromBits);
+    emitOp(dwarf::DW_OP_shl);
+    emitOp(dwarf::DW_OP_lit1);
+    emitOp(dwarf::DW_OP_minus);
+  }
   emitOp(dwarf::DW_OP_and);
 }
 
 void DwarfExpression::addWasmLocation(unsigned Index, uint64_t Offset) {
-  assert(LocationKind == Implicit || LocationKind == Unknown);
-  LocationKind = Implicit;
   emitOp(dwarf::DW_OP_WASM_location);
-  emitUnsigned(Index);
+  emitUnsigned(Index == 4/*TI_LOCAL_INDIRECT*/ ? 0/*TI_LOCAL*/ : Index);
   emitUnsigned(Offset);
+  if (Index == 4 /*TI_LOCAL_INDIRECT*/) {
+    assert(LocationKind == Unknown);
+    LocationKind = Memory;
+  } else {
+    assert(LocationKind == Implicit || LocationKind == Unknown);
+    LocationKind = Implicit;
+  }
 }

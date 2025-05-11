@@ -15,7 +15,6 @@
 
 #include "llvm/ADT/iterator_range.h"
 #include "llvm/BinaryFormat/COFF.h"
-#include "llvm/MC/SubtargetFeature.h"
 #include "llvm/Object/Binary.h"
 #include "llvm/Object/CVDebugRecord.h"
 #include "llvm/Object/Error.h"
@@ -24,6 +23,7 @@
 #include "llvm/Support/ConvertUTF.h"
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/TargetParser/SubtargetFeature.h"
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
@@ -379,8 +379,8 @@ public:
   }
 
   bool isCommon() const {
-    return isExternal() && getSectionNumber() == COFF::IMAGE_SYM_UNDEFINED &&
-           getValue() != 0;
+    return (isExternal() || isSection()) &&
+           getSectionNumber() == COFF::IMAGE_SYM_UNDEFINED && getValue() != 0;
   }
 
   bool isUndefined() const {
@@ -597,16 +597,6 @@ struct coff_tls_directory {
 using coff_tls_directory32 = coff_tls_directory<support::little32_t>;
 using coff_tls_directory64 = coff_tls_directory<support::little64_t>;
 
-/// Bits in control flow guard flags as we understand them.
-enum class coff_guard_flags : uint32_t {
-  CFInstrumented = 0x00000100,
-  HasFidTable = 0x00000400,
-  ProtectDelayLoadIAT = 0x00001000,
-  DelayLoadIATSection = 0x00002000, // Delay load in separate section
-  HasLongJmpTable = 0x00010000,
-  FidTableHasFlags = 0x10000000, // Indicates that fid tables are 5 bytes
-};
-
 enum class frame_type : uint16_t { Fpo = 0, Trap = 1, Tss = 2, NonFpo = 3 };
 
 struct coff_load_config_code_integrity {
@@ -661,6 +651,17 @@ struct coff_load_configuration32 {
   support::ulittle16_t Reserved2;
   support::ulittle32_t GuardRFVerifyStackPointerFunctionPointer;
   support::ulittle32_t HotPatchTableOffset;
+
+  // Added in MSVC 2019
+  support::ulittle32_t Reserved3;
+  support::ulittle32_t EnclaveConfigurationPointer;
+  support::ulittle32_t VolatileMetadataPointer;
+  support::ulittle32_t GuardEHContinuationTable;
+  support::ulittle32_t GuardEHContinuationCount;
+  support::ulittle32_t GuardXFGCheckFunctionPointer;
+  support::ulittle32_t GuardXFGDispatchFunctionPointer;
+  support::ulittle32_t GuardXFGTableDispatchFunctionPointer;
+  support::ulittle32_t CastGuardOsDeterminedFailureMode;
 };
 
 /// 64-bit load config (IMAGE_LOAD_CONFIG_DIRECTORY64)
@@ -708,6 +709,58 @@ struct coff_load_configuration64 {
   support::ulittle16_t Reserved2;
   support::ulittle64_t GuardRFVerifyStackPointerFunctionPointer;
   support::ulittle32_t HotPatchTableOffset;
+
+  // Added in MSVC 2019
+  support::ulittle32_t Reserved3;
+  support::ulittle64_t EnclaveConfigurationPointer;
+  support::ulittle64_t VolatileMetadataPointer;
+  support::ulittle64_t GuardEHContinuationTable;
+  support::ulittle64_t GuardEHContinuationCount;
+  support::ulittle64_t GuardXFGCheckFunctionPointer;
+  support::ulittle64_t GuardXFGDispatchFunctionPointer;
+  support::ulittle64_t GuardXFGTableDispatchFunctionPointer;
+  support::ulittle64_t CastGuardOsDeterminedFailureMode;
+};
+
+struct chpe_metadata {
+  support::ulittle32_t Version;
+  support::ulittle32_t CodeMap;
+  support::ulittle32_t CodeMapCount;
+  support::ulittle32_t CodeRangesToEntryPoints;
+  support::ulittle32_t RedirectionMetadata;
+  support::ulittle32_t __os_arm64x_dispatch_call_no_redirect;
+  support::ulittle32_t __os_arm64x_dispatch_ret;
+  support::ulittle32_t __os_arm64x_dispatch_call;
+  support::ulittle32_t __os_arm64x_dispatch_icall;
+  support::ulittle32_t __os_arm64x_dispatch_icall_cfg;
+  support::ulittle32_t AlternateEntryPoint;
+  support::ulittle32_t AuxiliaryIAT;
+  support::ulittle32_t CodeRangesToEntryPointsCount;
+  support::ulittle32_t RedirectionMetadataCount;
+  support::ulittle32_t GetX64InformationFunctionPointer;
+  support::ulittle32_t SetX64InformationFunctionPointer;
+  support::ulittle32_t ExtraRFETable;
+  support::ulittle32_t ExtraRFETableSize;
+  support::ulittle32_t __os_arm64x_dispatch_fptr;
+  support::ulittle32_t AuxiliaryIATCopy;
+};
+
+struct chpe_range_entry {
+  support::ulittle32_t StartOffset;
+  support::ulittle32_t Length;
+};
+
+enum chpe_range_type { CHPE_RANGE_ARM64, CHPE_RANGE_ARM64EC, CHPE_RANGE_AMD64 };
+
+struct chpe_code_range_entry {
+  support::ulittle32_t StartRva;
+  support::ulittle32_t EndRva;
+  support::ulittle32_t EntryPoint;
+};
+
+struct chpe_redirection_entry {
+  support::ulittle32_t Source;
+  support::ulittle32_t Destination;
 };
 
 struct coff_runtime_function_x64 {
@@ -801,6 +854,7 @@ private:
   const coff_tls_directory64 *TLSDirectory64;
   // Either coff_load_configuration32 or coff_load_configuration64.
   const void *LoadConfig = nullptr;
+  const chpe_metadata *CHPEMetadata = nullptr;
 
   Expected<StringRef> getString(uint32_t offset) const;
 
@@ -834,8 +888,17 @@ public:
   }
 
   uint16_t getMachine() const {
-    if (COFFHeader)
+    if (COFFHeader) {
+      if (CHPEMetadata) {
+        switch (COFFHeader->Machine) {
+        case COFF::IMAGE_FILE_MACHINE_AMD64:
+          return COFF::IMAGE_FILE_MACHINE_ARM64EC;
+        case COFF::IMAGE_FILE_MACHINE_ARM64:
+          return COFF::IMAGE_FILE_MACHINE_ARM64X;
+        }
+      }
       return COFFHeader->Machine;
+    }
     if (COFFBigObjHeader)
       return COFFBigObjHeader->Machine;
     llvm_unreachable("no COFF header!");
@@ -902,6 +965,10 @@ public:
 
   uint32_t getStringTableSize() const { return StringTableSize; }
 
+  const export_directory_table_entry *getExportTable() const {
+    return ExportDirectory;
+  }
+
   const coff_load_configuration32 *getLoadConfig32() const {
     assert(!is64());
     return reinterpret_cast<const coff_load_configuration32 *>(LoadConfig);
@@ -911,6 +978,9 @@ public:
     assert(is64());
     return reinterpret_cast<const coff_load_configuration64 *>(LoadConfig);
   }
+
+  const chpe_metadata *getCHPEMetadata() const { return CHPEMetadata; }
+
   StringRef getRelocationTypeName(uint16_t Type) const;
 
 protected:
@@ -936,7 +1006,7 @@ protected:
   bool isSectionData(DataRefImpl Sec) const override;
   bool isSectionBSS(DataRefImpl Sec) const override;
   bool isSectionVirtual(DataRefImpl Sec) const override;
-  bool isDebugSection(StringRef SectionName) const override;
+  bool isDebugSection(DataRefImpl Sec) const override;
   relocation_iterator section_rel_begin(DataRefImpl Sec) const override;
   relocation_iterator section_rel_end(DataRefImpl Sec) const override;
 
@@ -953,6 +1023,8 @@ public:
   section_iterator section_begin() const override;
   section_iterator section_end() const override;
 
+  bool is64Bit() const override { return false; }
+
   const coff_section *getCOFFSection(const SectionRef &Section) const;
   COFFSymbolRef getCOFFSymbol(const DataRefImpl &Ref) const;
   COFFSymbolRef getCOFFSymbol(const SymbolRef &Symbol) const;
@@ -964,7 +1036,9 @@ public:
   StringRef getFileFormatName() const override;
   Triple::ArchType getArch() const override;
   Expected<uint64_t> getStartAddress() const override;
-  SubtargetFeatures getFeatures() const override { return SubtargetFeatures(); }
+  Expected<SubtargetFeatures> getFeatures() const override {
+    return SubtargetFeatures();
+  }
 
   import_directory_iterator import_directory_begin() const;
   import_directory_iterator import_directory_end() const;
@@ -1056,13 +1130,15 @@ public:
 
   uint64_t getImageBase() const;
   Error getVaPtr(uint64_t VA, uintptr_t &Res) const;
-  Error getRvaPtr(uint32_t Rva, uintptr_t &Res) const;
+  Error getRvaPtr(uint32_t Rva, uintptr_t &Res,
+                  const char *ErrorContext = nullptr) const;
 
   /// Given an RVA base and size, returns a valid array of bytes or an error
   /// code if the RVA and size is not contained completely within a valid
   /// section.
   Error getRvaAndSizeAsBytes(uint32_t RVA, uint32_t Size,
-                             ArrayRef<uint8_t> &Contents) const;
+                             ArrayRef<uint8_t> &Contents,
+                             const char *ErrorContext = nullptr) const;
 
   Error getHintName(uint32_t Rva, uint16_t &Hint,
                               StringRef &Name) const;
@@ -1237,7 +1313,7 @@ private:
   BinaryByteStream BBS;
 
   SectionRef Section;
-  const COFFObjectFile *Obj;
+  const COFFObjectFile *Obj = nullptr;
 
   std::vector<const coff_relocation *> Relocs;
 
@@ -1271,6 +1347,12 @@ struct FpoData {
 
   // cbFrame: frame pointer
   frame_type getFP() const { return static_cast<frame_type>(Attributes >> 14); }
+};
+
+class SectionStrippedError
+    : public ErrorInfo<SectionStrippedError, BinaryError> {
+public:
+  SectionStrippedError() { setErrorCode(object_error::section_stripped); }
 };
 
 } // end namespace object

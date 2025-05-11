@@ -31,15 +31,29 @@ class Decl;
 class Stmt;
 
 struct SkippedRange {
+  enum Kind {
+    PPIfElse, // Preprocessor #if/#else ...
+    EmptyLine,
+    Comment,
+  };
+
   SourceRange Range;
   // The location of token before the skipped source range.
   SourceLocation PrevTokLoc;
   // The location of token after the skipped source range.
   SourceLocation NextTokLoc;
+  // The nature of this skipped range
+  Kind RangeKind;
 
-  SkippedRange(SourceRange Range, SourceLocation PrevTokLoc = SourceLocation(),
+  bool isComment() { return RangeKind == Comment; }
+  bool isEmptyLine() { return RangeKind == EmptyLine; }
+  bool isPPIfElse() { return RangeKind == PPIfElse; }
+
+  SkippedRange(SourceRange Range, Kind K,
+               SourceLocation PrevTokLoc = SourceLocation(),
                SourceLocation NextTokLoc = SourceLocation())
-      : Range(Range), PrevTokLoc(PrevTokLoc), NextTokLoc(NextTokLoc) {}
+      : Range(Range), PrevTokLoc(PrevTokLoc), NextTokLoc(NextTokLoc),
+        RangeKind(K) {}
 };
 
 /// Stores additional source code information like skipped ranges which
@@ -62,7 +76,7 @@ public:
 
   std::vector<SkippedRange> &getSkippedRanges() { return SkippedRanges; }
 
-  void AddSkippedRange(SourceRange Range);
+  void AddSkippedRange(SourceRange Range, SkippedRange::Kind RangeKind);
 
   void SourceRangeSkipped(SourceRange Range, SourceLocation EndifLoc) override;
 
@@ -94,6 +108,9 @@ class CoverageMappingModuleGen {
   std::vector<llvm::Constant *> FunctionNames;
   std::vector<FunctionInfo> FunctionRecords;
 
+  std::string getCurrentDirname();
+  std::string normalizeFilename(StringRef Filename);
+
   /// Emit a function record.
   void emitFunctionMappingRecord(const FunctionInfo &Info,
                                  uint64_t FilenamesRef);
@@ -101,8 +118,7 @@ class CoverageMappingModuleGen {
 public:
   static CoverageSourceInfo *setUpCoverageCallbacks(Preprocessor &PP);
 
-  CoverageMappingModuleGen(CodeGenModule &CGM, CoverageSourceInfo &SourceInfo)
-      : CGM(CGM), SourceInfo(SourceInfo) {}
+  CoverageMappingModuleGen(CodeGenModule &CGM, CoverageSourceInfo &SourceInfo);
 
   CoverageSourceInfo &getSourceInfo() const {
     return SourceInfo;

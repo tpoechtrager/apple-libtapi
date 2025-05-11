@@ -19,10 +19,11 @@
 // FIXME: Is it easiest to fix this layering violation by moving the .inc
 // #includes from AArch64MCTargetDesc.h to here?
 #include "MCTargetDesc/AArch64MCTargetDesc.h" // For AArch64::X0 and friends.
+#include "llvm/ADT/BitmaskEnum.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringSwitch.h"
-#include "llvm/MC/SubtargetFeature.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/TargetParser/SubtargetFeature.h"
 
 namespace llvm {
 
@@ -104,6 +105,25 @@ inline static unsigned getXRegFromWReg(unsigned Reg) {
   }
   // For anything else, return it unchanged.
   return Reg;
+}
+
+inline static unsigned getXRegFromXRegTuple(unsigned RegTuple) {
+  switch (RegTuple) {
+  case AArch64::X0_X1_X2_X3_X4_X5_X6_X7: return AArch64::X0;
+  case AArch64::X2_X3_X4_X5_X6_X7_X8_X9: return AArch64::X2;
+  case AArch64::X4_X5_X6_X7_X8_X9_X10_X11: return AArch64::X4;
+  case AArch64::X6_X7_X8_X9_X10_X11_X12_X13: return AArch64::X6;
+  case AArch64::X8_X9_X10_X11_X12_X13_X14_X15: return AArch64::X8;
+  case AArch64::X10_X11_X12_X13_X14_X15_X16_X17: return AArch64::X10;
+  case AArch64::X12_X13_X14_X15_X16_X17_X18_X19: return AArch64::X12;
+  case AArch64::X14_X15_X16_X17_X18_X19_X20_X21: return AArch64::X14;
+  case AArch64::X16_X17_X18_X19_X20_X21_X22_X23: return AArch64::X16;
+  case AArch64::X18_X19_X20_X21_X22_X23_X24_X25: return AArch64::X18;
+  case AArch64::X20_X21_X22_X23_X24_X25_X26_X27: return AArch64::X20;
+  case AArch64::X22_X23_X24_X25_X26_X27_X28_FP: return AArch64::X22;
+  }
+  // For anything else, return it unchanged.
+  return RegTuple;
 }
 
 static inline unsigned getBRegFromDReg(unsigned Reg) {
@@ -312,6 +332,7 @@ inline static unsigned getNZCVToSatisfyCondCode(CondCode Code) {
   case LE: return Z; // Z == 1 || N != V
   }
 }
+
 } // end namespace AArch64CC
 
 struct SysAlias {
@@ -324,7 +345,8 @@ struct SysAlias {
       : Name(N), Encoding(E), FeaturesRequired(F) {}
 
   bool haveFeatures(FeatureBitset ActiveFeatures) const {
-    return (FeaturesRequired & ActiveFeatures) == FeaturesRequired;
+    return ActiveFeatures[llvm::AArch64::FeatureAll] ||
+           (FeaturesRequired & ActiveFeatures) == FeaturesRequired;
   }
 
   FeatureBitset getRequiredFeatures() const { return FeaturesRequired; }
@@ -345,6 +367,14 @@ struct SysAliasImm : SysAlias {
   constexpr SysAliasImm(const char *N, uint16_t E, uint16_t I, FeatureBitset F)
       : SysAlias(N, E, F), ImmValue(I) {}
 };
+
+namespace AArch64SVCR {
+  struct SVCR : SysAlias{
+    using SysAlias::SysAlias;
+  };
+  #define GET_SVCR_DECL
+  #include "AArch64GenSystemOperands.inc"
+}
 
 namespace AArch64AT{
   struct AT : SysAlias {
@@ -418,6 +448,14 @@ namespace AArch64SVEPRFM {
 #include "AArch64GenSystemOperands.inc"
 }
 
+namespace AArch64RPRFM {
+struct RPRFM : SysAlias {
+  using SysAlias::SysAlias;
+};
+#define GET_RPRFM_DECL
+#include "AArch64GenSystemOperands.inc"
+} // namespace AArch64RPRFM
+
 namespace AArch64SVEPredPattern {
   struct SVEPREDPAT {
     const char *Name;
@@ -426,6 +464,92 @@ namespace AArch64SVEPredPattern {
 #define GET_SVEPREDPAT_DECL
 #include "AArch64GenSystemOperands.inc"
 }
+
+namespace AArch64SVEVecLenSpecifier {
+  struct SVEVECLENSPECIFIER {
+    const char *Name;
+    uint16_t Encoding;
+  };
+#define GET_SVEVECLENSPECIFIER_DECL
+#include "AArch64GenSystemOperands.inc"
+} // namespace AArch64SVEVecLenSpecifier
+
+/// Return the number of active elements for VL1 to VL256 predicate pattern,
+/// zero for all other patterns.
+inline unsigned getNumElementsFromSVEPredPattern(unsigned Pattern) {
+  switch (Pattern) {
+  default:
+    return 0;
+  case AArch64SVEPredPattern::vl1:
+  case AArch64SVEPredPattern::vl2:
+  case AArch64SVEPredPattern::vl3:
+  case AArch64SVEPredPattern::vl4:
+  case AArch64SVEPredPattern::vl5:
+  case AArch64SVEPredPattern::vl6:
+  case AArch64SVEPredPattern::vl7:
+  case AArch64SVEPredPattern::vl8:
+    return Pattern;
+  case AArch64SVEPredPattern::vl16:
+    return 16;
+  case AArch64SVEPredPattern::vl32:
+    return 32;
+  case AArch64SVEPredPattern::vl64:
+    return 64;
+  case AArch64SVEPredPattern::vl128:
+    return 128;
+  case AArch64SVEPredPattern::vl256:
+    return 256;
+  }
+}
+
+/// Return specific VL predicate pattern based on the number of elements.
+inline std::optional<unsigned>
+getSVEPredPatternFromNumElements(unsigned MinNumElts) {
+  switch (MinNumElts) {
+  default:
+    return std::nullopt;
+  case 1:
+  case 2:
+  case 3:
+  case 4:
+  case 5:
+  case 6:
+  case 7:
+  case 8:
+    return MinNumElts;
+  case 16:
+    return AArch64SVEPredPattern::vl16;
+  case 32:
+    return AArch64SVEPredPattern::vl32;
+  case 64:
+    return AArch64SVEPredPattern::vl64;
+  case 128:
+    return AArch64SVEPredPattern::vl128;
+  case 256:
+    return AArch64SVEPredPattern::vl256;
+  }
+}
+
+/// An enum to describe what types of loops we should attempt to tail-fold:
+///   Disabled:    None
+///   Reductions:  Loops containing reductions
+///   Recurrences: Loops with first-order recurrences, i.e. that would
+///                  require a SVE splice instruction
+///   Reverse:     Reverse loops
+///   Simple:      Loops that are not reversed and don't contain reductions
+///                  or first-order recurrences.
+///   All:         All
+enum class TailFoldingOpts : uint8_t {
+  Disabled = 0x00,
+  Simple = 0x01,
+  Reductions = 0x02,
+  Recurrences = 0x04,
+  Reverse = 0x08,
+  All = Reductions | Recurrences | Simple | Reverse
+};
+
+LLVM_DECLARE_ENUM_AS_BITMASK(TailFoldingOpts,
+                             /* LargestValue */ (long)TailFoldingOpts::Reverse);
 
 namespace AArch64ExactFPImm {
   struct ExactFPImm {
@@ -438,10 +562,16 @@ namespace AArch64ExactFPImm {
 }
 
 namespace AArch64PState {
-  struct PState : SysAlias{
+  struct PStateImm0_15 : SysAlias{
     using SysAlias::SysAlias;
   };
-  #define GET_PSTATE_DECL
+  #define GET_PSTATEIMM0_15_DECL
+  #include "AArch64GenSystemOperands.inc"
+
+  struct PStateImm0_1 : SysAlias{
+    using SysAlias::SysAlias;
+  };
+  #define GET_PSTATEIMM0_1_DECL
   #include "AArch64GenSystemOperands.inc"
 }
 
@@ -544,13 +674,15 @@ AArch64StringToVectorLayout(StringRef LayoutStr) {
 namespace AArch64SysReg {
   struct SysReg {
     const char *Name;
+    const char *AltName;
     unsigned Encoding;
     bool Readable;
     bool Writeable;
     FeatureBitset FeaturesRequired;
 
     bool haveFeatures(FeatureBitset ActiveFeatures) const {
-      return (FeaturesRequired & ActiveFeatures) == FeaturesRequired;
+      return ActiveFeatures[llvm::AArch64::FeatureAll] ||
+             (FeaturesRequired & ActiveFeatures) == FeaturesRequired;
     }
   };
 
@@ -662,6 +794,13 @@ namespace AArch64II {
     /// SP-relative load or store instruction (which do not check tags), or to
     /// an LDG instruction to obtain the tag value.
     MO_TAGGED = 0x400,
+
+    /// MO_DLLIMPORTAUX - Symbol refers to "auxilliary" import stub. On
+    /// Arm64EC, there are two kinds of import stubs used for DLL import of
+    /// functions: MO_DLLIMPORT refers to natively callable Arm64 code, and
+    /// MO_DLLIMPORTAUX refers to the original address which can be compared
+    /// for equality.
+    MO_DLLIMPORTAUX = 0x800,
   };
 } // end namespace AArch64II
 
@@ -674,10 +813,12 @@ enum ID : uint8_t {
   IA = 0,
   IB = 1,
   DA = 2,
-  DB = 3
+  DB = 3,
+  LAST = DB
 };
-};
+} // namespace AArch64PACKey
 
+/// Return 2-letter identifier string for numeric key ID.
 inline static StringRef AArch64PACKeyIDToString(AArch64PACKey::ID KeyID) {
   switch (KeyID) {
   case AArch64PACKey::IA:
@@ -691,7 +832,8 @@ inline static StringRef AArch64PACKeyIDToString(AArch64PACKey::ID KeyID) {
   }
 }
 
-inline static Optional<AArch64PACKey::ID>
+/// Return numeric key ID for 2-letter identifier string.
+inline static std::optional<AArch64PACKey::ID>
 AArch64StringToPACKeyID(StringRef Name) {
   if (Name == "ia")
     return AArch64PACKey::IA;
@@ -701,7 +843,7 @@ AArch64StringToPACKeyID(StringRef Name) {
     return AArch64PACKey::DA;
   if (Name == "db")
     return AArch64PACKey::DB;
-  return None;
+  return std::nullopt;
 }
 
 namespace AArch64 {
@@ -714,7 +856,6 @@ namespace AArch64 {
 // <n x (M*P) x t> vector (such as index 1) are undefined.
 static constexpr unsigned SVEBitsPerBlock = 128;
 static constexpr unsigned SVEMaxBitsPerVector = 2048;
-const unsigned NeonBitsPerVector = 128;
 } // end namespace AArch64
 } // end namespace llvm
 

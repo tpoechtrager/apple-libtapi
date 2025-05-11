@@ -15,10 +15,8 @@
 #ifndef LLVM_LIB_TARGET_AMDGPU_AMDGPUISELLOWERING_H
 #define LLVM_LIB_TARGET_AMDGPU_AMDGPUISELLOWERING_H
 
-#include "AMDGPU.h"
 #include "llvm/CodeGen/CallingConvLower.h"
 #include "llvm/CodeGen/TargetLowering.h"
-#include "llvm/Target/TargetMachine.h"
 
 namespace llvm {
 
@@ -37,9 +35,15 @@ private:
   SDValue getFFBX_U32(SelectionDAG &DAG, SDValue Op, const SDLoc &DL, unsigned Opc) const;
 
 public:
+  /// \returns The minimum number of bits needed to store the value of \Op as an
+  /// unsigned integer. Truncating to this size and then zero-extending to the
+  /// original size will not change the value.
   static unsigned numBitsUnsigned(SDValue Op, SelectionDAG &DAG);
+
+  /// \returns The minimum number of bits needed to store the value of \Op as a
+  /// signed integer. Truncating to this size and then sign-extending to the
+  /// original size will not change the value.
   static unsigned numBitsSigned(SDValue Op, SelectionDAG &DAG);
-  static bool hasDefinedInitializer(const GlobalValue *GV);
 
 protected:
   SDValue LowerEXTRACT_SUBVECTOR(SDValue Op, SelectionDAG &DAG) const;
@@ -53,10 +57,26 @@ protected:
   SDValue LowerFRINT(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerFNEARBYINT(SDValue Op, SelectionDAG &DAG) const;
 
+  SDValue LowerFROUNDEVEN(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerFROUND(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerFFLOOR(SDValue Op, SelectionDAG &DAG) const;
-  SDValue LowerFLOG(SDValue Op, SelectionDAG &DAG,
-                    double Log2BaseInverted) const;
+
+  SDValue getIsLtSmallestNormal(SelectionDAG &DAG, SDValue Op,
+                                SDNodeFlags Flags) const;
+  SDValue getIsFinite(SelectionDAG &DAG, SDValue Op, SDNodeFlags Flags) const;
+  std::pair<SDValue, SDValue> getScaledLogInput(SelectionDAG &DAG,
+                                                const SDLoc SL, SDValue Op,
+                                                SDNodeFlags Flags) const;
+
+  SDValue LowerFLOG2(SDValue Op, SelectionDAG &DAG) const;
+  SDValue LowerFLOGCommon(SDValue Op, SelectionDAG &DAG) const;
+  SDValue LowerFLOG10(SDValue Op, SelectionDAG &DAG) const;
+  SDValue LowerFLOGUnsafe(SDValue Op, const SDLoc &SL, SelectionDAG &DAG,
+                          bool IsLog10, SDNodeFlags Flags) const;
+  SDValue lowerFEXP2(SDValue Op, SelectionDAG &DAG) const;
+
+  SDValue lowerFEXPUnsafe(SDValue Op, const SDLoc &SL, SelectionDAG &DAG,
+                          SDNodeFlags Flags) const;
   SDValue lowerFEXP(SDValue Op, SelectionDAG &DAG) const;
 
   SDValue LowerCTLZ_CTTZ(SDValue Op, SelectionDAG &DAG) const;
@@ -66,10 +86,9 @@ protected:
   SDValue LowerUINT_TO_FP(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerSINT_TO_FP(SDValue Op, SelectionDAG &DAG) const;
 
-  SDValue LowerFP64_TO_INT(SDValue Op, SelectionDAG &DAG, bool Signed) const;
+  SDValue LowerFP_TO_INT64(SDValue Op, SelectionDAG &DAG, bool Signed) const;
   SDValue LowerFP_TO_FP16(SDValue Op, SelectionDAG &DAG) const;
-  SDValue LowerFP_TO_UINT(SDValue Op, SelectionDAG &DAG) const;
-  SDValue LowerFP_TO_SINT(SDValue Op, SelectionDAG &DAG) const;
+  SDValue LowerFP_TO_INT(SDValue Op, SelectionDAG &DAG) const;
 
   SDValue LowerSIGN_EXTEND_INREG(SDValue Op, SelectionDAG &DAG) const;
 
@@ -88,13 +107,21 @@ protected:
   SDValue performSrlCombine(SDNode *N, DAGCombinerInfo &DCI) const;
   SDValue performTruncateCombine(SDNode *N, DAGCombinerInfo &DCI) const;
   SDValue performMulCombine(SDNode *N, DAGCombinerInfo &DCI) const;
+  SDValue performMulLoHiCombine(SDNode *N, DAGCombinerInfo &DCI) const;
   SDValue performMulhsCombine(SDNode *N, DAGCombinerInfo &DCI) const;
   SDValue performMulhuCombine(SDNode *N, DAGCombinerInfo &DCI) const;
   SDValue performCtlz_CttzCombine(const SDLoc &SL, SDValue Cond, SDValue LHS,
                              SDValue RHS, DAGCombinerInfo &DCI) const;
+
+  SDValue foldFreeOpFromSelect(TargetLowering::DAGCombinerInfo &DCI,
+                               SDValue N) const;
   SDValue performSelectCombine(SDNode *N, DAGCombinerInfo &DCI) const;
 
+  TargetLowering::NegatibleCost
+  getConstantNegateCost(const ConstantFPSDNode *C) const;
+
   bool isConstantCostlierToNegate(SDValue N) const;
+  bool isConstantCheaperToNegate(SDValue N) const;
   SDValue performFNegCombine(SDNode *N, DAGCombinerInfo &DCI) const;
   SDValue performFAbsCombine(SDNode *N, DAGCombinerInfo &DCI) const;
   SDValue performRcpCombine(SDNode *N, DAGCombinerInfo &DCI) const;
@@ -145,21 +172,13 @@ protected:
 public:
   AMDGPUTargetLowering(const TargetMachine &TM, const AMDGPUSubtarget &STI);
 
-  bool mayIgnoreSignedZero(SDValue Op) const {
-    if (getTargetMachine().Options.NoSignedZerosFPMath)
-      return true;
-
-    const auto Flags = Op.getNode()->getFlags();
-    if (Flags.hasNoSignedZeros())
-      return true;
-
-    return false;
-  }
+  bool mayIgnoreSignedZero(SDValue Op) const;
 
   static inline SDValue stripBitcast(SDValue Val) {
     return Val.getOpcode() == ISD::BITCAST ? Val.getOperand(0) : Val;
   }
 
+  static bool shouldFoldFNegIntoSrc(SDNode *FNeg, SDValue FNegSrc);
   static bool allUsesHaveSourceMods(const SDNode *N,
                                     unsigned CostThreshold = 4);
   bool isFAbsFree(EVT VT) const override;
@@ -169,14 +188,16 @@ public:
 
   bool isZExtFree(Type *Src, Type *Dest) const override;
   bool isZExtFree(EVT Src, EVT Dest) const override;
-  bool isZExtFree(SDValue Val, EVT VT2) const override;
 
   SDValue getNegatedExpression(SDValue Op, SelectionDAG &DAG,
                                bool LegalOperations, bool ForCodeSize,
                                NegatibleCost &Cost,
                                unsigned Depth) const override;
 
-  bool isNarrowingProfitable(EVT VT1, EVT VT2) const override;
+  bool isNarrowingProfitable(EVT SrcVT, EVT DestVT) const override;
+
+  bool isDesirableToCommuteWithShift(const SDNode *N,
+                                     CombineLevel Level) const override;
 
   EVT getTypeForExtReturn(LLVMContext &Context, EVT VT,
                           ISD::NodeType ExtendKind) const override;
@@ -194,12 +215,12 @@ public:
   bool isLoadBitCastBeneficial(EVT, EVT, const SelectionDAG &DAG,
                                const MachineMemOperand &MMO) const final;
 
-  bool storeOfVectorConstantIsCheap(EVT MemVT,
+  bool storeOfVectorConstantIsCheap(bool IsZero, EVT MemVT,
                                     unsigned NumElem,
                                     unsigned AS) const override;
   bool aggressivelyPreferBuildVectorSources(EVT VecVT) const override;
-  bool isCheapToSpeculateCttz() const override;
-  bool isCheapToSpeculateCtlz() const override;
+  bool isCheapToSpeculateCttz(Type *Ty) const override;
+  bool isCheapToSpeculateCtlz(Type *Ty) const override;
 
   bool isSDNodeAlwaysUniform(const SDNode *N) const override;
   static CCAssignFn *CCAssignFnForCall(CallingConv::ID CC, bool IsVarArg);
@@ -229,6 +250,10 @@ public:
   void ReplaceNodeResults(SDNode * N,
                           SmallVectorImpl<SDValue> &Results,
                           SelectionDAG &DAG) const override;
+
+  SDValue combineFMinMaxLegacyImpl(const SDLoc &DL, EVT VT, SDValue LHS,
+                                   SDValue RHS, SDValue True, SDValue False,
+                                   SDValue CC, DAGCombinerInfo &DCI) const;
 
   SDValue combineFMinMaxLegacy(const SDLoc &DL, EVT VT, SDValue LHS,
                                SDValue RHS, SDValue True, SDValue False,
@@ -282,6 +307,9 @@ public:
                                     bool SNaN = false,
                                     unsigned Depth = 0) const override;
 
+  bool isReassocProfitable(MachineRegisterInfo &MRI, Register N0,
+                           Register N1) const override;
+
   /// Helper function that adds Reg to the LiveIn list of the DAG's
   /// MachineFunction.
   ///
@@ -325,13 +353,16 @@ public:
 
   enum ImplicitParameter {
     FIRST_IMPLICIT,
-    GRID_DIM = FIRST_IMPLICIT,
-    GRID_OFFSET,
+    PRIVATE_BASE,
+    SHARED_BASE,
+    QUEUE_PTR,
   };
 
   /// Helper function that returns the byte offset of the given
   /// type of implicit parameter.
   uint32_t getImplicitParameterOffset(const MachineFunction &MF,
+                                      const ImplicitParameter Param) const;
+  uint32_t getImplicitParameterOffset(const uint64_t ExplicitKernArgSize,
                                       const ImplicitParameter Param) const;
 
   MVT getFenceOperandTy(const DataLayout &DL) const override {
@@ -339,6 +370,12 @@ public:
   }
 
   AtomicExpansionKind shouldExpandAtomicRMWInIR(AtomicRMWInst *) const override;
+
+  bool isConstantUnsignedBitfieldExtractLegal(unsigned Opc, LLT Ty1,
+                                              LLT Ty2) const override;
+
+  bool shouldSinkOperands(Instruction *I,
+                          SmallVectorImpl<Use *> &Ops) const override;
 };
 
 namespace AMDGPUISD {
@@ -346,13 +383,14 @@ namespace AMDGPUISD {
 enum NodeType : unsigned {
   // AMDIL ISD Opcodes
   FIRST_NUMBER = ISD::BUILTIN_OP_END,
-  UMUL,        // 32bit unsigned multiplication
+  UMUL, // 32bit unsigned multiplication
   BRANCH_COND,
   // End AMDIL ISD Opcodes
 
   // Function call.
   CALL,
   TC_RETURN,
+  TC_RETURN_GFX,
   TRAP,
 
   // Masked control flow nodes.
@@ -363,11 +401,14 @@ enum NodeType : unsigned {
   // A uniform kernel return that terminates the wavefront.
   ENDPGM,
 
+  // s_endpgm, but we may want to insert it in the middle of the block.
+  ENDPGM_TRAP,
+
   // Return to a shader part's epilog code.
   RETURN_TO_EPILOG,
 
   // Return with values from a non-entry function.
-  RET_FLAG,
+  RET_GLUE,
 
   DWORDADDR,
   FRACT,
@@ -418,17 +459,23 @@ enum NodeType : unsigned {
   RSQ,
   RCP_LEGACY,
   RCP_IFLAG,
+
+  // log2, no denormal handling for f32.
+  LOG,
+
+  // exp2, no denormal handling for f32.
+  EXP,
+
   FMUL_LEGACY,
   RSQ_CLAMP,
-  LDEXP,
   FP_CLASS,
   DOT4,
   CARRY,
   BORROW,
-  BFE_U32, // Extract range of bits with zero extension to 32-bits.
-  BFE_I32, // Extract range of bits with sign extension to 32-bits.
-  BFI, // (src0 & src1) | (~src0 & src2)
-  BFM, // Insert a range of bits into a 32-bit word.
+  BFE_U32,  // Extract range of bits with zero extension to 32-bits.
+  BFE_I32,  // Extract range of bits with sign extension to 32-bits.
+  BFI,      // (src0 & src1) | (~src0 & src2)
+  BFM,      // Insert a range of bits into a 32-bit word.
   FFBH_U32, // ctlz with -1 if input is zero.
   FFBH_I32,
   FFBL_B32, // cttz with -1 if input is zero.
@@ -469,9 +516,6 @@ enum NodeType : unsigned {
   // are known 0.
   FP_TO_FP16,
 
-  // Wrapper around fp16 results that are known to zero the high bits.
-  FP16_ZEXT,
-
   /// This node is for VLIW targets and it is used to represent a vector
   /// that is stored in consecutive registers with the same channel.
   /// For example:
@@ -485,6 +529,9 @@ enum NodeType : unsigned {
   CONST_DATA_PTR,
   PC_ADD_REL_OFFSET,
   LDS,
+  FPTRUNC_ROUND_UPWARD,
+  FPTRUNC_ROUND_DOWNWARD,
+
   DUMMY_CHAIN,
   FIRST_MEM_OPCODE_NUMBER = ISD::FIRST_TARGET_MEMORY_OPCODE,
   LOAD_D16_HI,
@@ -502,8 +549,6 @@ enum NodeType : unsigned {
   TBUFFER_LOAD_FORMAT_D16,
   DS_ORDERED_COUNT,
   ATOMIC_CMP_SWAP,
-  ATOMIC_INC,
-  ATOMIC_DEC,
   ATOMIC_LOAD_FMIN,
   ATOMIC_LOAD_FMAX,
   BUFFER_LOAD,
@@ -512,6 +557,7 @@ enum NodeType : unsigned {
   BUFFER_LOAD_BYTE,
   BUFFER_LOAD_SHORT,
   BUFFER_LOAD_FORMAT,
+  BUFFER_LOAD_FORMAT_TFE,
   BUFFER_LOAD_FORMAT_D16,
   SBUFFER_LOAD,
   BUFFER_STORE,
@@ -534,10 +580,11 @@ enum NodeType : unsigned {
   BUFFER_ATOMIC_CMPSWAP,
   BUFFER_ATOMIC_CSUB,
   BUFFER_ATOMIC_FADD,
+  BUFFER_ATOMIC_FMIN,
+  BUFFER_ATOMIC_FMAX,
 
   LAST_AMDGPU_ISD_NUMBER
 };
-
 
 } // End namespace AMDGPUISD
 

@@ -7,7 +7,6 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/IR/DebugLoc.h"
-#include "LLVMContextImpl.h"
 #include "llvm/Config/llvm-config.h"
 #include "llvm/IR/DebugInfo.h"
 using namespace llvm;
@@ -68,10 +67,49 @@ void DebugLoc::setImplicitCode(bool ImplicitCode) {
   }
 }
 
+DebugLoc DebugLoc::replaceInlinedAtSubprogram(
+    const DebugLoc &RootLoc, DISubprogram &NewSP, LLVMContext &Ctx,
+    DenseMap<const MDNode *, MDNode *> &Cache) {
+  SmallVector<DILocation *> LocChain;
+  DILocation *CachedResult = nullptr;
+
+  // Collect the inline chain, stopping if we find a location that has already
+  // been processed.
+  for (DILocation *Loc = RootLoc; Loc; Loc = Loc->getInlinedAt()) {
+    if (auto It = Cache.find(Loc); It != Cache.end()) {
+      CachedResult = cast<DILocation>(It->second);
+      break;
+    }
+    LocChain.push_back(Loc);
+  }
+
+  DILocation *UpdatedLoc = CachedResult;
+  if (!UpdatedLoc) {
+    // If no cache hits, then back() is the end of the inline chain, that is,
+    // the DILocation whose scope ends in the Subprogram to be replaced.
+    DILocation *LocToUpdate = LocChain.pop_back_val();
+    DIScope *NewScope = DILocalScope::cloneScopeForSubprogram(
+        *LocToUpdate->getScope(), NewSP, Ctx, Cache);
+    UpdatedLoc = DILocation::get(Ctx, LocToUpdate->getLine(),
+                                 LocToUpdate->getColumn(), NewScope);
+    Cache[LocToUpdate] = UpdatedLoc;
+  }
+
+  // Recreate the location chain, bottom-up, starting at the new scope (or a
+  // cached result).
+  for (const DILocation *LocToUpdate : reverse(LocChain)) {
+    UpdatedLoc =
+        DILocation::get(Ctx, LocToUpdate->getLine(), LocToUpdate->getColumn(),
+                        LocToUpdate->getScope(), UpdatedLoc);
+    Cache[LocToUpdate] = UpdatedLoc;
+  }
+
+  return UpdatedLoc;
+}
+
 DebugLoc DebugLoc::appendInlinedAt(const DebugLoc &DL, DILocation *InlinedAt,
                                    LLVMContext &Ctx,
-                                   DenseMap<const MDNode *, MDNode *> &Cache,
-                                   bool ReplaceLast) {
+                                   DenseMap<const MDNode *, MDNode *> &Cache) {
   SmallVector<DILocation *, 3> InlinedAtLocations;
   DILocation *Last = InlinedAt;
   DILocation *CurInlinedAt = DL;
@@ -84,8 +122,6 @@ DebugLoc DebugLoc::appendInlinedAt(const DebugLoc &DL, DILocation *InlinedAt,
       break;
     }
 
-    if (ReplaceLast && !IA->getInlinedAt())
-      break;
     InlinedAtLocations.push_back(IA);
     CurInlinedAt = IA;
   }

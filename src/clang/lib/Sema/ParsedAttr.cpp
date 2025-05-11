@@ -19,14 +19,11 @@
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
-#include "llvm/Support/ManagedStatic.h"
 #include <cassert>
 #include <cstddef>
 #include <utility>
 
 using namespace clang;
-
-LLVM_INSTANTIATE_REGISTRY(ParsedAttrInfoRegistry)
 
 IdentifierLoc *IdentifierLoc::create(ASTContext &Ctx, SourceLocation Loc,
                                      IdentifierInfo *Ident) {
@@ -111,7 +108,7 @@ namespace {
 
 const ParsedAttrInfo &ParsedAttrInfo::get(const AttributeCommonInfo &A) {
   // If we have a ParsedAttrInfo for this ParsedAttr then return that.
-  if ((size_t)A.getParsedKind() < llvm::array_lengthof(AttrInfoMap))
+  if ((size_t)A.getParsedKind() < std::size(AttrInfoMap))
     return *AttrInfoMap[A.getParsedKind()];
 
   // If this is an ignored attribute then return an appropriate ParsedAttrInfo.
@@ -120,13 +117,7 @@ const ParsedAttrInfo &ParsedAttrInfo::get(const AttributeCommonInfo &A) {
   if (A.getParsedKind() == AttributeCommonInfo::IgnoredAttribute)
     return IgnoredParsedAttrInfo;
 
-  // Otherwise this may be an attribute defined by a plugin. First instantiate
-  // all plugin attributes if we haven't already done so.
-  static llvm::ManagedStatic<std::list<std::unique_ptr<ParsedAttrInfo>>>
-      PluginAttrInstances;
-  if (PluginAttrInstances->empty())
-    for (auto It : ParsedAttrInfoRegistry::entries())
-      PluginAttrInstances->emplace_back(It.instantiate());
+  // Otherwise this may be an attribute defined by a plugin.
 
   // Search for a ParsedAttrInfo whose name and syntax match.
   std::string FullName = A.getNormalizedFullName();
@@ -134,15 +125,18 @@ const ParsedAttrInfo &ParsedAttrInfo::get(const AttributeCommonInfo &A) {
   if (SyntaxUsed == AttributeCommonInfo::AS_ContextSensitiveKeyword)
     SyntaxUsed = AttributeCommonInfo::AS_Keyword;
 
-  for (auto &Ptr : *PluginAttrInstances)
-    for (auto &S : Ptr->Spellings)
-      if (S.Syntax == SyntaxUsed && S.NormalizedFullName == FullName)
-        return *Ptr;
+  for (auto &Ptr : getAttributePluginInstances())
+    if (Ptr->hasSpelling(SyntaxUsed, FullName))
+      return *Ptr;
 
   // If we failed to find a match then return a default ParsedAttrInfo.
   static const ParsedAttrInfo DefaultParsedAttrInfo(
       AttributeCommonInfo::UnknownAttribute);
   return DefaultParsedAttrInfo;
+}
+
+ArrayRef<const ParsedAttrInfo *> ParsedAttrInfo::getAllBuiltin() {
+  return llvm::ArrayRef(AttrInfoMap);
 }
 
 unsigned ParsedAttr::getMinArgs() const { return getInfo().NumArgs; }
@@ -151,12 +145,24 @@ unsigned ParsedAttr::getMaxArgs() const {
   return getMinArgs() + getInfo().OptArgs;
 }
 
+unsigned ParsedAttr::getNumArgMembers() const {
+  return getInfo().NumArgMembers;
+}
+
 bool ParsedAttr::hasCustomParsing() const {
   return getInfo().HasCustomParsing;
 }
 
 bool ParsedAttr::diagnoseAppertainsTo(Sema &S, const Decl *D) const {
   return getInfo().diagAppertainsToDecl(S, *this, D);
+}
+
+bool ParsedAttr::diagnoseAppertainsTo(Sema &S, const Stmt *St) const {
+  return getInfo().diagAppertainsToStmt(S, *this, St);
+}
+
+bool ParsedAttr::diagnoseMutualExclusion(Sema &S, const Decl *D) const {
+  return getInfo().diagMutualExclusion(S, *this, D);
 }
 
 bool ParsedAttr::appliesToDecl(const Decl *D,
@@ -172,7 +178,10 @@ void ParsedAttr::getMatchRules(
 }
 
 bool ParsedAttr::diagnoseLangOpts(Sema &S) const {
-  return getInfo().diagLangOpts(S, *this);
+  if (getInfo().acceptsLangOpts(S.getLangOpts()))
+    return true;
+  S.Diag(getLoc(), diag::warn_attribute_ignored) << *this;
+  return false;
 }
 
 bool ParsedAttr::isTargetSpecificAttr() const {
@@ -193,6 +202,46 @@ bool ParsedAttr::isSupportedByPragmaAttribute() const {
   return getInfo().IsSupportedByPragmaAttribute;
 }
 
+bool ParsedAttr::slidesFromDeclToDeclSpecLegacyBehavior() const {
+  if (isRegularKeywordAttribute())
+    // The appurtenance rules are applied strictly for all regular keyword
+    // atributes.
+    return false;
+
+  assert(isStandardAttributeSyntax());
+
+  // We have historically allowed some type attributes with standard attribute
+  // syntax to slide to the decl-specifier-seq, so we have to keep supporting
+  // it. This property is consciously not defined as a flag in Attr.td because
+  // we don't want new attributes to specify it.
+  //
+  // Note: No new entries should be added to this list. Entries should be
+  // removed from this list after a suitable deprecation period, provided that
+  // there are no compatibility considerations with other compilers. If
+  // possible, we would like this list to go away entirely.
+  switch (getParsedKind()) {
+  case AT_AddressSpace:
+  case AT_OpenCLPrivateAddressSpace:
+  case AT_OpenCLGlobalAddressSpace:
+  case AT_OpenCLGlobalDeviceAddressSpace:
+  case AT_OpenCLGlobalHostAddressSpace:
+  case AT_OpenCLLocalAddressSpace:
+  case AT_OpenCLConstantAddressSpace:
+  case AT_OpenCLGenericAddressSpace:
+  case AT_NeonPolyVectorType:
+  case AT_NeonVectorType:
+  case AT_ArmMveStrictPolymorphism:
+  case AT_BTFTypeTag:
+  case AT_ObjCGC:
+  case AT_MatrixType:
+    return true;
+  default:
+    return false;
+  }
+}
+
+bool ParsedAttr::acceptsExprPack() const { return getInfo().AcceptsExprPack; }
+
 unsigned ParsedAttr::getSemanticSpelling() const {
   return getInfo().spellingIndexToSemanticSpelling(*this);
 }
@@ -203,4 +252,61 @@ bool ParsedAttr::hasVariadicArg() const {
   // legitimately bumps up against that maximum, we can use another bit to track
   // whether it's truly variadic or not.
   return getInfo().OptArgs == 15;
+}
+
+bool ParsedAttr::isParamExpr(size_t N) const {
+  return getInfo().isParamExpr(N);
+}
+
+void ParsedAttr::handleAttrWithDelayedArgs(Sema &S, Decl *D) const {
+  ::handleAttrWithDelayedArgs(S, D, *this);
+}
+
+static unsigned getNumAttributeArgs(const ParsedAttr &AL) {
+  // FIXME: Include the type in the argument list.
+  return AL.getNumArgs() + AL.hasParsedType();
+}
+
+template <typename Compare>
+static bool checkAttributeNumArgsImpl(Sema &S, const ParsedAttr &AL,
+                                      unsigned Num, unsigned Diag,
+                                      Compare Comp) {
+  if (Comp(getNumAttributeArgs(AL), Num)) {
+    S.Diag(AL.getLoc(), Diag) << AL << Num;
+    return false;
+  }
+  return true;
+}
+
+bool ParsedAttr::checkExactlyNumArgs(Sema &S, unsigned Num) const {
+  return checkAttributeNumArgsImpl(S, *this, Num,
+                                   diag::err_attribute_wrong_number_arguments,
+                                   std::not_equal_to<unsigned>());
+}
+bool ParsedAttr::checkAtLeastNumArgs(Sema &S, unsigned Num) const {
+  return checkAttributeNumArgsImpl(S, *this, Num,
+                                   diag::err_attribute_too_few_arguments,
+                                   std::less<unsigned>());
+}
+bool ParsedAttr::checkAtMostNumArgs(Sema &S, unsigned Num) const {
+  return checkAttributeNumArgsImpl(S, *this, Num,
+                                   diag::err_attribute_too_many_arguments,
+                                   std::greater<unsigned>());
+}
+
+void clang::takeAndConcatenateAttrs(ParsedAttributes &First,
+                                    ParsedAttributes &Second,
+                                    ParsedAttributes &Result) {
+  // Note that takeAllFrom() puts the attributes at the beginning of the list,
+  // so to obtain the correct ordering, we add `Second`, then `First`.
+  Result.takeAllFrom(Second);
+  Result.takeAllFrom(First);
+  if (First.Range.getBegin().isValid())
+    Result.Range.setBegin(First.Range.getBegin());
+  else
+    Result.Range.setBegin(Second.Range.getBegin());
+  if (Second.Range.getEnd().isValid())
+    Result.Range.setEnd(Second.Range.getEnd());
+  else
+    Result.Range.setEnd(First.Range.getEnd());
 }

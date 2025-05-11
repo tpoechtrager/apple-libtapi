@@ -1,9 +1,8 @@
 //===- lib/Diagnostics/Diagnostics.cpp - TAPI Diagnostics -------*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 ///
@@ -19,6 +18,8 @@
 #include "clang/Basic/DiagnosticOptions.h"
 #include "clang/Frontend/ChainedDiagnosticConsumer.h"
 #include "clang/Frontend/LogDiagnosticPrinter.h"
+#include "clang/Frontend/SerializedDiagnosticPrinter.h"
+#include "clang/Frontend/SerializedDiagnostics.h"
 #include "clang/Frontend/TextDiagnosticPrinter.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/FileSystem.h"
@@ -57,13 +58,13 @@ TAPI_NAMESPACE_INTERNAL_BEGIN
 
 static constexpr DiagInfoRec diagInfo[] = {
 #define DIAG(ENUM, CLASS, DEFAULT_SEVERITY, DESC, GROUP, SFINAE, NOWERROR,     \
-             SHOWINSYSHEADER, DEFERRABLE, CATEGORY)                                        \
+             SHOWINSYSHEADER, SHOWINSYSMACRO, DEFERRABLE, CATEGORY)            \
   {DESC, diag::ENUM, sizeof(DESC) - 1, CLASS, DEFAULT_SEVERITY},
 #include "tapi/Diagnostics/DiagnosticTAPIKinds.inc"
 #undef DIAG
 };
 
-static constexpr unsigned diagInfoSize = llvm::array_lengthof(diagInfo);
+static constexpr unsigned diagInfoSize = std::size(diagInfo);
 
 static clang::DiagnosticOptions *createDiagnosticsEngineOpts() {
   static bool hasColors = llvm::sys::Process::StandardErrHasColors();
@@ -93,6 +94,7 @@ DiagnosticsEngine::DiagnosticsEngine(clang::DiagnosticConsumer *client) {
 }
 
 DiagnosticsEngine::~DiagnosticsEngine() {
+  diag->getClient()->finish();
   diag->getClient()->EndSourceFile();
 }
 
@@ -145,23 +147,71 @@ clang::DiagnosticBuilder DiagnosticsEngine::report(clang::SourceLocation loc,
   return diag->Report(loc, newID);
 }
 
+clang::DiagnosticBuilder DiagnosticsEngine::report(unsigned diagID,
+                                                   const APILoc &loc) {
+  if (loc.isInvalid())
+    return report(diagID);
+
+  llvm::errs() << loc.getFilename() << ":" << llvm::utostr(loc.getLine()) << ":"
+               << llvm::utostr(loc.getColumn()) << ": ";
+  return report(diagID);
+}
+
+// Wrapper for tapi LogDiagnosticsPrinter.
+// Since tapi diagnostic file is only produced from one instance of tapi
+// invocation, we can write a valid plist file instead of a partial plist file
+// that needs to be wrapped into a valid plist file.
+class TapiLogDiagnosticPrinter : public clang::LogDiagnosticPrinter {
+public:
+  TapiLogDiagnosticPrinter(raw_ostream &os, clang::DiagnosticOptions *diags,
+                           std::unique_ptr<raw_ostream> streamOwner)
+      : clang::LogDiagnosticPrinter(os, diags, std::move(streamOwner)), os(os) {
+    // Write header for plist file.
+    os << "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n";
+    os << "<!DOCTYPE plist PUBLIC \"-//Apple Computer//DTD PLIST 1.0//EN\" "
+          "\"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n";
+    os << "<plist version=\"1.0\">\n";
+    os << "<array>\n";
+  }
+
+  ~TapiLogDiagnosticPrinter() {
+    // Write end of plist on destruction.
+    os << "</array>\n";
+    os << "</plist>";
+  }
+
+private:
+  raw_ostream &os;
+};
+
 void DiagnosticsEngine::setupLogDiagnostics(
     raw_ostream &os, std::unique_ptr<raw_ostream> streamOwner) {
-  auto logger = std::make_unique<clang::LogDiagnosticPrinter>(
+  auto logger = std::make_unique<TapiLogDiagnosticPrinter>(
       os, diagOpts.get(), std::move(streamOwner));
   assert(diag->ownsClient());
   diag->setClient(new clang::ChainedDiagnosticConsumer(diag->takeClient(),
                                                        std::move(logger)));
 }
 
-void DiagnosticsEngine::setupDiagnosticsFile(StringRef output) {
+void DiagnosticsEngine::setupSerializedDiagnostics(
+    StringRef output, std::unique_ptr<raw_ostream> streamOwner) {
+  auto SerializedConsumer = clang::serialized_diags::create(
+      output, diagOpts.get(), /*MergeChildRecords=*/false,
+      std::move(streamOwner));
+  SerializedConsumer->BeginSourceFile(langOpts);
+  assert(diag->ownsClient());
+  diag->setClient(new clang::ChainedDiagnosticConsumer(
+      diag->takeClient(), std::move(SerializedConsumer)));
+}
+
+void DiagnosticsEngine::setupDiagnosticsFile(StringRef output, bool serialize) {
   std::error_code ec;
   std::unique_ptr<raw_ostream> streamOwner;
   raw_ostream *os = &llvm::errs();
   if (output != "-") {
     // Create the output stream.
     auto fileOS = std::make_unique<llvm::raw_fd_ostream>(
-        output, ec, llvm::sys::fs::F_Append | llvm::sys::fs::F_Text);
+        output, ec, llvm::sys::fs::OF_Append | llvm::sys::fs::OF_Text);
     if (ec) {
       report(diag::err_cannot_open_file)
           << output << ec.message();
@@ -171,8 +221,13 @@ void DiagnosticsEngine::setupDiagnosticsFile(StringRef output) {
       streamOwner = std::move(fileOS);
     }
   }
-  diagOpts->DiagnosticLogFile = output.str();
 
+  if (serialize) {
+    setupSerializedDiagnostics(output, std::move(streamOwner));
+    return;
+  }
+
+  diagOpts->DiagnosticLogFile = output.str();
   setupLogDiagnostics(*os, std::move(streamOwner));
 }
 

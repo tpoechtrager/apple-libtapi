@@ -184,8 +184,24 @@ def : ProcessorModel<"gfx909", SIQuarterSpeedModel,
   FeatureISAVersion9_0_9.Features
 >;
 
+def : ProcessorModel<"gfx90a", SIDPFullSpeedModel,
+  FeatureISAVersion9_0_A.Features
+>;
+
 def : ProcessorModel<"gfx90c", SIQuarterSpeedModel,
   FeatureISAVersion9_0_C.Features
+>;
+
+def : ProcessorModel<"gfx940", SIDPGFX940FullSpeedModel,
+  FeatureISAVersion9_4_0.Features
+>;
+
+def : ProcessorModel<"gfx941", SIDPGFX940FullSpeedModel,
+  FeatureISAVersion9_4_1.Features
+>;
+
+def : ProcessorModel<"gfx942", SIDPGFX940FullSpeedModel,
+  FeatureISAVersion9_4_2.Features
 >;
 
 //===----------------------------------------------------------------------===//
@@ -204,6 +220,10 @@ def : ProcessorModel<"gfx1012", GFX10SpeedModel,
   FeatureISAVersion10_1_2.Features
 >;
 
+def : ProcessorModel<"gfx1013", GFX10SpeedModel,
+  FeatureISAVersion10_1_3.Features
+>;
+
 def : ProcessorModel<"gfx1030", GFX10SpeedModel,
   FeatureISAVersion10_3_0.Features
 >;
@@ -218,4 +238,44 @@ def : ProcessorModel<"gfx1032", GFX10SpeedModel,
 
 def : ProcessorModel<"gfx1033", GFX10SpeedModel,
   FeatureISAVersion10_3_0.Features
+>;
+
+def : ProcessorModel<"gfx1034", GFX10SpeedModel,
+  FeatureISAVersion10_3_0.Features
+>;
+
+def : ProcessorModel<"gfx1035", GFX10SpeedModel,
+  FeatureISAVersion10_3_0.Features
+>;
+
+def : ProcessorModel<"gfx1036", GFX10SpeedModel,
+  FeatureISAVersion10_3_0.Features
+>;
+
+//===----------------------------------------------------------------------===//
+// GCN GFX11.
+//===----------------------------------------------------------------------===//
+
+def : ProcessorModel<"gfx1100", GFX11SpeedModel,
+  FeatureISAVersion11_0_0.Features
+>;
+
+def : ProcessorModel<"gfx1101", GFX11SpeedModel,
+  FeatureISAVersion11_0_1.Features
+>;
+
+def : ProcessorModel<"gfx1102", GFX11SpeedModel,
+  FeatureISAVersion11_0_2.Features
+>;
+
+def : ProcessorModel<"gfx1103", GFX11SpeedModel,
+  FeatureISAVersion11_0_3.Features
+>;
+
+def : ProcessorModel<"gfx1150", GFX11SpeedModel,
+  FeatureISAVersion11_5_0.Features
+>;
+
+def : ProcessorModel<"gfx1151", GFX11SpeedModel,
+  FeatureISAVersion11_5_1.Features
 >;

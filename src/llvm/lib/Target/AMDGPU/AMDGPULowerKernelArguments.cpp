@@ -12,30 +12,12 @@
 //===----------------------------------------------------------------------===//
 
 #include "AMDGPU.h"
-#include "AMDGPUSubtarget.h"
-#include "AMDGPUTargetMachine.h"
-#include "llvm/ADT/StringRef.h"
-#include "llvm/Analysis/Loads.h"
-#include "llvm/CodeGen/Passes.h"
+#include "GCNSubtarget.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
-#include "llvm/IR/Attributes.h"
-#include "llvm/IR/BasicBlock.h"
-#include "llvm/IR/Constants.h"
-#include "llvm/IR/DerivedTypes.h"
-#include "llvm/IR/Function.h"
+#include "llvm/IR/IntrinsicsAMDGPU.h"
 #include "llvm/IR/IRBuilder.h"
-#include "llvm/IR/InstrTypes.h"
-#include "llvm/IR/Instruction.h"
-#include "llvm/IR/Instructions.h"
-#include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/MDBuilder.h"
-#include "llvm/IR/Metadata.h"
-#include "llvm/IR/Operator.h"
-#include "llvm/IR/Type.h"
-#include "llvm/IR/Value.h"
-#include "llvm/Pass.h"
-#include "llvm/Support/Casting.h"
-
+#include "llvm/Target/TargetMachine.h"
 #define DEBUG_TYPE "amdgpu-lower-kernel-arguments"
 
 using namespace llvm;
@@ -88,10 +70,10 @@ bool AMDGPULowerKernelArguments::runOnFunction(Function &F) {
   IRBuilder<> Builder(&*getInsertPt(EntryBlock));
 
   const Align KernArgBaseAlign(16); // FIXME: Increase if necessary
-  const uint64_t BaseOffset = ST.getExplicitKernelArgOffset(F);
+  const uint64_t BaseOffset = ST.getExplicitKernelArgOffset();
 
   Align MaxAlign;
-  // FIXME: Alignment is broken broken with explicit arg offset.;
+  // FIXME: Alignment is broken with explicit arg offset.;
   const uint64_t TotalKernArgSize = ST.getKernArgSegmentSize(F, MaxAlign);
   if (TotalKernArgSize == 0)
     return false;
@@ -100,19 +82,17 @@ bool AMDGPULowerKernelArguments::runOnFunction(Function &F) {
       Builder.CreateIntrinsic(Intrinsic::amdgcn_kernarg_segment_ptr, {}, {},
                               nullptr, F.getName() + ".kernarg.segment");
 
-  KernArgSegment->addAttribute(AttributeList::ReturnIndex, Attribute::NonNull);
-  KernArgSegment->addAttribute(AttributeList::ReturnIndex,
-    Attribute::getWithDereferenceableBytes(Ctx, TotalKernArgSize));
+  KernArgSegment->addRetAttr(Attribute::NonNull);
+  KernArgSegment->addRetAttr(
+      Attribute::getWithDereferenceableBytes(Ctx, TotalKernArgSize));
 
-  unsigned AS = KernArgSegment->getType()->getPointerAddressSpace();
   uint64_t ExplicitArgOffset = 0;
 
   for (Argument &Arg : F.args()) {
     const bool IsByRef = Arg.hasByRefAttr();
     Type *ArgTy = IsByRef ? Arg.getParamByRefType() : Arg.getType();
-    MaybeAlign ABITypeAlign = IsByRef ? Arg.getParamAlign() : None;
-    if (!ABITypeAlign)
-      ABITypeAlign = DL.getABITypeAlign(ArgTy);
+    MaybeAlign ParamAlign = IsByRef ? Arg.getParamAlign() : std::nullopt;
+    Align ABITypeAlign = DL.getValueOrABITypeAlignment(ParamAlign, ArgTy);
 
     uint64_t Size = DL.getTypeSizeInBits(ArgTy);
     uint64_t AllocSize = DL.getTypeAllocSize(ArgTy);
@@ -130,8 +110,8 @@ bool AMDGPULowerKernelArguments::runOnFunction(Function &F) {
           Builder.getInt8Ty(), KernArgSegment, EltOffset,
           Arg.getName() + ".byval.kernarg.offset");
 
-      Value *CastOffsetPtr = Builder.CreatePointerBitCastOrAddrSpaceCast(
-          ArgOffsetPtr, Arg.getType());
+      Value *CastOffsetPtr =
+          Builder.CreateAddrSpaceCast(ArgOffsetPtr, Arg.getType());
       Arg.replaceAllUsesWith(CastOffsetPtr);
       continue;
     }
@@ -189,8 +169,6 @@ bool AMDGPULowerKernelArguments::runOnFunction(Function &F) {
       AdjustedArgTy = V4Ty;
     }
 
-    ArgPtr = Builder.CreateBitCast(ArgPtr, AdjustedArgTy->getPointerTo(AS),
-                                   ArgPtr->getName() + ".cast");
     LoadInst *Load =
         Builder.CreateAlignedLoad(AdjustedArgTy, ArgPtr, AdjustedAlign);
     Load->setMetadata(LLVMContext::MD_invariant_load, MDNode::get(Ctx, {}));
@@ -219,13 +197,11 @@ bool AMDGPULowerKernelArguments::runOnFunction(Function &F) {
                                                           DerefOrNullBytes))));
       }
 
-      unsigned ParamAlign = Arg.getParamAlignment();
-      if (ParamAlign != 0) {
+      if (MaybeAlign ParamAlign = Arg.getParamAlign()) {
         Load->setMetadata(
-          LLVMContext::MD_align,
-          MDNode::get(Ctx,
-                      MDB.createConstant(ConstantInt::get(Builder.getInt64Ty(),
-                                                          ParamAlign))));
+            LLVMContext::MD_align,
+            MDNode::get(Ctx, MDB.createConstant(ConstantInt::get(
+                                 Builder.getInt64Ty(), ParamAlign->value()))));
       }
     }
 
@@ -250,8 +226,7 @@ bool AMDGPULowerKernelArguments::runOnFunction(Function &F) {
     }
   }
 
-  KernArgSegment->addAttribute(
-      AttributeList::ReturnIndex,
+  KernArgSegment->addRetAttr(
       Attribute::getWithAlignment(Ctx, std::max(KernArgBaseAlign, MaxAlign)));
 
   return true;
