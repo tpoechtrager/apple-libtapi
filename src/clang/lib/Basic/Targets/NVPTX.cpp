@@ -20,13 +20,13 @@
 using namespace clang;
 using namespace clang::targets;
 
-static constexpr Builtin::Info BuiltinInfo[] = {
+const Builtin::Info NVPTXTargetInfo::BuiltinInfo[] = {
 #define BUILTIN(ID, TYPE, ATTRS)                                               \
-  {#ID, TYPE, ATTRS, nullptr, HeaderDesc::NO_HEADER, ALL_LANGUAGES},
+  {#ID, TYPE, ATTRS, nullptr, ALL_LANGUAGES, nullptr},
 #define LIBBUILTIN(ID, TYPE, ATTRS, HEADER)                                    \
-  {#ID, TYPE, ATTRS, nullptr, HeaderDesc::HEADER, ALL_LANGUAGES},
+  {#ID, TYPE, ATTRS, HEADER, ALL_LANGUAGES, nullptr},
 #define TARGET_BUILTIN(ID, TYPE, ATTRS, FEATURE)                               \
-  {#ID, TYPE, ATTRS, FEATURE, HeaderDesc::NO_HEADER, ALL_LANGUAGES},
+  {#ID, TYPE, ATTRS, nullptr, ALL_LANGUAGES, FEATURE},
 #include "clang/Basic/BuiltinsNVPTX.def"
 };
 
@@ -52,9 +52,6 @@ NVPTXTargetInfo::NVPTXTargetInfo(const llvm::Triple &Triple,
   VLASupported = false;
   AddrSpaceMap = &NVPTXAddrSpaceMap;
   UseAddrSpaceMapMangling = true;
-  // __bf16 is always available as a load/store only type.
-  BFloat16Width = BFloat16Align = 16;
-  BFloat16Format = &llvm::APFloat::BFloat();
 
   // Define available target features
   // These must be defined in sorted order!
@@ -73,7 +70,7 @@ NVPTXTargetInfo::NVPTXTargetInfo(const llvm::Triple &Triple,
   // types.
   llvm::Triple HostTriple(Opts.HostTriple);
   if (!HostTriple.isNVPTX())
-    HostTarget = AllocateTarget(llvm::Triple(Opts.HostTriple), Opts);
+    HostTarget.reset(AllocateTarget(llvm::Triple(Opts.HostTriple), Opts));
 
   // If no host target, make some guesses about the data layout and return.
   if (!HostTarget) {
@@ -93,14 +90,12 @@ NVPTXTargetInfo::NVPTXTargetInfo(const llvm::Triple &Triple,
     default:
       llvm_unreachable("TargetPointerWidth must be 32 or 64");
     }
-
-    MaxAtomicInlineWidth = TargetPointerWidth;
     return;
   }
 
   // Copy properties from host target.
-  PointerWidth = HostTarget->getPointerWidth(LangAS::Default);
-  PointerAlign = HostTarget->getPointerAlign(LangAS::Default);
+  PointerWidth = HostTarget->getPointerWidth(/* AddrSpace = */ 0);
+  PointerAlign = HostTarget->getPointerAlign(/* AddrSpace = */ 0);
   BoolWidth = HostTarget->getBoolWidth();
   BoolAlign = HostTarget->getBoolAlign();
   IntWidth = HostTarget->getIntWidth();
@@ -121,7 +116,7 @@ NVPTXTargetInfo::NVPTXTargetInfo(const llvm::Triple &Triple,
       HostTarget->getDefaultAlignForAttributeAligned();
   SizeType = HostTarget->getSizeType();
   IntMaxType = HostTarget->getIntMaxType();
-  PtrDiffType = HostTarget->getPtrDiffType(LangAS::Default);
+  PtrDiffType = HostTarget->getPtrDiffType(/* AddrSpace = */ 0);
   IntPtrType = HostTarget->getIntPtrType();
   WCharType = HostTarget->getWCharType();
   WIntType = HostTarget->getWIntType();
@@ -155,7 +150,7 @@ NVPTXTargetInfo::NVPTXTargetInfo(const llvm::Triple &Triple,
 }
 
 ArrayRef<const char *> NVPTXTargetInfo::getGCCRegNames() const {
-  return llvm::ArrayRef(GCCRegNames);
+  return llvm::makeArrayRef(GCCRegNames);
 }
 
 bool NVPTXTargetInfo::hasFeature(StringRef Feature) const {
@@ -168,7 +163,7 @@ void NVPTXTargetInfo::getTargetDefines(const LangOptions &Opts,
                                        MacroBuilder &Builder) const {
   Builder.defineMacro("__PTX__");
   Builder.defineMacro("__NVPTX__");
-  if (Opts.CUDAIsDevice || Opts.OpenMPIsTargetDevice || !HostTarget) {
+  if (Opts.CUDAIsDevice || Opts.OpenMPIsDevice) {
     // Set __CUDA_ARCH__ for the GPU specified.
     std::string CUDAArchCode = [this] {
       switch (GPU) {
@@ -195,8 +190,6 @@ void NVPTXTargetInfo::getTargetDefines(const LangOptions &Opts,
       case CudaArch::GFX90a:
       case CudaArch::GFX90c:
       case CudaArch::GFX940:
-      case CudaArch::GFX941:
-      case CudaArch::GFX942:
       case CudaArch::GFX1010:
       case CudaArch::GFX1011:
       case CudaArch::GFX1012:
@@ -212,8 +205,6 @@ void NVPTXTargetInfo::getTargetDefines(const LangOptions &Opts,
       case CudaArch::GFX1101:
       case CudaArch::GFX1102:
       case CudaArch::GFX1103:
-      case CudaArch::GFX1150:
-      case CudaArch::GFX1151:
       case CudaArch::Generic:
       case CudaArch::LAST:
         break;
@@ -269,6 +260,6 @@ void NVPTXTargetInfo::getTargetDefines(const LangOptions &Opts,
 }
 
 ArrayRef<Builtin::Info> NVPTXTargetInfo::getTargetBuiltins() const {
-  return llvm::ArrayRef(BuiltinInfo,
-                        clang::NVPTX::LastTSBuiltin - Builtin::FirstTSBuiltin);
+  return llvm::makeArrayRef(BuiltinInfo, clang::NVPTX::LastTSBuiltin -
+                                             Builtin::FirstTSBuiltin);
 }

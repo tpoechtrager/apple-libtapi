@@ -46,7 +46,7 @@ public:
 
   FileID getFileID() const { return ID; }
 
-  SourceManager &getSourceManager() const { return SM; }
+  const SourceManager &getSourceManager() const { return SM; }
 
   ArrayRef<CharSourceRange> getCharRanges() const { return CharRanges; }
 

@@ -1,11 +1,4 @@
-set(LLVM_LINK_COMPONENTS
-  Core
-  Support
-  Object
-  Coverage
-  ProfileData
-  TargetParser
-  )
+set(LLVM_LINK_COMPONENTS core support object coverage profiledata)
 
 add_llvm_tool(llvm-cov
   llvm-cov.cpp
@@ -21,5 +14,3 @@ add_llvm_tool(llvm-cov
   SourceCoverageViewText.cpp
   TestingSupport.cpp
   )
-
-target_link_libraries(llvm-cov PRIVATE LLVMDebuginfod)

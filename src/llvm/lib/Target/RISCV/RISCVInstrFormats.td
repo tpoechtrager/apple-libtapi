@@ -1,4 +1,4 @@
-//===-- RISCVInstrFormats.td - RISC-V Instruction Formats --*- tablegen -*-===//
+//===-- RISCVInstrFormats.td - RISCV Instruction Formats ---*- tablegen -*-===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -47,12 +47,7 @@ def InstFormatCS     : InstFormat<13>;
 def InstFormatCA     : InstFormat<14>;
 def InstFormatCB     : InstFormat<15>;
 def InstFormatCJ     : InstFormat<16>;
-def InstFormatCU     : InstFormat<17>;
-def InstFormatCLB    : InstFormat<18>;
-def InstFormatCLH    : InstFormat<19>;
-def InstFormatCSB    : InstFormat<20>;
-def InstFormatCSH    : InstFormat<21>;
-def InstFormatOther  : InstFormat<22>;
+def InstFormatOther  : InstFormat<17>;
 
 class RISCVVConstraint<bits<3> val> {
   bits<3> Value = val;
@@ -130,14 +125,12 @@ def lookupRISCVOpcodeByName : SearchIndex {
 }
 def OPC_LOAD      : RISCVOpcode<"LOAD",      0b0000011>;
 def OPC_LOAD_FP   : RISCVOpcode<"LOAD_FP",   0b0000111>;
-def OPC_CUSTOM_0  : RISCVOpcode<"CUSTOM_0",  0b0001011>;
 def OPC_MISC_MEM  : RISCVOpcode<"MISC_MEM",  0b0001111>;
 def OPC_OP_IMM    : RISCVOpcode<"OP_IMM",    0b0010011>;
 def OPC_AUIPC     : RISCVOpcode<"AUIPC",     0b0010111>;
 def OPC_OP_IMM_32 : RISCVOpcode<"OP_IMM_32", 0b0011011>;
 def OPC_STORE     : RISCVOpcode<"STORE",     0b0100011>;
 def OPC_STORE_FP  : RISCVOpcode<"STORE_FP",  0b0100111>;
-def OPC_CUSTOM_1  : RISCVOpcode<"CUSTOM_1",  0b0101011>;
 def OPC_AMO       : RISCVOpcode<"AMO",       0b0101111>;
 def OPC_OP        : RISCVOpcode<"OP",        0b0110011>;
 def OPC_LUI       : RISCVOpcode<"LUI",       0b0110111>;
@@ -148,21 +141,31 @@ def OPC_NMSUB     : RISCVOpcode<"NMSUB",     0b1001011>;
 def OPC_NMADD     : RISCVOpcode<"NMADD",     0b1001111>;
 def OPC_OP_FP     : RISCVOpcode<"OP_FP",     0b1010011>;
 def OPC_OP_V      : RISCVOpcode<"OP_V",      0b1010111>;
-def OPC_CUSTOM_2  : RISCVOpcode<"CUSTOM_2",  0b1011011>;
 def OPC_BRANCH    : RISCVOpcode<"BRANCH",    0b1100011>;
 def OPC_JALR      : RISCVOpcode<"JALR",      0b1100111>;
 def OPC_JAL       : RISCVOpcode<"JAL",       0b1101111>;
 def OPC_SYSTEM    : RISCVOpcode<"SYSTEM",    0b1110011>;
-def OPC_OP_P      : RISCVOpcode<"OP_P",      0b1110111>;
-def OPC_CUSTOM_3  : RISCVOpcode<"CUSTOM_3",  0b1111011>;
 
-class RVInstCommon<dag outs, dag ins, string opcodestr, string argstr,
-                   list<dag> pattern, InstFormat format> : Instruction {
+class RVInst<dag outs, dag ins, string opcodestr, string argstr,
+             list<dag> pattern, InstFormat format>
+    : Instruction {
+  field bits<32> Inst;
+  // SoftFail is a field the disassembler can use to provide a way for
+  // instructions to not match without killing the whole decode process. It is
+  // mainly used for ARM, but Tablegen expects this field to exist or it fails
+  // to build the decode table.
+  field bits<32> SoftFail = 0;
+  let Size = 4;
+
+  bits<7> Opcode = 0;
+
+  let Inst{6-0} = Opcode;
+
   let Namespace = "RISCV";
 
   dag OutOperandList = outs;
   dag InOperandList = ins;
-  let AsmString = opcodestr # !if(!empty(argstr), "", "\t" # argstr);
+  let AsmString = opcodestr # "\t" # argstr;
   let Pattern = pattern;
 
   let TSFlags{4-0} = format.Value;
@@ -174,56 +177,29 @@ class RVInstCommon<dag outs, dag ins, string opcodestr, string argstr,
   bits<3> VLMul = 0;
   let TSFlags{10-8} = VLMul;
 
-  bit ForceTailAgnostic = false;
-  let TSFlags{11} = ForceTailAgnostic;
+  bit HasDummyMask = 0;
+  let TSFlags{11} = HasDummyMask;
 
-  bit IsTiedPseudo = 0;
-  let TSFlags{12} = IsTiedPseudo;
+  bit ForceTailAgnostic = false;
+  let TSFlags{12} = ForceTailAgnostic;
+
+  bit HasMergeOp = 0;
+  let TSFlags{13} = HasMergeOp;
 
   bit HasSEWOp = 0;
-  let TSFlags{13} = HasSEWOp;
+  let TSFlags{14} = HasSEWOp;
 
   bit HasVLOp = 0;
-  let TSFlags{14} = HasVLOp;
+  let TSFlags{15} = HasVLOp;
 
   bit HasVecPolicyOp = 0;
-  let TSFlags{15} = HasVecPolicyOp;
+  let TSFlags{16} = HasVecPolicyOp;
 
   bit IsRVVWideningReduction = 0;
-  let TSFlags{16} = IsRVVWideningReduction;
+  let TSFlags{17} = IsRVVWideningReduction;
 
   bit UsesMaskPolicy = 0;
-  let TSFlags{17} = UsesMaskPolicy;
-
-  // Indicates that the result can be considered sign extended from bit 31. Some
-  // instructions with this flag aren't W instructions, but are either sign
-  // extended from a smaller size, always outputs a small integer, or put zeros
-  // in bits 63:31. Used by the SExtWRemoval pass.
-  bit IsSignExtendingOpW = 0;
-  let TSFlags{18} = IsSignExtendingOpW;
-
-  bit HasRoundModeOp = 0;
-  let TSFlags{19} =  HasRoundModeOp;
-
-  // This is only valid when HasRoundModeOp is set to 1. HasRoundModeOp is set
-  // to 1 for vector fixed-point or floating-point intrinsics. This bit is
-  // processed under pass 'RISCVInsertReadWriteCSR' pass to distinguish between
-  // fixed-point / floating-point instructions and emit appropriate read/write
-  // to the correct CSR.
-  bit UsesVXRM = 0;
-  let TSFlags{20} =  UsesVXRM;
-}
-
-class RVInst<dag outs, dag ins, string opcodestr, string argstr,
-             list<dag> pattern, InstFormat format>
-    : RVInstCommon<outs, ins, opcodestr, argstr, pattern, format> {
-  field bits<32> Inst;
-  // SoftFail is a field the disassembler can use to provide a way for
-  // instructions to not match without killing the whole decode process. It is
-  // mainly used for ARM, but Tablegen expects this field to exist or it fails
-  // to build the decode table.
-  field bits<32> SoftFail = 0;
-  let Size = 4;
+  let TSFlags{18} = UsesMaskPolicy;
 }
 
 // Pseudo instructions
@@ -233,7 +209,7 @@ class Pseudo<dag outs, dag ins, list<dag> pattern, string opcodestr = "", string
   let isCodeGenOnly = 1;
 }
 
-class PseudoQuietFCMP<DAGOperand Ty>
+class PseudoQuietFCMP<RegisterClass Ty>
     : Pseudo<(outs GPR:$rd), (ins Ty:$rs1, Ty:$rs2), []> {
   let hasSideEffects = 1;
   let mayLoad = 0;
@@ -285,7 +261,7 @@ class RVInstR<bits<7> funct7, bits<3> funct3, RISCVOpcode opcode, dag outs,
   let Inst{19-15} = rs1;
   let Inst{14-12} = funct3;
   let Inst{11-7} = rd;
-  let Inst{6-0} = opcode.Value;
+  let Opcode = opcode.Value;
 }
 
 class RVInstR4<bits<2> funct2, bits<3> funct3, RISCVOpcode opcode, dag outs,
@@ -302,7 +278,7 @@ class RVInstR4<bits<2> funct2, bits<3> funct3, RISCVOpcode opcode, dag outs,
   let Inst{19-15} = rs1;
   let Inst{14-12} = funct3;
   let Inst{11-7} = rd;
-  let Inst{6-0} = opcode.Value;
+  let Opcode = opcode.Value;
 }
 
 class RVInstR4Frm<bits<2> funct2, RISCVOpcode opcode, dag outs, dag ins,
@@ -320,7 +296,7 @@ class RVInstR4Frm<bits<2> funct2, RISCVOpcode opcode, dag outs, dag ins,
   let Inst{19-15} = rs1;
   let Inst{14-12} = frm;
   let Inst{11-7} = rd;
-  let Inst{6-0} = opcode.Value;
+  let Opcode = opcode.Value;
 }
 
 class RVInstRAtomic<bits<5> funct5, bit aq, bit rl, bits<3> funct3,
@@ -338,7 +314,7 @@ class RVInstRAtomic<bits<5> funct5, bit aq, bit rl, bits<3> funct3,
   let Inst{19-15} = rs1;
   let Inst{14-12} = funct3;
   let Inst{11-7} = rd;
-  let Inst{6-0} = opcode.Value;
+  let Opcode = opcode.Value;
 }
 
 class RVInstRFrm<bits<7> funct7, RISCVOpcode opcode, dag outs, dag ins,
@@ -354,7 +330,7 @@ class RVInstRFrm<bits<7> funct7, RISCVOpcode opcode, dag outs, dag ins,
   let Inst{19-15} = rs1;
   let Inst{14-12} = frm;
   let Inst{11-7} = rd;
-  let Inst{6-0} = opcode.Value;
+  let Opcode = opcode.Value;
 }
 
 class RVInstI<bits<3> funct3, RISCVOpcode opcode, dag outs, dag ins,
@@ -368,7 +344,7 @@ class RVInstI<bits<3> funct3, RISCVOpcode opcode, dag outs, dag ins,
   let Inst{19-15} = rs1;
   let Inst{14-12} = funct3;
   let Inst{11-7} = rd;
-  let Inst{6-0} = opcode.Value;
+  let Opcode = opcode.Value;
 }
 
 class RVInstIShift<bits<5> imm11_7, bits<3> funct3, RISCVOpcode opcode,
@@ -384,7 +360,7 @@ class RVInstIShift<bits<5> imm11_7, bits<3> funct3, RISCVOpcode opcode,
   let Inst{19-15} = rs1;
   let Inst{14-12} = funct3;
   let Inst{11-7} = rd;
-  let Inst{6-0} = opcode.Value;
+  let Opcode = opcode.Value;
 }
 
 class RVInstIShiftW<bits<7> imm11_5, bits<3> funct3, RISCVOpcode opcode,
@@ -399,7 +375,7 @@ class RVInstIShiftW<bits<7> imm11_5, bits<3> funct3, RISCVOpcode opcode,
   let Inst{19-15} = rs1;
   let Inst{14-12} = funct3;
   let Inst{11-7} = rd;
-  let Inst{6-0} = opcode.Value;
+  let Opcode = opcode.Value;
 }
 
 class RVInstS<bits<3> funct3, RISCVOpcode opcode, dag outs, dag ins,
@@ -414,7 +390,7 @@ class RVInstS<bits<3> funct3, RISCVOpcode opcode, dag outs, dag ins,
   let Inst{19-15} = rs1;
   let Inst{14-12} = funct3;
   let Inst{11-7} = imm12{4-0};
-  let Inst{6-0} = opcode.Value;
+  let Opcode = opcode.Value;
 }
 
 class RVInstB<bits<3> funct3, RISCVOpcode opcode, dag outs, dag ins,
@@ -431,7 +407,7 @@ class RVInstB<bits<3> funct3, RISCVOpcode opcode, dag outs, dag ins,
   let Inst{14-12} = funct3;
   let Inst{11-8} = imm12{3-0};
   let Inst{7} = imm12{10};
-  let Inst{6-0} = opcode.Value;
+  let Opcode = opcode.Value;
 }
 
 class RVInstU<RISCVOpcode opcode, dag outs, dag ins, string opcodestr,
@@ -442,7 +418,7 @@ class RVInstU<RISCVOpcode opcode, dag outs, dag ins, string opcodestr,
 
   let Inst{31-12} = imm20;
   let Inst{11-7} = rd;
-  let Inst{6-0} = opcode.Value;
+  let Opcode = opcode.Value;
 }
 
 class RVInstJ<RISCVOpcode opcode, dag outs, dag ins, string opcodestr,
@@ -456,7 +432,7 @@ class RVInstJ<RISCVOpcode opcode, dag outs, dag ins, string opcodestr,
   let Inst{20} = imm20{10};
   let Inst{19-12} = imm20{18-11};
   let Inst{11-7} = rd;
-  let Inst{6-0} = opcode.Value;
+  let Opcode = opcode.Value;
 }
 
 //===----------------------------------------------------------------------===//
@@ -478,7 +454,7 @@ class DirectiveInsnR<dag outs, dag ins, string argstr>
   let Inst{19-15} = rs1;
   let Inst{14-12} = funct3;
   let Inst{11-7} = rd;
-  let Inst{6-0} = opcode;
+  let Opcode = opcode;
 
   let AsmString = ".insn r " # argstr;
 }
@@ -500,7 +476,7 @@ class DirectiveInsnR4<dag outs, dag ins, string argstr>
   let Inst{19-15} = rs1;
   let Inst{14-12} = funct3;
   let Inst{11-7} = rd;
-  let Inst{6-0} = opcode;
+  let Opcode = opcode;
 
   let AsmString = ".insn r4 " # argstr;
 }
@@ -518,7 +494,7 @@ class DirectiveInsnI<dag outs, dag ins, string argstr>
   let Inst{19-15} = rs1;
   let Inst{14-12} = funct3;
   let Inst{11-7} = rd;
-  let Inst{6-0} = opcode;
+  let Opcode = opcode;
 
   let AsmString = ".insn i " # argstr;
 }
@@ -537,7 +513,7 @@ class DirectiveInsnS<dag outs, dag ins, string argstr>
   let Inst{19-15} = rs1;
   let Inst{14-12} = funct3;
   let Inst{11-7} = imm12{4-0};
-  let Inst{6-0} = opcode;
+  let Opcode = opcode;
 
   let AsmString = ".insn s " # argstr;
 }
@@ -558,7 +534,7 @@ class DirectiveInsnB<dag outs, dag ins, string argstr>
   let Inst{14-12} = funct3;
   let Inst{11-8} = imm12{3-0};
   let Inst{7} = imm12{10};
-  let Inst{6-0} = opcode;
+  let Opcode = opcode;
 
   let AsmString = ".insn b " # argstr;
 }
@@ -572,7 +548,7 @@ class DirectiveInsnU<dag outs, dag ins, string argstr>
 
   let Inst{31-12} = imm20;
   let Inst{11-7} = rd;
-  let Inst{6-0} = opcode;
+  let Opcode = opcode;
 
   let AsmString = ".insn u " # argstr;
 }
@@ -586,7 +562,7 @@ class DirectiveInsnJ<dag outs, dag ins, string argstr>
 
   let Inst{31-12} = imm20;
   let Inst{11-7} = rd;
-  let Inst{6-0} = opcode;
+  let Opcode = opcode;
 
   let AsmString = ".insn j " # argstr;
 }

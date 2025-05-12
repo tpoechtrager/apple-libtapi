@@ -24,6 +24,8 @@
 #include "clang/Analysis/FlowSensitive/DataflowEnvironment.h"
 #include "clang/Analysis/FlowSensitive/DataflowLattice.h"
 #include "clang/Analysis/FlowSensitive/MapLattice.h"
+#include "llvm/ADT/None.h"
+#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/Support/Error.h"
@@ -33,7 +35,6 @@
 #include "gtest/gtest.h"
 #include <cstdint>
 #include <memory>
-#include <optional>
 #include <ostream>
 #include <string>
 #include <utility>
@@ -57,14 +58,12 @@ struct ValueLattice {
   //  * `Defined` -> top.
   ValueState State;
 
-  // When `std::nullopt`, the lattice is either at top or bottom, based on
-  // `State`.
-  std::optional<int64_t> Value;
+  // When `None`, the lattice is either at top or bottom, based on `State`.
+  llvm::Optional<int64_t> Value;
 
-  constexpr ValueLattice()
-      : State(ValueState::Undefined), Value(std::nullopt) {}
+  constexpr ValueLattice() : State(ValueState::Undefined), Value(llvm::None) {}
   constexpr ValueLattice(int64_t V) : State(ValueState::Defined), Value(V) {}
-  constexpr ValueLattice(ValueState S) : State(S), Value(std::nullopt) {}
+  constexpr ValueLattice(ValueState S) : State(S), Value(llvm::None) {}
 
   static constexpr ValueLattice bottom() {
     return ValueLattice(ValueState::Undefined);
@@ -134,9 +133,9 @@ public:
     return ConstantPropagationLattice::bottom();
   }
 
-  void transfer(const CFGElement &E, ConstantPropagationLattice &Vars,
+  void transfer(const CFGElement *E, ConstantPropagationLattice &Vars,
                 Environment &Env) {
-    auto CS = E.getAs<CFGStmt>();
+    auto CS = E->getAs<CFGStmt>();
     if (!CS)
       return;
     auto S = CS->getStmt();

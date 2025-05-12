@@ -16,10 +16,10 @@
 #include "OSTargets.h"
 #include "clang/Basic/TargetInfo.h"
 #include "clang/Basic/TargetOptions.h"
+#include "llvm/ADT/Triple.h"
 #include "llvm/Support/Compiler.h"
-#include "llvm/TargetParser/ARMTargetParser.h"
-#include "llvm/TargetParser/ARMTargetParserCommon.h"
-#include "llvm/TargetParser/Triple.h"
+#include "llvm/Support/ARMTargetParser.h"
+#include "llvm/Support/TargetParser.h"
 
 namespace clang {
 namespace targets {
@@ -99,6 +99,8 @@ class LLVM_LIBRARY_VISIBILITY ARMTargetInfo : public TargetInfo {
     HW_FP_DP = (1 << 3), /// double (64-bit)
   };
   uint32_t HW_FP;
+
+  static const Builtin::Info BuiltinInfo[];
 
   void setABIAAPCS();
   void setABIAPCS(bool IsAAPCS16);
@@ -181,7 +183,7 @@ public:
   bool
   validateConstraintModifier(StringRef Constraint, char Modifier, unsigned Size,
                              std::string &SuggestedModifier) const override;
-  std::string_view getClobbers() const override;
+  const char *getClobbers() const override;
 
   StringRef getConstraintRegister(StringRef Constraint,
                                   StringRef Expression) const override {

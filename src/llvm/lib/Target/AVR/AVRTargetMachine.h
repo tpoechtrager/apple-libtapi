@@ -22,8 +22,6 @@
 #include "AVRSelectionDAGInfo.h"
 #include "AVRSubtarget.h"
 
-#include <optional>
-
 namespace llvm {
 
 /// A generic AVR implementation.
@@ -31,9 +29,8 @@ class AVRTargetMachine : public LLVMTargetMachine {
 public:
   AVRTargetMachine(const Target &T, const Triple &TT, StringRef CPU,
                    StringRef FS, const TargetOptions &Options,
-                   std::optional<Reloc::Model> RM,
-                   std::optional<CodeModel::Model> CM, CodeGenOpt::Level OL,
-                   bool JIT);
+                   Optional<Reloc::Model> RM, Optional<CodeModel::Model> CM,
+                   CodeGenOpt::Level OL, bool JIT);
 
   const AVRSubtarget *getSubtargetImpl() const;
   const AVRSubtarget *getSubtargetImpl(const Function &) const override;
@@ -43,19 +40,6 @@ public:
   }
 
   TargetPassConfig *createPassConfig(PassManagerBase &PM) override;
-
-  MachineFunctionInfo *
-  createMachineFunctionInfo(BumpPtrAllocator &Allocator, const Function &F,
-                            const TargetSubtargetInfo *STI) const override;
-
-  bool isNoopAddrSpaceCast(unsigned SrcAs, unsigned DestAs) const override {
-    // While AVR has different address spaces, they are all represented by
-    // 16-bit pointers that can be freely casted between (of course, a pointer
-    // must be cast back to its original address space to be dereferenceable).
-    // To be safe, also check the pointer size in case we implement __memx
-    // pointers.
-    return getPointerSize(SrcAs) == getPointerSize(DestAs);
-  }
 
 private:
   std::unique_ptr<TargetLoweringObjectFile> TLOF;

@@ -1,4 +1,4 @@
-//===- GIMatchDagOperands.h - Represent operand lists for nodes -*- C++ -*-===//
+//===- GIMatchDagOperands.h - Represent a shared operand list for nodes ---===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.

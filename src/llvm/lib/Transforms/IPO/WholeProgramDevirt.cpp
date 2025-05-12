@@ -58,6 +58,8 @@
 #include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
+#include "llvm/ADT/Triple.h"
+#include "llvm/ADT/iterator_range.h"
 #include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/Analysis/BasicAliasAnalysis.h"
 #include "llvm/Analysis/OptimizationRemarkEmitter.h"
@@ -82,6 +84,9 @@
 #include "llvm/IR/Metadata.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/ModuleSummaryIndexYAML.h"
+#include "llvm/InitializePasses.h"
+#include "llvm/Pass.h"
+#include "llvm/PassRegistry.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Errc.h"
@@ -89,7 +94,6 @@
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/GlobPattern.h"
 #include "llvm/Support/MathExtras.h"
-#include "llvm/TargetParser/Triple.h"
 #include "llvm/Transforms/IPO.h"
 #include "llvm/Transforms/IPO/FunctionAttrs.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
@@ -255,7 +259,8 @@ wholeprogramdevirt::findLowestOffset(ArrayRef<VirtualCallTarget> Targets,
         if (I < B.size())
           BitsUsed |= B[I];
       if (BitsUsed != 0xff)
-        return (MinByte + I) * 8 + llvm::countr_zero(uint8_t(~BitsUsed));
+        return (MinByte + I) * 8 +
+               countTrailingZeros(uint8_t(~BitsUsed), ZB_Undefined);
     }
   } else {
     // Find a free (Size/8) byte region in each member of Used.
@@ -309,10 +314,9 @@ void wholeprogramdevirt::setAfterReturnValues(
   }
 }
 
-VirtualCallTarget::VirtualCallTarget(GlobalValue *Fn, const TypeMemberInfo *TM)
+VirtualCallTarget::VirtualCallTarget(Function *Fn, const TypeMemberInfo *TM)
     : Fn(Fn), TM(TM),
-      IsBigEndian(Fn->getParent()->getDataLayout().isBigEndian()),
-      WasDevirt(false) {}
+      IsBigEndian(Fn->getParent()->getDataLayout().isBigEndian()), WasDevirt(false) {}
 
 namespace {
 
@@ -376,7 +380,6 @@ namespace {
 // conditions
 //   1) All summaries are live.
 //   2) All function summaries indicate it's unreachable
-//   3) There is no non-function with the same GUID (which is rare)
 bool mustBeUnreachableFunction(ValueInfo TheFnVI) {
   if ((!TheFnVI) || TheFnVI.getSummaryList().empty()) {
     // Returns false if ValueInfo is absent, or the summary list is empty
@@ -389,13 +392,12 @@ bool mustBeUnreachableFunction(ValueInfo TheFnVI) {
     // In general either all summaries should be live or all should be dead.
     if (!Summary->isLive())
       return false;
-    if (auto *FS = dyn_cast<FunctionSummary>(Summary->getBaseObject())) {
+    if (auto *FS = dyn_cast<FunctionSummary>(Summary.get())) {
       if (!FS->fflags().MustBeUnreachable)
         return false;
     }
-    // Be conservative if a non-function has the same GUID (which is rare).
-    else
-      return false;
+    // Do nothing if a non-function has the same GUID (which is rare).
+    // This is correct since non-function summaries are not relevant.
   }
   // All function summaries are live and all of them agree that the function is
   // unreachble.
@@ -764,7 +766,7 @@ PreservedAnalyses WholeProgramDevirtPass::run(Module &M,
     return FAM.getResult<DominatorTreeAnalysis>(F);
   };
   if (UseCommandLine) {
-    if (!DevirtModule::runForTesting(M, AARGetter, OREGetter, LookupDomTree))
+    if (DevirtModule::runForTesting(M, AARGetter, OREGetter, LookupDomTree))
       return PreservedAnalyses::all();
     return PreservedAnalyses::none();
   }
@@ -816,8 +818,8 @@ void updatePublicTypeTestCalls(Module &M,
     for (Use &U : make_early_inc_range(PublicTypeTestFunc->uses())) {
       auto *CI = cast<CallInst>(U.getUser());
       auto *NewCI = CallInst::Create(
-          TypeTestFunc, {CI->getArgOperand(0), CI->getArgOperand(1)},
-          std::nullopt, "", CI);
+          TypeTestFunc, {CI->getArgOperand(0), CI->getArgOperand(1)}, None, "",
+          CI);
       CI->replaceAllUsesWith(NewCI);
       CI->eraseFromParent();
     }
@@ -895,7 +897,8 @@ static Error checkCombinedSummaryForTesting(ModuleSummaryIndex *Summary) {
   // DevirtIndex::run, not to DevirtModule::run used by opt/runForTesting.
   const auto &ModPaths = Summary->modulePaths();
   if (ClSummaryAction != PassSummaryAction::Import &&
-      !ModPaths.contains(ModuleSummaryIndex::getRegularLTOModuleName()))
+      ModPaths.find(ModuleSummaryIndex::getRegularLTOModuleName()) ==
+          ModPaths.end())
     return createStringError(
         errc::invalid_argument,
         "combined summary should contain Regular LTO module");
@@ -960,7 +963,7 @@ void DevirtModule::buildTypeIdentifierMap(
     std::vector<VTableBits> &Bits,
     DenseMap<Metadata *, std::set<TypeMemberInfo>> &TypeIdMap) {
   DenseMap<GlobalVariable *, VTableBits *> GVToBits;
-  Bits.reserve(M.global_size());
+  Bits.reserve(M.getGlobalList().size());
   SmallVector<MDNode *, 2> Types;
   for (GlobalVariable &GV : M.globals()) {
     Types.clear();
@@ -1005,17 +1008,12 @@ bool DevirtModule::tryFindVirtualCallTargets(
       return false;
 
     Constant *Ptr = getPointerAtOffset(TM.Bits->GV->getInitializer(),
-                                       TM.Offset + ByteOffset, M, TM.Bits->GV);
+                                       TM.Offset + ByteOffset, M,
+                                       TM.Bits->GV);
     if (!Ptr)
       return false;
 
-    auto C = Ptr->stripPointerCasts();
-    // Make sure this is a function or alias to a function.
-    auto Fn = dyn_cast<Function>(C);
-    auto A = dyn_cast<GlobalAlias>(C);
-    if (!Fn && A)
-      Fn = dyn_cast<Function>(A->getAliasee());
-
+    auto Fn = dyn_cast<Function>(Ptr->stripPointerCasts());
     if (!Fn)
       return false;
 
@@ -1032,11 +1030,7 @@ bool DevirtModule::tryFindVirtualCallTargets(
     if (mustBeUnreachableFunction(Fn, ExportSummary))
       continue;
 
-    // Save the symbol used in the vtable to use as the devirtualization
-    // target.
-    auto GV = dyn_cast<GlobalValue>(C);
-    assert(GV);
-    TargetsForSlot.push_back({GV, &TM});
+    TargetsForSlot.push_back({Fn, &TM});
   }
 
   // Give up if we couldn't find any targets.
@@ -1170,8 +1164,9 @@ void DevirtModule::applySingleImplDevirt(VTableSlotInfo &SlotInfo,
         CB.setMetadata(LLVMContext::MD_callees, nullptr);
         if (CB.getCalledOperand() &&
             CB.getOperandBundle(LLVMContext::OB_ptrauth)) {
-          auto *NewCS =
-              CallBase::removeOperandBundle(&CB, LLVMContext::OB_ptrauth, &CB);
+          auto *NewCS = CallBase::removeOperandBundle(&CB,
+                                                      LLVMContext::OB_ptrauth,
+                                                      &CB);
           CB.replaceAllUsesWith(NewCS);
           // Schedule for deletion at the end of pass run.
           CallsWithPtrAuthBundleRemoved.push_back(&CB);
@@ -1225,7 +1220,7 @@ bool DevirtModule::trySingleImplDevirt(
     WholeProgramDevirtResolution *Res) {
   // See if the program contains a single implementation of this virtual
   // function.
-  auto *TheFn = TargetsForSlot[0].Fn;
+  Function *TheFn = TargetsForSlot[0].Fn;
   for (auto &&Target : TargetsForSlot)
     if (TheFn != Target.Fn)
       return false;
@@ -1399,19 +1394,8 @@ void DevirtModule::applyICallBranchFunnel(VTableSlotInfo &SlotInfo,
       IsExported = true;
     if (CSInfo.AllCallSitesDevirted)
       return;
-
-    std::map<CallBase *, CallBase *> CallBases;
     for (auto &&VCallSite : CSInfo.CallSites) {
       CallBase &CB = VCallSite.CB;
-
-      if (CallBases.find(&CB) != CallBases.end()) {
-        // When finding devirtualizable calls, it's possible to find the same
-        // vtable passed to multiple llvm.type.test or llvm.type.checked.load
-        // calls, which can cause duplicate call sites to be recorded in
-        // [Const]CallSites. If we've already found one of these
-        // call instances, just ignore it. It will be replaced later.
-        continue;
-      }
 
       // Jump tables are only profitable if the retpoline mitigation is enabled.
       Attribute FSAttr = CB.getCaller()->getFnAttribute("target-features");
@@ -1459,7 +1443,8 @@ void DevirtModule::applyICallBranchFunnel(VTableSlotInfo &SlotInfo,
           AttributeList::get(M.getContext(), Attrs.getFnAttrs(),
                              Attrs.getRetAttrs(), NewArgAttrs));
 
-      CallBases[&CB] = NewCS;
+      CB.replaceAllUsesWith(NewCS);
+      CB.eraseFromParent();
 
       // This use is no longer unsafe.
       if (VCallSite.NumUnsafeUses)
@@ -1469,11 +1454,6 @@ void DevirtModule::applyICallBranchFunnel(VTableSlotInfo &SlotInfo,
     // retpoline mitigation, which would mean that they are lowered to
     // llvm.type.test and therefore require an llvm.type.test resolution for the
     // type identifier.
-
-    std::for_each(CallBases.begin(), CallBases.end(), [](auto &CBs) {
-      CBs.first->replaceAllUsesWith(CBs.second);
-      CBs.first->eraseFromParent();
-    });
   };
   Apply(SlotInfo.CSInfo);
   for (auto &P : SlotInfo.ConstCSInfo)
@@ -1486,30 +1466,23 @@ bool DevirtModule::tryEvaluateFunctionsWithArgs(
   // Evaluate each function and store the result in each target's RetVal
   // field.
   for (VirtualCallTarget &Target : TargetsForSlot) {
-    // TODO: Skip for now if the vtable symbol was an alias to a function,
-    // need to evaluate whether it would be correct to analyze the aliasee
-    // function for this optimization.
-    auto Fn = dyn_cast<Function>(Target.Fn);
-    if (!Fn)
-      return false;
-
-    if (Fn->arg_size() != Args.size() + 1)
+    if (Target.Fn->arg_size() != Args.size() + 1)
       return false;
 
     Evaluator Eval(M.getDataLayout(), nullptr);
     SmallVector<Constant *, 2> EvalArgs;
     EvalArgs.push_back(
-        Constant::getNullValue(Fn->getFunctionType()->getParamType(0)));
+        Constant::getNullValue(Target.Fn->getFunctionType()->getParamType(0)));
     for (unsigned I = 0; I != Args.size(); ++I) {
-      auto *ArgTy =
-          dyn_cast<IntegerType>(Fn->getFunctionType()->getParamType(I + 1));
+      auto *ArgTy = dyn_cast<IntegerType>(
+          Target.Fn->getFunctionType()->getParamType(I + 1));
       if (!ArgTy)
         return false;
       EvalArgs.push_back(ConstantInt::get(ArgTy, Args[I]));
     }
 
     Constant *RetVal;
-    if (!Eval.EvaluateFunction(Fn, RetVal, EvalArgs) ||
+    if (!Eval.EvaluateFunction(Target.Fn, RetVal, EvalArgs) ||
         !isa<ConstantInt>(RetVal))
       return false;
     Target.RetVal = cast<ConstantInt>(RetVal)->getZExtValue();
@@ -1717,7 +1690,8 @@ void DevirtModule::applyVirtualConstProp(CallSiteInfo &CSInfo, StringRef FnName,
       Call.replaceAndErase("virtual-const-prop-1-bit", FnName, RemarksEnabled,
                            OREGetter, IsBitSet);
     } else {
-      Value *Val = B.CreateLoad(RetType, Addr);
+      Value *ValAddr = B.CreateBitCast(Addr, RetType->getPointerTo());
+      Value *Val = B.CreateLoad(RetType, ValAddr);
       NumVirtConstProp++;
       Call.replaceAndErase("virtual-const-prop", FnName, RemarksEnabled,
                            OREGetter, Val);
@@ -1729,14 +1703,8 @@ void DevirtModule::applyVirtualConstProp(CallSiteInfo &CSInfo, StringRef FnName,
 bool DevirtModule::tryVirtualConstProp(
     MutableArrayRef<VirtualCallTarget> TargetsForSlot, VTableSlotInfo &SlotInfo,
     WholeProgramDevirtResolution *Res, VTableSlot Slot) {
-  // TODO: Skip for now if the vtable symbol was an alias to a function,
-  // need to evaluate whether it would be correct to analyze the aliasee
-  // function for this optimization.
-  auto Fn = dyn_cast<Function>(TargetsForSlot[0].Fn);
-  if (!Fn)
-    return false;
   // This only works if the function returns an integer.
-  auto RetType = dyn_cast<IntegerType>(Fn->getReturnType());
+  auto RetType = dyn_cast<IntegerType>(TargetsForSlot[0].Fn->getReturnType());
   if (!RetType)
     return false;
   unsigned BitWidth = RetType->getBitWidth();
@@ -1754,18 +1722,11 @@ bool DevirtModule::tryVirtualConstProp(
   // inline all implementations of the virtual function into each call site,
   // rather than using function attributes to perform local optimization.
   for (VirtualCallTarget &Target : TargetsForSlot) {
-    // TODO: Skip for now if the vtable symbol was an alias to a function,
-    // need to evaluate whether it would be correct to analyze the aliasee
-    // function for this optimization.
-    auto Fn = dyn_cast<Function>(Target.Fn);
-    if (!Fn)
-      return false;
-
-    if (Fn->isDeclaration() ||
-        !computeFunctionBodyMemoryAccess(*Fn, AARGetter(*Fn))
+    if (Target.Fn->isDeclaration() ||
+        !computeFunctionBodyMemoryAccess(*Target.Fn, AARGetter(*Target.Fn))
              .doesNotAccessMemory() ||
-        Fn->arg_empty() || !Fn->arg_begin()->use_empty() ||
-        Fn->getReturnType() != RetType)
+        Target.Fn->arg_empty() || !Target.Fn->arg_begin()->use_empty() ||
+        Target.Fn->getReturnType() != RetType)
       return false;
   }
 
@@ -1889,9 +1850,10 @@ void DevirtModule::rebuildGlobal(VTableBits &B) {
 bool DevirtModule::areRemarksEnabled() {
   const auto &FL = M.getFunctionList();
   for (const Function &Fn : FL) {
-    if (Fn.empty())
+    const auto &BBL = Fn.getBasicBlockList();
+    if (BBL.empty())
       continue;
-    auto DI = OptimizationRemark(DEBUG_TYPE, "", DebugLoc(), &Fn.front());
+    auto DI = OptimizationRemark(DEBUG_TYPE, "", DebugLoc(), &BBL.front());
     return DI.isEnabled();
   }
   return false;
@@ -2294,7 +2256,7 @@ bool DevirtModule::run() {
 
   // For each (type, offset) pair:
   bool DidVirtualConstProp = false;
-  std::map<std::string, GlobalValue *> DevirtTargets;
+  std::map<std::string, Function*> DevirtTargets;
   for (auto &S : CallSlots) {
     // Search each of the members of the type identifier for the virtual
     // function implementation at offset S.first.ByteOffset, and add to
@@ -2349,14 +2311,7 @@ bool DevirtModule::run() {
   if (RemarksEnabled) {
     // Generate remarks for each devirtualized function.
     for (const auto &DT : DevirtTargets) {
-      GlobalValue *GV = DT.second;
-      auto F = dyn_cast<Function>(GV);
-      if (!F) {
-        auto A = dyn_cast<GlobalAlias>(GV);
-        assert(A && isa<Function>(A->getAliasee()));
-        F = dyn_cast<Function>(A->getAliasee());
-        assert(F);
-      }
+      Function *F = DT.second;
 
       using namespace ore;
       OREGetter(F).emit(OptimizationRemark(DEBUG_TYPE, "Devirtualized", F)

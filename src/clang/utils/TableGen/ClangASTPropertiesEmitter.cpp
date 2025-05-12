@@ -20,7 +20,6 @@
 #include "llvm/TableGen/TableGenBackend.h"
 #include <cctype>
 #include <map>
-#include <optional>
 #include <set>
 #include <string>
 using namespace llvm;
@@ -526,8 +525,7 @@ void ASTPropsEmitter::emitReadOfProperty(StringRef readerName,
   // get a pr-value back from read(), and we should be able to forward
   // that in the creation rule.
   Out << "    ";
-  if (!condition.empty())
-    Out << "std::optional<";
+  if (!condition.empty()) Out << "llvm::Optional<";
   type.emitCXXValueTypeName(true, Out);
   if (!condition.empty()) Out << ">";
   Out << " " << name;
@@ -664,7 +662,9 @@ ASTPropsEmitter::emitDispatcherTemplate(const ReaderWriterInfo &info) {
   declareSpecialization("<class T>",
                         "llvm::ArrayRef<T>",
                         "Array");
-  declareSpecialization("<class T>", "std::optional<T>", "Optional");
+  declareSpecialization("<class T>",
+                        "llvm::Optional<T>",
+                        "Optional");
   Out << "\n";
 }
 
@@ -677,20 +677,15 @@ ASTPropsEmitter::emitPackUnpackOptionalTemplate(const ReaderWriterInfo &info) {
   Out << "template <class ValueType>\n"
          "struct " << classPrefix << "OptionalValue;\n";
 
-  auto declareSpecialization = [&](const Twine &typeName, StringRef code) {
+  auto declareSpecialization = [&](const Twine &typeName,
+                                   StringRef code) {
     Out << "template <>\n"
-           "struct "
-        << classPrefix << "OptionalValue<" << typeName
-        << "> {\n"
-           "  static "
-        << (info.IsReader ? "std::optional<" : "") << typeName
-        << (info.IsReader ? "> " : " ") << methodName << "("
-        << (info.IsReader ? "" : "std::optional<") << typeName
-        << (info.IsReader ? "" : ">")
-        << " value) {\n"
-           "    return "
-        << code
-        << ";\n"
+           "struct " << classPrefix << "OptionalValue<" << typeName << "> {\n"
+           "  static " << (info.IsReader ? "Optional<" : "") << typeName
+                       << (info.IsReader ? "> " : " ") << methodName << "("
+                       << (info.IsReader ? "" : "Optional<") << typeName
+                       << (info.IsReader ? "" : ">") << " value) {\n"
+           "    return " << code << ";\n"
            "  }\n"
            "};\n";
   };

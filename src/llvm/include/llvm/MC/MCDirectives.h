@@ -45,9 +45,7 @@ enum MCSymbolAttr {
   MCSA_Weak,                    ///< .weak
   MCSA_WeakDefinition,          ///< .weak_definition (MachO)
   MCSA_WeakReference,           ///< .weak_reference (MachO)
-  MCSA_WeakDefAutoPrivate,      ///< .weak_def_can_be_hidden (MachO)
-  MCSA_WeakAntiDep,             ///< .weak_anti_dep (COFF)
-  MCSA_Memtag,                  ///< .memtag (ELF)
+  MCSA_WeakDefAutoPrivate       ///< .weak_def_can_be_hidden (MachO)
 };
 
 enum MCAssemblerFlag {

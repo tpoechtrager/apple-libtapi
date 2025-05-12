@@ -17,7 +17,6 @@
 #include "llvm/Support/YAMLTraits.h"
 #include "llvm/ObjectYAML/YAML.h"
 #include "llvm/ADT/MapVector.h"
-#include <optional>
 
 namespace llvm {
 namespace ArchYAML {
@@ -45,13 +44,13 @@ struct Archive {
 
     MapVector<StringRef, Field> Fields;
 
-    std::optional<yaml::BinaryRef> Content;
-    std::optional<llvm::yaml::Hex8> PaddingByte;
+    Optional<yaml::BinaryRef> Content;
+    Optional<llvm::yaml::Hex8> PaddingByte;
   };
 
   StringRef Magic;
-  std::optional<std::vector<Child>> Members;
-  std::optional<yaml::BinaryRef> Content;
+  Optional<std::vector<Child>> Members;
+  Optional<yaml::BinaryRef> Content;
 };
 
 } // end namespace ArchYAML

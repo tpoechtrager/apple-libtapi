@@ -18,7 +18,6 @@
 #include "llvm/ADT/FloatingPointMode.h"
 #include "llvm/Support/CodeGen.h"
 #include "llvm/Target/TargetOptions.h"
-#include <optional>
 #include <string>
 #include <vector>
 
@@ -38,16 +37,16 @@ std::string getMCPU();
 std::vector<std::string> getMAttrs();
 
 Reloc::Model getRelocModel();
-std::optional<Reloc::Model> getExplicitRelocModel();
+Optional<Reloc::Model> getExplicitRelocModel();
 
 ThreadModel::Model getThreadModel();
 
 CodeModel::Model getCodeModel();
-std::optional<CodeModel::Model> getExplicitCodeModel();
+Optional<CodeModel::Model> getExplicitCodeModel();
 
 llvm::ExceptionHandling getExceptionModel();
 
-std::optional<CodeGenFileType> getExplicitFileType();
+Optional<CodeGenFileType> getExplicitFileType();
 
 CodeGenFileType getFileType();
 
@@ -94,15 +93,15 @@ std::string getTrapFuncName();
 
 bool getUseCtors();
 
-bool getDisableIntegratedAS();
+bool getLowerGlobalDtorsViaCxaAtExit();
 
 bool getRelaxELFRelocations();
 
 bool getDataSections();
-std::optional<bool> getExplicitDataSections();
+Optional<bool> getExplicitDataSections();
 
 bool getFunctionSections();
-std::optional<bool> getExplicitFunctionSections();
+Optional<bool> getExplicitFunctionSections();
 
 bool getIgnoreXCOFFVisibility();
 
@@ -113,7 +112,6 @@ std::string getBBSections();
 unsigned getTLSSize();
 
 bool getEmulatedTLS();
-std::optional<bool> getExplicitEmulatedTLS();
 
 bool getUniqueSectionNames();
 
@@ -134,19 +132,17 @@ bool getEnableMachineFunctionSplitter();
 bool getEnableDebugEntryValues();
 
 bool getValueTrackingVariableLocations();
-std::optional<bool> getExplicitValueTrackingVariableLocations();
+Optional<bool> getExplicitValueTrackingVariableLocations();
 
 bool getForceDwarfFrameSection();
 
-bool getXRayFunctionIndex();
+bool getXRayOmitFunctionIndex();
 
 bool getDebugStrictDwarf();
 
 unsigned getAlignLoops();
 
 bool getJMCInstrument();
-
-bool getXCOFFReadOnlyPointers();
 
 /// Create this object with static storage to register codegen-related command
 /// line options.

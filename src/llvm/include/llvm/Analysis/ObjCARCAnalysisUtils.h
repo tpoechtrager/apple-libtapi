@@ -22,12 +22,12 @@
 #ifndef LLVM_ANALYSIS_OBJCARCANALYSISUTILS_H
 #define LLVM_ANALYSIS_OBJCARCANALYSISUTILS_H
 
+#include "llvm/ADT/Optional.h"
 #include "llvm/Analysis/ObjCARCInstKind.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/ValueHandle.h"
-#include <optional>
 
 namespace llvm {
 
@@ -229,20 +229,20 @@ class ARCMDKindCache {
   Module *M;
 
   /// The Metadata Kind for clang.imprecise_release metadata.
-  std::optional<unsigned> ImpreciseReleaseMDKind;
+  llvm::Optional<unsigned> ImpreciseReleaseMDKind;
 
   /// The Metadata Kind for clang.arc.copy_on_escape metadata.
-  std::optional<unsigned> CopyOnEscapeMDKind;
+  llvm::Optional<unsigned> CopyOnEscapeMDKind;
 
   /// The Metadata Kind for clang.arc.no_objc_arc_exceptions metadata.
-  std::optional<unsigned> NoObjCARCExceptionsMDKind;
+  llvm::Optional<unsigned> NoObjCARCExceptionsMDKind;
 
 public:
   void init(Module *Mod) {
     M = Mod;
-    ImpreciseReleaseMDKind = std::nullopt;
-    CopyOnEscapeMDKind = std::nullopt;
-    NoObjCARCExceptionsMDKind = std::nullopt;
+    ImpreciseReleaseMDKind = llvm::None;
+    CopyOnEscapeMDKind = llvm::None;
+    NoObjCARCExceptionsMDKind = llvm::None;
   }
 
   unsigned get(ARCMDKindID ID) {

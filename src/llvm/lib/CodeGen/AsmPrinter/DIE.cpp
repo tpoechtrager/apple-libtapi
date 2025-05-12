@@ -173,7 +173,9 @@ void DIEAbbrevSet::Emit(const AsmPrinter *AP, MCSection *Section) const {
 // DIE Implementation
 //===----------------------------------------------------------------------===//
 
-DIE *DIE::getParent() const { return dyn_cast_if_present<DIE *>(Owner); }
+DIE *DIE::getParent() const {
+  return Owner.dyn_cast<DIE*>();
+}
 
 DIEAbbrev DIE::generateAbbrev() const {
   DIEAbbrev Abbrev(Tag, hasChildren());
@@ -207,7 +209,7 @@ const DIE *DIE::getUnitDie() const {
 DIEUnit *DIE::getUnit() const {
   const DIE *UnitDie = getUnitDie();
   if (UnitDie)
-    return dyn_cast_if_present<DIEUnit *>(UnitDie->Owner);
+    return UnitDie->Owner.dyn_cast<DIEUnit*>();
   return nullptr;
 }
 
@@ -383,7 +385,6 @@ void DIEInteger::emitValue(const AsmPrinter *Asm, dwarf::Form Form) const {
   case dwarf::DW_FORM_strx2:
   case dwarf::DW_FORM_addrx2:
   case dwarf::DW_FORM_strx3:
-  case dwarf::DW_FORM_addrx3:
   case dwarf::DW_FORM_strp:
   case dwarf::DW_FORM_ref4:
   case dwarf::DW_FORM_data4:
@@ -424,7 +425,7 @@ void DIEInteger::emitValue(const AsmPrinter *Asm, dwarf::Form Form) const {
 ///
 unsigned DIEInteger::sizeOf(const dwarf::FormParams &FormParams,
                             dwarf::Form Form) const {
-  if (std::optional<uint8_t> FixedSize =
+  if (Optional<uint8_t> FixedSize =
           dwarf::getFixedFormByteSize(Form, FormParams))
     return *FixedSize;
 
@@ -579,7 +580,7 @@ void DIEString::emitValue(const AsmPrinter *AP, dwarf::Form Form) const {
     DIEInteger(S.getIndex()).emitValue(AP, Form);
     return;
   case dwarf::DW_FORM_strp:
-    if (AP->doesDwarfUseRelocationsAcrossSections())
+    if (AP->MAI->doesDwarfUseRelocationsAcrossSections())
       DIELabel(S.getSymbol()).emitValue(AP, Form);
     else
       DIEInteger(S.getOffset()).emitValue(AP, Form);

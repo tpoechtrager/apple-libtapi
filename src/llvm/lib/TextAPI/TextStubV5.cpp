@@ -72,9 +72,8 @@ using namespace llvm;
 using namespace llvm::json;
 using namespace llvm::MachO;
 
-namespace {
 struct JSONSymbol {
-  EncodeKind Kind;
+  SymbolKind Kind;
   std::string Name;
   SymbolFlags Flags;
 };
@@ -183,16 +182,16 @@ private:
 template <typename JsonT, typename StubT = JsonT>
 Expected<StubT> getRequiredValue(
     TBDKey Key, const Object *Obj,
-    std::function<std::optional<JsonT>(const Object *, StringRef)> GetValue,
-    std::function<std::optional<StubT>(JsonT)> Validate = nullptr) {
-  std::optional<JsonT> Val = GetValue(Obj, Keys[Key]);
+    std::function<llvm::Optional<JsonT>(const Object *, StringRef)> GetValue,
+    std::function<llvm::Optional<StubT>(JsonT)> Validate = nullptr) {
+  llvm::Optional<JsonT> Val = GetValue(Obj, Keys[Key]);
   if (!Val)
     return make_error<JSONStubError>(getParseErrorMsg(Key));
 
   if (Validate == nullptr)
     return static_cast<StubT>(*Val);
 
-  std::optional<StubT> Result = Validate(*Val);
+  llvm::Optional<StubT> Result = Validate(*Val);
   if (!Result.has_value())
     return make_error<JSONStubError>(getParseErrorMsg(Key));
   return Result.value();
@@ -201,14 +200,13 @@ Expected<StubT> getRequiredValue(
 template <typename JsonT, typename StubT = JsonT>
 Expected<StubT> getRequiredValue(
     TBDKey Key, const Object *Obj,
-    std::function<std::optional<JsonT>(const Object *, StringRef)> const
-        GetValue,
-    StubT DefaultValue, function_ref<std::optional<StubT>(JsonT)> Validate) {
-  std::optional<JsonT> Val = GetValue(Obj, Keys[Key]);
+    std::function<llvm::Optional<JsonT>(const Object *, StringRef)> GetValue,
+    StubT DefaultValue, std::function<llvm::Optional<StubT>(JsonT)> Validate) {
+  llvm::Optional<JsonT> Val = GetValue(Obj, Keys[Key]);
   if (!Val)
     return DefaultValue;
 
-  std::optional<StubT> Result;
+  llvm::Optional<StubT> Result;
   Result = Validate(*Val);
   if (!Result.has_value())
     return make_error<JSONStubError>(getParseErrorMsg(Key));
@@ -216,7 +214,7 @@ Expected<StubT> getRequiredValue(
 }
 
 Error collectFromArray(TBDKey Key, const Object *Obj,
-                       function_ref<void(StringRef)> Append,
+                       std::function<void(StringRef)> Append,
                        bool IsRequired = false) {
   const auto *Values = Obj->getArray(Keys[Key]);
   if (!Values) {
@@ -240,7 +238,7 @@ namespace StubParser {
 Expected<FileType> getVersion(const Object *File) {
   auto VersionOrErr = getRequiredValue<int64_t, FileType>(
       TBDKey::TBDVersion, File, &Object::getInteger,
-      [](int64_t Val) -> std::optional<FileType> {
+      [](int64_t Val) -> llvm::Optional<FileType> {
         unsigned Result = Val;
         if (Result != 5)
           return std::nullopt;
@@ -306,7 +304,7 @@ Error collectSymbolsFromSegment(const Object *Segment, TargetsToSymbols &Result,
                                 SymbolFlags SectionFlag) {
   auto Err = collectFromArray(
       TBDKey::Globals, Segment, [&Result, &SectionFlag](StringRef Name) {
-        JSONSymbol Sym = {EncodeKind::GlobalSymbol, Name.str(), SectionFlag};
+        JSONSymbol Sym = {SymbolKind::GlobalSymbol, Name.str(), SectionFlag};
         Result.back().second.emplace_back(Sym);
       });
   if (Err)
@@ -314,7 +312,7 @@ Error collectSymbolsFromSegment(const Object *Segment, TargetsToSymbols &Result,
 
   Err = collectFromArray(
       TBDKey::ObjCClass, Segment, [&Result, &SectionFlag](StringRef Name) {
-        JSONSymbol Sym = {EncodeKind::ObjectiveCClass, Name.str(), SectionFlag};
+        JSONSymbol Sym = {SymbolKind::ObjectiveCClass, Name.str(), SectionFlag};
         Result.back().second.emplace_back(Sym);
       });
   if (Err)
@@ -322,7 +320,7 @@ Error collectSymbolsFromSegment(const Object *Segment, TargetsToSymbols &Result,
 
   Err = collectFromArray(TBDKey::ObjCEHType, Segment,
                          [&Result, &SectionFlag](StringRef Name) {
-                           JSONSymbol Sym = {EncodeKind::ObjectiveCClassEHType,
+                           JSONSymbol Sym = {SymbolKind::ObjectiveCClassEHType,
                                              Name.str(), SectionFlag};
                            Result.back().second.emplace_back(Sym);
                          });
@@ -331,7 +329,7 @@ Error collectSymbolsFromSegment(const Object *Segment, TargetsToSymbols &Result,
 
   Err = collectFromArray(
       TBDKey::ObjCIvar, Segment, [&Result, &SectionFlag](StringRef Name) {
-        JSONSymbol Sym = {EncodeKind::ObjectiveCInstanceVariable, Name.str(),
+        JSONSymbol Sym = {SymbolKind::ObjectiveCInstanceVariable, Name.str(),
                           SectionFlag};
         Result.back().second.emplace_back(Sym);
       });
@@ -345,7 +343,7 @@ Error collectSymbolsFromSegment(const Object *Segment, TargetsToSymbols &Result,
            : SymbolFlags::WeakDefined);
   Err = collectFromArray(
       TBDKey::Weak, Segment, [&Result, WeakFlag](StringRef Name) {
-        JSONSymbol Sym = {EncodeKind::GlobalSymbol, Name.str(), WeakFlag};
+        JSONSymbol Sym = {SymbolKind::GlobalSymbol, Name.str(), WeakFlag};
         Result.back().second.emplace_back(Sym);
       });
   if (Err)
@@ -353,7 +351,7 @@ Error collectSymbolsFromSegment(const Object *Segment, TargetsToSymbols &Result,
 
   Err = collectFromArray(
       TBDKey::ThreadLocal, Segment, [&Result, SectionFlag](StringRef Name) {
-        JSONSymbol Sym = {EncodeKind::GlobalSymbol, Name.str(),
+        JSONSymbol Sym = {SymbolKind::GlobalSymbol, Name.str(),
                           SymbolFlags::ThreadLocalValue | SectionFlag};
         Result.back().second.emplace_back(Sym);
       });
@@ -529,7 +527,7 @@ Expected<PackedVersion> getPackedVersion(const Object *File, TBDKey Key) {
     if (!Obj)
       return make_error<JSONStubError>(getParseErrorMsg(Key));
 
-    auto ValidatePV = [](StringRef Version) -> std::optional<PackedVersion> {
+    auto ValidatePV = [](StringRef Version) -> llvm::Optional<PackedVersion> {
       PackedVersion PV;
       auto [success, truncated] = PV.parse64(Version);
       if (!success || truncated)
@@ -565,8 +563,6 @@ Expected<TBDFlags> getFlags(const Object *File) {
                   .Case("not_app_extension_safe",
                         TBDFlags::NotApplicationExtensionSafe)
                   .Case("sim_support", TBDFlags::SimulatorSupport)
-                  .Case("not_for_dyld_shared_cache",
-                        TBDFlags::OSLibNotForSharedCache)
                   .Default(TBDFlags::None);
           Flags |= TBDFlag;
         });
@@ -658,7 +654,6 @@ Expected<IFPtr> parseToInterfaceFile(const Object *File) {
   F->setApplicationExtensionSafe(
       !(Flags & TBDFlags::NotApplicationExtensionSafe));
   F->setSimulatorSupport((Flags & TBDFlags::SimulatorSupport));
-  F->setOSLibNotForSharedCache((Flags & TBDFlags::OSLibNotForSharedCache));
   for (auto &T : Targets)
     F->addTarget(T);
   for (auto &[Lib, Targets] : Clients)
@@ -703,7 +698,6 @@ Expected<std::vector<IFPtr>> getInlinedLibs(const Object *File) {
 }
 
 } // namespace StubParser
-} // namespace
 
 Expected<std::unique_ptr<InterfaceFile>>
 MachO::getInterfaceFileFromJSON(StringRef JSON) {
@@ -768,8 +762,7 @@ Array serializeTargetInfo(const TargetList &ActiveTargets) {
   Array Targets;
   for (const auto Targ : ActiveTargets) {
     Object TargetInfo;
-    if (!Targ.MinDeployment.empty())
-      TargetInfo[Keys[TBDKey::Deployment]] = Targ.MinDeployment.getAsString();
+    TargetInfo[Keys[TBDKey::Deployment]] = Targ.MinDeployment.getAsString();
     TargetInfo[Keys[TBDKey::Target]] = getFormattedStr(Targ);
     Targets.emplace_back(std::move(TargetInfo));
   }
@@ -857,16 +850,16 @@ Array serializeSymbols(InterfaceFile::const_filtered_symbol_range Symbols,
   auto AssignForSymbolType = [](SymbolFields::SymbolTypes &Assignment,
                                 const Symbol *Sym) {
     switch (Sym->getKind()) {
-    case EncodeKind::ObjectiveCClass:
+    case SymbolKind::ObjectiveCClass:
       Assignment.ObjCClasses.emplace_back(Sym->getName());
       return;
-    case EncodeKind::ObjectiveCClassEHType:
+    case SymbolKind::ObjectiveCClassEHType:
       Assignment.EHTypes.emplace_back(Sym->getName());
       return;
-    case EncodeKind::ObjectiveCInstanceVariable:
+    case SymbolKind::ObjectiveCInstanceVariable:
       Assignment.IVars.emplace_back(Sym->getName());
       return;
-    case EncodeKind::GlobalSymbol: {
+    case SymbolKind::GlobalSymbol: {
       if (Sym->isWeakReferenced() || Sym->isWeakDefined())
         Assignment.Weaks.emplace_back(Sym->getName());
       else if (Sym->isThreadLocalValue())
@@ -928,8 +921,6 @@ Array serializeFlags(const InterfaceFile *File) {
     Flags.emplace_back("not_app_extension_safe");
   if (File->hasSimulatorSupport())
     Flags.emplace_back("sim_support");
-  if (File->isOSLibNotForSharedCache())
-    Flags.emplace_back("not_for_dyld_shared_cache");
   return serializeScalar(TBDKey::Attributes, std::move(Flags));
 }
 
@@ -993,8 +984,9 @@ Expected<Object> serializeIF(const InterfaceFile *File) {
   return std::move(Library);
 }
 
-Expected<Object> getJSON(const InterfaceFile *File, const FileType FileKind) {
-  assert(FileKind == FileType::TBD_V5 && "unexpected json file format version");
+Expected<Object> getJSON(const InterfaceFile *File) {
+  assert(File->getFileType() == FileType::TBD_V5 &&
+         "unexpected json file format version");
   Object Root;
 
   auto MainLibOrErr = serializeIF(File);
@@ -1018,9 +1010,8 @@ Expected<Object> getJSON(const InterfaceFile *File, const FileType FileKind) {
 
 Error MachO::serializeInterfaceFileToJSON(raw_ostream &OS,
                                           const InterfaceFile &File,
-                                          const FileType FileKind,
                                           bool Compact) {
-  auto TextFile = getJSON(&File, FileKind);
+  auto TextFile = getJSON(&File);
   if (!TextFile)
     return TextFile.takeError();
   if (Compact)

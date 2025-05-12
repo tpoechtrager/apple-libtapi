@@ -126,7 +126,6 @@ static unsigned offsetToDisp(MachineInstr &MI) {
   return OffDisp;
 }
 
-namespace {
 class EliminateFrameIndex {
   const TargetInstrInfo &TII;
   const TargetRegisterInfo &TRI;
@@ -193,7 +192,6 @@ public:
   void processMI(MachineInstr &MI, Register FrameReg, int64_t Offset,
                  int FIOperandNum);
 };
-} // namespace
 
 // Prepare the frame index if it doesn't fit in the immediate field.  Use
 // clobber register to hold calculated address.
@@ -479,7 +477,7 @@ void EliminateFrameIndex::processMI(MachineInstr &MI, Register FrameReg,
   replaceFI(MI, FrameReg, Offset, FIOperandNum);
 }
 
-bool VERegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
+void VERegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
                                          int SPAdj, unsigned FIOperandNum,
                                          RegScavenger *RS) const {
   assert(SPAdj == 0 && "Unexpected");
@@ -502,7 +500,6 @@ bool VERegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
   Offset += MI.getOperand(FIOperandNum + offsetToDisp(MI)).getImm();
 
   EFI.processMI(MI, FrameReg, Offset, FIOperandNum);
-  return false;
 }
 
 Register VERegisterInfo::getFrameRegister(const MachineFunction &MF) const {

@@ -33,12 +33,12 @@ RefactoringOperationResult clang::tooling::initiateRefactoringOperationAt(
     SourceLocation Location, SourceRange SelectionRange, ASTContext &Context,
     RefactoringActionType ActionType, bool CreateOperation) {
   if (Location.isInvalid())
-    return std::nullopt;
+    return None;
   if (ActionType == RefactoringActionType::Rename ||
       ActionType == RefactoringActionType::Rename_Local) {
     const NamedDecl *FoundDecl = rename::getNamedDeclAt(Context, Location);
     if (!FoundDecl)
-      return std::nullopt;
+      return None;
     RefactoringOperationResult Result;
     Result.Initiated = true;
     if (CreateOperation)
@@ -81,10 +81,10 @@ RefactoringOperationResult clang::tooling::initiateRefactoringOperationAt(
 RefactoringOperationResult clang::tooling::initiateRefactoringOperationOnDecl(
     StringRef DeclUSR, ASTContext &Context, RefactoringActionType ActionType) {
   if (ActionType != RefactoringActionType::Rename)
-    return std::nullopt;
+    return None;
   const NamedDecl *FoundDecl = rename::getNamedDeclWithUSR(Context, DeclUSR);
   if (!FoundDecl)
-    return std::nullopt;
+    return None;
   RefactoringOperationResult Result;
   Result.Initiated = true;
   Result.SymbolOp = std::make_unique<SymbolOperation>(FoundDecl, Context);

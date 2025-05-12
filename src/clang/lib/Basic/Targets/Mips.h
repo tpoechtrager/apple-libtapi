@@ -15,8 +15,8 @@
 
 #include "clang/Basic/TargetInfo.h"
 #include "clang/Basic/TargetOptions.h"
+#include "llvm/ADT/Triple.h"
 #include "llvm/Support/Compiler.h"
-#include "llvm/TargetParser/Triple.h"
 
 namespace clang {
 namespace targets {
@@ -40,6 +40,7 @@ class LLVM_LIBRARY_VISIBILITY MipsTargetInfo : public TargetInfo {
       resetDataLayout(("e-" + Layout).str());
   }
 
+  static const Builtin::Info BuiltinInfo[];
   std::string CPU;
   bool IsMips16;
   bool IsMicromips;
@@ -225,7 +226,7 @@ public:
         "$msair", "$msacsr", "$msaaccess", "$msasave", "$msamodify",
         "$msarequest", "$msamap", "$msaunmap"
     };
-    return llvm::ArrayRef(GCCRegNames);
+    return llvm::makeArrayRef(GCCRegNames);
   }
 
   bool validateAsmConstraint(const char *&Name,
@@ -278,7 +279,7 @@ public:
     return TargetInfo::convertConstraint(Constraint);
   }
 
-  std::string_view getClobbers() const override {
+  const char *getClobbers() const override {
     // In GCC, $1 is not widely used in generated code (it's used only in a few
     // specific situations), so there is no real need for users to add it to
     // the clobbers list if they want to use it in their inline assembly code.
@@ -394,8 +395,8 @@ public:
         {{"ra"}, "$31"}
     };
     if (ABI == "o32")
-      return llvm::ArrayRef(O32RegAliases);
-    return llvm::ArrayRef(NewABIRegAliases);
+      return llvm::makeArrayRef(O32RegAliases);
+    return llvm::makeArrayRef(NewABIRegAliases);
   }
 
   bool hasInt128Type() const override {

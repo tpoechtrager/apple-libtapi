@@ -30,7 +30,6 @@
 #include "llvm/ADT/iterator_range.h"
 #include "llvm/CodeGen/ISDOpcodes.h"
 #include "llvm/CodeGen/MachineMemOperand.h"
-#include "llvm/CodeGen/MachineValueType.h"
 #include "llvm/CodeGen/Register.h"
 #include "llvm/CodeGen/ValueTypes.h"
 #include "llvm/IR/Constants.h"
@@ -43,6 +42,7 @@
 #include "llvm/Support/AtomicOrdering.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/MachineValueType.h"
 #include "llvm/Support/TypeSize.h"
 #include <algorithm>
 #include <cassert>
@@ -305,7 +305,6 @@ public:
 
   /// This returns the SDNode that contains this Use.
   SDNode *getUser() { return User; }
-  const SDNode *getUser() const { return User; }
 
   /// Get the next SDUse in the use list.
   SDUse *getNext() const { return Next; }
@@ -392,11 +391,9 @@ private:
   // We assume instructions do not raise floating-point exceptions by default,
   // and only those marked explicitly may do so.  We could choose to represent
   // this via a positive "FPExcept" flags like on the MI level, but having a
-  // negative "NoFPExcept" flag here makes the flag intersection logic more
-  // straightforward.
+  // negative "NoFPExcept" flag here (that defaults to true) makes the flag
+  // intersection logic more straightforward.
   bool NoFPExcept : 1;
-  // Instructions with attached 'unpredictable' metadata on IR level.
-  bool Unpredictable : 1;
 
 public:
   /// Default constructor turns off all optimization flags.
@@ -404,7 +401,7 @@ public:
       : NoUnsignedWrap(false), NoSignedWrap(false), Exact(false), NoNaNs(false),
         NoInfs(false), NoSignedZeros(false), AllowReciprocal(false),
         AllowContract(false), ApproximateFuncs(false),
-        AllowReassociation(false), NoFPExcept(false), Unpredictable(false) {}
+        AllowReassociation(false), NoFPExcept(false) {}
 
   /// Propagate the fast-math-flags from an IR FPMathOperator.
   void copyFMF(const FPMathOperator &FPMO) {
@@ -429,7 +426,6 @@ public:
   void setApproximateFuncs(bool b) { ApproximateFuncs = b; }
   void setAllowReassociation(bool b) { AllowReassociation = b; }
   void setNoFPExcept(bool b) { NoFPExcept = b; }
-  void setUnpredictable(bool b) { Unpredictable = b; }
 
   // These are accessors for each flag.
   bool hasNoUnsignedWrap() const { return NoUnsignedWrap; }
@@ -443,7 +439,6 @@ public:
   bool hasApproximateFuncs() const { return ApproximateFuncs; }
   bool hasAllowReassociation() const { return AllowReassociation; }
   bool hasNoFPExcept() const { return NoFPExcept; }
-  bool hasUnpredictable() const { return Unpredictable; }
 
   /// Clear any flags in this flag set that aren't also set in Flags. All
   /// flags will be cleared if Flags are undefined.
@@ -459,7 +454,6 @@ public:
     ApproximateFuncs &= Flags.ApproximateFuncs;
     AllowReassociation &= Flags.AllowReassociation;
     NoFPExcept &= Flags.NoFPExcept;
-    Unpredictable &= Flags.Unpredictable;
   }
 };
 
@@ -475,7 +469,7 @@ public:
   /// We do not place that under `#if LLVM_ENABLE_ABI_BREAKING_CHECKS`
   /// intentionally because it adds unneeded complexity without noticeable
   /// benefits (see discussion with @thakis in D120714).
-  uint16_t PersistentId = 0xffff;
+  uint16_t PersistentId;
 
 protected:
   // We define a set of mini-helper classes to help us interpret the bits in our
@@ -763,7 +757,6 @@ public:
 
     use_iterator() = default;
     use_iterator(const use_iterator &I) = default;
-    use_iterator &operator=(const use_iterator &) = default;
 
     bool operator==(const use_iterator &x) const { return Op == x.Op; }
     bool operator!=(const use_iterator &x) const {
@@ -932,7 +925,7 @@ public:
 
   op_iterator op_begin() const { return OperandList; }
   op_iterator op_end() const { return OperandList+NumOperands; }
-  ArrayRef<SDUse> ops() const { return ArrayRef(op_begin(), op_end()); }
+  ArrayRef<SDUse> ops() const { return makeArrayRef(op_begin(), op_end()); }
 
   /// Iterator for directly iterating over the operand SDValue's.
   struct value_op_iterator
@@ -1296,6 +1289,8 @@ public:
   /// Returns alignment and volatility of the memory access
   Align getOriginalAlign() const { return MMO->getBaseAlign(); }
   Align getAlign() const { return MMO->getAlign(); }
+  // FIXME: Remove once transition to getAlign is over.
+  unsigned getAlignment() const { return MMO->getAlign().value(); }
 
   /// Return the SubclassData value, without HasDebugValue. This contains an
   /// encoding of the volatile flag, as well as bits used by subclasses. This
@@ -1424,8 +1419,6 @@ public:
     case ISD::ATOMIC_LOAD_FSUB:
     case ISD::ATOMIC_LOAD_FMAX:
     case ISD::ATOMIC_LOAD_FMIN:
-    case ISD::ATOMIC_LOAD_UINC_WRAP:
-    case ISD::ATOMIC_LOAD_UDEC_WRAP:
     case ISD::ATOMIC_LOAD:
     case ISD::ATOMIC_STORE:
     case ISD::MLOAD:
@@ -1438,8 +1431,6 @@ public:
     case ISD::VP_SCATTER:
     case ISD::EXPERIMENTAL_VP_STRIDED_LOAD:
     case ISD::EXPERIMENTAL_VP_STRIDED_STORE:
-    case ISD::GET_FPENV_MEM:
-    case ISD::SET_FPENV_MEM:
       return true;
     default:
       return N->isMemIntrinsic() || N->isTargetMemoryOpcode();
@@ -1495,8 +1486,6 @@ public:
            N->getOpcode() == ISD::ATOMIC_LOAD_FSUB    ||
            N->getOpcode() == ISD::ATOMIC_LOAD_FMAX    ||
            N->getOpcode() == ISD::ATOMIC_LOAD_FMIN    ||
-           N->getOpcode() == ISD::ATOMIC_LOAD_UINC_WRAP ||
-           N->getOpcode() == ISD::ATOMIC_LOAD_UDEC_WRAP ||
            N->getOpcode() == ISD::ATOMIC_LOAD         ||
            N->getOpcode() == ISD::ATOMIC_STORE;
   }
@@ -1546,7 +1535,7 @@ protected:
 public:
   ArrayRef<int> getMask() const {
     EVT VT = getValueType(0);
-    return ArrayRef(Mask, VT.getVectorNumElements());
+    return makeArrayRef(Mask, VT.getVectorNumElements());
   }
 
   int getMaskElt(unsigned Idx) const {
@@ -1615,7 +1604,11 @@ public:
 
   bool isOne() const { return Value->isOne(); }
   bool isZero() const { return Value->isZero(); }
+  // NOTE: This is soft-deprecated.  Please use `isZero()` instead.
+  bool isNullValue() const { return isZero(); }
   bool isAllOnes() const { return Value->isMinusOne(); }
+  // NOTE: This is soft-deprecated.  Please use `isAllOnes()` instead.
+  bool isAllOnesValue() const { return isAllOnes(); }
   bool isMaxSignedValue() const { return Value->isMaxValue(true); }
   bool isMinSignedValue() const { return Value->isMinValue(true); }
 
@@ -1715,10 +1708,6 @@ SDValue peekThroughOneUseBitcasts(SDValue V);
 /// If \p V is not an extracted subvector, it is returned as-is.
 SDValue peekThroughExtractSubvectors(SDValue V);
 
-/// Return the non-truncated source operand of \p V if it exists.
-/// If \p V is not a truncation, it is returned as-is.
-SDValue peekThroughTruncates(SDValue V);
-
 /// Returns true if \p V is a bitwise not operation. Assumes that an all ones
 /// constant is canonicalized to be operand 1.
 bool isBitwiseNot(SDValue V, bool AllowUndefs = false);
@@ -1753,8 +1742,7 @@ bool isNullOrNullSplat(SDValue V, bool AllowUndefs = false);
 
 /// Return true if the value is a constant 1 integer or a splatted vector of a
 /// constant 1 integer (with no undefs).
-/// Build vector implicit truncation is allowed, but the truncated bits need to
-/// be zero.
+/// Does not permit build vector implicit truncation.
 bool isOneOrOneSplat(SDValue V, bool AllowUndefs = false);
 
 /// Return true if the value is a constant -1 integer or a splatted vector of a
@@ -2114,7 +2102,7 @@ public:
   /// If this BuildVector is constant and represents the numerical series
   /// "<a, a+n, a+2n, a+3n, ...>" where a is integer and n is a non-zero integer,
   /// the value "<a,n>" is returned.
-  std::optional<std::pair<APInt, APInt>> isConstantSequence() const;
+  Optional<std::pair<APInt, APInt>> isConstantSequence() const;
 
   /// Recast bit data \p SrcBitElements to \p DstEltSizeInBits wide elements.
   /// Undef elements are treated as zero, and entirely undefined elements are
@@ -2898,23 +2886,6 @@ public:
   }
 };
 
-class FPStateAccessSDNode : public MemSDNode {
-public:
-  friend class SelectionDAG;
-
-  FPStateAccessSDNode(unsigned NodeTy, unsigned Order, const DebugLoc &dl,
-                      SDVTList VTs, EVT MemVT, MachineMemOperand *MMO)
-      : MemSDNode(NodeTy, Order, dl, VTs, MemVT, MMO) {
-    assert((NodeTy == ISD::GET_FPENV_MEM || NodeTy == ISD::SET_FPENV_MEM) &&
-           "Expected FP state access node");
-  }
-
-  static bool classof(const SDNode *N) {
-    return N->getOpcode() == ISD::GET_FPENV_MEM ||
-           N->getOpcode() == ISD::SET_FPENV_MEM;
-  }
-};
-
 /// An SDNode that represents everything that will be needed
 /// to construct a MachineInstr. These nodes are created during the
 /// instruction selection proper phase.
@@ -2959,10 +2930,10 @@ public:
     if (NumMemRefs == 0)
       return {};
     if (NumMemRefs == 1)
-      return ArrayRef(MemRefs.getAddrOfPtr1(), 1);
+      return makeArrayRef(MemRefs.getAddrOfPtr1(), 1);
 
     // Otherwise we have an actual array.
-    return ArrayRef(cast<MachineMemOperand **>(MemRefs), NumMemRefs);
+    return makeArrayRef(MemRefs.get<MachineMemOperand **>(), NumMemRefs);
   }
   mmo_iterator memoperands_begin() const { return memoperands().begin(); }
   mmo_iterator memoperands_end() const { return memoperands().end(); }

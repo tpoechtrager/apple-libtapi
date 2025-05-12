@@ -37,12 +37,14 @@ public:
   AbbreviationMap() {}
 
   void set(unsigned recordID, unsigned abbrevID) {
-    assert(!Abbrevs.contains(recordID) && "Abbreviation already set.");
+    assert(Abbrevs.find(recordID) == Abbrevs.end()
+           && "Abbreviation already set.");
     Abbrevs[recordID] = abbrevID;
   }
 
   unsigned get(unsigned recordID) {
-    assert(Abbrevs.contains(recordID) && "Abbreviation not set.");
+    assert(Abbrevs.find(recordID) != Abbrevs.end() &&
+           "Abbreviation not set.");
     return Abbrevs[recordID];
   }
 };

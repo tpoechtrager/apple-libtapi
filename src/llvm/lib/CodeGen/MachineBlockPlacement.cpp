@@ -201,21 +201,10 @@ static cl::opt<unsigned> TriangleChainCount(
     cl::init(2),
     cl::Hidden);
 
-// Use case: When block layout is visualized after MBP pass, the basic blocks
-// are labeled in layout order; meanwhile blocks could be numbered in a
-// different order. It's hard to map between the graph and pass output.
-// With this option on, the basic blocks are renumbered in function layout
-// order. For debugging only.
-static cl::opt<bool> RenumberBlocksBeforeView(
-    "renumber-blocks-before-view",
-    cl::desc(
-        "If true, basic blocks are re-numbered before MBP layout is printed "
-        "into a dot graph. Only used when a function is being printed."),
-    cl::init(false), cl::Hidden);
-
-namespace llvm {
 extern cl::opt<bool> EnableExtTspBlockPlacement;
 extern cl::opt<bool> ApplyExtTspWithoutProfile;
+
+namespace llvm {
 extern cl::opt<unsigned> StaticLikelyProb;
 extern cl::opt<unsigned> ProfileLikelyProb;
 
@@ -353,15 +342,15 @@ class MachineBlockPlacement : public MachineFunctionPass {
 
   /// Pair struct containing basic block and taildup profitability
   struct BlockAndTailDupResult {
-    MachineBasicBlock *BB = nullptr;
+    MachineBasicBlock *BB;
     bool ShouldTailDup;
   };
 
   /// Triple struct containing edge weight and the edge.
   struct WeightedEdge {
     BlockFrequency Weight;
-    MachineBasicBlock *Src = nullptr;
-    MachineBasicBlock *Dest = nullptr;
+    MachineBasicBlock *Src;
+    MachineBasicBlock *Dest;
   };
 
   /// work lists of blocks that are ready to be laid out
@@ -372,32 +361,32 @@ class MachineBlockPlacement : public MachineFunctionPass {
   DenseMap<const MachineBasicBlock *, BlockAndTailDupResult> ComputedEdges;
 
   /// Machine Function
-  MachineFunction *F = nullptr;
+  MachineFunction *F;
 
   /// A handle to the branch probability pass.
-  const MachineBranchProbabilityInfo *MBPI = nullptr;
+  const MachineBranchProbabilityInfo *MBPI;
 
   /// A handle to the function-wide block frequency pass.
   std::unique_ptr<MBFIWrapper> MBFI;
 
   /// A handle to the loop info.
-  MachineLoopInfo *MLI = nullptr;
+  MachineLoopInfo *MLI;
 
   /// Preferred loop exit.
   /// Member variable for convenience. It may be removed by duplication deep
   /// in the call stack.
-  MachineBasicBlock *PreferredLoopExit = nullptr;
+  MachineBasicBlock *PreferredLoopExit;
 
   /// A handle to the target's instruction info.
-  const TargetInstrInfo *TII = nullptr;
+  const TargetInstrInfo *TII;
 
   /// A handle to the target's lowering info.
-  const TargetLoweringBase *TLI = nullptr;
+  const TargetLoweringBase *TLI;
 
   /// A handle to the post dominator tree.
-  MachinePostDominatorTree *MPDT = nullptr;
+  MachinePostDominatorTree *MPDT;
 
-  ProfileSummaryInfo *PSI = nullptr;
+  ProfileSummaryInfo *PSI;
 
   /// Duplicator used to duplicate tails during placement.
   ///
@@ -411,7 +400,7 @@ class MachineBlockPlacement : public MachineFunctionPass {
 
   /// True:  use block profile count to compute tail duplication cost.
   /// False: use block frequency to compute tail duplication cost.
-  bool UseProfileCount = false;
+  bool UseProfileCount;
 
   /// Allocator and owner of BlockChain structures.
   ///
@@ -1159,7 +1148,7 @@ bool MachineBlockPlacement::canTailDuplicateUnplacedPreds(
     // tail-duplicated into.
     // Skip any blocks that are already placed or not in this loop.
     if (Pred == BB || (BlockFilter && !BlockFilter->count(Pred))
-        || (BlockToChain[Pred] == &Chain && !Succ->succ_empty()))
+        || BlockToChain[Pred] == &Chain)
       continue;
     if (!TailDup.canTailDuplicate(Succ, Pred)) {
       if (Successors.size() > 1 && hasSameSuccessors(*Pred, Successors))
@@ -2017,7 +2006,7 @@ MachineBlockPlacement::FallThroughGains(
      for (MachineBasicBlock *Succ : BestPred->successors()) {
        if ((Succ == NewTop) || (Succ == BestPred) || !LoopBlockSet.count(Succ))
          continue;
-       if (ComputedEdges.contains(Succ))
+       if (ComputedEdges.find(Succ) != ComputedEdges.end())
          continue;
        BlockChain *SuccChain = BlockToChain[Succ];
        if ((SuccChain && (Succ != *SuccChain->begin())) ||
@@ -3477,8 +3466,6 @@ bool MachineBlockPlacement::runOnMachineFunction(MachineFunction &MF) {
   if (ViewBlockLayoutWithBFI != GVDT_None &&
       (ViewBlockFreqFuncName.empty() ||
        F->getFunction().getName().equals(ViewBlockFreqFuncName))) {
-    if (RenumberBlocksBeforeView)
-      MF.RenumberBlocks();
     MBFI->view("MBP." + MF.getName(), false);
   }
 

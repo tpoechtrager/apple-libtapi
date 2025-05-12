@@ -16,16 +16,10 @@
 
 #include "CodeGenHwModes.h"
 #include "llvm/ADT/SmallSet.h"
-#include "llvm/ADT/SmallVector.h"
-#include "llvm/ADT/StringRef.h"
-#include "llvm/CodeGen/MachineValueType.h"
-#include "llvm/Support/Compiler.h"
-#include <cassert>
-#include <limits>
+#include "llvm/Support/MachineValueType.h"
+
 #include <map>
 #include <string>
-#include <tuple>
-#include <utility>
 
 namespace llvm {
 
@@ -44,44 +38,18 @@ template <typename InfoT>
 void union_modes(const InfoByHwMode<InfoT> &A,
                  const InfoByHwMode<InfoT> &B,
                  SmallVectorImpl<unsigned> &Modes) {
-  auto AI = A.begin();
-  auto BI = B.begin();
-
-  // Skip default mode, but remember if we had one.
-  bool HasDefault = false;
-  if (AI != A.end() && AI->first == DefaultMode) {
-    HasDefault = true;
-    ++AI;
-  }
-  if (BI != B.end() && BI->first == DefaultMode) {
-    HasDefault = true;
-    ++BI;
-  }
-
-  while (AI != A.end()) {
-    // If we're done with B, finish A.
-    if (BI == B.end()) {
-      for (; AI != A.end(); ++AI)
-        Modes.push_back(AI->first);
-      break;
-    }
-
-    if (BI->first < AI->first) {
-      Modes.push_back(BI->first);
-      ++BI;
-    } else {
-      Modes.push_back(AI->first);
-      if (AI->first == BI->first)
-        ++BI;
-      ++AI;
-    }
-  }
-
-  // Finish B.
-  for (; BI != B.end(); ++BI)
-    Modes.push_back(BI->first);
-
+  SmallSet<unsigned, 4> U;
+  for (const auto &P : A)
+    U.insert(P.first);
+  for (const auto &P : B)
+    U.insert(P.first);
   // Make sure that the default mode is last on the list.
+  bool HasDefault = false;
+  for (unsigned M : U)
+    if (M != DefaultMode)
+      Modes.push_back(M);
+    else
+      HasDefault = true;
   if (HasDefault)
     Modes.push_back(DefaultMode);
 }
@@ -110,27 +78,20 @@ struct InfoByHwMode {
   LLVM_ATTRIBUTE_ALWAYS_INLINE
   bool hasMode(unsigned M) const { return Map.find(M) != Map.end(); }
   LLVM_ATTRIBUTE_ALWAYS_INLINE
-  bool hasDefault() const {
-    return !Map.empty() && Map.begin()->first == DefaultMode;
-  }
+  bool hasDefault() const { return hasMode(DefaultMode); }
 
   InfoT &get(unsigned Mode) {
-    auto F = Map.find(Mode);
-    if (F != Map.end())
-      return F->second;
-
-    // Copy and insert the default mode which should be first.
-    assert(hasDefault());
-    auto P = Map.insert({Mode, Map.begin()->second});
-    return P.first->second;
+    if (!hasMode(Mode)) {
+      assert(hasMode(DefaultMode));
+      Map.insert({Mode, Map.at(DefaultMode)});
+    }
+    return Map.at(Mode);
   }
   const InfoT &get(unsigned Mode) const {
     auto F = Map.find(Mode);
-    if (F != Map.end())
-      return F->second;
-    // Get the default mode which should be first.
-    F = Map.begin();
-    assert(F != Map.end() && F->first == DefaultMode);
+    if (Mode != DefaultMode && F == Map.end())
+      F = Map.find(DefaultMode);
+    assert(F != Map.end());
     return F->second;
   }
 
@@ -139,7 +100,7 @@ struct InfoByHwMode {
     return Map.size() == 1 && Map.begin()->first == DefaultMode;
   }
   LLVM_ATTRIBUTE_ALWAYS_INLINE
-  const InfoT &getSimple() const {
+  InfoT getSimple() const {
     assert(isSimple());
     return Map.begin()->second;
   }

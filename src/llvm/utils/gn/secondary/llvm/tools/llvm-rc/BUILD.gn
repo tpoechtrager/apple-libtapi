@@ -41,7 +41,6 @@ driver_executable("llvm-rc") {
     "//llvm/lib/Object",
     "//llvm/lib/Option",
     "//llvm/lib/Support",
-    "//llvm/lib/TargetParser",
   ]
   sources = [
     "ResourceFileWriter.cpp",

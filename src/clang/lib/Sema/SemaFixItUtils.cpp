@@ -124,16 +124,12 @@ bool ConversionFixItGenerator::tryToFixConversion(const Expr *FullExpr,
 
   // Check if the pointer to the argument needs to be passed:
   //   (type -> type *) or (type & -> type *).
-  if (const auto *ToPtrTy = dyn_cast<PointerType>(ToQTy)) {
+  if (isa<PointerType>(ToQTy)) {
     bool CanConvert = false;
     OverloadFixItKind FixKind = OFIK_TakeAddress;
 
     // Only suggest taking address of L-values.
     if (!Expr->isLValue() || Expr->getObjectKind() != OK_Ordinary)
-      return false;
-
-    // Do no take address of const pointer to get void*
-    if (isa<PointerType>(FromQTy) && ToPtrTy->isVoidPointerType())
       return false;
 
     CanConvert = CompareTypes(S.Context.getPointerType(FromQTy), ToQTy, S,

@@ -153,7 +153,7 @@ Expected<ScanDaemon> ScanDaemon::launchDaemon(StringRef BasePath,
       BasePathCStr.c_str(),
   };
 
-  ArrayRef<const char *> InitialArgs = ArrayRef(Args);
+  ArrayRef<const char *> InitialArgs = makeArrayRef(Args);
   SmallVector<const char *> LaunchArgs(InitialArgs.begin(), InitialArgs.end());
 
   llvm::BumpPtrAllocator Alloc;

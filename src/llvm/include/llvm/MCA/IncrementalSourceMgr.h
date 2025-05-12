@@ -35,17 +35,17 @@ class IncrementalSourceMgr : public SourceMgr {
   std::deque<Instruction *> Staging;
 
   /// Current instruction index.
-  unsigned TotalCounter = 0U;
+  unsigned TotalCounter;
 
   /// End-of-stream flag.
-  bool EOS = false;
+  bool EOS;
 
   /// Called when an instruction is no longer needed.
   using InstFreedCallback = llvm::function_ref<void(Instruction *)>;
   InstFreedCallback InstFreedCB;
 
 public:
-  IncrementalSourceMgr() = default;
+  IncrementalSourceMgr() : TotalCounter(0U), EOS(false) {}
 
   void clear();
 

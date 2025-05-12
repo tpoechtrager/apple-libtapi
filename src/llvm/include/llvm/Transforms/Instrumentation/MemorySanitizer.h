@@ -17,6 +17,7 @@
 #include "llvm/IR/PassManager.h"
 
 namespace llvm {
+class Function;
 class Module;
 class StringRef;
 class raw_ostream;

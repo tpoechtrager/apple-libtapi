@@ -650,7 +650,7 @@ TEST_F(LexerTest, RawAndNormalLexSameForLineComments) {
           SrcBuffer.data(), SrcBuffer.data(),
           SrcBuffer.data() + SrcBuffer.size());
 
-  auto ToksView = llvm::ArrayRef(Toks);
+  auto ToksView = llvm::makeArrayRef(Toks);
   clang::Token T;
   EXPECT_FALSE(ToksView.empty());
   while (!L.LexFromRawLexer(T)) {

@@ -16,7 +16,6 @@
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/CodeGen/MacroFusion.h"
 #include "llvm/CodeGen/ScheduleDAGMutation.h"
-#include <optional>
 
 using namespace llvm;
 namespace {
@@ -56,9 +55,9 @@ public:
   bool hasOp1(unsigned Opc) const { return OpSet1.contains(Opc); }
   bool hasOp2(unsigned Opc) const { return OpSet2.contains(Opc); }
   bool isSupported() const { return Supported; }
-  std::optional<unsigned> depOpIdx() const {
+  Optional<unsigned> depOpIdx() const {
     if (DepOpIdx < 0)
-      return std::nullopt;
+      return None;
     return DepOpIdx;
   }
 
@@ -106,8 +105,8 @@ static bool checkOpConstraints(FusionFeature::FusionKind Kd,
     if (!RA.isReg())
       return true;
 
-    return RA.getReg().isVirtual() ||
-           (RA.getReg() != PPC::ZERO && RA.getReg() != PPC::ZERO8);
+    return Register::isVirtualRegister(RA.getReg()) ||
+      (RA.getReg() != PPC::ZERO && RA.getReg() != PPC::ZERO8);
   }
   // [addis rt,ra,si - ld rt,ds(ra)] etc.
   case FusionFeature::FK_AddisLoad: {
@@ -116,7 +115,7 @@ static bool checkOpConstraints(FusionFeature::FusionKind Kd,
       return true;
 
     // Only check it for non-virtual register.
-    if (!RT.getReg().isVirtual())
+    if (!Register::isVirtualRegister(RT.getReg()))
       // addis(rt) = ld(ra) = ld(rt)
       // ld(rt) cannot be zero
       if (!matchingRegOps(SecondMI, 0, SecondMI, 2) ||
@@ -169,7 +168,8 @@ static bool checkOpConstraints(FusionFeature::FusionKind Kd,
   // { ld,ldx } - cmpli 0,1,rx,{ 0,1 }
   case FusionFeature::FK_LoadCmp2: {
     const MachineOperand &BT = SecondMI.getOperand(0);
-    if (!BT.isReg() || (!BT.getReg().isVirtual() && BT.getReg() != PPC::CR0))
+    if (!BT.isReg() ||
+        (!Register::isVirtualRegister(BT.getReg()) && BT.getReg() != PPC::CR0))
       return false;
     if (SecondMI.getOpcode() == PPC::CMPDI &&
         matchingImmOps(SecondMI, 2, -1, 16))
@@ -180,7 +180,8 @@ static bool checkOpConstraints(FusionFeature::FusionKind Kd,
   // { lha,lhax,lwa,lwax } - cmpi 0,L,rx,{ 0,1,-1 }
   case FusionFeature::FK_LoadCmp3: {
     const MachineOperand &BT = SecondMI.getOperand(0);
-    if (!BT.isReg() || (!BT.getReg().isVirtual() && BT.getReg() != PPC::CR0))
+    if (!BT.isReg() ||
+        (!Register::isVirtualRegister(BT.getReg()) && BT.getReg() != PPC::CR0))
       return false;
     return matchingImmOps(SecondMI, 2, 0) || matchingImmOps(SecondMI, 2, 1) ||
            matchingImmOps(SecondMI, 2, -1, 16);

@@ -158,6 +158,15 @@ std::error_code MaskingOverlayFileSystem::isLocal(const Twine &path,
   return OverlayFileSystem::isLocal(path, result);
 }
 
+std::error_code
+MaskingOverlayFileSystem::getRealPath(const Twine &path,
+                                      SmallVectorImpl<char> &output) const {
+  if (pathMasked(path))
+    return llvm::errc::no_such_file_or_directory;
+
+  return OverlayFileSystem::getRealPath(path, output);
+}
+
 ErrorOr<std::unique_ptr<vfs::File>>
 MaskingOverlayFileSystem::openFileForRead(const Twine &path) {
   if (pathMasked(path))

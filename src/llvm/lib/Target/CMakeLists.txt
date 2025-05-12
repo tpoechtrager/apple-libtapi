@@ -17,7 +17,6 @@ add_llvm_component_library(LLVMTarget
   Core
   MC
   Support
-  TargetParser
   )
 
 # When building shared objects for each target there are some internal APIs

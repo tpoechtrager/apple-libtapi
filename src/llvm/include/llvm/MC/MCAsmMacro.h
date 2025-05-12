@@ -46,7 +46,7 @@ public:
     Slash,     // '/'
     BackSlash, // '\'
     LParen, RParen, LBrac, RBrac, LCurly, RCurly,
-    Question, Star, Dot, Comma, Dollar, Equal, EqualEqual,
+    Star, Dot, Comma, Dollar, Equal, EqualEqual,
 
     Pipe, PipePipe, Caret,
     Amp, AmpAmp, Exclaim, ExclaimEqual, Percent, Hash,
@@ -63,7 +63,7 @@ public:
   };
 
 private:
-  TokenKind Kind = TokenKind::Eof;
+  TokenKind Kind;
 
   /// A reference to the entire token contents; this is always a pointer into
   /// a memory buffer owned by the source manager.

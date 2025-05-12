@@ -19,23 +19,23 @@ void DWARFTypePrinter::appendArrayType(const DWARFDie &D) {
   for (const DWARFDie &C : D.children()) {
     if (C.getTag() != DW_TAG_subrange_type)
       continue;
-    std::optional<uint64_t> LB;
-    std::optional<uint64_t> Count;
-    std::optional<uint64_t> UB;
-    std::optional<unsigned> DefaultLB;
-    if (std::optional<DWARFFormValue> L = C.find(DW_AT_lower_bound))
+    Optional<uint64_t> LB;
+    Optional<uint64_t> Count;
+    Optional<uint64_t> UB;
+    Optional<unsigned> DefaultLB;
+    if (Optional<DWARFFormValue> L = C.find(DW_AT_lower_bound))
       LB = L->getAsUnsignedConstant();
-    if (std::optional<DWARFFormValue> CountV = C.find(DW_AT_count))
+    if (Optional<DWARFFormValue> CountV = C.find(DW_AT_count))
       Count = CountV->getAsUnsignedConstant();
-    if (std::optional<DWARFFormValue> UpperV = C.find(DW_AT_upper_bound))
+    if (Optional<DWARFFormValue> UpperV = C.find(DW_AT_upper_bound))
       UB = UpperV->getAsUnsignedConstant();
-    if (std::optional<DWARFFormValue> LV =
+    if (Optional<DWARFFormValue> LV =
             D.getDwarfUnit()->getUnitDIE().find(DW_AT_language))
-      if (std::optional<uint64_t> LC = LV->getAsUnsignedConstant())
+      if (Optional<uint64_t> LC = LV->getAsUnsignedConstant())
         if ((DefaultLB =
                  LanguageLowerBound(static_cast<dwarf::SourceLanguage>(*LC))))
           if (LB && *LB == *DefaultLB)
-            LB = std::nullopt;
+            LB = None;
     if (!LB && !Count && !UB)
       OS << "[]";
     else if (!LB && (Count || UB) && DefaultLB)
@@ -424,11 +424,11 @@ bool DWARFTypePrinter::appendTemplateParameters(DWARFDie D,
             OS << (char)Val;
             OS << "'";
           } else if (Val < 256)
-            OS << llvm::format("'\\x%02" PRIx64 "'", Val);
+            OS << to_string(llvm::format("'\\x%02x'", Val));
           else if (Val <= 0xFFFF)
-            OS << llvm::format("'\\u%04" PRIx64 "'", Val);
+            OS << to_string(llvm::format("'\\u%04x'", Val));
           else
-            OS << llvm::format("'\\U%08" PRIx64 "'", Val);
+            OS << to_string(llvm::format("'\\U%08x'", Val));
         }
       }
       continue;

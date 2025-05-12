@@ -34,10 +34,11 @@
 #include "clang/StaticAnalyzer/Core/PathSensitive/SymExpr.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/SymbolManager.h"
 #include "llvm/ADT/APSInt.h"
+#include "llvm/ADT/None.h"
+#include "llvm/ADT/Optional.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Compiler.h"
 #include <cassert>
-#include <optional>
 #include <tuple>
 
 using namespace clang;
@@ -123,8 +124,7 @@ SVal SValBuilder::convertToArrayIndex(SVal val) {
     return val;
 
   // Common case: we have an appropriately sized integer.
-  if (std::optional<nonloc::ConcreteInt> CI =
-          val.getAs<nonloc::ConcreteInt>()) {
+  if (Optional<nonloc::ConcreteInt> CI = val.getAs<nonloc::ConcreteInt>()) {
     const llvm::APSInt& I = CI->getValue();
     if (I.getBitWidth() == ArrayIndexWidth && I.isSigned())
       return val;
@@ -297,7 +297,7 @@ DefinedSVal SValBuilder::getBlockPointer(const BlockDecl *block,
   return loc::MemRegionVal(BD);
 }
 
-std::optional<loc::MemRegionVal>
+Optional<loc::MemRegionVal>
 SValBuilder::getCastedMemRegionVal(const MemRegion *R, QualType Ty) {
   if (auto OptR = StateMgr.getStoreManager().castRegion(R, Ty))
     return loc::MemRegionVal(*OptR);
@@ -319,7 +319,7 @@ loc::MemRegionVal SValBuilder::getCXXThis(const CXXRecordDecl *D,
   return loc::MemRegionVal(getRegionManager().getCXXThisRegion(PT, SFC));
 }
 
-std::optional<SVal> SValBuilder::getConstantVal(const Expr *E) {
+Optional<SVal> SValBuilder::getConstantVal(const Expr *E) {
   E = E->IgnoreParens();
 
   switch (E->getStmtClass()) {
@@ -389,12 +389,13 @@ std::optional<SVal> SValBuilder::getConstantVal(const Expr *E) {
     case CK_NoOp:
     case CK_BitCast: {
       const Expr *SE = CE->getSubExpr();
-      std::optional<SVal> Val = getConstantVal(SE);
+      Optional<SVal> Val = getConstantVal(SE);
       if (!Val)
         return std::nullopt;
       return evalCast(*Val, CE->getType(), SE->getType());
     }
     }
+    // FALLTHROUGH
     [[fallthrough]];
   }
 
@@ -433,13 +434,11 @@ SVal SValBuilder::makeSymExprValNN(BinaryOperator::Opcode Op,
     return makeNonLoc(symLHS, Op, symRHS, ResultTy);
 
   if (symLHS && symLHS->computeComplexity() < MaxComp)
-    if (std::optional<nonloc::ConcreteInt> rInt =
-            RHS.getAs<nonloc::ConcreteInt>())
+    if (Optional<nonloc::ConcreteInt> rInt = RHS.getAs<nonloc::ConcreteInt>())
       return makeNonLoc(symLHS, Op, rInt->getValue(), ResultTy);
 
   if (symRHS && symRHS->computeComplexity() < MaxComp)
-    if (std::optional<nonloc::ConcreteInt> lInt =
-            LHS.getAs<nonloc::ConcreteInt>())
+    if (Optional<nonloc::ConcreteInt> lInt = LHS.getAs<nonloc::ConcreteInt>())
       return makeNonLoc(lInt->getValue(), Op, symRHS, ResultTy);
 
   return UnknownVal();
@@ -502,14 +501,14 @@ SVal SValBuilder::evalBinOp(ProgramStateRef state, BinaryOperator::Opcode op,
     return UnknownVal();
   }
 
-  if (std::optional<Loc> LV = lhs.getAs<Loc>()) {
-    if (std::optional<Loc> RV = rhs.getAs<Loc>())
+  if (Optional<Loc> LV = lhs.getAs<Loc>()) {
+    if (Optional<Loc> RV = rhs.getAs<Loc>())
       return evalBinOpLL(state, op, *LV, *RV, type);
 
     return evalBinOpLN(state, op, *LV, rhs.castAs<NonLoc>(), type);
   }
 
-  if (const std::optional<Loc> RV = rhs.getAs<Loc>()) {
+  if (const Optional<Loc> RV = rhs.getAs<Loc>()) {
     const auto IsCommutative = [](BinaryOperatorKind Op) {
       return Op == BO_Mul || Op == BO_Add || Op == BO_And || Op == BO_Xor ||
              Op == BO_Or;

@@ -39,7 +39,6 @@ add_llvm_target(SPIRVCodeGen
   Analysis
   AsmPrinter
   CodeGen
-  CodeGenTypes
   Core
   Demangle
   GlobalISel
@@ -49,7 +48,6 @@ add_llvm_target(SPIRVCodeGen
   SelectionDAG
   Support
   Target
-  TargetParser
   TransformUtils
 
   ADD_TO_COMPONENT

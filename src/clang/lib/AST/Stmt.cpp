@@ -41,7 +41,6 @@
 #include <algorithm>
 #include <cassert>
 #include <cstring>
-#include <optional>
 #include <string>
 #include <type_traits>
 #include <utility>
@@ -1002,18 +1001,18 @@ bool IfStmt::isObjCAvailabilityCheck() const {
   return isa<ObjCAvailabilityCheckExpr>(getCond());
 }
 
-std::optional<Stmt *> IfStmt::getNondiscardedCase(const ASTContext &Ctx) {
+Optional<Stmt *> IfStmt::getNondiscardedCase(const ASTContext &Ctx) {
   if (!isConstexpr() || getCond()->isValueDependent())
-    return std::nullopt;
+    return None;
   return !getCond()->EvaluateKnownConstInt(Ctx) ? getElse() : getThen();
 }
 
-std::optional<const Stmt *>
+Optional<const Stmt *>
 IfStmt::getNondiscardedCase(const ASTContext &Ctx) const {
-  if (std::optional<Stmt *> Result =
+  if (Optional<Stmt *> Result =
           const_cast<IfStmt *>(this)->getNondiscardedCase(Ctx))
     return *Result;
-  return std::nullopt;
+  return None;
 }
 
 ForStmt::ForStmt(const ASTContext &C, Stmt *Init, Expr *Cond, VarDecl *condVar,
@@ -1345,11 +1344,6 @@ CapturedStmt::CapturedStmt(EmptyShell Empty, unsigned NumCaptures)
   : Stmt(CapturedStmtClass, Empty), NumCaptures(NumCaptures),
     CapDeclAndKind(nullptr, CR_Default) {
   getStoredStmts()[NumCaptures] = nullptr;
-
-  // Construct default capture objects.
-  Capture *Buffer = getStoredCaptures();
-  for (unsigned I = 0, N = NumCaptures; I != N; ++I)
-    new (Buffer++) Capture();
 }
 
 CapturedStmt *CapturedStmt::Create(const ASTContext &Context, Stmt *S,

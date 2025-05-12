@@ -15,8 +15,6 @@
 #include "ReduceIRReferences.h"
 #include "Delta.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
-#include "llvm/CodeGen/MachineFunction.h"
-#include "llvm/CodeGen/MachineModuleInfo.h"
 
 using namespace llvm;
 
@@ -27,7 +25,7 @@ static void dropIRReferencesFromInstructions(Oracle &O, MachineFunction &MF) {
         for (MachineMemOperand *MMO : MI.memoperands()) {
           // Leave behind pseudo source values.
           // TODO: Removing all MemOperand values is a further reduction step.
-          if (isa<const Value *>(MMO->getPointerInfo().V))
+          if (MMO->getPointerInfo().V.is<const Value *>())
             MMO->setValue(static_cast<const Value *>(nullptr));
         }
 
@@ -69,15 +67,16 @@ static void stripIRFromFunctions(Oracle &O, ReducerWorkItem &WorkItem) {
 }
 
 void llvm::reduceIRInstructionReferencesDeltaPass(TestRunner &Test) {
-  runDeltaPass(Test, stripIRFromInstructions,
-               "Reducing IR references from instructions");
+  outs() << "*** Reducing IR references from instructions...\n";
+  runDeltaPass(Test, stripIRFromInstructions);
 }
 
 void llvm::reduceIRBlockReferencesDeltaPass(TestRunner &Test) {
-  runDeltaPass(Test, stripIRFromBlocks, "Reducing IR references from blocks");
+  outs() << "*** Reducing IR references from blocks...\n";
+  runDeltaPass(Test, stripIRFromBlocks);
 }
 
 void llvm::reduceIRFunctionReferencesDeltaPass(TestRunner &Test) {
-  runDeltaPass(Test, stripIRFromFunctions,
-               "Reducing IR references from functions");
+  outs() << "*** Reducing IR references from functions...\n";
+  runDeltaPass(Test, stripIRFromFunctions);
 }

@@ -1,4 +1,4 @@
-if (DEFINED LLVM_HAVE_TF_AOT OR LLVM_HAVE_TFLITE)
+if (DEFINED LLVM_HAVE_TF_AOT OR DEFINED LLVM_HAVE_TF_API)
   include(TensorFlowCompile)
   set(LLVM_RAEVICT_MODEL_PATH_DEFAULT "models/regalloc-eviction")
 
@@ -17,29 +17,15 @@ if (DEFINED LLVM_HAVE_TF_AOT OR LLVM_HAVE_TFLITE)
     )
   endif()
 
-  if (LLVM_HAVE_TFLITE)
+  if (DEFINED LLVM_HAVE_TF_API)
     list(APPEND MLLinkDeps ${tensorflow_c_api} ${tensorflow_fx})
   endif()
 endif()
-
-# This provides the implementation of MVT and LLT.
-# Be careful to append deps on this, since Targets' tablegens depend on this.
-add_llvm_component_library(LLVMCodeGenTypes
-  LowLevelType.cpp
-  PARTIAL_SOURCES_INTENDED
-
-  DEPENDS
-  vt_gen
-
-  LINK_COMPONENTS
-  Support
-  )
 
 add_llvm_component_library(LLVMCodeGen
   AggressiveAntiDepBreaker.cpp
   AllocationOrder.cpp
   Analysis.cpp
-  AssignmentTrackingAnalysis.cpp
   AtomicExpandPass.cpp
   BasicTargetTransformInfo.cpp
   BranchFolding.cpp
@@ -48,7 +34,6 @@ add_llvm_component_library(LLVMCodeGen
   BasicBlockSections.cpp
   BasicBlockSectionsProfileReader.cpp
   CalcSpillWeights.cpp
-  CallBrPrepare.cpp
   CallingConvLower.cpp
   CFGuardLongjmp.cpp
   CFIFixup.cpp
@@ -58,7 +43,6 @@ add_llvm_component_library(LLVMCodeGen
   CodeGenPassBuilder.cpp
   CodeGenPrepare.cpp
   CommandFlags.cpp
-  ComplexDeinterleavingPass.cpp
   CriticalAntiDepBreaker.cpp
   DeadMachineInstructionElim.cpp
   DetectDeadLanes.cpp
@@ -69,7 +53,6 @@ add_llvm_component_library(LLVMCodeGen
   EHContGuardCatchret.cpp
   ExecutionDomainFix.cpp
   ExpandLargeDivRem.cpp
-  ExpandLargeFpConvert.cpp
   ExpandMemCmp.cpp
   ExpandPostRAPseudos.cpp
   ExpandReductions.cpp
@@ -93,7 +76,6 @@ add_llvm_component_library(LLVMCodeGen
   InterleavedLoadCombinePass.cpp
   IntrinsicLowering.cpp
   JMCInstrumenter.cpp
-  KCFI.cpp
   LatencyPriorityQueue.cpp
   LazyMachineBlockFrequencyInfo.cpp
   LexicalScopes.cpp
@@ -113,7 +95,7 @@ add_llvm_component_library(LLVMCodeGen
   LLVMTargetMachine.cpp
   LocalStackSlotAllocation.cpp
   LoopTraversal.cpp
-  LowLevelTypeUtils.cpp
+  LowLevelType.cpp
   LowerEmuTLS.cpp
   MachineBasicBlock.cpp
   MachineBlockFrequencyInfo.cpp
@@ -135,7 +117,6 @@ add_llvm_component_library(LLVMCodeGen
   MachineFunctionSplitter.cpp
   MachineInstrBundle.cpp
   MachineInstr.cpp
-  MachineLateInstrsCleanup.cpp
   MachineLICM.cpp
   MachineLoopInfo.cpp
   MachineLoopUtils.cpp
@@ -157,7 +138,6 @@ add_llvm_component_library(LLVMCodeGen
   MachineSSAUpdater.cpp
   MachineStripDebug.cpp
   MachineTraceMetrics.cpp
-  MachineUniformityAnalysis.cpp
   MachineVerifier.cpp
   MIRFSDiscriminator.cpp
   MIRSampleProfile.cpp
@@ -215,7 +195,6 @@ add_llvm_component_library(LLVMCodeGen
   RegisterBankInfo.cpp
   SafeStack.cpp
   SafeStackLayout.cpp
-  SanitizerBinaryMetadata.cpp
   ScheduleDAG.cpp
   ScheduleDAGInstrs.cpp
   ScheduleDAGPrinter.cpp
@@ -228,7 +207,6 @@ add_llvm_component_library(LLVMCodeGen
   SpillPlacement.cpp
   SplitKit.cpp
   StackColoring.cpp
-  StackFrameLayoutAnalysisPass.cpp
   StackMapLivenessAnalysis.cpp
   StackMaps.cpp
   StackProtector.cpp
@@ -246,8 +224,8 @@ add_llvm_component_library(LLVMCodeGen
   TargetRegisterInfo.cpp
   TargetSchedule.cpp
   TargetSubtargetInfo.cpp
-  TwoAddressInstructionPass.cpp
   TypePromotion.cpp
+  TwoAddressInstructionPass.cpp
   UnreachableBlockElim.cpp
   ValueTypes.cpp
   VLIWMachineScheduler.cpp
@@ -275,16 +253,12 @@ add_llvm_component_library(LLVMCodeGen
   Analysis
   BitReader
   BitWriter
-  CodeGenTypes
   Core
   MC
-  ObjCARC
-  MCCAS
   ProfileData
   Scalar
   Support
   Target
-  TargetParser
   TransformUtils
   )
 

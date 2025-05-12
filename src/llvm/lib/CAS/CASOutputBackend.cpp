@@ -48,7 +48,7 @@ CASOutputBackend::~CASOutputBackend() = default;
 
 Expected<std::unique_ptr<vfs::OutputFileImpl>>
 CASOutputBackend::createFileImpl(StringRef ResolvedPath,
-                                 std::optional<vfs::OutputConfig> Config) {
+                                 Optional<vfs::OutputConfig> Config) {
   // FIXME: CASIDOutputBackend.createFile() should be called NOW (not inside
   // the OnKeep closure) so that if there are initialization errors (such as
   // output directory not existing) they're reported by createFileImpl().
@@ -56,16 +56,11 @@ CASOutputBackend::createFileImpl(StringRef ResolvedPath,
   // The opened file can be kept inside \a CASOutputFile and forwarded.
   return std::make_unique<CASOutputFile>(
       ResolvedPath, [&](StringRef Path, StringRef Bytes) -> Error {
-        std::optional<ObjectRef> BytesRef;
-        if (Error E =
-                CAS.storeFromString(std::nullopt, Bytes).moveInto(BytesRef))
+        Optional<ObjectRef> BytesRef;
+        if (Error E = CAS.storeFromString(None, Bytes).moveInto(BytesRef))
           return E;
-        addObject(Path, *BytesRef);
+        // FIXME: Should there be a lock taken before modifying Outputs?
+        Outputs.push_back({std::string(Path), *BytesRef});
         return Error::success();
       });
-}
-
-void CASOutputBackend::addObject(StringRef Path, ObjectRef Object) {
-  // FIXME: Should there be a lock taken before modifying Outputs?
-  Outputs.push_back({std::string(Path), Object});
 }

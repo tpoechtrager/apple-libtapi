@@ -62,11 +62,7 @@ TEST(PointerIntPairTest, GetSet) {
   EXPECT_EQ(&s, Pair2.getPointer());
   EXPECT_EQ(E::Case3, Pair2.getInt());
 
-  auto [Pointer2, Int2] = Pair2;
-  EXPECT_EQ(Pair2.getPointer(), Pointer2);
-  EXPECT_EQ(Pair2.getInt(), Int2);
-
-  static_assert(std::is_trivially_copyable_v<PointerIntPair<S *, 2, E>>,
+  static_assert(std::is_trivially_copyable<PointerIntPair<S *, 2, E>>::value,
                 "trivially copyable");
 }
 
@@ -104,27 +100,10 @@ TEST(PointerIntPairTest, ManyUnusedBits) {
   EXPECT_EQ(FixnumPointerTraits::NumLowBitsAvailable - 1,
             (int)PointerLikeTypeTraits<decltype(pair)>::NumLowBitsAvailable);
 
-  static_assert(std::is_trivially_copyable_v<
-                    PointerIntPair<Fixnum31, 1, bool, FixnumPointerTraits>>,
-                "trivially copyable");
-}
-
-TEST(PointerIntPairTest, TypePunning) {
-  int I = 0;
-  int *IntPtr = &I;
-
-  int **IntPtrBegin = &IntPtr;
-  int **IntPtrEnd = IntPtrBegin + 1;
-
-  PointerIntPair<int *, 1> Pair;
-  int **PairAddr = Pair.getAddrOfPointer();
-
-  while (IntPtrBegin != IntPtrEnd) {
-    *PairAddr = *IntPtrBegin;
-    ++PairAddr;
-    ++IntPtrBegin;
-  }
-  EXPECT_EQ(Pair.getPointer(), IntPtr);
+  static_assert(
+      std::is_trivially_copyable<
+          PointerIntPair<Fixnum31, 1, bool, FixnumPointerTraits>>::value,
+      "trivially copyable");
 }
 
 } // end anonymous namespace

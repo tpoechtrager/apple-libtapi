@@ -38,8 +38,7 @@ public:
 
           LookupResult Result;
           for (auto &KV : *InternedResult)
-            Result[*KV.first] = {KV.second.getAddress().getValue(),
-                                 KV.second.getFlags()};
+            Result[*KV.first] = std::move(KV.second);
           OnResolved(Result);
         };
 
@@ -82,7 +81,7 @@ using BaseT = RTTIExtends<RTDyldObjectLinkingLayer, ObjectLayer>;
 
 RTDyldObjectLinkingLayer::RTDyldObjectLinkingLayer(
     ExecutionSession &ES, GetMemoryManagerFunction GetMemoryManager)
-    : BaseT(ES), GetMemoryManager(std::move(GetMemoryManager)) {
+    : BaseT(ES), GetMemoryManager(GetMemoryManager) {
   ES.registerResourceManager(*this);
 }
 
@@ -260,46 +259,6 @@ Error RTDyldObjectLinkingLayer::onObjLoad(
       if (COFFSec.Characteristics & COFF::IMAGE_SCN_LNK_COMDAT)
         I->second.setFlags(I->second.getFlags() | JITSymbolFlags::Weak);
     }
-
-    // Handle any aliases.
-    for (auto &Sym : COFFObj->symbols()) {
-      uint32_t SymFlags = cantFail(Sym.getFlags());
-      if (SymFlags & object::BasicSymbolRef::SF_Undefined)
-        continue;
-      auto Name = Sym.getName();
-      if (!Name)
-        return Name.takeError();
-      auto I = Resolved.find(*Name);
-
-      // Skip already-resolved symbols, and symbols that we're not responsible
-      // for.
-      if (I != Resolved.end() || !R.getSymbols().count(ES.intern(*Name)))
-        continue;
-
-      // Skip anything other than weak externals.
-      auto COFFSym = COFFObj->getCOFFSymbol(Sym);
-      if (!COFFSym.isWeakExternal())
-        continue;
-      auto *WeakExternal = COFFSym.getAux<object::coff_aux_weak_external>();
-      if (WeakExternal->Characteristics != COFF::IMAGE_WEAK_EXTERN_SEARCH_ALIAS)
-        continue;
-
-      // We found an alias. Reuse the resolution of the alias target for the
-      // alias itself.
-      Expected<object::COFFSymbolRef> TargetSymbol =
-          COFFObj->getSymbol(WeakExternal->TagIndex);
-      if (!TargetSymbol)
-        return TargetSymbol.takeError();
-      Expected<StringRef> TargetName = COFFObj->getSymbolName(*TargetSymbol);
-      if (!TargetName)
-        return TargetName.takeError();
-      auto J = Resolved.find(*TargetName);
-      if (J == Resolved.end())
-        return make_error<StringError>("Could alias target " + *TargetName +
-                                           " not resolved",
-                                       inconvertibleErrorCode());
-      Resolved[*Name] = J->second;
-    }
   }
 
   for (auto &KV : Resolved) {
@@ -327,7 +286,7 @@ Error RTDyldObjectLinkingLayer::onObjLoad(
     } else if (AutoClaimObjectSymbols)
       ExtraSymbolsToClaim[InternedName] = Flags;
 
-    Symbols[InternedName] = {ExecutorAddr(KV.second.getAddress()), Flags};
+    Symbols[InternedName] = JITEvaluatedSymbol(KV.second.getAddress(), Flags);
   }
 
   if (!ExtraSymbolsToClaim.empty()) {
@@ -391,8 +350,7 @@ void RTDyldObjectLinkingLayer::onObjEmit(
   }
 }
 
-Error RTDyldObjectLinkingLayer::handleRemoveResources(JITDylib &JD,
-                                                      ResourceKey K) {
+Error RTDyldObjectLinkingLayer::handleRemoveResources(ResourceKey K) {
 
   std::vector<MemoryManagerUP> MemMgrsToRemove;
 
@@ -416,8 +374,7 @@ Error RTDyldObjectLinkingLayer::handleRemoveResources(JITDylib &JD,
   return Error::success();
 }
 
-void RTDyldObjectLinkingLayer::handleTransferResources(JITDylib &JD,
-                                                       ResourceKey DstKey,
+void RTDyldObjectLinkingLayer::handleTransferResources(ResourceKey DstKey,
                                                        ResourceKey SrcKey) {
   auto I = MemMgrs.find(SrcKey);
   if (I != MemMgrs.end()) {

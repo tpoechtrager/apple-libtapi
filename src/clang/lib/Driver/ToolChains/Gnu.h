@@ -10,7 +10,6 @@
 #define LLVM_CLANG_LIB_DRIVER_TOOLCHAINS_GNU_H
 
 #include "Cuda.h"
-#include "LazyDetector.h"
 #include "ROCm.h"
 #include "clang/Driver/Tool.h"
 #include "clang/Driver/ToolChain.h"
@@ -23,12 +22,12 @@ struct DetectedMultilibs {
   /// The set of multilibs that the detected installation supports.
   MultilibSet Multilibs;
 
-  /// The multilibs appropriate for the given flags.
-  llvm::SmallVector<Multilib> SelectedMultilibs;
+  /// The primary multilib appropriate for the given flags.
+  Multilib SelectedMultilib;
 
   /// On Biarch systems, this corresponds to the default multilib when
   /// targeting the non-default multilib. Otherwise, it is empty.
-  std::optional<Multilib> BiarchSibling;
+  llvm::Optional<Multilib> BiarchSibling;
 };
 
 bool findMIPSMultilibs(const Driver &D, const llvm::Triple &TargetTriple,
@@ -202,7 +201,7 @@ public:
     Multilib SelectedMultilib;
     /// On Biarch systems, this corresponds to the default multilib when
     /// targeting the non-default multilib. Otherwise, it is empty.
-    std::optional<Multilib> BiarchSibling;
+    llvm::Optional<Multilib> BiarchSibling;
 
     GCCVersion Version;
 
@@ -219,7 +218,7 @@ public:
   public:
     explicit GCCInstallationDetector(const Driver &D) : IsValid(false), D(D) {}
     void init(const llvm::Triple &TargetTriple, const llvm::opt::ArgList &Args,
-              ArrayRef<std::string> ExtraTripleAliases = std::nullopt);
+              ArrayRef<std::string> ExtraTripleAliases = None);
 
     /// Check whether we detected a valid GCC install.
     bool isValid() const { return IsValid; }
@@ -287,8 +286,8 @@ public:
 
 protected:
   GCCInstallationDetector GCCInstallation;
-  LazyDetector<CudaInstallationDetector> CudaInstallation;
-  LazyDetector<RocmInstallationDetector> RocmInstallation;
+  CudaInstallationDetector CudaInstallation;
+  RocmInstallationDetector RocmInstallation;
 
 public:
   Generic_GCC(const Driver &D, const llvm::Triple &Triple,

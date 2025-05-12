@@ -34,7 +34,6 @@
 #include "tapi/Frontend/Frontend.h"
 #include "tapi/SDKDB/PartialSDKDB.h"
 #include "tapi/SDKDB/SDKDB.h"
-#include "clang/Basic/DarwinSDKInfo.h"
 #include "clang/Basic/Diagnostic.h"
 #include "clang/Driver/DriverDiagnostic.h"
 #include "llvm/ADT/StringMap.h"
@@ -70,11 +69,9 @@ public:
   }
 
   void visitObjCInterface(ObjCInterfaceRecord &record) override {
-    // If this a promoted APISet, make all exported objc classes to be public.
-    if (record.isExported()) {
-      record.access = APIAccess::Public;
-      updateObjCContainerRecordToPublic(record);
-    }
+    // If this a promoted APISet, make all objc classes to be public.
+    record.access = APIAccess::Public;
+    updateObjCContainerRecordToPublic(record);
   }
 
   void visitObjCCategory(ObjCCategoryRecord &record) override {
@@ -113,7 +110,6 @@ public:
   std::string diagnosticsFile;
   PathSeq systemIncludePaths;
   PathSeq systemFrameworkPaths;
-  PathSeq afterIncludePaths;
   bool verbose;
   PlatformType platform{PLATFORM_UNKNOWN};
   std::string version;
@@ -126,11 +122,10 @@ public:
   std::string projectName;
   bool hasSDKDBError = false;
   bool hasWrittenPartialOutput = false;
-
-  std::optional<DarwinSDKInfo> sdkInfo;
+  bool scannedSwiftInterface = false;
 
   Context(Options &opt, DiagnosticsEngine &diag)
-      : tapi::internal::Context(opt, diag), config(*this) {
+      : tapi::internal::Context(opt, diag), config(*this)  {
     registry.addYAMLReaders();
     outputPath = opt.driverOptions.outputPath;
     installAPISDKDBPath = opt.sdkdbOptions.installAPISDKDBDirectory;
@@ -152,15 +147,12 @@ public:
         verifyAllowlist = std::move(*inputBuf);
     }
 
-    afterIncludePaths = opt.frontendOptions.afterIncludePaths;
     systemIncludePaths = opt.frontendOptions.systemIncludePaths;
     systemFrameworkPaths =
         getAllPaths(opt.frontendOptions.systemFrameworkPaths);
     // set project name.
-    std::optional<std::string> project;
-    if (auto srcroot = llvm::sys::Process::GetEnv("SRCROOT"))
-        project = llvm::sys::path::stem(*srcroot);
-    if (!project || project->empty())
+    auto project = llvm::sys::Process::GetEnv("RC_ProjectName");
+    if (!project)
       return;
     projectName = *project;
     config.setProjectName(projectName);
@@ -168,22 +160,6 @@ public:
 
   ~Context() {
     sys::fs::remove_directories(moduleCachePath);
-  }
-
-  bool hasSDKInfo() {
-    if (sdkInfo)
-      return true;
-    const auto sysRoot = config.getSysRoot();
-    if (!StringRef(sysRoot).endswith(".sdk"))
-      return false;
-    auto sdkInfoOrErr = parseDarwinSDKInfo(
-        getFileManager().getVirtualFileSystem(), std::move(sysRoot));
-    if (auto err = sdkInfoOrErr.takeError()) {
-      consumeError(std::move(err));
-      return false;
-    }
-    sdkInfo = *sdkInfoOrErr;
-    return true;
   }
 
   Error scanBinaryFile(StringRef path, std::vector<Triple> &triples,
@@ -333,45 +309,30 @@ private:
 
 } // namespace sdkdb
 
-namespace {
-
-class SwiftSDKDBError : public llvm::ErrorInfo<SwiftSDKDBError> {
-public:
-  SwiftSDKDBError(StringRef path, Twine errorMsg)
-      : path(path.str()), msg(errorMsg.str()) {}
-
-  void log(llvm::raw_ostream &os) const override {
-    os << "failed to read Swift SDKDB " << path << ": " << msg << "\n";
+static Expected<std::string>
+findSwiftAPIExtractExecutable(DiagnosticsEngine &diag) {
+  static int staticSymbol;
+  // If environmental variable "_TAPI_TEST_SWIFT_API_EXTRACT" is set, just
+  // return that.
+  if (auto swiftFromEnv = sys::Process::GetEnv("_TAPI_TEST_SWIFT_API_EXTRACT"))
+    return *swiftFromEnv;
+  // Try to find swift-api-extract first in the toolchain. If that fails, then
+  // fall-back to the default search PATH.
+  auto mainExecutable = sys::fs::getMainExecutable("tapi", &staticSymbol);
+  StringRef toolchainBinDir = sys::path::parent_path(mainExecutable);
+  auto swiftBinary = sys::findProgramByName("swift-api-extract",
+                                            makeArrayRef(toolchainBinDir));
+  if (swiftBinary.getError()) {
+    diag.report(diag::warn)
+        << "cannot find 'swift-api-extract' in toolchain directory. "
+           "Looking for 'swift-api-extract' in PATH instead.";
+    swiftBinary = sys::findProgramByName("swift-api-extract");
+    if (auto ec = swiftBinary.getError())
+      return make_error<StringError>(
+          "unable to find 'swift-api-extract' in PATH", ec);
   }
-
-  std::error_code convertToErrorCode() const override {
-    return llvm::inconvertibleErrorCode();
-  }
-
-  // Used by ErrorInfo::classID.
-  static char ID;
-
-private:
-  std::string path;
-  std::string msg;
-};
-
-char SwiftSDKDBError::ID = 0;
-
-static Error makeSwiftSDKDBError(StringRef path, Error err) {
-  return make_error<SwiftSDKDBError>(sys::path::filename(path),
-                                     toString(std::move(err)));
+  return swiftBinary.get();
 }
-
-static Error makeSwiftSDKDBError(StringRef path, std::error_code ec) {
-  return makeSwiftSDKDBError(path, errorCodeToError(ec));
-}
-
-static Error makeSwiftSDKDBError(StringRef path, Twine errorMsg) {
-  return make_error<SwiftSDKDBError>(path, errorMsg);
-}
-
-} // anonymous namespace
 
 static void inferTriplesFromEnvironment(sdkdb::Context &context,
                                         const Framework &framework,
@@ -385,22 +346,9 @@ static void inferTriplesFromEnvironment(sdkdb::Context &context,
 
   bool isMacCatalyst =
       context.config.isiOSMacProject() || framework.isMacCatalyst();
-  bool isDriverKit = context.config.isDriverKitProject() ||
-                     framework.isDriverKit() ||
-                     sys::Process::GetEnv("DRIVERKIT").value_or("") == "1";
-
-  const bool isZippered = context.config.isZipperedProject();
-  std::string iOSMacVersion;
-  if (isZippered || isMacCatalyst) {
-    VersionTuple envVersion;
-    if (context.hasSDKInfo() && !envVersion.tryParse(context.version)) {
-      const auto *mapping = context.sdkInfo->getVersionMapping(
-          DarwinSDKInfo::OSEnvPair::macOStoMacCatalystPair());
-      if (auto version = mapping->map(envVersion, VersionTuple(), std::nullopt))
-        iOSMacVersion = version->getAsString();
-    } else
-      iOSMacVersion = "13.1";
-  }
+  bool isDriverKit =
+      context.config.isDriverKitProject() || framework.isDriverKit();
+  bool isZippered = context.config.isZipperedProject();
 
   SmallVector<StringRef, 2> archs;
   StringRef(*archStr).split(archs, ' ');
@@ -411,11 +359,11 @@ static void inferTriplesFromEnvironment(sdkdb::Context &context,
     // FIXME: catalyst and driverkit versions are hard coded.
     if (isMacCatalyst)
       triples.emplace_back(getArchitectureName(arch), "apple",
-                           getOSAndEnvironmentName(PLATFORM_IOS, iOSMacVersion),
+                           getOSAndEnvironmentName(PLATFORM_IOS, "13.0"),
                            "macabi");
     else if (isZippered) {
       triples.emplace_back(getArchitectureName(arch), "apple",
-                           getOSAndEnvironmentName(PLATFORM_IOS, iOSMacVersion),
+                           getOSAndEnvironmentName(PLATFORM_IOS, "13.0"),
                            "macabi");
       triples.emplace_back(
           getArchitectureName(arch), "apple",
@@ -438,12 +386,7 @@ static void inferTriplesFromEnvironment(sdkdb::Context &context,
 
 static bool computeFrontendResultFromFramework(
     sdkdb::Context &context, const Framework &framework,
-    std::vector<Triple> &triples,
-    // isPublic is used to indicate scanning the public SDK content root.
-    // it prefers the public SDK root and sets the public SDK overlay.
-    // publicOnly only controls the type of headers for scanning and skips
-    // non-public headers.
-    bool isPublic, bool publicOnly = false) {
+    std::vector<Triple> &triples, bool isPublic) {
   // bail out of there is no triples.
   if (triples.empty())
     return true;
@@ -547,24 +490,7 @@ static bool computeFrontendResultFromFramework(
   if (!parseGlobs(HeaderType::Private))
     return false;
 
-  // A builtin list of header globs that we should always exclude and might come
-  // from multiple projects. The list is applied to every project so these globs
-  // are not checked for if they have matched any header, to suppress excessive
-  // warnings for projects that don't install the headers.
-  const std::unique_ptr<HeaderGlob> builtinExcludeHeaderGlobs[]{
-      // Exclude `**/usr/[local/]include/_modules/**` headers, which are only
-      // used to build modules and should not be directly included.
-      llvm::cantFail(
-          HeaderGlob::create("**/usr/include/_modules/**", HeaderType::Public)),
-      llvm::cantFail(HeaderGlob::create("**/usr/local/include/_modules/**",
-                                        HeaderType::Private)),
-  };
-
   for (auto &header : headerFiles) {
-    for (auto &glob : builtinExcludeHeaderGlobs)
-      if (glob->match(header))
-        header.isExcluded = true;
-
     for (auto &glob : excludeHeaderGlobs)
       if (glob->match(header))
         header.isExcluded = true;
@@ -587,7 +513,7 @@ static bool computeFrontendResultFromFramework(
   // Exclude all the headers if the framework is in a special path with
   // the name of architectures.
   static const StringSet<> specialDirectoryNames = {
-      "arm", "arm64", "i386", "x86_64", "x86_64h", "ppc", "machine"};
+      "arm", "arm64", "i386", "x86_64", "ppc", "machine"};
   if (specialDirectoryNames.find(sys::path::filename(framework.getPath())) !=
       specialDirectoryNames.end()) {
     for (auto &header : headerFiles)
@@ -735,14 +661,10 @@ static bool computeFrontendResultFromFramework(
   auto &output =
       isPublic ? context.publicSDKResults : context.internalSDKResults;
   for (auto type : {HeaderType::Public, HeaderType::Private}) {
-    if (publicOnly && type == HeaderType::Private)
-      continue;
-
     std::vector<FrontendContext> results;
     for (auto &target : triples) {
       job->target = target;
       job->type = type;
-      job->afterIncludePaths = context.afterIncludePaths;
       job->systemIncludePaths = context.systemIncludePaths;
       job->useUmbrellaHeaderOnly = context.config.useUmbrellaOnly();
       if (target.getEnvironment() == Triple::MacABI) {
@@ -824,17 +746,245 @@ static Expected<API> createAPIsFromSwiftAPIJson(llvm::json::Object &input) {
     return result.takeError();
 }
 
-static Error scanFramework(sdkdb::Context &context, Framework &framework,
-                           bool isPublic, bool binaryOnly,
-                           bool publicOnly = false) {
-  if (publicOnly && framework.getPath().contains("PrivateFrameworks"))
+static std::vector<std::string>
+constructSwiftArgs(StringRef swiftAPIExtract, const Triple &triple,
+                   StringRef moduleName, StringRef vfsFile, StringRef sdkRoot,
+                   StringRef moduleCache, StringRef outputFile) {
+  std::vector<std::string> swiftArgs = {
+      swiftAPIExtract.str(), "-target",
+      triple.str(),          "-sdk",
+      sdkRoot.str(),         "-module-name",
+      moduleName.str(),      "-vfsoverlay",
+      vfsFile.str(),         "-module-cache-path",
+      moduleCache.str(),     "-o",
+      outputFile.str()};
+
+  auto addSearchPath = [&](StringRef path, bool isFramework) {
+    if (isFramework)
+      swiftArgs.emplace_back("-F");
+    else
+      swiftArgs.emplace_back("-I");
+    swiftArgs.emplace_back(path);
+  };
+  if (triple.getEnvironment() == Triple::MacABI) {
+    SmallString<PATH_MAX> iOSSupportPath(sdkRoot);
+    sys::path::append(iOSSupportPath, "System", "iOSSupport");
+    SmallString<PATH_MAX> includePath(iOSSupportPath);
+    sys::path::append(includePath, "usr", "include");
+    addSearchPath(includePath, false);
+    SmallString<PATH_MAX> frameworkPath(iOSSupportPath);
+    sys::path::append(frameworkPath, "System", "Library", "Frameworks");
+    addSearchPath(frameworkPath, true);
+    // add private library search path since that might be referenced by
+    // internal SDK.
+    SmallString<PATH_MAX> privateIncludePath(iOSSupportPath);
+    sys::path::append(privateIncludePath, "usr", "local", "include");
+    addSearchPath(privateIncludePath, false);
+    SmallString<PATH_MAX> privateFrameworkPath(iOSSupportPath);
+    sys::path::append(privateFrameworkPath, "System", "Library",
+                      "PrivateFrameworks");
+    addSearchPath(privateFrameworkPath, true);
+  }
+
+  SmallString<PATH_MAX> privateIncludePath(sdkRoot);
+  sys::path::append(privateIncludePath, "usr", "local", "include");
+  addSearchPath(privateIncludePath, false);
+  SmallString<PATH_MAX> privateFrameworkPath(sdkRoot);
+  sys::path::append(privateFrameworkPath, "System", "Library",
+                    "PrivateFrameworks");
+  addSearchPath(privateFrameworkPath, true);
+
+  return swiftArgs;
+}
+
+static void createSwiftReproducer(sdkdb::Context &context, std::string module,
+                                  Triple triple, std::vector<std::string> args,
+                                  StringRef vfsFile) {
+  std::string tempFileTemplate =
+      context.outputPath + "/" + module + "-%%%%%%.sh";
+  SmallString<PATH_MAX> tempFile;
+  int fd;
+  auto ec = sys::fs::createUniqueFile(tempFileTemplate, fd, tempFile);
+  if (ec) {
+    errs() << "Cannot create temporary file for swift reproducer\n";
+    return;
+  }
+  raw_fd_ostream sh(fd, /*shouldClose=*/true);
+  for (const auto &arg : args)
+    sh << "\"" << arg << "\" ";
+  sh << "\n";
+
+  errs() << "\nNote: a reproducer of the error is written to: \"" << tempFile
+         << "\".\n";
+  errs() << "Note: the reproducer is intended to help users to debug the issue "
+            "under a more familiar context using swift.\n";
+  errs() << "Note: the paths in the reproducer might need to be adjusted.\n";
+  sys::path::replace_extension(tempFile, "vfs");
+  sys::fs::copy_file(vfsFile, tempFile);
+  sys::fs::setPermissions(tempFile, llvm::sys::fs::all_read);
+}
+
+static Error extractSwiftAPI(sdkdb::Context &context, const SwiftModule &module,
+                             std::vector<Triple> &triples,
+                             StringRef swiftAPIExtract, StringRef vfsFile,
+                             StringRef sdkRoot) {
+  for (const auto &target : triples) {
+    SmallString<PATH_MAX> outputFile;
+    if (auto ec = sys::fs::createTemporaryFile("swiftapi", "json", outputFile))
+      return make_error<StringError>("unable to create temporary output file",
+                                     ec);
+    FileRemover removeOutputFile(outputFile);
+
+    auto moduleCachePath = context.getOrCreateModuleCache();
+    if (!moduleCachePath)
+      return moduleCachePath.takeError();
+
+    auto swiftArgs =
+        constructSwiftArgs(swiftAPIExtract, target, module.name, vfsFile,
+                           sdkRoot, *moduleCachePath, outputFile);
+    SmallString<PATH_MAX> stderrFile;
+    if (auto ec = sys::fs::createTemporaryFile("stderr", "txt", stderrFile))
+      return make_error<StringError>("unable to create temporary stderr file",
+                                     ec);
+    FileRemover removeStderrFile(stderrFile);
+    const Optional<StringRef> redirects[] = {/*STDIN=*/llvm::None,
+                                             /*STDOUT=*/llvm::None,
+                                             /*STDERR=*/StringRef(stderrFile)};
+    if (context.verbose) {
+      outs() << "\nswift-api-extract: ";
+      for (const auto &arg : swiftArgs)
+        outs() << arg << " ";
+      outs() << "\n";
+    }
+
+    std::vector<StringRef> args;
+    for (auto &arg : swiftArgs)
+      args.emplace_back(arg);
+
+    bool failed = sys::ExecuteAndWait(swiftAPIExtract, args,
+                                      /*env=*/llvm::None, redirects);
+
+    if (failed) {
+      auto bufferOr = MemoryBuffer::getFile(stderrFile);
+      if (auto ec = bufferOr.getError())
+        return make_error<StringError>("unable to read file", ec);
+
+      createSwiftReproducer(context, module.name, target, swiftArgs, vfsFile);
+      std::string message = "'swift-api-extract' invocation failed:\n";
+      for (auto arg : args) {
+        if (arg.empty())
+          continue;
+        message.append(arg.str()).append(1, ' ');
+      }
+      message.append(1, '\n');
+      message.append(bufferOr.get()->getBuffer().str());
+
+      return make_error<StringError>(
+          message, std::make_error_code(std::errc::not_supported));
+    }
+
+    auto file = context.getFileManager().getFile(outputFile);
+    if (!file)
+      return make_error<StringError>(
+          "cannot open swift-api-extract output file",
+          inconvertibleErrorCode());
+
+    auto buffer = context.getFileManager().getBufferForFile(*file);
+    if (!buffer)
+      return make_error<StringError>(
+          "cannot open swift-api-extract output file",
+          inconvertibleErrorCode());
+
+    auto inputValue = json::parse((*buffer)->getBuffer());
+    if (!inputValue)
+      return inputValue.takeError();
+
+    auto *root = inputValue->getAsObject();
+    if (!root)
+      return make_error<APIJSONError>("API is not a JSON Object");
+
+    auto publicResult = createAPIsFromSwiftAPIJson(*root);
+    if (!publicResult)
+      return publicResult.takeError();
+
+    sdkdb::APILocUpdater publicLocUpdater(sdkRoot, *publicResult);
+    publicResult->visit(publicLocUpdater);
+    context.extraPublicSDKResults.emplace_back(std::move(*publicResult));
+
+    auto internalResult = createAPIsFromSwiftAPIJson(*root);
+    if (!internalResult)
+      return publicResult.takeError();
+
+    sdkdb::APILocUpdater internalLocUpdater(sdkRoot, *internalResult);
+    internalResult->visit(internalLocUpdater);
+    context.extraInternalSDKResults.emplace_back(std::move(*internalResult));
+
+    context.scannedSwiftInterface = true;
+  }
+
+  return Error::success();
+}
+
+static Error computeSwiftInterfacesFromFramework(sdkdb::Context &context,
+                                                 const Framework &framework,
+                                                 std::vector<Triple> &triples,
+                                                 bool isPublic) {
+  if (framework._swiftModules.empty())
     return Error::success();
 
+  // skip private frameworks if public is requested.
+  if (isPublic) {
+    auto frameworkPath = framework.getPath();
+    frameworkPath.consume_front(context.publicSDKPath);
+    if (frameworkPath != "/" && !isWithinPublicLocation(frameworkPath))
+      return Error::success();
+  }
+
+  auto swiftAPIExtract = findSwiftAPIExtractExecutable(context.getDiag());
+  if (!swiftAPIExtract) {
+    // Issue warning for missing `swift-api-extract` for now and proceed.
+    context.getDiag().report(diag::warn)
+        << toString(swiftAPIExtract.takeError());
+    return Error::success();
+  }
+
+  SmallString<PATH_MAX> vfsFile;
+  if (auto ec = sys::fs::createTemporaryFile("vfsoverlay", "yaml", vfsFile))
+    return make_error<StringError>("unable to create temporary input file", ec);
+  FileRemover removeVFSFile(vfsFile);
+  std::error_code ec;
+  raw_fd_ostream vfsMap(vfsFile, ec, sys::fs::OF_None);
+  if (ec)
+    return make_error<StringError>("cannot create vfs file", ec);
+
+  // rdar://104975096
+  // Always use the internal VFS overlay to scan Swift interfaces. Swift builds
+  // private versions of clang module dependencies from private swiftinterfaces
+  // and needs the public headers mapped to SDKContentRoot, because they might
+  // contain SPI_AVAILABLE symbols that are API_UNAVAILABLE in
+  // PublicSDKContentRoot.
+  vfs::YAMLVFSWriter vfsWriter;
+  for (auto &entry : context.internalVFSOverlay)
+    vfsWriter.addFileMapping(entry.first, entry.second);
+  vfsWriter.write(vfsMap);
+  vfsMap.close();
+
+  for (auto &module : framework._swiftModules) {
+    if (auto err = extractSwiftAPI(context, module, triples, *swiftAPIExtract,
+                                   vfsFile, context.config.getSysRoot()))
+      return err;
+  }
+
+  return Error::success();
+}
+
+static Error scanFramework(sdkdb::Context &context, Framework &framework,
+                           bool isPublic, bool binaryOnly) {
   //
   // First scan all sub-frameworks, because we most likely will depend on them.
   //
   for (auto &F : framework._subFrameworks) {
-    if (auto err = scanFramework(context, F, isPublic, binaryOnly, publicOnly))
+    if (auto err = scanFramework(context, F, isPublic, binaryOnly))
       return err;
   }
 
@@ -842,7 +992,7 @@ static Error scanFramework(sdkdb::Context &context, Framework &framework,
   // Second scan all versions ...
   //
   for (auto &F : framework._versions) {
-    if (auto err = scanFramework(context, F, isPublic, binaryOnly, publicOnly))
+    if (auto err = scanFramework(context, F, isPublic, binaryOnly))
       return err;
   }
 
@@ -864,12 +1014,20 @@ static Error scanFramework(sdkdb::Context &context, Framework &framework,
 
   // Now scan the header files.
   if (!computeFrontendResultFromFramework(context, framework, triples,
-        isPublic, publicOnly)) {
+        isPublic)) {
     if (!context.hasSDKDBError) {
       context.hasSDKDBError = true;
       context.getDiag().report(diag::err_cannot_generate_sdkdb)
           << "Failed to scan header interface";
     }
+  }
+
+  // Scan swift interfaces.
+  if (auto err = computeSwiftInterfacesFromFramework(context, framework,
+                                                     triples, isPublic)) {
+    context.hasSDKDBError = true;
+    context.getDiag().report(diag::err_cannot_generate_sdkdb)
+        << toString(std::move(err));
   }
 
   return Error::success();
@@ -895,7 +1053,15 @@ static bool interfaceScan(sdkdb::Context &context, Options &opts) {
   config.clangExtraArgs = opts.frontendOptions.clangExtraArgs;
   config.clangResourcePath = opts.frontendOptions.clangResourcePath;
 
-  context.config.setArchitectures(ArchitectureSet::All());
+  std::vector<Target> targetTriples;
+  for (auto t: opts.frontendOptions.targets)
+    targetTriples.emplace_back(t);
+
+  if (opts.frontendOptions.targets.empty())
+    context.config.setArchitectures(ArchitectureSet::All());
+  else
+    context.config.setArchitectures(
+        mapToArchitectureSet(targetTriples));
 
   // Handle extra header directories/files.
   config.extraPublicHeaders = opts.tapiOptions.extraPublicHeaders;
@@ -958,7 +1124,7 @@ static bool interfaceScan(sdkdb::Context &context, Options &opts) {
   std::vector<Framework> publicFrameworks, internalFrameworks;
 
   // Scan PublicSDKContentRoot.
-  if (config.scanPublicHeaders && !context.config.scanPublicHeadersInSDKContentRoot()) {
+  if (config.scanPublicHeaders) {
     DirectoryScanner scanner(context.getFileManager(), diag,
                              ScannerMode::ScanRuntimeRoot);
     // Scan binary first.
@@ -1011,7 +1177,7 @@ static bool interfaceScan(sdkdb::Context &context, Options &opts) {
   }
 
   // Scan frameworks.
-  if (config.scanPublicHeaders && !context.config.scanPublicHeadersInSDKContentRoot()) {
+  if (config.scanPublicHeaders) {
     auto rootPath = opts.sdkdbOptions.publicSDKContentRoot.empty()
                         ? opts.sdkdbOptions.sdkContentRoot
                         : opts.sdkdbOptions.publicSDKContentRoot;
@@ -1043,20 +1209,6 @@ static bool interfaceScan(sdkdb::Context &context, Options &opts) {
       sdkdb::APILocUpdater locUpdater(opts.sdkdbOptions.sdkContentRoot,
                                       *result.api);
       result.api->visit(locUpdater);
-    }
-
-    if (context.config.scanPublicHeadersInSDKContentRoot()) {
-      if (auto err = scanFramework(context, framework, /*isPublic*/ false,
-                                   /*binary only*/ false, /*publicOnly=*/true)) {
-        diag.report(diag::err_cannot_generate_sdkdb) << toString(std::move(err));
-        context.hasSDKDBError = true;
-      }
-
-      for (auto &result : context.internalSDKResults) {
-        sdkdb::APILocUpdater locUpdater(opts.sdkdbOptions.sdkContentRoot,
-                                        *result.api);
-        result.api->visit(locUpdater);
-      }
     }
   }
 
@@ -1181,15 +1333,15 @@ static bool readPartialSDKDBInputs(sdkdb::Context &context, Options &opts) {
   return true;
 }
 
-static Error readExistingPartialSDKDBFromDirectory(sdkdb::Context &context) {
+static void readExistingPartialSDKDBFromDirectory(sdkdb::Context &context) {
   // Skip if no output is specified or output is stdout.
   if (context.installAPISDKDBPath.empty())
-    return Error::success();
+    return;
 
   auto &fm = context.getFileManager();
   // if output path is not a directory, skip.
   if (!fm.isDirectory(context.installAPISDKDBPath))
-    return Error::success();
+    return;
 
   // look into directory for partial SDKDB files.
   auto &fs = fm.getVirtualFileSystem();
@@ -1221,79 +1373,50 @@ static Error readExistingPartialSDKDBFromDirectory(sdkdb::Context &context) {
   llvm::sort(inputFiles);
 
   for (auto &path : inputFiles) {
-    const bool isSwiftSDKDB = StringRef(path).ends_with(".swift.sdkdb");
-
     // Read partial SDKDB output.
     auto file = context.getFileManager().getFile(path);
-    if (!file) {
-      if (isSwiftSDKDB)
-        return makeSwiftSDKDBError(path, file.getError());
+    if (!file)
       continue;
-    }
     auto buffer = context.getFileManager().getBufferForFile(*file);
-    if (!buffer) {
-      if (isSwiftSDKDB)
-        return makeSwiftSDKDBError(path, buffer.getError());
+    if (!buffer)
       continue;
-    }
 
     auto inputValue = json::parse((*buffer)->getBuffer());
     if (!inputValue) {
-      if (isSwiftSDKDB)
-        return makeSwiftSDKDBError(path, inputValue.takeError());
       consumeError(inputValue.takeError());
       continue;
     }
 
     auto *root = inputValue->getAsObject();
-    if (!root) {
-      if (isSwiftSDKDB)
-        return makeSwiftSDKDBError(path, "Invalid JSON object");
+    if (!root)
       continue;
+
+    {
+      auto partialResult = PartialSDKDB::createPublicAPIsFromJSON(*root);
+      if (!partialResult) {
+        consumeError(partialResult.takeError());
+        continue;
+      }
+
+      for (auto &result : partialResult->binaryInterfaces)
+        context.publicBinaryResults.emplace_back(std::move(result));
+      for (auto &result : partialResult->headerInterfaces)
+        context.extraPublicSDKResults.emplace_back(std::move(result));
     }
 
-    if (isSwiftSDKDB) {
-      auto publicResult = createAPIsFromSwiftAPIJson(*root);
-      if (!publicResult)
-        return makeSwiftSDKDBError(path, publicResult.takeError());
-
-      context.extraPublicSDKResults.emplace_back(std::move(*publicResult));
-
-      auto internalResult = createAPIsFromSwiftAPIJson(*root);
-      if (!internalResult)
-        return makeSwiftSDKDBError(path, internalResult.takeError());
-
-      context.extraInternalSDKResults.emplace_back(std::move(*internalResult));
-    } else {
-      {
-        auto partialResult = PartialSDKDB::createPublicAPIsFromJSON(*root);
-        if (!partialResult) {
-          consumeError(partialResult.takeError());
-          continue;
-        }
-
-        for (auto &result : partialResult->binaryInterfaces)
-          context.publicBinaryResults.emplace_back(std::move(result));
-        for (auto &result : partialResult->headerInterfaces)
-          context.extraPublicSDKResults.emplace_back(std::move(result));
+    {
+      auto partialResult = PartialSDKDB::createPrivateAPIsFromJSON(*root);
+      if (!partialResult) {
+        consumeError(partialResult.takeError());
+        continue;
       }
 
-      {
-        auto partialResult = PartialSDKDB::createPrivateAPIsFromJSON(*root);
-        if (!partialResult) {
-          consumeError(partialResult.takeError());
-          continue;
-        }
-
-        for (auto &result : partialResult->binaryInterfaces)
-          context.internalBinaryResults.emplace_back(std::move(result));
-        for (auto &result : partialResult->headerInterfaces)
-          context.extraInternalSDKResults.emplace_back(std::move(result));
-      }
+      for (auto &result : partialResult->binaryInterfaces)
+        context.internalBinaryResults.emplace_back(std::move(result));
+      for (auto &result : partialResult->headerInterfaces)
+        context.extraInternalSDKResults.emplace_back(std::move(result));
     }
   }
-
-  return Error::success();
 }
 
 /// Scan the directory for header and dynamic libraries and generate
@@ -1362,14 +1485,8 @@ static bool runSDKDBDriver(sdkdb::Context &context, DiagnosticsEngine &diag,
 
   // Run InterfaceScan.
   if (opts.sdkdbOptions.action & SDKDBAction::SDKDBInterfaceScan) {
-    if (!context.config.ignoreExistingPartialSDKDBs()) {
-      // Scan the output directory to see if there are any partial outputs.
-      if (auto err = readExistingPartialSDKDBFromDirectory(context)) {
-        diag.report(diag::err_cannot_generate_sdkdb)
-            << toString(std::move(err));
-        return false;
-      }
-    }
+    // Scan the output directory to see if there are any partial outputs.
+    readExistingPartialSDKDBFromDirectory(context);
     // Scan interface from roots.
     if (!interfaceScan(context, opts))
       return false;
@@ -1480,9 +1597,8 @@ bool Driver::SDKDB::run(DiagnosticsEngine &diag, Options &opts) {
       emptyContext.hasSDKDBError = true;
       writePartialSDKDB(emptyContext);
     }
-    // Return false to error out if `TAPI_SDKDB_FORCE_ERROR` is set to 1.
-    // Otherwise return true to ignore the SDKDB error.
-    return sys::Process::GetEnv("TAPI_SDKDB_FORCE_ERROR").value_or("") != "1";
+    // Do not return error unless TAPI_SDKDB_FORCE_ERROR is set.
+    return !sys::Process::GetEnv("TAPI_SDKDB_FORCE_ERROR").has_value();
   }
 
   return true;

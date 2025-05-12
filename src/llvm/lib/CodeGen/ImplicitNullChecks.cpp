@@ -26,6 +26,8 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/None.h"
+#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
@@ -94,13 +96,13 @@ class ImplicitNullChecks : public MachineFunctionPass {
     /// computeDependence).
     bool CanReorder;
 
-    /// If non-std::nullopt, then an instruction in \p Insts that also must be
+    /// If non-None, then an instruction in \p Insts that also must be
     /// hoisted.
-    std::optional<ArrayRef<MachineInstr *>::iterator> PotentialDependence;
+    Optional<ArrayRef<MachineInstr *>::iterator> PotentialDependence;
 
     /*implicit*/ DependenceResult(
         bool CanReorder,
-        std::optional<ArrayRef<MachineInstr *>::iterator> PotentialDependence)
+        Optional<ArrayRef<MachineInstr *>::iterator> PotentialDependence)
         : CanReorder(CanReorder), PotentialDependence(PotentialDependence) {
       assert((!PotentialDependence || CanReorder) &&
              "!CanReorder && PotentialDependence.hasValue() not allowed!");
@@ -253,18 +255,18 @@ ImplicitNullChecks::computeDependence(const MachineInstr *MI,
   assert(llvm::all_of(Block, canHandle) && "Check this first!");
   assert(!is_contained(Block, MI) && "Block must be exclusive of MI!");
 
-  std::optional<ArrayRef<MachineInstr *>::iterator> Dep;
+  Optional<ArrayRef<MachineInstr *>::iterator> Dep;
 
   for (auto I = Block.begin(), E = Block.end(); I != E; ++I) {
     if (canReorder(*I, MI))
       continue;
 
-    if (Dep == std::nullopt) {
+    if (Dep == None) {
       // Found one possible dependency, keep track of it.
       Dep = I;
     } else {
       // We found two dependencies, so bail out.
-      return {false, std::nullopt};
+      return {false, None};
     }
   }
 
@@ -778,7 +780,9 @@ void ImplicitNullChecks::rewriteNullChecks(
     // The original operation may define implicit-defs alongside
     // the value.
     MachineBasicBlock *MBB = NC.getMemOperation()->getParent();
-    for (const MachineOperand &MO : FaultingInstr->all_defs()) {
+    for (const MachineOperand &MO : FaultingInstr->operands()) {
+      if (!MO.isReg() || !MO.isDef())
+        continue;
       Register Reg = MO.getReg();
       if (!Reg || MBB->isLiveIn(Reg))
         continue;
@@ -786,8 +790,8 @@ void ImplicitNullChecks::rewriteNullChecks(
     }
 
     if (auto *DepMI = NC.getOnlyDependency()) {
-      for (auto &MO : DepMI->all_defs()) {
-        if (!MO.getReg() || MO.isDead())
+      for (auto &MO : DepMI->operands()) {
+        if (!MO.isReg() || !MO.getReg() || !MO.isDef() || MO.isDead())
           continue;
         if (!NC.getNotNullSucc()->isLiveIn(MO.getReg()))
           NC.getNotNullSucc()->addLiveIn(MO.getReg());
@@ -801,7 +805,7 @@ void ImplicitNullChecks::rewriteNullChecks(
     // Insert an *unconditional* branch to not-null successor - we expect
     // block placement to remove fallthroughs later.
     TII->insertBranch(*NC.getCheckBlock(), NC.getNotNullSucc(), nullptr,
-                      /*Cond=*/std::nullopt, DL);
+                      /*Cond=*/None, DL);
 
     NumImplicitNullChecks++;
   }

@@ -18,6 +18,7 @@
 
 #include "llvm/ADT/ArrayRef.h"
 #include <algorithm>
+#include <memory>
 
 namespace llvm {
 
@@ -69,8 +70,16 @@ unsigned ComputeMappedEditDistance(ArrayRef<T> FromArray, ArrayRef<T> ToArray,
       return MaxEditDistance + 1;
   }
 
-  SmallVector<unsigned, 64> Row(n + 1);
-  for (unsigned i = 1; i < Row.size(); ++i)
+  const unsigned SmallBufferSize = 64;
+  unsigned SmallBuffer[SmallBufferSize];
+  std::unique_ptr<unsigned[]> Allocated;
+  unsigned *Row = SmallBuffer;
+  if (n + 1 > SmallBufferSize) {
+    Row = new unsigned[n + 1];
+    Allocated.reset(Row);
+  }
+
+  for (unsigned i = 1; i <= n; ++i)
     Row[i] = i;
 
   for (typename ArrayRef<T>::size_type y = 1; y <= m; ++y) {

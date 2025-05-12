@@ -13,7 +13,6 @@
 
 #include "ReduceVirtualRegisters.h"
 #include "Delta.h"
-#include "llvm/CodeGen/MachineModuleInfo.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 
 using namespace llvm;
@@ -23,7 +22,7 @@ static void dropRegisterHintsFromFunction(Oracle &O, MachineFunction &MF) {
   for (unsigned I = 0, E = MRI.getNumVirtRegs(); I != E; ++I) {
     Register Reg = Register::index2VirtReg(I);
 
-    const std::pair<unsigned, SmallVector<Register, 4>> &Hints =
+    const std::pair<Register, SmallVector<Register, 4>> &Hints =
         MRI.getRegAllocationHints(Reg);
     if (Hints.second.empty())
       continue;
@@ -42,6 +41,6 @@ static void dropRegisterHintsFromFunctions(Oracle &O,
 }
 
 void llvm::reduceVirtualRegisterHintsDeltaPass(TestRunner &Test) {
-  runDeltaPass(Test, dropRegisterHintsFromFunctions,
-               "Reducing virtual register hints from functions");
+  outs() << "*** Reducing virtual register hints from functions...\n";
+  runDeltaPass(Test, dropRegisterHintsFromFunctions);
 }

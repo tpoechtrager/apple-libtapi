@@ -36,14 +36,14 @@ namespace llvm {
     const char *TokStart;
     lltok::Kind CurKind;
     std::string StrVal;
-    unsigned UIntVal = 0;
+    unsigned UIntVal;
     Type *TyVal = nullptr;
-    APFloat APFloatVal{0.0};
-    APSInt APSIntVal{0};
+    APFloat APFloatVal;
+    APSInt  APSIntVal;
 
     // When false (default), an identifier ending in ':' is a label token.
     // When true, the ':' is treated as a separate token.
-    bool IgnoreColonInIdentifiers = false;
+    bool IgnoreColonInIdentifiers;
 
   public:
     explicit LLLexer(StringRef StartBuf, SourceMgr &SM, SMDiagnostic &,

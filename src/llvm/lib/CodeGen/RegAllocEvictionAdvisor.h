@@ -10,6 +10,7 @@
 #define LLVM_CODEGEN_REGALLOCEVICTIONADVISOR_H
 
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/CodeGen/Register.h"
@@ -121,13 +122,13 @@ public:
 protected:
   RegAllocEvictionAdvisor(const MachineFunction &MF, const RAGreedy &RA);
 
-  bool canReassign(const LiveInterval &VirtReg, MCRegister FromReg) const;
+  Register canReassign(const LiveInterval &VirtReg, Register PrevReg) const;
 
   // Get the upper limit of elements in the given Order we need to analize.
   // TODO: is this heuristic,  we could consider learning it.
-  std::optional<unsigned> getOrderLimit(const LiveInterval &VirtReg,
-                                        const AllocationOrder &Order,
-                                        unsigned CostPerUseLimit) const;
+  Optional<unsigned> getOrderLimit(const LiveInterval &VirtReg,
+                                   const AllocationOrder &Order,
+                                   unsigned CostPerUseLimit) const;
 
   // Determine if it's worth trying to allocate this reg, given the
   // CostPerUseLimit

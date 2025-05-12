@@ -49,8 +49,8 @@ public:
   ~GlobalTypeTableBuilder();
 
   // TypeCollection overrides
-  std::optional<TypeIndex> getFirst() override;
-  std::optional<TypeIndex> getNext(TypeIndex Prev) override;
+  Optional<TypeIndex> getFirst() override;
+  Optional<TypeIndex> getNext(TypeIndex Prev) override;
   CVType getType(TypeIndex Index) override;
   StringRef getTypeName(TypeIndex Index) override;
   bool contains(TypeIndex Index) override;

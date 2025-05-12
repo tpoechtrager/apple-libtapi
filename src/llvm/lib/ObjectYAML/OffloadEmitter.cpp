@@ -28,9 +28,12 @@ bool yaml2offload(Binary &Doc, raw_ostream &Out, ErrorHandler EH) {
     if (Member.Flags)
       Image.Flags = *Member.Flags;
 
-    if (Member.StringEntries)
-      for (const auto &Entry : *Member.StringEntries)
-        Image.StringData[Entry.Key] = Entry.Value;
+    StringMap<StringRef> &StringData = Image.StringData;
+    if (Member.StringEntries) {
+      for (const auto &Entry : *Member.StringEntries) {
+        StringData[Entry.Key] = Entry.Value;
+      }
+    }
 
     SmallVector<char, 1024> Data;
     raw_svector_ostream OS(Data);

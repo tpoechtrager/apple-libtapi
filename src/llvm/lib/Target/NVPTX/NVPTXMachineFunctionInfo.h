@@ -24,7 +24,7 @@ private:
   SmallVector<std::string, 8> ImageHandleList;
 
 public:
-  NVPTXMachineFunctionInfo(const Function &F, const TargetSubtargetInfo *STI) {}
+  NVPTXMachineFunctionInfo(MachineFunction &MF) {}
 
   MachineFunctionInfo *
   clone(BumpPtrAllocator &Allocator, MachineFunction &DestMF,

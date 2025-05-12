@@ -27,7 +27,7 @@ public:
 
   unsigned getMaxStubSize() const override { return 0; }
 
-  Align getStubAlignment() override { return Align(1); }
+  unsigned getStubAlignment() override { return 1; }
 
   Expected<relocation_iterator>
   processRelocationRef(unsigned SectionID, relocation_iterator RelI,

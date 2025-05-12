@@ -36,7 +36,6 @@ driver_executable("llvm-nm") {
     "//llvm/lib/Target:AllTargetsAsmParsers",
     "//llvm/lib/Target:AllTargetsDescs",
     "//llvm/lib/Target:AllTargetsInfos",
-    "//llvm/lib/TargetParser",
   ]
   sources = [ "llvm-nm.cpp" ]
 }

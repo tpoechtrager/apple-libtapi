@@ -12,7 +12,6 @@
 #include "llvm/ADT/CachedHashString.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/StringRef.h"
-#include "llvm/Support/Alignment.h"
 #include <cstddef>
 #include <cstdint>
 
@@ -39,14 +38,14 @@ private:
   DenseMap<CachedHashStringRef, size_t> StringIndexMap;
   size_t Size = 0;
   Kind K;
-  Align Alignment;
+  unsigned Alignment;
   bool Finalized = false;
 
   void finalizeStringTable(bool Optimize);
   void initSize();
 
 public:
-  StringTableBuilder(Kind K, Align Alignment = Align(1));
+  StringTableBuilder(Kind K, unsigned Alignment = 1);
   ~StringTableBuilder();
 
   /// Add a string to the builder. Returns the position of S in the

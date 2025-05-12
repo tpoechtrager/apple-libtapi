@@ -240,9 +240,7 @@ Error DbiModuleList::initializeFileInfo(BinaryStreamRef FileInfo) {
 }
 
 uint32_t DbiModuleList::getModuleCount() const {
-  // Workaround to avoid the crash until upstream issue is fixed:
-  // https://github.com/llvm/llvm-project/issues/55214
-  return FileInfoHeader ? FileInfoHeader->NumModules : 0;
+  return FileInfoHeader->NumModules;
 }
 
 uint32_t DbiModuleList::getSourceFileCount() const {

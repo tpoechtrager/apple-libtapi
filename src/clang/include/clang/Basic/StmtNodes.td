@@ -50,7 +50,7 @@ def CXXCatchStmt : StmtNode<Stmt>;
 def CXXTryStmt : StmtNode<Stmt>;
 def CXXForRangeStmt : StmtNode<Stmt>;
 
-// C++ Coroutines statements
+// C++ Coroutines TS statements
 def CoroutineBodyStmt : StmtNode<Stmt>;
 def CoreturnStmt : StmtNode<Stmt>;
 
@@ -160,9 +160,8 @@ def FunctionParmPackExpr : StmtNode<Expr>;
 def MaterializeTemporaryExpr : StmtNode<Expr>;
 def LambdaExpr : StmtNode<Expr>;
 def CXXFoldExpr : StmtNode<Expr>;
-def CXXParenListInitExpr: StmtNode<Expr>;
 
-// C++ Coroutines expressions
+// C++ Coroutines TS expressions
 def CoroutineSuspendExpr : StmtNode<Expr, 1>;
 def CoawaitExpr : StmtNode<CoroutineSuspendExpr>;
 def DependentCoawaitExpr : StmtNode<Expr>;
@@ -293,4 +292,3 @@ def OMPTeamsGenericLoopDirective : StmtNode<OMPLoopDirective>;
 def OMPTargetTeamsGenericLoopDirective : StmtNode<OMPLoopDirective>;
 def OMPParallelGenericLoopDirective : StmtNode<OMPLoopDirective>;
 def OMPTargetParallelGenericLoopDirective : StmtNode<OMPLoopDirective>;
-def OMPErrorDirective : StmtNode<OMPExecutableDirective>;

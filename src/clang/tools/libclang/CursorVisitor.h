@@ -14,7 +14,6 @@
 #include "Index_Internal.h"
 #include "clang/AST/DeclVisitor.h"
 #include "clang/AST/TypeLocVisitor.h"
-#include <optional>
 
 namespace clang {
 class PreprocessingRecord;
@@ -208,7 +207,7 @@ public:
   bool VisitAttributes(Decl *D);
   bool VisitBlockDecl(BlockDecl *B);
   bool VisitCXXRecordDecl(CXXRecordDecl *D);
-  std::optional<bool> shouldVisitCursor(CXCursor C);
+  Optional<bool> shouldVisitCursor(CXCursor C);
   bool VisitDeclContext(DeclContext *DC);
   bool VisitTranslationUnitDecl(TranslationUnitDecl *D);
   bool VisitTypedefDecl(TypedefDecl *D);
@@ -279,7 +278,7 @@ public:
   LLVM_ATTRIBUTE_NOINLINE bool Visit(const Stmt *S);
 
 private:
-  std::optional<bool> handleDeclForVisitation(const Decl *D);
+  Optional<bool> handleDeclForVisitation(const Decl *D);
 };
 
 } // namespace cxcursor

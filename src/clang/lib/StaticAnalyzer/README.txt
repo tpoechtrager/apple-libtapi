@@ -119,17 +119,15 @@ simulation results.
 
 Of course, viewing the CFG (Control-Flow Graph) is also useful:
 
-$ clang -cc1 -analyzer-checker-help-developer
+$ clang -cc1 -help | grep cfg
+ -cfg-add-implicit-dtors Add C++ implicit destructors to CFGs for all analyses
+ -cfg-add-initializers   Add C++ initializers to CFGs for all analyses
+ -cfg-dump               Display Control-Flow Graphs
+ -cfg-view               View Control-Flow Graphs using GraphViz
+ -unoptimized-cfg        Generate unoptimized CFGs for all analyses
 
- -analyzer-checker=debug.DumpCFG   Display Control-Flow Graphs
- -analyzer-checker=debug.ViewCFG   View Control-Flow Graphs using GraphViz
-(outdated below?)
- -cfg-add-implicit-dtors           Add C++ implicit destructors to CFGs for all analyses
- -cfg-add-initializers             Add C++ initializers to CFGs for all analyses
- -unoptimized-cfg                  Generate unoptimized CFGs for all analyses
-
-debug.DumpCFG dumps a textual representation of the CFG to the console, and
-debug.ViewCFG creates a GraphViz representation.
+-cfg-dump dumps a textual representation of the CFG to the console,
+and -cfg-view creates a GraphViz representation.
 
 = References =
 

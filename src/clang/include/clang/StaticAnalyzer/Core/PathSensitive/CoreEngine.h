@@ -25,7 +25,6 @@
 #include "clang/StaticAnalyzer/Core/PathSensitive/ProgramState_Fwd.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/WorkList.h"
 #include "llvm/ADT/SmallVector.h"
-#include "llvm/ADT/iterator_range.h"
 #include "llvm/Support/Casting.h"
 #include <cassert>
 #include <memory>
@@ -176,11 +175,21 @@ public:
   WorkList *getWorkList() const { return WList.get(); }
   WorkList *getCTUWorkList() const { return CTUWList.get(); }
 
-  auto exhausted_blocks() const {
-    return llvm::iterator_range(blocksExhausted);
+  BlocksExhausted::const_iterator blocks_exhausted_begin() const {
+    return blocksExhausted.begin();
   }
 
-  auto aborted_blocks() const { return llvm::iterator_range(blocksAborted); }
+  BlocksExhausted::const_iterator blocks_exhausted_end() const {
+    return blocksExhausted.end();
+  }
+
+  BlocksAborted::const_iterator blocks_aborted_begin() const {
+    return blocksAborted.begin();
+  }
+
+  BlocksAborted::const_iterator blocks_aborted_end() const {
+    return blocksAborted.end();
+  }
 
   /// Enqueue the given set of nodes onto the work list.
   void enqueue(ExplodedNodeSet &Set);
@@ -498,11 +507,6 @@ public:
     iterator(CFGBlock::const_succ_iterator i) : I(i) {}
 
   public:
-    // This isn't really a conventional iterator.
-    // We just implement the deref as a no-op for now to make range-based for
-    // loops work.
-    const iterator &operator*() const { return *this; }
-
     iterator &operator++() { ++I; return *this; }
     bool operator!=(const iterator &X) const { return I != X.I; }
 

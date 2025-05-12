@@ -74,9 +74,9 @@ unsigned AMDGPUELFObjectWriter::getRelocType(MCContext &Ctx,
     return ELF::R_AMDGPU_REL32;
   case FK_Data_4:
   case FK_SecRel_4:
-    return IsPCRel ? ELF::R_AMDGPU_REL32 : ELF::R_AMDGPU_ABS32;
+    return ELF::R_AMDGPU_ABS32;
   case FK_Data_8:
-    return IsPCRel ? ELF::R_AMDGPU_REL64 : ELF::R_AMDGPU_ABS64;
+    return ELF::R_AMDGPU_ABS64;
   }
 
   if (Fixup.getTargetKind() == AMDGPU::fixup_si_sopp_br) {

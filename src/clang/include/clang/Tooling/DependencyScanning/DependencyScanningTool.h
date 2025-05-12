@@ -68,10 +68,10 @@ struct TranslationUnitDeps {
   std::vector<ModuleID> ClangModuleDeps;
 
   /// The CASID for input file dependency tree.
-  std::optional<std::string> CASFileSystemRootID;
+  llvm::Optional<std::string> CASFileSystemRootID;
 
   /// The include-tree for input file dependency tree.
-  std::optional<std::string> IncludeTreeID;
+  llvm::Optional<std::string> IncludeTreeID;
 
   /// The sequence of commands required to build the translation unit. Commands
   /// should be executed in order.
@@ -83,12 +83,6 @@ struct TranslationUnitDeps {
 
   /// Deprecated driver command-line. This will be removed in a future version.
   std::vector<std::string> DriverCommandLine;
-};
-
-struct P1689Rule {
-  std::string PrimaryOutput;
-  std::optional<P1689ModuleInfo> Provides;
-  std::vector<P1689ModuleInfo> Requires;
 };
 
 /// The high-level implementation of the dependency discovery tool that runs on
@@ -108,22 +102,6 @@ public:
   /// occurred, dependency file contents otherwise.
   llvm::Expected<std::string>
   getDependencyFile(const std::vector<std::string> &CommandLine, StringRef CWD);
-
-  /// Collect the module dependency in P1689 format for C++20 named modules.
-  ///
-  /// \param MakeformatOutput The output parameter for dependency information
-  /// in make format if the command line requires to generate make-format
-  /// dependency information by `-MD -MF <dep_file>`.
-  ///
-  /// \param MakeformatOutputPath The output parameter for the path to
-  /// \p MakeformatOutput.
-  ///
-  /// \returns A \c StringError with the diagnostic output if clang errors
-  /// occurred, P1689 dependency format rules otherwise.
-  llvm::Expected<P1689Rule>
-  getP1689ModuleDependencyFile(const clang::tooling::CompileCommand &Command,
-                               StringRef CWD, std::string &MakeformatOutput,
-                               std::string &MakeformatOutputPath);
 
   /// Collect dependency tree.
   llvm::Expected<llvm::cas::ObjectProxy>
@@ -260,8 +238,8 @@ private:
   std::vector<ModuleID> DirectModuleDeps;
   std::vector<Command> Commands;
   std::string ContextHash;
-  std::optional<std::string> CASFileSystemRootID;
-  std::optional<std::string> IncludeTreeID;
+  Optional<std::string> CASFileSystemRootID;
+  Optional<std::string> IncludeTreeID;
   std::vector<std::string> OutputPaths;
   const llvm::DenseSet<ModuleID> &AlreadySeen;
 };

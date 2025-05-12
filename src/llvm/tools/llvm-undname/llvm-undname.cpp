@@ -75,7 +75,8 @@ static bool msDemangle(const std::string &S) {
     Flags = MSDemangleFlags(Flags | MSDF_NoVariableType);
 
   size_t NRead;
-  char *ResultBuf = microsoftDemangle(S, &NRead, &Status, Flags);
+  char *ResultBuf =
+      microsoftDemangle(S.c_str(), &NRead, nullptr, nullptr, &Status, Flags);
   if (Status == llvm::demangle_success) {
     outs() << ResultBuf << "\n";
     outs().flush();

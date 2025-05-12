@@ -124,16 +124,16 @@ namespace {
     unsigned swiftBridgeLength =
         endian::readNext<uint16_t, little, unaligned>(data);
     if (swiftBridgeLength > 0) {
-      info.setSwiftBridge(std::optional<std::string>(std::string(
-          reinterpret_cast<const char *>(data), swiftBridgeLength - 1)));
+      info.setSwiftBridge(
+        std::string(reinterpret_cast<const char *>(data), swiftBridgeLength-1));
       data += swiftBridgeLength-1;
     }
 
     unsigned errorDomainLength =
       endian::readNext<uint16_t, little, unaligned>(data);
     if (errorDomainLength > 0) {
-      info.setNSErrorDomain(std::optional<std::string>(std::string(
-          reinterpret_cast<const char *>(data), errorDomainLength - 1)));
+      info.setNSErrorDomain(
+        std::string(reinterpret_cast<const char *>(data), errorDomainLength-1));
       data += errorDomainLength-1;
     }
   }
@@ -539,22 +539,22 @@ namespace {
       unsigned ImportAsLength =
           endian::readNext<uint16_t, little, unaligned>(data);
       if (ImportAsLength > 0) {
-        info.SwiftImportAs = std::string(reinterpret_cast<const char *>(data),
-                                         ImportAsLength - 1);
+        info.SwiftImportAs = (std::string(reinterpret_cast<const char *>(data),
+                                          ImportAsLength - 1));
         data += ImportAsLength - 1;
       }
       unsigned RetainOpLength =
           endian::readNext<uint16_t, little, unaligned>(data);
       if (RetainOpLength > 0) {
-        info.SwiftRetainOp = std::string(reinterpret_cast<const char *>(data),
-                                         RetainOpLength - 1);
+        info.SwiftRetainOp = (std::string(reinterpret_cast<const char *>(data),
+                                          RetainOpLength - 1));
         data += RetainOpLength - 1;
       }
       unsigned ReleaseOpLength =
           endian::readNext<uint16_t, little, unaligned>(data);
       if (ReleaseOpLength > 0) {
-        info.SwiftReleaseOp = std::string(reinterpret_cast<const char *>(data),
-                                          ReleaseOpLength - 1);
+        info.SwiftReleaseOp = (std::string(reinterpret_cast<const char *>(data),
+                                           ReleaseOpLength - 1));
         data += ReleaseOpLength - 1;
       }
 
@@ -609,7 +609,7 @@ public:
 
   // The size and modification time of the source file from
   // which this API notes file was created, if known.
-  std::optional<std::pair<off_t, time_t>> SourceFileSizeAndModTime;
+  Optional<std::pair<off_t, time_t>> SourceFileSizeAndModTime;
 
   /// Various options and attributes for the module
   ModuleOptions ModuleOpts;
@@ -682,11 +682,11 @@ public:
 
   /// Retrieve the identifier ID for the given string, or an empty
   /// optional if the string is unknown.
-  std::optional<IdentifierID> getIdentifier(StringRef str);
+  Optional<IdentifierID> getIdentifier(StringRef str);
 
   /// Retrieve the selector ID for the given selector, or an empty
   /// optional if the string is unknown.
-  std::optional<SelectorID> getSelector(ObjCSelectorRef selector);
+  Optional<SelectorID> getSelector(ObjCSelectorRef selector);
 
   bool readControlBlock(llvm::BitstreamCursor &cursor, 
                         SmallVectorImpl<uint64_t> &scratch);
@@ -712,25 +712,25 @@ public:
                         SmallVectorImpl<uint64_t> &scratch);
 };
 
-std::optional<IdentifierID>
-APINotesReader::Implementation::getIdentifier(StringRef str) {
+Optional<IdentifierID> APINotesReader::Implementation::getIdentifier(
+                         StringRef str) {
   if (!IdentifierTable)
-    return std::nullopt;
+    return None;
 
   if (str.empty())
     return IdentifierID(0);
 
   auto known = IdentifierTable->find(str);
   if (known == IdentifierTable->end())
-    return std::nullopt;
+    return None;
 
   return *known;
 }
 
-std::optional<SelectorID>
-APINotesReader::Implementation::getSelector(ObjCSelectorRef selector) {
+Optional<SelectorID> APINotesReader::Implementation::getSelector(
+                       ObjCSelectorRef selector) {
   if (!ObjCSelectorTable || !IdentifierTable)
-    return std::nullopt;
+    return None;
 
   // Translate the identifiers.
   StoredObjCSelector key;
@@ -739,15 +739,16 @@ APINotesReader::Implementation::getSelector(ObjCSelectorRef selector) {
     if (auto identID = getIdentifier(ident)) {
       key.Identifiers.push_back(*identID);
     } else {
-      return std::nullopt;
+      return None;
     }
   }
 
   auto known = ObjCSelectorTable->find(key);
   if (known == ObjCSelectorTable->end())
-    return std::nullopt;
+    return None;
 
   return *known;
+
 }
 
 bool APINotesReader::Implementation::readControlBlock(
@@ -1830,7 +1831,7 @@ StringRef APINotesReader::getModuleName() const {
   return Impl.ModuleName;
 }
 
-std::optional<std::pair<off_t, time_t>>
+Optional<std::pair<off_t, time_t>>
 APINotesReader::getSourceFileSizeAndModTime() const {
   return Impl.SourceFileSizeAndModTime;
 }
@@ -1871,21 +1872,20 @@ APINotesReader::VersionedInfo<T>::VersionedInfo(
     Selected = 0;
 }
 
-auto APINotesReader::lookupObjCClassID(StringRef name)
-    -> std::optional<ContextID> {
+auto APINotesReader::lookupObjCClassID(StringRef name) -> Optional<ContextID> {
   if (!Impl.ObjCContextIDTable)
-    return std::nullopt;
+    return None;
 
-  std::optional<IdentifierID> classID = Impl.getIdentifier(name);
+  Optional<IdentifierID> classID = Impl.getIdentifier(name);
   if (!classID)
-    return std::nullopt;
+    return None;
 
   // ObjC classes can't be declared in C++ namespaces, so use -1 as the global
   // context.
   auto knownID = Impl.ObjCContextIDTable->find(
       ContextTableKey(-1, (uint8_t)ContextKind::ObjCClass, *classID));
   if (knownID == Impl.ObjCContextIDTable->end())
-    return std::nullopt;
+    return None;
 
   return ContextID(*knownID);
 }
@@ -1893,50 +1893,50 @@ auto APINotesReader::lookupObjCClassID(StringRef name)
 auto APINotesReader::lookupObjCClassInfo(StringRef name)
        -> VersionedInfo<ObjCContextInfo> {
   if (!Impl.ObjCContextInfoTable)
-    return std::nullopt;
+    return None;
 
-  std::optional<ContextID> contextID = lookupObjCClassID(name);
+  Optional<ContextID> contextID = lookupObjCClassID(name);
   if (!contextID)
-    return std::nullopt;
+    return None;
 
   auto knownInfo = Impl.ObjCContextInfoTable->find(contextID->Value);
   if (knownInfo == Impl.ObjCContextInfoTable->end())
-    return std::nullopt;
+    return None;
 
   return { Impl.SwiftVersion, *knownInfo };
 }
 
 auto APINotesReader::lookupObjCProtocolID(StringRef name)
-    -> std::optional<ContextID> {
-  if (!Impl.ObjCContextIDTable)
-    return std::nullopt;
+       -> Optional<ContextID> {
+   if (!Impl.ObjCContextIDTable)
+     return None;
 
-  std::optional<IdentifierID> classID = Impl.getIdentifier(name);
-  if (!classID)
-    return std::nullopt;
+   Optional<IdentifierID> classID = Impl.getIdentifier(name);
+   if (!classID)
+     return None;
 
   // ObjC classes can't be declared in C++ namespaces, so use -1 as the global
   // context.
   auto knownID = Impl.ObjCContextIDTable->find(
       ContextTableKey(-1, (uint8_t)ContextKind::ObjCProtocol, *classID));
   if (knownID == Impl.ObjCContextIDTable->end())
-    return std::nullopt;
+    return None;
 
-  return ContextID(*knownID);
+   return ContextID(*knownID);
 }
 
 auto APINotesReader::lookupObjCProtocolInfo(StringRef name)
        -> VersionedInfo<ObjCContextInfo> {
    if (!Impl.ObjCContextInfoTable)
-    return std::nullopt;
+     return None;
 
-   std::optional<ContextID> contextID = lookupObjCProtocolID(name);
+   Optional<ContextID> contextID = lookupObjCProtocolID(name);
    if (!contextID)
-    return std::nullopt;
+     return None;
 
    auto knownInfo = Impl.ObjCContextInfoTable->find(contextID->Value);
    if (knownInfo == Impl.ObjCContextInfoTable->end())
-    return std::nullopt;
+     return None;
    
    return { Impl.SwiftVersion, *knownInfo };
 }
@@ -1947,17 +1947,17 @@ auto APINotesReader::lookupObjCProperty(ContextID contextID,
                                         bool isInstance)
     -> VersionedInfo<ObjCPropertyInfo> {
   if (!Impl.ObjCPropertyTable)
-    return std::nullopt;
+    return None;
 
-  std::optional<IdentifierID> propertyID = Impl.getIdentifier(name);
+  Optional<IdentifierID> propertyID = Impl.getIdentifier(name);
   if (!propertyID)
-    return std::nullopt;
+    return None;
 
   auto known = Impl.ObjCPropertyTable->find(std::make_tuple(contextID.Value,
                                                             *propertyID,
                                                             (char)isInstance));
   if (known == Impl.ObjCPropertyTable->end())
-    return std::nullopt;
+    return None;
 
   return { Impl.SwiftVersion, *known };
 }
@@ -1968,17 +1968,17 @@ auto APINotesReader::lookupObjCMethod(
                                       bool isInstanceMethod)
     -> VersionedInfo<ObjCMethodInfo> {
   if (!Impl.ObjCMethodTable)
-    return std::nullopt;
+    return None;
 
-  std::optional<SelectorID> selectorID = Impl.getSelector(selector);
+  Optional<SelectorID> selectorID = Impl.getSelector(selector);
   if (!selectorID)
-    return std::nullopt;
+    return None;
 
   auto known = Impl.ObjCMethodTable->find(
       ObjCMethodTableInfo::internal_key_type{
           contextID.Value, *selectorID, isInstanceMethod});
   if (known == Impl.ObjCMethodTable->end())
-    return std::nullopt;
+    return None;
 
   return { Impl.SwiftVersion, *known };
 }
@@ -1987,17 +1987,17 @@ auto APINotesReader::lookupGlobalVariable(StringRef name,
                                           std::optional<Context> context)
     -> VersionedInfo<GlobalVariableInfo> {
   if (!Impl.GlobalVariableTable)
-    return std::nullopt;
+    return None;
 
-  std::optional<IdentifierID> nameID = Impl.getIdentifier(name);
+  Optional<IdentifierID> nameID = Impl.getIdentifier(name);
   if (!nameID)
-    return std::nullopt;
+    return None;
 
   ContextTableKey key(context, *nameID);
 
   auto known = Impl.GlobalVariableTable->find(key);
   if (known == Impl.GlobalVariableTable->end())
-    return std::nullopt;
+    return None;
 
   return { Impl.SwiftVersion, *known };
 }
@@ -2006,17 +2006,17 @@ auto APINotesReader::lookupGlobalFunction(StringRef name,
                                           std::optional<Context> context)
     -> VersionedInfo<GlobalFunctionInfo> {
   if (!Impl.GlobalFunctionTable)
-    return std::nullopt;
+    return None;
 
-  std::optional<IdentifierID> nameID = Impl.getIdentifier(name);
+  Optional<IdentifierID> nameID = Impl.getIdentifier(name);
   if (!nameID)
-    return std::nullopt;
+    return None;
 
   ContextTableKey key(context, *nameID);
 
   auto known = Impl.GlobalFunctionTable->find(key);
   if (known == Impl.GlobalFunctionTable->end())
-    return std::nullopt;
+    return None;
 
   return { Impl.SwiftVersion, *known };
 }
@@ -2024,15 +2024,15 @@ auto APINotesReader::lookupGlobalFunction(StringRef name,
 auto APINotesReader::lookupEnumConstant(StringRef name)
     -> VersionedInfo<EnumConstantInfo> {
   if (!Impl.EnumConstantTable)
-    return std::nullopt;
+    return None;
 
-  std::optional<IdentifierID> nameID = Impl.getIdentifier(name);
+  Optional<IdentifierID> nameID = Impl.getIdentifier(name);
   if (!nameID)
-    return std::nullopt;
+    return None;
 
   auto known = Impl.EnumConstantTable->find(*nameID);
   if (known == Impl.EnumConstantTable->end())
-    return std::nullopt;
+    return None;
 
   return { Impl.SwiftVersion, *known };
 }
@@ -2040,17 +2040,17 @@ auto APINotesReader::lookupEnumConstant(StringRef name)
 auto APINotesReader::lookupTag(StringRef name, std::optional<Context> context)
     -> VersionedInfo<TagInfo> {
   if (!Impl.TagTable)
-    return std::nullopt;
+    return None;
 
-  std::optional<IdentifierID> nameID = Impl.getIdentifier(name);
+  Optional<IdentifierID> nameID = Impl.getIdentifier(name);
   if (!nameID)
-    return std::nullopt;
+    return None;
 
   ContextTableKey key(context, *nameID);
 
   auto known = Impl.TagTable->find(key);
   if (known == Impl.TagTable->end())
-    return std::nullopt;
+    return None;
 
   return { Impl.SwiftVersion, *known };
 }
@@ -2059,37 +2059,37 @@ auto APINotesReader::lookupTypedef(StringRef name,
                                    std::optional<Context> context)
     -> VersionedInfo<TypedefInfo> {
   if (!Impl.TypedefTable)
-    return std::nullopt;
+    return None;
 
-  std::optional<IdentifierID> nameID = Impl.getIdentifier(name);
+  Optional<IdentifierID> nameID = Impl.getIdentifier(name);
   if (!nameID)
-    return std::nullopt;
+    return None;
 
   ContextTableKey key(context, *nameID);
 
   auto known = Impl.TypedefTable->find(key);
   if (known == Impl.TypedefTable->end())
-    return std::nullopt;
+    return None;
 
   return { Impl.SwiftVersion, *known };
 }
 
 auto APINotesReader::lookupNamespaceID(
-    StringRef name, std::optional<ContextID> parentNamespaceID)
-    -> std::optional<ContextID> {
+    StringRef name, Optional<ContextID> parentNamespaceID)
+    -> Optional<ContextID> {
   if (!Impl.ObjCContextIDTable)
-    return std::nullopt;
+    return None;
 
-  std::optional<IdentifierID> namespaceID = Impl.getIdentifier(name);
+  Optional<IdentifierID> namespaceID = Impl.getIdentifier(name);
   if (!namespaceID)
-    return std::nullopt;
+    return None;
 
   uint32_t rawParentNamespaceID =
       parentNamespaceID ? parentNamespaceID->Value : -1;
   auto knownID = Impl.ObjCContextIDTable->find(
       {rawParentNamespaceID, (char)ContextKind::Namespace, *namespaceID});
   if (knownID == Impl.ObjCContextIDTable->end())
-    return std::nullopt;
+    return None;
 
   return ContextID(*knownID);
 }

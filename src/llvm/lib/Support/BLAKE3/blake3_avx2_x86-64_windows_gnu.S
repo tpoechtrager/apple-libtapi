@@ -1,5 +1,3 @@
-#include "llvm_blake3_prefix.h"
-
 .intel_syntax noprefix
 .global _blake3_hash_many_avx2
 .global blake3_hash_many_avx2

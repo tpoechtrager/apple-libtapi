@@ -779,7 +779,7 @@ private:
 
 #define IMPL(Index)                                                            \
   template <typename NodeType>                                                 \
-  std::enable_if_t<                                                            \
+  typename std::enable_if_t<                                                   \
       llvm::is_one_of<const NodeType *, CMD_TYPES_##Index>::value>             \
   SetCallbackAndRawNode(const MatchCallback *CB, const NodeType &N) {          \
     assertEmpty();                                                             \
@@ -788,8 +788,8 @@ private:
   }                                                                            \
                                                                                \
   template <typename T>                                                        \
-  std::enable_if_t<llvm::is_one_of<const T *, CMD_TYPES_##Index>::value,       \
-                   const T *>                                                  \
+  typename std::enable_if_t<                                                   \
+      llvm::is_one_of<const T *, CMD_TYPES_##Index>::value, const T *>         \
   getNode() const {                                                            \
     assertHoldsState();                                                        \
     return Callback.getInt() == (Index) ? Node##Index.dyn_cast<const T *>()    \
@@ -1562,7 +1562,7 @@ MatchFinder::~MatchFinder() {}
 
 void MatchFinder::addMatcher(const DeclarationMatcher &NodeMatch,
                              MatchCallback *Action) {
-  std::optional<TraversalKind> TK;
+  llvm::Optional<TraversalKind> TK;
   if (Action)
     TK = Action->getCheckTraversalKind();
   if (TK)
@@ -1580,7 +1580,7 @@ void MatchFinder::addMatcher(const TypeMatcher &NodeMatch,
 
 void MatchFinder::addMatcher(const StatementMatcher &NodeMatch,
                              MatchCallback *Action) {
-  std::optional<TraversalKind> TK;
+  llvm::Optional<TraversalKind> TK;
   if (Action)
     TK = Action->getCheckTraversalKind();
   if (TK)
@@ -1685,9 +1685,9 @@ void MatchFinder::registerTestCallbackAfterParsing(
 
 StringRef MatchFinder::MatchCallback::getID() const { return "<unknown>"; }
 
-std::optional<TraversalKind>
+llvm::Optional<TraversalKind>
 MatchFinder::MatchCallback::getCheckTraversalKind() const {
-  return std::nullopt;
+  return llvm::None;
 }
 
 } // end namespace ast_matchers

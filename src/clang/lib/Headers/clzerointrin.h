@@ -6,7 +6,7 @@
  *
  *===-----------------------------------------------------------------------===
  */
-#ifndef __X86INTRIN_H
+#if !defined __X86INTRIN_H && !defined __IMMINTRIN_H
 #error "Never use <clzerointrin.h> directly; include <x86intrin.h> instead."
 #endif
 
@@ -17,16 +17,14 @@
 #define __DEFAULT_FN_ATTRS \
   __attribute__((__always_inline__, __nodebug__,  __target__("clzero")))
 
-/// Zeroes out the cache line for the address \a __line. This uses a
-///    non-temporal store. Calling \c _mm_sfence() afterward might be needed
-///    to enforce ordering.
+/// Loads the cache line address and zero's out the cacheline
 ///
-/// \headerfile <x86intrin.h>
+/// \headerfile <clzerointrin.h>
 ///
-/// This intrinsic corresponds to the \c CLZERO instruction.
+/// This intrinsic corresponds to the <c> CLZERO </c> instruction.
 ///
 /// \param __line
-///    An address within the cache line to zero out.
+///    A pointer to a cacheline which needs to be zeroed out.
 static __inline__ void __DEFAULT_FN_ATTRS
 _mm_clzero (void * __line)
 {

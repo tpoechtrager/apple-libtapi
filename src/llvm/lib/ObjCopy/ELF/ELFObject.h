@@ -432,8 +432,6 @@ public:
   virtual bool hasContents() const { return false; }
   // Notify the section that it is subject to removal.
   virtual void onRemove();
-
-  virtual void restoreSymTabLink(SymbolTableSection &) {}
 };
 
 class Segment {
@@ -485,7 +483,6 @@ class Section : public SectionBase {
 
   ArrayRef<uint8_t> Contents;
   SectionBase *LinkSection = nullptr;
-  bool HasSymTabLink = false;
 
 public:
   explicit Section(ArrayRef<uint8_t> Data) : Contents(Data) {}
@@ -500,7 +497,6 @@ public:
   bool hasContents() const override {
     return Type != ELF::SHT_NOBITS && Type != ELF::SHT_NULL;
   }
-  void restoreSymTabLink(SymbolTableSection &SymTab) override;
 };
 
 class OwnedDataSection : public SectionBase {
@@ -695,7 +691,6 @@ protected:
   std::vector<std::unique_ptr<Symbol>> Symbols;
   StringTableSection *SymbolNames = nullptr;
   SectionIndexSection *SectionIndexTable = nullptr;
-  bool IndicesChanged = false;
 
   using SymPtr = std::unique_ptr<Symbol>;
 
@@ -708,7 +703,6 @@ public:
   void prepareForLayout();
   // An 'empty' symbol table still contains a null symbol.
   bool empty() const { return Symbols.size() == 1; }
-  bool indicesChanged() const { return IndicesChanged; }
   void setShndxTable(SectionIndexSection *ShndxTable) {
     SectionIndexTable = ShndxTable;
   }
@@ -963,7 +957,7 @@ private:
   const ELFFile<ELFT> &ElfFile;
   Object &Obj;
   size_t EhdrOffset = 0;
-  std::optional<StringRef> ExtractPartition;
+  Optional<StringRef> ExtractPartition;
 
   void setParentSegment(Segment &Child);
   Error readProgramHeaders(const ELFFile<ELFT> &HeadersFile);
@@ -976,7 +970,7 @@ private:
 
 public:
   ELFBuilder(const ELFObjectFile<ELFT> &ElfObj, Object &Obj,
-             std::optional<StringRef> ExtractPartition);
+             Optional<StringRef> ExtractPartition);
 
   Error build(bool EnsureSymtab);
 };
@@ -1015,11 +1009,11 @@ public:
 
 class ELFReader : public Reader {
   Binary *Bin;
-  std::optional<StringRef> ExtractPartition;
+  Optional<StringRef> ExtractPartition;
 
 public:
   Expected<std::unique_ptr<Object>> create(bool EnsureSymtab) const override;
-  explicit ELFReader(Binary *B, std::optional<StringRef> ExtractPartition)
+  explicit ELFReader(Binary *B, Optional<StringRef> ExtractPartition)
       : Bin(B), ExtractPartition(ExtractPartition) {}
 };
 

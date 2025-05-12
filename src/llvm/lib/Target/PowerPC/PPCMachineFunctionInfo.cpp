@@ -20,8 +20,7 @@ static cl::opt<bool> PPCDisableNonVolatileCR(
     cl::init(false), cl::Hidden);
 
 void PPCFunctionInfo::anchor() {}
-PPCFunctionInfo::PPCFunctionInfo(const Function &F,
-                                 const TargetSubtargetInfo *STI)
+PPCFunctionInfo::PPCFunctionInfo(const MachineFunction &MF)
     : DisableNonVolatileCR(PPCDisableNonVolatileCR) {}
 
 MachineFunctionInfo *

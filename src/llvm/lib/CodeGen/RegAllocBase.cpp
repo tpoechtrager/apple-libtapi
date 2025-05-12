@@ -156,7 +156,7 @@ void RegAllocBase::allocatePhysRegs() {
         continue;
       }
       LLVM_DEBUG(dbgs() << "queuing new interval: " << *SplitVirtReg << "\n");
-      assert(SplitVirtReg->reg().isVirtual() &&
+      assert(Register::isVirtualRegister(SplitVirtReg->reg()) &&
              "expect split value in virtual register");
       enqueue(SplitVirtReg);
       ++NumNewQueued;

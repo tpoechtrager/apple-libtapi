@@ -20,7 +20,6 @@
 #include "clang/StaticAnalyzer/Core/PathSensitive/CheckerContext.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/ProgramState.h"
 #include "llvm/Support/raw_ostream.h"
-#include <optional>
 
 using namespace clang;
 using namespace ento;
@@ -259,7 +258,7 @@ SVal GTestChecker::getAssertionResultSuccessFieldValue(
   if (!SuccessField)
     return UnknownVal();
 
-  std::optional<Loc> FieldLoc =
+  Optional<Loc> FieldLoc =
       State->getLValue(SuccessField, Instance).getAs<Loc>();
   if (!FieldLoc)
     return UnknownVal();

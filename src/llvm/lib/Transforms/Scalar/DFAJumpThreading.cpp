@@ -70,8 +70,11 @@
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/IntrinsicInst.h"
+#include "llvm/InitializePasses.h"
+#include "llvm/Pass.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/SSAUpdaterBulk.h"
 #include "llvm/Transforms/Utils/ValueMapper.h"
@@ -165,7 +168,50 @@ private:
   OptimizationRemarkEmitter *ORE;
 };
 
+class DFAJumpThreadingLegacyPass : public FunctionPass {
+public:
+  static char ID; // Pass identification
+  DFAJumpThreadingLegacyPass() : FunctionPass(ID) {}
+
+  void getAnalysisUsage(AnalysisUsage &AU) const override {
+    AU.addRequired<AssumptionCacheTracker>();
+    AU.addRequired<DominatorTreeWrapperPass>();
+    AU.addPreserved<DominatorTreeWrapperPass>();
+    AU.addRequired<TargetTransformInfoWrapperPass>();
+    AU.addRequired<OptimizationRemarkEmitterWrapperPass>();
+  }
+
+  bool runOnFunction(Function &F) override {
+    if (skipFunction(F))
+      return false;
+
+    AssumptionCache *AC =
+        &getAnalysis<AssumptionCacheTracker>().getAssumptionCache(F);
+    DominatorTree *DT = &getAnalysis<DominatorTreeWrapperPass>().getDomTree();
+    TargetTransformInfo *TTI =
+        &getAnalysis<TargetTransformInfoWrapperPass>().getTTI(F);
+    OptimizationRemarkEmitter *ORE =
+        &getAnalysis<OptimizationRemarkEmitterWrapperPass>().getORE();
+
+    return DFAJumpThreading(AC, DT, TTI, ORE).run(F);
+  }
+};
 } // end anonymous namespace
+
+char DFAJumpThreadingLegacyPass::ID = 0;
+INITIALIZE_PASS_BEGIN(DFAJumpThreadingLegacyPass, "dfa-jump-threading",
+                      "DFA Jump Threading", false, false)
+INITIALIZE_PASS_DEPENDENCY(AssumptionCacheTracker)
+INITIALIZE_PASS_DEPENDENCY(DominatorTreeWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(TargetTransformInfoWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(OptimizationRemarkEmitterWrapperPass)
+INITIALIZE_PASS_END(DFAJumpThreadingLegacyPass, "dfa-jump-threading",
+                    "DFA Jump Threading", false, false)
+
+// Public interface to the DFA Jump Threading pass
+FunctionPass *llvm::createDFAJumpThreadingPass() {
+  return new DFAJumpThreadingLegacyPass();
+}
 
 namespace {
 
@@ -579,7 +625,7 @@ private:
         continue;
 
       PathsType SuccPaths = paths(Succ, Visited, PathDepth + 1);
-      for (const PathType &Path : SuccPaths) {
+      for (PathType Path : SuccPaths) {
         PathType NewPath(Path);
         NewPath.push_front(BB);
         Res.push_back(NewPath);
@@ -678,7 +724,7 @@ private:
 
     // Make DeterminatorBB the first element in Path.
     PathType Path = TPath.getPath();
-    auto ItDet = llvm::find(Path, DeterminatorBB);
+    auto ItDet = std::find(Path.begin(), Path.end(), DeterminatorBB);
     std::rotate(Path.begin(), ItDet, Path.end());
 
     bool IsDetBBSeen = false;
@@ -752,7 +798,7 @@ private:
 
       // Otherwise update Metrics for all blocks that will be cloned. If any
       // block is already cloned and would be reused, don't double count it.
-      auto DetIt = llvm::find(PathBBs, Determinator);
+      auto DetIt = std::find(PathBBs.begin(), PathBBs.end(), Determinator);
       for (auto BBIt = DetIt; BBIt != PathBBs.end(); BBIt++) {
         BB = *BBIt;
         VisitedBB = getClonedBB(BB, NextState, DuplicateMap);
@@ -897,7 +943,7 @@ private:
     if (PathBBs.front() == Determinator)
       PathBBs.pop_front();
 
-    auto DetIt = llvm::find(PathBBs, Determinator);
+    auto DetIt = std::find(PathBBs.begin(), PathBBs.end(), Determinator);
     auto Prev = std::prev(DetIt);
     BasicBlock *PrevBB = *Prev;
     for (auto BBIt = DetIt; BBIt != PathBBs.end(); BBIt++) {
@@ -932,7 +978,7 @@ private:
     SSAUpdaterBulk SSAUpdate;
     SmallVector<Use *, 16> UsesToRename;
 
-    for (const auto &KV : NewDefs) {
+    for (auto KV : NewDefs) {
       Instruction *I = KV.first;
       BasicBlock *BB = I->getParent();
       std::vector<Instruction *> Cloned = KV.second;

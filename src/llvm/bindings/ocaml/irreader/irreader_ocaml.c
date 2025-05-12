@@ -12,25 +12,23 @@
 |*                                                                            *|
 \*===----------------------------------------------------------------------===*/
 
+#include "llvm-c/IRReader.h"
 #include "caml/alloc.h"
-#include "caml/callback.h"
 #include "caml/fail.h"
 #include "caml/memory.h"
-#include "llvm_ocaml.h"
-#include "llvm-c/IRReader.h"
+#include "caml/callback.h"
 
 void llvm_raise(value Prototype, char *Message);
 
 /* Llvm.llcontext -> Llvm.llmemorybuffer -> Llvm.llmodule */
-value llvm_parse_ir(value C, value MemBuf) {
+value llvm_parse_ir(LLVMContextRef C, LLVMMemoryBufferRef MemBuf) {
   CAMLparam0();
   CAMLlocal2(Variant, MessageVal);
   LLVMModuleRef M;
   char *Message;
 
-  if (LLVMParseIRInContext(Context_val(C), MemoryBuffer_val(MemBuf), &M,
-                           &Message))
+  if (LLVMParseIRInContext(C, MemBuf, &M, &Message))
     llvm_raise(*caml_named_value("Llvm_irreader.Error"), Message);
 
-  CAMLreturn(to_val(M));
+  CAMLreturn((value)M);
 }

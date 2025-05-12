@@ -15,7 +15,9 @@
 #include "llvm/Object/ModuleSymbolTable.h"
 #include "RecordStreamer.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/ADT/Triple.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/GlobalAlias.h"
 #include "llvm/IR/GlobalValue.h"
@@ -40,7 +42,6 @@
 #include "llvm/Support/SMLoc.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/TargetParser/Triple.h"
 #include <algorithm>
 #include <cassert>
 #include <cstdint>
@@ -173,12 +174,12 @@ void ModuleSymbolTable::CollectAsmSymvers(
 }
 
 void ModuleSymbolTable::printSymbolName(raw_ostream &OS, Symbol S) const {
-  if (isa<AsmSymbol *>(S)) {
-    OS << cast<AsmSymbol *>(S)->first;
+  if (S.is<AsmSymbol *>()) {
+    OS << S.get<AsmSymbol *>()->first;
     return;
   }
 
-  auto *GV = cast<GlobalValue *>(S);
+  auto *GV = S.get<GlobalValue *>();
   if (GV->hasDLLImportStorageClass())
     OS << "__imp_";
 
@@ -186,10 +187,10 @@ void ModuleSymbolTable::printSymbolName(raw_ostream &OS, Symbol S) const {
 }
 
 uint32_t ModuleSymbolTable::getSymbolFlags(Symbol S) const {
-  if (isa<AsmSymbol *>(S))
-    return cast<AsmSymbol *>(S)->second;
+  if (S.is<AsmSymbol *>())
+    return S.get<AsmSymbol *>()->second;
 
-  auto *GV = cast<GlobalValue *>(S);
+  auto *GV = S.get<GlobalValue *>();
 
   uint32_t Res = BasicSymbolRef::SF_None;
   if (GV->isDeclarationForLinker())

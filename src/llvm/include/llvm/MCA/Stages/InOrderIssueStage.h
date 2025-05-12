@@ -35,10 +35,10 @@ struct StallInfo {
   };
 
   InstRef IR;
-  unsigned CyclesLeft = 0;
-  StallKind Kind = StallKind::DEFAULT;
+  unsigned CyclesLeft;
+  StallKind Kind;
 
-  StallInfo() = default;
+  StallInfo() : CyclesLeft(), Kind(StallKind::DEFAULT) {}
 
   StallKind getStallKind() const { return Kind; }
   unsigned getCyclesLeft() const { return CyclesLeft; }

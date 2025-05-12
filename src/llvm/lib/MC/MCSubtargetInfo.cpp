@@ -11,13 +11,12 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/MC/MCInstrItineraries.h"
 #include "llvm/MC/MCSchedule.h"
+#include "llvm/MC/SubtargetFeature.h"
 #include "llvm/Support/Format.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/TargetParser/SubtargetFeature.h"
 #include <algorithm>
 #include <cassert>
 #include <cstring>
-#include <optional>
 
 using namespace llvm;
 
@@ -142,7 +141,7 @@ static void cpuHelp(ArrayRef<SubtargetSubTypeKV> CPUTable) {
   errs() << '\n';
 
   errs() << "Use -mcpu or -mtune to specify the target's processor.\n"
-            "For example, clang --target=aarch64-unknown-linux-gnu "
+            "For example, clang --target=aarch64-unknown-linux-gui "
             "-mcpu=cortex-a35\n";
 
   PrintOnce = true;
@@ -336,18 +335,17 @@ void MCSubtargetInfo::initInstrItins(InstrItineraryData &InstrItins) const {
                                   ForwardingPaths);
 }
 
-std::optional<unsigned> MCSubtargetInfo::getCacheSize(unsigned Level) const {
-  return std::nullopt;
+Optional<unsigned> MCSubtargetInfo::getCacheSize(unsigned Level) const {
+  return Optional<unsigned>();
 }
 
-std::optional<unsigned>
+Optional<unsigned>
 MCSubtargetInfo::getCacheAssociativity(unsigned Level) const {
-  return std::nullopt;
+  return Optional<unsigned>();
 }
 
-std::optional<unsigned>
-MCSubtargetInfo::getCacheLineSize(unsigned Level) const {
-  return std::nullopt;
+Optional<unsigned> MCSubtargetInfo::getCacheLineSize(unsigned Level) const {
+  return Optional<unsigned>();
 }
 
 unsigned MCSubtargetInfo::getPrefetchDistance() const {

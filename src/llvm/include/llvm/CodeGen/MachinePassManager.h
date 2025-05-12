@@ -134,7 +134,8 @@ class MachineFunctionPassManager
   using Base = PassManager<MachineFunction, MachineFunctionAnalysisManager>;
 
 public:
-  MachineFunctionPassManager(bool RequireCodeGenSCCOrder = false,
+  MachineFunctionPassManager(bool DebugLogging = false,
+                             bool RequireCodeGenSCCOrder = false,
                              bool VerifyMachineFunction = false)
       : RequireCodeGenSCCOrder(RequireCodeGenSCCOrder),
         VerifyMachineFunction(VerifyMachineFunction) {}

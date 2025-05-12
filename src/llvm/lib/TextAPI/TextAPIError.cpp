@@ -21,17 +21,11 @@ char TextAPIError::ID = 0;
 void TextAPIError::log(raw_ostream &OS) const {
   switch (EC) {
   case TextAPIErrorCode::NoSuchArchitecture:
-    OS << "no such architecture";
-    break;
-  case TextAPIErrorCode::InvalidInputFormat:
-    OS << "invalid input format";
-    break;
+    OS << "no such architecture\n";
+    return;
   default:
     llvm_unreachable("unhandled TextAPIErrorCode");
   }
-  if (!Msg.empty())
-    OS << ": " << Msg;
-  OS << "\n";
 }
 
 std::error_code TextAPIError::convertToErrorCode() const {

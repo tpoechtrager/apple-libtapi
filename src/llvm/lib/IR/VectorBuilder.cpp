@@ -32,7 +32,9 @@ Module &VectorBuilder::getModule() const {
 }
 
 Value *VectorBuilder::getAllTrueMask() {
-  return Builder.getAllOnesMask(StaticVectorLength);
+  auto *BoolTy = Builder.getInt1Ty();
+  auto *MaskTy = VectorType::get(BoolTy, StaticVectorLength);
+  return ConstantInt::getAllOnesValue(MaskTy);
 }
 
 Value &VectorBuilder::requestMask() {

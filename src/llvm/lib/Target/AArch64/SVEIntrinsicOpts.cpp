@@ -34,7 +34,6 @@
 #include "llvm/IR/PatternMatch.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Support/Debug.h"
-#include <optional>
 
 using namespace llvm;
 using namespace llvm::PatternMatch;
@@ -285,7 +284,7 @@ bool SVEIntrinsicOpts::optimizePredicateStore(Instruction *I) {
     return false;
 
   unsigned MinVScale = Attr.getVScaleRangeMin();
-  std::optional<unsigned> MaxVScale = Attr.getVScaleRangeMax();
+  Optional<unsigned> MaxVScale = Attr.getVScaleRangeMax();
   // The transform needs to know the exact runtime length of scalable vectors
   if (!MaxVScale || MinVScale != MaxVScale)
     return false;
@@ -348,7 +347,7 @@ bool SVEIntrinsicOpts::optimizePredicateLoad(Instruction *I) {
     return false;
 
   unsigned MinVScale = Attr.getVScaleRangeMin();
-  std::optional<unsigned> MaxVScale = Attr.getVScaleRangeMax();
+  Optional<unsigned> MaxVScale = Attr.getVScaleRangeMax();
   // The transform needs to know the exact runtime length of scalable vectors
   if (!MaxVScale || MinVScale != MaxVScale)
     return false;

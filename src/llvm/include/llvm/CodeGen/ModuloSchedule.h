@@ -170,11 +170,11 @@ private:
   MachineFunction &MF;
   const TargetSubtargetInfo &ST;
   MachineRegisterInfo &MRI;
-  const TargetInstrInfo *TII = nullptr;
+  const TargetInstrInfo *TII;
   LiveIntervals &LIS;
 
-  MachineBasicBlock *BB = nullptr;
-  MachineBasicBlock *Preheader = nullptr;
+  MachineBasicBlock *BB;
+  MachineBasicBlock *Preheader;
   MachineBasicBlock *NewKernel = nullptr;
   std::unique_ptr<TargetInstrInfo::PipelinerLoopInfo> LoopInfo;
 
@@ -297,13 +297,13 @@ protected:
   MachineFunction &MF;
   const TargetSubtargetInfo &ST;
   MachineRegisterInfo &MRI;
-  const TargetInstrInfo *TII = nullptr;
-  LiveIntervals *LIS = nullptr;
+  const TargetInstrInfo *TII;
+  LiveIntervals *LIS;
 
   /// The original loop block that gets rewritten in-place.
-  MachineBasicBlock *BB = nullptr;
+  MachineBasicBlock *BB;
   /// The original loop preheader.
-  MachineBasicBlock *Preheader = nullptr;
+  MachineBasicBlock *Preheader;
   /// All prolog and epilog blocks.
   SmallVector<MachineBasicBlock *, 4> Prologs, Epilogs;
   /// For every block, the stages that are produced.

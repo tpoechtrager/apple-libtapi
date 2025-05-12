@@ -59,7 +59,7 @@ public:
                  Constant *Initializer, const Twine &Name = "",
                  GlobalVariable *InsertBefore = nullptr,
                  ThreadLocalMode = NotThreadLocal,
-                 std::optional<unsigned> AddressSpace = std::nullopt,
+                 Optional<unsigned> AddressSpace = None,
                  bool isExternallyInitialized = false);
   GlobalVariable(const GlobalVariable &) = delete;
   GlobalVariable &operator=(const GlobalVariable &) = delete;

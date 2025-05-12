@@ -12,7 +12,7 @@
 
 #include "LanaiMCAsmInfo.h"
 
-#include "llvm/TargetParser/Triple.h"
+#include "llvm/ADT/Triple.h"
 
 using namespace llvm;
 

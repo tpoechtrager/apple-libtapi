@@ -240,11 +240,6 @@ private:
   static SourceRange getLocalSourceRangeImpl(TypeLoc TL);
 };
 
-inline TypeSourceInfo::TypeSourceInfo(QualType ty, size_t DataSize) : Ty(ty) {
-  // Init data attached to the object. See getTypeLoc.
-  memset(this + 1, 0, DataSize);
-}
-
 /// Return the TypeLoc for a type source info.
 inline TypeLoc TypeSourceInfo::getTypeLoc() const {
   // TODO: is this alignment already sufficient?
@@ -819,7 +814,7 @@ public:
   }
 
   ArrayRef<SourceLocation> getProtocolLocs() const {
-    return llvm::ArrayRef(getProtocolLocArray(), getNumProtocols());
+    return llvm::makeArrayRef(getProtocolLocArray(), getNumProtocols());
   }
 
   void initializeLocal(ASTContext &Context, SourceLocation Loc);
@@ -1025,7 +1020,7 @@ public:
 
 
   ArrayRef<SourceLocation> getProtocolLocs() const {
-    return llvm::ArrayRef(getProtocolLocArray(), getNumProtocols());
+    return llvm::makeArrayRef(getProtocolLocArray(), getNumProtocols());
   }
 
   bool hasBaseTypeAsWritten() const {
@@ -1452,7 +1447,7 @@ public:
   }
 
   ArrayRef<ParmVarDecl *> getParams() const {
-    return llvm::ArrayRef(getParmArray(), getNumParams());
+    return llvm::makeArrayRef(getParmArray(), getNumParams());
   }
 
   // ParmVarDecls* are stored after Info, one for each parameter.
@@ -1639,7 +1634,7 @@ public:
   }
 
   unsigned getNumArgs() const {
-    return getTypePtr()->template_arguments().size();
+    return getTypePtr()->getNumArgs();
   }
 
   void setArgLocInfo(unsigned i, TemplateArgumentLocInfo AI) {
@@ -1651,8 +1646,7 @@ public:
   }
 
   TemplateArgumentLoc getArgLoc(unsigned i) const {
-    return TemplateArgumentLoc(getTypePtr()->template_arguments()[i],
-                               getArgLocInfo(i));
+    return TemplateArgumentLoc(getTypePtr()->getArg(i), getArgLocInfo(i));
   }
 
   SourceLocation getTemplateNameLoc() const {
@@ -1687,12 +1681,12 @@ public:
     setTemplateNameLoc(Loc);
     setLAngleLoc(Loc);
     setRAngleLoc(Loc);
-    initializeArgLocs(Context, getTypePtr()->template_arguments(),
+    initializeArgLocs(Context, getNumArgs(), getTypePtr()->getArgs(),
                       getArgInfos(), Loc);
   }
 
-  static void initializeArgLocs(ASTContext &Context,
-                                ArrayRef<TemplateArgument> Args,
+  static void initializeArgLocs(ASTContext &Context, unsigned NumArgs,
+                                const TemplateArgument *Args,
                                 TemplateArgumentLocInfo *ArgInfos,
                                 SourceLocation Loc);
 
@@ -2107,7 +2101,7 @@ struct AutoTypeLocInfo : TypeSpecLocInfo {
   NestedNameSpecifierLoc NestedNameSpec;
   SourceLocation TemplateKWLoc;
   SourceLocation ConceptNameLoc;
-  NamedDecl *FoundDecl = nullptr;
+  NamedDecl *FoundDecl;
   SourceLocation LAngleLoc;
   SourceLocation RAngleLoc;
 
@@ -2194,7 +2188,7 @@ public:
   }
 
   unsigned getNumArgs() const {
-    return getTypePtr()->getTypeConstraintArguments().size();
+    return getTypePtr()->getNumArgs();
   }
 
   void setArgLocInfo(unsigned i, TemplateArgumentLocInfo AI) {
@@ -2470,7 +2464,7 @@ public:
   }
 
   unsigned getNumArgs() const {
-    return getTypePtr()->template_arguments().size();
+    return getTypePtr()->getNumArgs();
   }
 
   void setArgLocInfo(unsigned i, TemplateArgumentLocInfo AI) {
@@ -2482,8 +2476,7 @@ public:
   }
 
   TemplateArgumentLoc getArgLoc(unsigned i) const {
-    return TemplateArgumentLoc(getTypePtr()->template_arguments()[i],
-                               getArgLocInfo(i));
+    return TemplateArgumentLoc(getTypePtr()->getArg(i), getArgLocInfo(i));
   }
 
   SourceRange getLocalSourceRange() const {

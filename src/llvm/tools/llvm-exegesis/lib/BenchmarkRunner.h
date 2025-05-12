@@ -34,40 +34,16 @@ namespace exegesis {
 // Common code for all benchmark modes.
 class BenchmarkRunner {
 public:
-  enum ExecutionModeE { InProcess, SubProcess };
-
-  explicit BenchmarkRunner(const LLVMState &State, Benchmark::ModeE Mode,
-                           BenchmarkPhaseSelectorE BenchmarkPhaseSelector,
-                           ExecutionModeE ExecutionMode);
+  explicit BenchmarkRunner(const LLVMState &State,
+                           InstructionBenchmark::ModeE Mode);
 
   virtual ~BenchmarkRunner();
 
-  class RunnableConfiguration {
-    friend class BenchmarkRunner;
-
-  public:
-    ~RunnableConfiguration() = default;
-    RunnableConfiguration(RunnableConfiguration &&) = default;
-
-    RunnableConfiguration(const RunnableConfiguration &) = delete;
-    RunnableConfiguration &operator=(RunnableConfiguration &&) = delete;
-    RunnableConfiguration &operator=(const RunnableConfiguration &) = delete;
-
-  private:
-    RunnableConfiguration() = default;
-
-    Benchmark InstrBenchmark;
-    object::OwningBinary<object::ObjectFile> ObjectFile;
-  };
-
-  Expected<RunnableConfiguration>
-  getRunnableConfiguration(const BenchmarkCode &Configuration,
-                           unsigned NumRepetitions, unsigned LoopUnrollFactor,
-                           const SnippetRepetitor &Repetitor) const;
-
-  Expected<Benchmark>
-  runConfiguration(RunnableConfiguration &&RC,
-                   const std::optional<StringRef> &DumpFile) const;
+  Expected<InstructionBenchmark>
+  runConfiguration(const BenchmarkCode &Configuration, unsigned NumRepetitions,
+                   unsigned LoopUnrollFactor,
+                   ArrayRef<std::unique_ptr<const SnippetRepetitor>> Repetitors,
+                   bool DumpObjectToDisk) const;
 
   // Scratch space to run instructions that touch memory.
   struct ScratchSpace {
@@ -91,41 +67,25 @@ public:
   class FunctionExecutor {
   public:
     virtual ~FunctionExecutor();
+    // FIXME deprecate this.
+    virtual Expected<int64_t> runAndMeasure(const char *Counters) const = 0;
 
-    Expected<llvm::SmallVector<int64_t, 4>>
-    runAndSample(const char *Counters) const;
-
-  protected:
-    static void
-    accumulateCounterValues(const llvm::SmallVectorImpl<int64_t> &NewValues,
-                            llvm::SmallVectorImpl<int64_t> *Result);
     virtual Expected<llvm::SmallVector<int64_t, 4>>
-    runWithCounter(StringRef CounterName) const = 0;
+    runAndSample(const char *Counters) const = 0;
   };
 
 protected:
   const LLVMState &State;
-  const Benchmark::ModeE Mode;
-  const BenchmarkPhaseSelectorE BenchmarkPhaseSelector;
-  const ExecutionModeE ExecutionMode;
+  const InstructionBenchmark::ModeE Mode;
 
 private:
   virtual Expected<std::vector<BenchmarkMeasure>>
   runMeasurements(const FunctionExecutor &Executor) const = 0;
 
-  Expected<SmallString<0>>
-  assembleSnippet(const BenchmarkCode &BC, const SnippetRepetitor &Repetitor,
-                  unsigned MinInstructions, unsigned LoopBodySize,
-                  bool GenerateMemoryInstructions) const;
-
-  Expected<std::string> writeObjectFile(StringRef Buffer,
-                                        StringRef FileName) const;
+  Expected<std::string> writeObjectFile(const BenchmarkCode &Configuration,
+                                        const FillFunction &Fill) const;
 
   const std::unique_ptr<ScratchSpace> Scratch;
-
-  Expected<std::unique_ptr<FunctionExecutor>>
-  createFunctionExecutor(object::OwningBinary<object::ObjectFile> Obj,
-                         const BenchmarkKey &Key) const;
 };
 
 } // namespace exegesis

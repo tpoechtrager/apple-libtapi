@@ -23,9 +23,9 @@ using namespace llvm;
 MCRegister
 MCRegisterInfo::getMatchingSuperReg(MCRegister Reg, unsigned SubIdx,
                                     const MCRegisterClass *RC) const {
-  for (MCPhysReg Super : superregs(Reg))
-    if (RC->contains(Super) && Reg == getSubReg(Super, SubIdx))
-      return Super;
+  for (MCSuperRegIterator Supers(Reg, this); Supers.isValid(); ++Supers)
+    if (RC->contains(*Supers) && Reg == getSubReg(*Supers, SubIdx))
+      return *Supers;
   return 0;
 }
 
@@ -35,11 +35,9 @@ MCRegister MCRegisterInfo::getSubReg(MCRegister Reg, unsigned Idx) const {
   // Get a pointer to the corresponding SubRegIndices list. This list has the
   // name of each sub-register in the same order as MCSubRegIterator.
   const uint16_t *SRI = SubRegIndices + get(Reg).SubRegIndices;
-  for (MCPhysReg Sub : subregs(Reg)) {
+  for (MCSubRegIterator Subs(Reg, this); Subs.isValid(); ++Subs, ++SRI)
     if (*SRI == Idx)
-      return Sub;
-    ++SRI;
-  }
+      return *Subs;
   return 0;
 }
 
@@ -49,11 +47,9 @@ unsigned MCRegisterInfo::getSubRegIndex(MCRegister Reg,
   // Get a pointer to the corresponding SubRegIndices list. This list has the
   // name of each sub-register in the same order as MCSubRegIterator.
   const uint16_t *SRI = SubRegIndices + get(Reg).SubRegIndices;
-  for (MCPhysReg Sub : subregs(Reg)) {
-    if (Sub == SubReg)
+  for (MCSubRegIterator Subs(Reg, this); Subs.isValid(); ++Subs, ++SRI)
+    if (*Subs == SubReg)
       return *SRI;
-    ++SRI;
-  }
   return 0;
 }
 
@@ -82,18 +78,18 @@ int MCRegisterInfo::getDwarfRegNum(MCRegister RegNum, bool isEH) const {
   return I->ToReg;
 }
 
-std::optional<unsigned> MCRegisterInfo::getLLVMRegNum(unsigned RegNum,
-                                                      bool isEH) const {
+Optional<unsigned> MCRegisterInfo::getLLVMRegNum(unsigned RegNum,
+                                                 bool isEH) const {
   const DwarfLLVMRegPair *M = isEH ? EHDwarf2LRegs : Dwarf2LRegs;
   unsigned Size = isEH ? EHDwarf2LRegsSize : Dwarf2LRegsSize;
 
   if (!M)
-    return std::nullopt;
+    return None;
   DwarfLLVMRegPair Key = { RegNum, 0 };
   const DwarfLLVMRegPair *I = std::lower_bound(M, M+Size, Key);
   if (I != M + Size && I->FromReg == RegNum)
     return I->ToReg;
-  return std::nullopt;
+  return None;
 }
 
 int MCRegisterInfo::getDwarfRegNumFromDwarfEHRegNum(unsigned RegNum) const {
@@ -105,13 +101,8 @@ int MCRegisterInfo::getDwarfRegNumFromDwarfEHRegNum(unsigned RegNum) const {
   // a corresponding LLVM register number at all.  So if we can't map the
   // EH register number to an LLVM register number, assume it's just a
   // valid DWARF register number as is.
-  if (std::optional<unsigned> LRegNum = getLLVMRegNum(RegNum, true)) {
-    int DwarfRegNum = getDwarfRegNum(*LRegNum, false);
-    if (DwarfRegNum == -1)
-      return RegNum;
-    else
-      return DwarfRegNum;
-  }
+  if (Optional<unsigned> LRegNum = getLLVMRegNum(RegNum, true))
+    return getDwarfRegNum(*LRegNum, false);
   return RegNum;
 }
 
@@ -134,13 +125,11 @@ int MCRegisterInfo::getCodeViewRegNum(MCRegister RegNum) const {
 
 bool MCRegisterInfo::regsOverlap(MCRegister RegA, MCRegister RegB) const {
   // Regunits are numerically ordered. Find a common unit.
-  auto RangeA = regunits(RegA);
-  MCRegUnitIterator IA = RangeA.begin(), EA = RangeA.end();
-  auto RangeB = regunits(RegB);
-  MCRegUnitIterator IB = RangeB.begin(), EB = RangeB.end();
+  MCRegUnitIterator RUA(RegA, this);
+  MCRegUnitIterator RUB(RegB, this);
   do {
-    if (*IA == *IB)
+    if (*RUA == *RUB)
       return true;
-  } while (*IA < *IB ? ++IA != EA : ++IB != EB);
+  } while (*RUA < *RUB ? (++RUA).isValid() : (++RUB).isValid());
   return false;
 }

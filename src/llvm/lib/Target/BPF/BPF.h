@@ -12,14 +12,18 @@
 #include "MCTargetDesc/BPFMCTargetDesc.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/Pass.h"
+#include "llvm/PassRegistry.h"
 #include "llvm/Target/TargetMachine.h"
 
 namespace llvm {
 class BPFTargetMachine;
-class PassRegistry;
 
+ModulePass *createBPFAdjustOpt();
 ModulePass *createBPFCheckAndAdjustIR();
 
+FunctionPass *createBPFAbstractMemberAccess(BPFTargetMachine *TM);
+FunctionPass *createBPFPreserveDIType();
+FunctionPass *createBPFIRPeephole();
 FunctionPass *createBPFISelDag(BPFTargetMachine &TM);
 FunctionPass *createBPFMISimplifyPatchablePass();
 FunctionPass *createBPFMIPeepholePass();
@@ -27,13 +31,17 @@ FunctionPass *createBPFMIPeepholeTruncElimPass();
 FunctionPass *createBPFMIPreEmitPeepholePass();
 FunctionPass *createBPFMIPreEmitCheckingPass();
 
+void initializeBPFAdjustOptPass(PassRegistry&);
 void initializeBPFCheckAndAdjustIRPass(PassRegistry&);
-void initializeBPFDAGToDAGISelPass(PassRegistry &);
+
+void initializeBPFAbstractMemberAccessLegacyPassPass(PassRegistry &);
+void initializeBPFPreserveDITypePass(PassRegistry&);
+void initializeBPFIRPeepholePass(PassRegistry&);
+void initializeBPFMISimplifyPatchablePass(PassRegistry&);
 void initializeBPFMIPeepholePass(PassRegistry&);
-void initializeBPFMIPeepholeTruncElimPass(PassRegistry &);
+void initializeBPFMIPeepholeTruncElimPass(PassRegistry&);
+void initializeBPFMIPreEmitPeepholePass(PassRegistry&);
 void initializeBPFMIPreEmitCheckingPass(PassRegistry&);
-void initializeBPFMIPreEmitPeepholePass(PassRegistry &);
-void initializeBPFMISimplifyPatchablePass(PassRegistry &);
 
 class BPFAbstractMemberAccessPass
     : public PassInfoMixin<BPFAbstractMemberAccessPass> {

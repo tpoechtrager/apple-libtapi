@@ -185,15 +185,11 @@ TEST(TBDv5, ReadFile) {
 "libraries": []
 })";
 
-  MemoryBufferRef InputBuf = MemoryBufferRef(TBDv5File, "Test.tbd");
-  Expected<FileType> ExpectedFT = TextAPIReader::canRead(InputBuf);
-  EXPECT_TRUE(!!ExpectedFT);
-
-  Expected<TBDFile> Result = TextAPIReader::get(InputBuf);
+  Expected<TBDFile> Result =
+      TextAPIReader::get(MemoryBufferRef(TBDv5File, "Test.tbd"));
   EXPECT_TRUE(!!Result);
   TBDFile File = std::move(Result.get());
   EXPECT_EQ(FileType::TBD_V5, File->getFileType());
-  EXPECT_EQ(*ExpectedFT, File->getFileType());
   EXPECT_EQ(std::string("/S/L/F/Foo.framework/Foo"), File->getInstallName());
 
   TargetList AllTargets = {
@@ -201,24 +197,13 @@ TEST(TBDv5, ReadFile) {
       Target(AK_arm64, PLATFORM_MACOS, VersionTuple(11, 0, 0)),
       Target(AK_arm64, PLATFORM_MACCATALYST, VersionTuple(14, 0)),
   };
-  std::set<Target> FileTargets{File->targets().begin(), File->targets().end()};
   EXPECT_EQ(mapToPlatformSet(AllTargets), File->getPlatforms());
   EXPECT_EQ(mapToArchitectureSet(AllTargets), File->getArchitectures());
-  EXPECT_EQ(FileTargets.size(), AllTargets.size());
-  for (const auto &Targ : AllTargets) {
-    auto FileTarg = FileTargets.find(Targ);
-    EXPECT_FALSE(FileTarg == FileTargets.end());
-    EXPECT_EQ(*FileTarg, Targ);
-    PackedVersion MD = Targ.MinDeployment;
-    PackedVersion FileMD = FileTarg->MinDeployment;
-    EXPECT_EQ(MD, FileMD);
-  }
 
   EXPECT_EQ(PackedVersion(1, 2, 0), File->getCurrentVersion());
   EXPECT_EQ(PackedVersion(1, 1, 0), File->getCompatibilityVersion());
   EXPECT_TRUE(File->isApplicationExtensionSafe());
   EXPECT_FALSE(File->isTwoLevelNamespace());
-  EXPECT_FALSE(File->isOSLibNotForSharedCache());
   EXPECT_EQ(0U, File->documents().size());
 
   InterfaceFileRef ClientA("ClientA", AllTargets);
@@ -267,63 +252,63 @@ TEST(TBDv5, ReadFile) {
                              Target(AK_arm64, PLATFORM_MACOS)};
 
   std::vector<ExportedSymbol> ExpectedExportedSymbols = {
-      {EncodeKind::GlobalSymbol, "_func", false, false, false, MacOSTargets},
-      {EncodeKind::GlobalSymbol,
+      {SymbolKind::GlobalSymbol, "_func", false, false, false, MacOSTargets},
+      {SymbolKind::GlobalSymbol,
        "_funcFoo",
        false,
        false,
        false,
        {Target(AK_x86_64, PLATFORM_MACOS)}},
-      {EncodeKind::GlobalSymbol, "_global", false, false, true, MacOSTargets},
-      {EncodeKind::GlobalSymbol,
+      {SymbolKind::GlobalSymbol, "_global", false, false, true, MacOSTargets},
+      {SymbolKind::GlobalSymbol,
        "_globalVar",
        false,
        false,
        true,
        {Target(AK_x86_64, PLATFORM_MACOS)}},
-      {EncodeKind::ObjectiveCClass,
+      {SymbolKind::ObjectiveCClass,
        "ClassA",
        false,
        false,
        true,
        {Target(AK_x86_64, PLATFORM_MACOS)}},
-      {EncodeKind::ObjectiveCClass,
+      {SymbolKind::ObjectiveCClass,
        "ClassB",
        false,
        false,
        true,
        {Target(AK_x86_64, PLATFORM_MACOS)}},
-      {EncodeKind::ObjectiveCClass,
+      {SymbolKind::ObjectiveCClass,
        "ClassData",
        false,
        false,
        true,
        {Target(AK_x86_64, PLATFORM_MACOS)}},
-      {EncodeKind::ObjectiveCClassEHType,
+      {SymbolKind::ObjectiveCClassEHType,
        "ClassA",
        false,
        false,
        true,
        {Target(AK_x86_64, PLATFORM_MACOS)}},
-      {EncodeKind::ObjectiveCClassEHType,
+      {SymbolKind::ObjectiveCClassEHType,
        "ClassB",
        false,
        false,
        true,
        {Target(AK_x86_64, PLATFORM_MACOS)}},
-      {EncodeKind::ObjectiveCInstanceVariable,
+      {SymbolKind::ObjectiveCInstanceVariable,
        "ClassA.ivar1",
        false,
        false,
        true,
        {Target(AK_x86_64, PLATFORM_MACOS)}},
-      {EncodeKind::ObjectiveCInstanceVariable,
+      {SymbolKind::ObjectiveCInstanceVariable,
        "ClassA.ivar2",
        false,
        false,
        true,
        {Target(AK_x86_64, PLATFORM_MACOS)}},
-      {EncodeKind::ObjectiveCInstanceVariable,
+      {SymbolKind::ObjectiveCInstanceVariable,
        "ClassC.ivar1",
        false,
        false,
@@ -331,20 +316,20 @@ TEST(TBDv5, ReadFile) {
        {Target(AK_x86_64, PLATFORM_MACOS)}},
   };
   std::vector<ExportedSymbol> ExpectedReexportedSymbols = {
-      {EncodeKind::GlobalSymbol, "_funcA", false, false, false, MacOSTargets},
-      {EncodeKind::GlobalSymbol, "_globalRe", false, false, true, MacOSTargets},
-      {EncodeKind::ObjectiveCClass, "ClassRexport", false, false, true,
+      {SymbolKind::GlobalSymbol, "_funcA", false, false, false, MacOSTargets},
+      {SymbolKind::GlobalSymbol, "_globalRe", false, false, true, MacOSTargets},
+      {SymbolKind::ObjectiveCClass, "ClassRexport", false, false, true,
        MacOSTargets},
   };
 
   std::vector<ExportedSymbol> ExpectedUndefinedSymbols = {
-      {EncodeKind::GlobalSymbol,
+      {SymbolKind::GlobalSymbol,
        "_globalBind",
        false,
        false,
        true,
        {Target(AK_x86_64, PLATFORM_MACOS)}},
-      {EncodeKind::GlobalSymbol,
+      {SymbolKind::GlobalSymbol,
        "referenced_sym",
        true,
        false,
@@ -363,7 +348,7 @@ TEST(TBDv5, ReadFile) {
                          std::begin(ExpectedUndefinedSymbols)));
 
   EXPECT_TRUE(
-      File->getSymbol(EncodeKind::GlobalSymbol, "_globalBind").has_value());
+      File->getSymbol(SymbolKind::GlobalSymbol, "_globalBind").has_value());
 }
 
 TEST(TBDv5, ReadMultipleTargets) {
@@ -524,23 +509,23 @@ TEST(TBDv5, ReadMultipleDocuments) {
 
   llvm::sort(Exports);
   ExportedSymbolSeq ExpectedExports = {
-      {EncodeKind::GlobalSymbol, "_funcFoo", false, false, false, {iOSTarget}},
-      {EncodeKind::GlobalSymbol, "_globalVar", false, true, true, {iOSTarget}},
-      {EncodeKind::ObjectiveCClass, "ClassA", false, false, true, {iOSTarget}},
-      {EncodeKind::ObjectiveCClass, "ClassB", false, false, true, {iOSTarget}},
-      {EncodeKind::ObjectiveCClass,
+      {SymbolKind::GlobalSymbol, "_funcFoo", false, false, false, {iOSTarget}},
+      {SymbolKind::GlobalSymbol, "_globalVar", false, true, true, {iOSTarget}},
+      {SymbolKind::ObjectiveCClass, "ClassA", false, false, true, {iOSTarget}},
+      {SymbolKind::ObjectiveCClass, "ClassB", false, false, true, {iOSTarget}},
+      {SymbolKind::ObjectiveCClass,
        "ClassData",
        false,
        false,
        true,
        {iOSTarget}},
-      {EncodeKind::ObjectiveCClassEHType,
+      {SymbolKind::ObjectiveCClassEHType,
        "ClassA",
        false,
        false,
        true,
        {iOSTarget}},
-      {EncodeKind::ObjectiveCClassEHType,
+      {SymbolKind::ObjectiveCClassEHType,
        "ClassB",
        false,
        false,
@@ -734,43 +719,43 @@ TEST(TBDv5, WriteFile) {
 
   SymbolFlags Flags = SymbolFlags::None;
   // Exports.
-  File.addSymbol(EncodeKind::GlobalSymbol, "_global",
+  File.addSymbol(SymbolKind::GlobalSymbol, "_global",
                  {AllTargets[0], AllTargets[1]}, Flags | SymbolFlags::Data);
-  File.addSymbol(EncodeKind::GlobalSymbol, "_func",
+  File.addSymbol(SymbolKind::GlobalSymbol, "_func",
                  {AllTargets[0], AllTargets[1]}, Flags | SymbolFlags::Text);
-  File.addSymbol(EncodeKind::ObjectiveCClass, "ClassA",
+  File.addSymbol(SymbolKind::ObjectiveCClass, "ClassA",
                  {AllTargets[0], AllTargets[1]}, Flags | SymbolFlags::Data);
-  File.addSymbol(EncodeKind::GlobalSymbol, "_funcFoo", {AllTargets[0]},
+  File.addSymbol(SymbolKind::GlobalSymbol, "_funcFoo", {AllTargets[0]},
                  Flags | SymbolFlags::Text);
-  File.addSymbol(EncodeKind::GlobalSymbol, "_globalVar", {AllTargets[0]},
+  File.addSymbol(SymbolKind::GlobalSymbol, "_globalVar", {AllTargets[0]},
                  Flags | SymbolFlags::Data);
-  File.addSymbol(EncodeKind::ObjectiveCClass, "ClassData", {AllTargets[0]},
+  File.addSymbol(SymbolKind::ObjectiveCClass, "ClassData", {AllTargets[0]},
                  Flags | SymbolFlags::Data);
-  File.addSymbol(EncodeKind::ObjectiveCClassEHType, "ClassA", {AllTargets[0]},
+  File.addSymbol(SymbolKind::ObjectiveCClassEHType, "ClassA", {AllTargets[0]},
                  Flags | SymbolFlags::Data);
-  File.addSymbol(EncodeKind::ObjectiveCClassEHType, "ClassB", {AllTargets[0]},
+  File.addSymbol(SymbolKind::ObjectiveCClassEHType, "ClassB", {AllTargets[0]},
                  Flags | SymbolFlags::Data);
-  File.addSymbol(EncodeKind::ObjectiveCInstanceVariable, "ClassA.ivar1",
+  File.addSymbol(SymbolKind::ObjectiveCInstanceVariable, "ClassA.ivar1",
                  {AllTargets[0]}, Flags | SymbolFlags::Data);
-  File.addSymbol(EncodeKind::ObjectiveCInstanceVariable, "ClassA.ivar2",
+  File.addSymbol(SymbolKind::ObjectiveCInstanceVariable, "ClassA.ivar2",
                  {AllTargets[0]}, Flags | SymbolFlags::Data);
-  File.addSymbol(EncodeKind::ObjectiveCInstanceVariable, "ClassC.ivar1",
+  File.addSymbol(SymbolKind::ObjectiveCInstanceVariable, "ClassC.ivar1",
                  {AllTargets[0]}, Flags | SymbolFlags::Data);
 
   // Reexports.
   Flags = SymbolFlags::Rexported;
-  File.addSymbol(EncodeKind::GlobalSymbol, "_globalRe", AllTargets,
+  File.addSymbol(SymbolKind::GlobalSymbol, "_globalRe", AllTargets,
                  Flags | SymbolFlags::Data);
-  File.addSymbol(EncodeKind::GlobalSymbol, "_funcA", AllTargets,
+  File.addSymbol(SymbolKind::GlobalSymbol, "_funcA", AllTargets,
                  Flags | SymbolFlags::Text);
-  File.addSymbol(EncodeKind::ObjectiveCClass, "ClassRexport", AllTargets,
+  File.addSymbol(SymbolKind::ObjectiveCClass, "ClassRexport", AllTargets,
                  Flags | SymbolFlags::Data);
 
   // Undefineds.
   Flags = SymbolFlags::Undefined;
-  File.addSymbol(EncodeKind::GlobalSymbol, "_globalBind", {AllTargets[0]},
+  File.addSymbol(SymbolKind::GlobalSymbol, "_globalBind", {AllTargets[0]},
                  Flags | SymbolFlags::Data);
-  File.addSymbol(EncodeKind::GlobalSymbol, "referenced_sym", {AllTargets[0]},
+  File.addSymbol(SymbolKind::GlobalSymbol, "referenced_sym", {AllTargets[0]},
                  Flags | SymbolFlags::Data | SymbolFlags::WeakReferenced);
 
   File.setTwoLevelNamespace(false);
@@ -900,7 +885,7 @@ TEST(TBDv5, WriteMultipleDocuments) {
   NestedFile.addRPath(AllTargets[0], "@executable_path/.../Frameworks");
   for (const auto &Targ : AllTargets)
     NestedFile.addReexportedLibrary("@rpath/libfoo.dylib", Targ);
-  NestedFile.addSymbol(EncodeKind::GlobalSymbol, "_funcFoo", AllTargets,
+  NestedFile.addSymbol(SymbolKind::GlobalSymbol, "_funcFoo", AllTargets,
                        SymbolFlags::Text);
   File.addDocument(std::make_shared<InterfaceFile>(std::move(NestedFile)));
 
@@ -912,7 +897,7 @@ TEST(TBDv5, WriteMultipleDocuments) {
   NestedFileB.setCurrentVersion(PackedVersion(1, 0, 0));
   NestedFileB.setTwoLevelNamespace();
   NestedFileB.setApplicationExtensionSafe(true);
-  NestedFileB.addSymbol(EncodeKind::GlobalSymbol, "_varFooBaz", {AllTargets[0]},
+  NestedFileB.addSymbol(SymbolKind::GlobalSymbol, "_varFooBaz", {AllTargets[0]},
                         SymbolFlags::Data);
   File.addDocument(std::make_shared<InterfaceFile>(std::move(NestedFileB)));
 
@@ -920,8 +905,7 @@ TEST(TBDv5, WriteMultipleDocuments) {
   // against TBDv5File.
   SmallString<4096> Buffer;
   raw_svector_ostream OS(Buffer);
-  Error Result = TextAPIWriter::writeToStream(OS, File, FileType::Invalid,
-                                              /*Compact=*/true);
+  Error Result = TextAPIWriter::writeToStream(OS, File, /*Compact=*/true);
   EXPECT_FALSE(Result);
 
   Expected<TBDFile> Input =
@@ -1196,116 +1180,6 @@ TEST(TBDv5, SimSupport) {
   EXPECT_TRUE(ReadFile->targets().begin() != ReadFile->targets().end());
   EXPECT_EQ(*ReadFile->targets().begin(), ExpectedTarget);
   EXPECT_TRUE(ReadFile->hasSimulatorSupport());
-}
-
-TEST(TBDv5, NotForSharedCache) {
-  static const char TBDv5File[] = R"({ 
-"tapi_tbd_version": 5,
-"main_library": {
-  "target_info": [
-    {
-      "target": "arm64-macos",
-      "min_deployment": "11.1" 
-    }
-  ],
-  "install_names":[
-    { "name":"/S/L/F/Foo.framework/Foo" }
-  ],
-  "flags":[ 
-    { "attributes": ["not_for_dyld_shared_cache"] }
-  ] 
-}})";
-
-  Expected<TBDFile> Result =
-      TextAPIReader::get(MemoryBufferRef(TBDv5File, "Test.tbd"));
-  EXPECT_TRUE(!!Result);
-  Target ExpectedTarget = Target(AK_arm64, PLATFORM_MACOS, VersionTuple(11, 1));
-  TBDFile ReadFile = std::move(Result.get());
-  EXPECT_EQ(FileType::TBD_V5, ReadFile->getFileType());
-  EXPECT_EQ(std::string("/S/L/F/Foo.framework/Foo"),
-            ReadFile->getInstallName());
-  EXPECT_TRUE(ReadFile->targets().begin() != ReadFile->targets().end());
-  EXPECT_EQ(*ReadFile->targets().begin(), ExpectedTarget);
-  EXPECT_FALSE(ReadFile->hasSimulatorSupport());
-  EXPECT_TRUE(ReadFile->isOSLibNotForSharedCache());
-}
-
-TEST(TBDv5, ObjCInterfaces) {
-  static const char TBDv5File[] = R"({ 
-"tapi_tbd_version": 5,
-"main_library": {
-  "target_info": [
-    {
-      "target": "arm64-ios-simulator",
-      "min_deployment": "14.0"
-    }
-  ],
-  "install_names":[
-    { "name":"/S/L/F/Foo.framework/Foo" }
-  ],
-  "exported_symbols": [
-    {
-      "data": {
-         "global": [
-              "_global",
-              "_OBJC_METACLASS_$_Standalone",
-              "_OBJC_CLASS_$_Standalone2"
-          ],
-          "weak": ["_OBJC_EHTYPE_$_NSObject"],
-          "objc_class": [
-              "ClassA",
-              "ClassB"
-          ],
-          "objc_eh_type": ["ClassA"]
-      }
-    }]
-}})";
-
-  Expected<TBDFile> Result =
-      TextAPIReader::get(MemoryBufferRef(TBDv5File, "Test.tbd"));
-  EXPECT_TRUE(!!Result);
-  TBDFile File = std::move(Result.get());
-  EXPECT_EQ(FileType::TBD_V5, File->getFileType());
-  Target ExpectedTarget =
-      Target(AK_arm64, PLATFORM_IOSSIMULATOR, VersionTuple(14, 0));
-  EXPECT_EQ(*File->targets().begin(), ExpectedTarget);
-
-  // Check Symbols.
-  ExportedSymbolSeq Exports;
-  for (const auto *Sym : File->symbols()) {
-    ExportedSymbol Temp =
-        ExportedSymbol{Sym->getKind(), std::string(Sym->getName()),
-                       Sym->isWeakDefined() || Sym->isWeakReferenced(),
-                       Sym->isThreadLocalValue(), Sym->isData()};
-    Exports.emplace_back(std::move(Temp));
-  }
-  llvm::sort(Exports);
-
-  std::vector<ExportedSymbol> ExpectedExports = {
-      {EncodeKind::GlobalSymbol, "_OBJC_CLASS_$_Standalone2", false, false,
-       true},
-      {EncodeKind::GlobalSymbol, "_OBJC_EHTYPE_$_NSObject", true, false, true},
-      {EncodeKind::GlobalSymbol, "_OBJC_METACLASS_$_Standalone", false, false,
-       true},
-      {EncodeKind::GlobalSymbol, "_global", false, false, true},
-      {EncodeKind::ObjectiveCClass, "ClassA", false, false, true},
-      {EncodeKind::ObjectiveCClass, "ClassB", false, false, true},
-      {EncodeKind::ObjectiveCClassEHType, "ClassA", false, false, true}};
-
-  EXPECT_EQ(ExpectedExports.size(), Exports.size());
-  EXPECT_TRUE(
-      std::equal(Exports.begin(), Exports.end(), std::begin(ExpectedExports)));
-
-  SmallString<4096> Buffer;
-  raw_svector_ostream OS(Buffer);
-  Error WriteResult = TextAPIWriter::writeToStream(OS, *File);
-  EXPECT_TRUE(!WriteResult);
-
-  Expected<TBDFile> Output =
-      TextAPIReader::get(MemoryBufferRef(Buffer, "Output.tbd"));
-  EXPECT_TRUE(!!Output);
-  TBDFile WriteResultFile = std::move(Output.get());
-  EXPECT_EQ(*File, *WriteResultFile);
 }
 
 TEST(TBDv5, MergeIF) {
@@ -1646,119 +1520,119 @@ TEST(TBDv5, MergeIF) {
                              Target(AK_arm64, PLATFORM_MACOS)};
 
   std::vector<ExportedSymbol> ExpectedExportedSymbols = {
-      {EncodeKind::GlobalSymbol, "_func", false, false, false, MacOSTargets},
-      {EncodeKind::GlobalSymbol,
+      {SymbolKind::GlobalSymbol, "_func", false, false, false, MacOSTargets},
+      {SymbolKind::GlobalSymbol,
        "_funcFoo",
        false,
        false,
        false,
        {Target(AK_x86_64, PLATFORM_MACOS)}},
-      {EncodeKind::GlobalSymbol,
+      {SymbolKind::GlobalSymbol,
        "_funcFooZ",
        false,
        false,
        false,
        {Target(AK_x86_64, PLATFORM_MACOS)}},
-      {EncodeKind::GlobalSymbol, "_funcZ", false, false, false, MacOSTargets},
-      {EncodeKind::GlobalSymbol, "_global", false, false, true, MacOSTargets},
-      {EncodeKind::GlobalSymbol,
+      {SymbolKind::GlobalSymbol, "_funcZ", false, false, false, MacOSTargets},
+      {SymbolKind::GlobalSymbol, "_global", false, false, true, MacOSTargets},
+      {SymbolKind::GlobalSymbol,
        "_globalVar",
        false,
        false,
        true,
        {Target(AK_x86_64, PLATFORM_MACOS)}},
-      {EncodeKind::GlobalSymbol,
+      {SymbolKind::GlobalSymbol,
        "_globalVarZ",
        false,
        false,
        true,
        {Target(AK_x86_64, PLATFORM_MACOS)}},
-      {EncodeKind::GlobalSymbol, "_globalZ", false, false, true, MacOSTargets},
-      {EncodeKind::ObjectiveCClass,
+      {SymbolKind::GlobalSymbol, "_globalZ", false, false, true, MacOSTargets},
+      {SymbolKind::ObjectiveCClass,
        "ClassA",
        false,
        false,
        true,
        {Target(AK_x86_64, PLATFORM_MACOS)}},
-      {EncodeKind::ObjectiveCClass,
+      {SymbolKind::ObjectiveCClass,
        "ClassB",
        false,
        false,
        true,
        {Target(AK_x86_64, PLATFORM_MACOS)}},
-      {EncodeKind::ObjectiveCClass,
+      {SymbolKind::ObjectiveCClass,
        "ClassData",
        false,
        false,
        true,
        {Target(AK_x86_64, PLATFORM_MACOS)}},
-      {EncodeKind::ObjectiveCClass,
+      {SymbolKind::ObjectiveCClass,
        "ClassF",
        false,
        false,
        true,
        {Target(AK_x86_64, PLATFORM_MACOS)}},
-      {EncodeKind::ObjectiveCClass,
+      {SymbolKind::ObjectiveCClass,
        "ClassZ",
        false,
        false,
        true,
        {Target(AK_x86_64, PLATFORM_MACOS)}},
-      {EncodeKind::ObjectiveCClassEHType,
+      {SymbolKind::ObjectiveCClassEHType,
        "ClassA",
        false,
        false,
        true,
        {Target(AK_x86_64, PLATFORM_MACOS)}},
-      {EncodeKind::ObjectiveCClassEHType,
+      {SymbolKind::ObjectiveCClassEHType,
        "ClassB",
        false,
        false,
        true,
        {Target(AK_x86_64, PLATFORM_MACOS)}},
-      {EncodeKind::ObjectiveCClassEHType,
+      {SymbolKind::ObjectiveCClassEHType,
        "ClassF",
        false,
        false,
        true,
        {Target(AK_x86_64, PLATFORM_MACOS)}},
-      {EncodeKind::ObjectiveCClassEHType,
+      {SymbolKind::ObjectiveCClassEHType,
        "ClassZ",
        false,
        false,
        true,
        {Target(AK_x86_64, PLATFORM_MACOS)}},
-      {EncodeKind::ObjectiveCInstanceVariable,
+      {SymbolKind::ObjectiveCInstanceVariable,
        "ClassA.ivar1",
        false,
        false,
        true,
        {Target(AK_x86_64, PLATFORM_MACOS)}},
-      {EncodeKind::ObjectiveCInstanceVariable,
+      {SymbolKind::ObjectiveCInstanceVariable,
        "ClassA.ivar2",
        false,
        false,
        true,
        {Target(AK_x86_64, PLATFORM_MACOS)}},
-      {EncodeKind::ObjectiveCInstanceVariable,
+      {SymbolKind::ObjectiveCInstanceVariable,
        "ClassC.ivar1",
        false,
        false,
        true,
        {Target(AK_x86_64, PLATFORM_MACOS)}},
-      {EncodeKind::ObjectiveCInstanceVariable,
+      {SymbolKind::ObjectiveCInstanceVariable,
        "ClassF.ivar1",
        false,
        false,
        true,
        {Target(AK_x86_64, PLATFORM_MACOS)}},
-      {EncodeKind::ObjectiveCInstanceVariable,
+      {SymbolKind::ObjectiveCInstanceVariable,
        "ClassZ.ivar1",
        false,
        false,
        true,
        {Target(AK_x86_64, PLATFORM_MACOS)}},
-      {EncodeKind::ObjectiveCInstanceVariable,
+      {SymbolKind::ObjectiveCInstanceVariable,
        "ClassZ.ivar2",
        false,
        false,
@@ -1767,20 +1641,20 @@ TEST(TBDv5, MergeIF) {
   };
 
   std::vector<ExportedSymbol> ExpectedReexportedSymbols = {
-      {EncodeKind::GlobalSymbol, "_funcA", false, false, false, MacOSTargets},
-      {EncodeKind::GlobalSymbol, "_globalRe", false, false, true, MacOSTargets},
-      {EncodeKind::ObjectiveCClass, "ClassRexport", false, false, true,
+      {SymbolKind::GlobalSymbol, "_funcA", false, false, false, MacOSTargets},
+      {SymbolKind::GlobalSymbol, "_globalRe", false, false, true, MacOSTargets},
+      {SymbolKind::ObjectiveCClass, "ClassRexport", false, false, true,
        MacOSTargets},
   };
 
   std::vector<ExportedSymbol> ExpectedUndefinedSymbols = {
-      {EncodeKind::GlobalSymbol,
+      {SymbolKind::GlobalSymbol,
        "_globalBind",
        false,
        false,
        true,
        {Target(AK_x86_64, PLATFORM_MACOS)}},
-      {EncodeKind::GlobalSymbol,
+      {SymbolKind::GlobalSymbol,
        "referenced_sym",
        true,
        false,
@@ -2033,14 +1907,14 @@ TEST(TBDv5, ExtractIF) {
   TargetList MacOSTargets = {Target(AK_arm64, PLATFORM_MACOS)};
 
   std::vector<ExportedSymbol> ExpectedExportedSymbols = {
-      {EncodeKind::GlobalSymbol, "_func", false, false, false, MacOSTargets},
-      {EncodeKind::GlobalSymbol, "_global", false, false, true, MacOSTargets},
-      {EncodeKind::ObjectiveCClass, "ClassA", false, false, true, MacOSTargets},
+      {SymbolKind::GlobalSymbol, "_func", false, false, false, MacOSTargets},
+      {SymbolKind::GlobalSymbol, "_global", false, false, true, MacOSTargets},
+      {SymbolKind::ObjectiveCClass, "ClassA", false, false, true, MacOSTargets},
   };
   std::vector<ExportedSymbol> ExpectedReexportedSymbols = {
-      {EncodeKind::GlobalSymbol, "_funcA", false, false, false, MacOSTargets},
-      {EncodeKind::GlobalSymbol, "_globalRe", false, false, true, MacOSTargets},
-      {EncodeKind::ObjectiveCClass, "ClassRexport", false, false, true,
+      {SymbolKind::GlobalSymbol, "_funcA", false, false, false, MacOSTargets},
+      {SymbolKind::GlobalSymbol, "_globalRe", false, false, true, MacOSTargets},
+      {SymbolKind::ObjectiveCClass, "ClassRexport", false, false, true,
        MacOSTargets},
   };
 
@@ -2286,14 +2160,14 @@ TEST(TBDv5, RemoveIF) {
   TargetList MacOSTargets = {Target(AK_arm64, PLATFORM_MACOS)};
 
   std::vector<ExportedSymbol> ExpectedExportedSymbols = {
-      {EncodeKind::GlobalSymbol, "_func", false, false, false, MacOSTargets},
-      {EncodeKind::GlobalSymbol, "_global", false, false, true, MacOSTargets},
-      {EncodeKind::ObjectiveCClass, "ClassA", false, false, true, MacOSTargets},
+      {SymbolKind::GlobalSymbol, "_func", false, false, false, MacOSTargets},
+      {SymbolKind::GlobalSymbol, "_global", false, false, true, MacOSTargets},
+      {SymbolKind::ObjectiveCClass, "ClassA", false, false, true, MacOSTargets},
   };
   std::vector<ExportedSymbol> ExpectedReexportedSymbols = {
-      {EncodeKind::GlobalSymbol, "_funcA", false, false, false, MacOSTargets},
-      {EncodeKind::GlobalSymbol, "_globalRe", false, false, true, MacOSTargets},
-      {EncodeKind::ObjectiveCClass, "ClassRexport", false, false, true,
+      {SymbolKind::GlobalSymbol, "_funcA", false, false, false, MacOSTargets},
+      {SymbolKind::GlobalSymbol, "_globalRe", false, false, true, MacOSTargets},
+      {SymbolKind::ObjectiveCClass, "ClassRexport", false, false, true,
        MacOSTargets},
   };
 
@@ -2442,8 +2316,8 @@ TEST(TBDv5, InlineIF) {
   llvm::sort(Exports);
 
   ExportedSymbolSeq ExpectedExports = {
-      {EncodeKind::GlobalSymbol, "_global", false, false, true, AllTargets},
-      {EncodeKind::ObjectiveCClass, "ClassA", false, false, true, AllTargets},
+      {SymbolKind::GlobalSymbol, "_global", false, false, true, AllTargets},
+      {SymbolKind::ObjectiveCClass, "ClassA", false, false, true, AllTargets},
   };
   EXPECT_EQ(ExpectedExports.size(), Exports.size());
   EXPECT_TRUE(

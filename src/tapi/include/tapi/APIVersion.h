@@ -24,7 +24,7 @@
 ///
 
 #define TAPI_API_VERSION_MAJOR 2U
-#define TAPI_API_VERSION_MINOR 3U
+#define TAPI_API_VERSION_MINOR 2U
 #define TAPI_API_VERSION_PATCH 0U
 
 namespace tapi {

@@ -16,8 +16,8 @@
 #include "Mips.h"
 #include "clang/Basic/TargetInfo.h"
 #include "clang/Basic/TargetOptions.h"
+#include "llvm/ADT/Triple.h"
 #include "llvm/Support/Compiler.h"
-#include "llvm/TargetParser/Triple.h"
 
 namespace clang {
 namespace targets {
@@ -52,9 +52,7 @@ public:
     return Feature == "pnacl";
   }
 
-  ArrayRef<Builtin::Info> getTargetBuiltins() const override {
-    return std::nullopt;
-  }
+  ArrayRef<Builtin::Info> getTargetBuiltins() const override { return None; }
 
   BuiltinVaListKind getBuiltinVaListKind() const override {
     return TargetInfo::PNaClABIBuiltinVaList;
@@ -69,7 +67,7 @@ public:
     return false;
   }
 
-  std::string_view getClobbers() const override { return ""; }
+  const char *getClobbers() const override { return ""; }
 
   bool hasBitIntType() const override { return true; }
 };

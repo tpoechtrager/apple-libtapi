@@ -12,7 +12,6 @@
 #include "clang/CAS/CASOptions.h"
 #include "clang/Tooling/DependencyScanning/DependencyScanningCASFilesystem.h"
 #include "clang/Tooling/DependencyScanning/DependencyScanningFilesystem.h"
-#include "llvm/ADT/BitmaskEnum.h"
 #include "llvm/CAS/ActionCache.h"
 
 namespace clang {
@@ -39,7 +38,7 @@ enum class ScanningOutputFormat {
   /// intermodule dependency information.
   Make,
 
-  /// This outputs the full clang module dependency graph suitable for use for
+  /// This outputs the full module dependency graph suitable for use for
   /// explicitly building modules.
   Full,
 
@@ -55,36 +54,7 @@ enum class ScanningOutputFormat {
 
   /// This emits the full dependency graph but with include tree.
   FullIncludeTree,
-
-  /// This outputs the dependency graph for standard c++ modules in P1689R5
-  /// format.
-  P1689,
 };
-
-#define DSS_LAST_BITMASK_ENUM(Id)                                              \
-  LLVM_MARK_AS_BITMASK_ENUM(Id), All = llvm::NextPowerOf2(Id) - 1
-
-enum class ScanningOptimizations {
-  None = 0,
-
-  /// Remove unused header search paths including header maps.
-  HeaderSearch = 1,
-
-  /// Remove warnings from system modules.
-  SystemWarnings = 2,
-
-  /// Remove unused -ivfsoverlay arguments.
-  VFS = 4,
-
-  /// Canonicalize -D and -U options.
-  Macros = 8,
-
-  DSS_LAST_BITMASK_ENUM(Macros),
-  Default = All,
-  FullIncludeTreeIrrelevant = HeaderSearch | VFS,
-};
-
-#undef DSS_LAST_BITMASK_ENUM
 
 /// The dependency scanning service contains shared configuration and state that
 /// is used by the individual dependency scanning workers.
@@ -95,14 +65,13 @@ public:
       std::shared_ptr<llvm::cas::ObjectStore> CAS,
       std::shared_ptr<llvm::cas::ActionCache> Cache,
       IntrusiveRefCntPtr<llvm::cas::CachingOnDiskFileSystem> SharedFS,
-      ScanningOptimizations OptimizeArgs = ScanningOptimizations::Default,
-      bool EagerLoadModules = false);
+      bool OptimizeArgs = false, bool EagerLoadModules = false);
 
   ScanningMode getMode() const { return Mode; }
 
   ScanningOutputFormat getFormat() const { return Format; }
 
-  ScanningOptimizations getOptimizeArgs() const { return OptimizeArgs; }
+  bool canOptimizeArgs() const { return OptimizeArgs; }
 
   bool shouldEagerLoadModules() const { return EagerLoadModules; }
 
@@ -128,14 +97,17 @@ private:
   std::shared_ptr<llvm::cas::ObjectStore> CAS;
   std::shared_ptr<llvm::cas::ActionCache> Cache;
   /// Whether to optimize the modules' command-line arguments.
-  const ScanningOptimizations OptimizeArgs;
-  /// Whether to set up command-lines to load PCM files eagerly.
-  const bool EagerLoadModules;
+  const bool OptimizeArgs;
+
   /// Shared CachingOnDiskFileSystem. Set to nullptr to not use CAS dependency
   /// scanning.
   IntrusiveRefCntPtr<llvm::cas::CachingOnDiskFileSystem> SharedFS;
+
+  /// Whether to set up command-lines to load PCM files eagerly.
+  const bool EagerLoadModules;
+
   /// The global file system cache.
-  std::optional<DependencyScanningFilesystemSharedCache> SharedCache;
+  Optional<DependencyScanningFilesystemSharedCache> SharedCache;
 };
 
 } // end namespace dependencies

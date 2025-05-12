@@ -18,12 +18,10 @@
 #include "llvm/Analysis/FunctionPropertiesAnalysis.h"
 #include "llvm/Analysis/InlineCost.h"
 #include "llvm/Analysis/InlineModelFeatureMaps.h"
-#include "llvm/Analysis/InteractiveModelRunner.h"
 #include "llvm/Analysis/LazyCallGraph.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/MLModelRunner.h"
 #include "llvm/Analysis/OptimizationRemarkEmitter.h"
-#include "llvm/Analysis/ReleaseModeModelRunner.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/InstIterator.h"
@@ -32,50 +30,19 @@
 
 using namespace llvm;
 
-static cl::opt<std::string> InteractiveChannelBaseName(
-    "inliner-interactive-channel-base", cl::Hidden,
-    cl::desc(
-        "Base file path for the interactive mode. The incoming filename should "
-        "have the name <inliner-interactive-channel-base>.in, while the "
-        "outgoing name should be <inliner-interactive-channel-base>.out"));
-static const std::string InclDefaultMsg =
-    (Twine("In interactive mode, also send the default policy decision: ") +
-     DefaultDecisionName + ".")
-        .str();
-static cl::opt<bool>
-    InteractiveIncludeDefault("inliner-interactive-include-default", cl::Hidden,
-                              cl::desc(InclDefaultMsg));
-
 #if defined(LLVM_HAVE_TF_AOT_INLINERSIZEMODEL)
+#include "llvm/Analysis/ReleaseModeModelRunner.h"
 // codegen-ed file
 #include "InlinerSizeModel.h" // NOLINT
-using CompiledModelType = llvm::InlinerSizeModel;
-#else
-using CompiledModelType = NoopSavedModelImpl;
-#endif
 
 std::unique_ptr<InlineAdvisor>
-llvm::getReleaseModeAdvisor(Module &M, ModuleAnalysisManager &MAM,
-                            std::function<bool(CallBase &)> GetDefaultAdvice) {
-  if (!llvm::isEmbeddedModelEvaluatorValid<CompiledModelType>() &&
-      InteractiveChannelBaseName.empty())
-    return nullptr;
-  std::unique_ptr<MLModelRunner> AOTRunner;
-  if (InteractiveChannelBaseName.empty())
-    AOTRunner = std::make_unique<ReleaseModeModelRunner<CompiledModelType>>(
-        M.getContext(), FeatureMap, DecisionName);
-  else {
-    auto Features = FeatureMap;
-    if (InteractiveIncludeDefault)
-      Features.push_back(DefaultDecisionSpec);
-    AOTRunner = std::make_unique<InteractiveModelRunner>(
-        M.getContext(), Features, InlineDecisionSpec,
-        InteractiveChannelBaseName + ".out",
-        InteractiveChannelBaseName + ".in");
-  }
-  return std::make_unique<MLInlineAdvisor>(M, MAM, std::move(AOTRunner),
-                                           GetDefaultAdvice);
+llvm::getReleaseModeAdvisor(Module &M, ModuleAnalysisManager &MAM) {
+  auto AOTRunner =
+      std::make_unique<ReleaseModeModelRunner<llvm::InlinerSizeModel>>(
+          M.getContext(), FeatureMap, DecisionName);
+  return std::make_unique<MLInlineAdvisor>(M, MAM, std::move(AOTRunner));
 }
+#endif
 
 #define DEBUG_TYPE "inline-ml"
 
@@ -92,23 +59,21 @@ static cl::opt<bool> KeepFPICache(
     cl::init(false));
 
 // clang-format off
-const std::vector<TensorSpec> llvm::FeatureMap{
-#define POPULATE_NAMES(DTYPE, SHAPE, NAME, __) TensorSpec::createSpec<DTYPE>(#NAME, SHAPE),
+const std::array<TensorSpec, NumberOfFeatures> llvm::FeatureMap{
+#define POPULATE_NAMES(_, NAME) TensorSpec::createSpec<int64_t>(NAME, {1} ),
 // InlineCost features - these must come first
   INLINE_COST_FEATURE_ITERATOR(POPULATE_NAMES)
+#undef POPULATE_NAMES
 
 // Non-cost features
+#define POPULATE_NAMES(_, NAME, __) TensorSpec::createSpec<int64_t>(NAME, {1} ),
   INLINE_FEATURE_ITERATOR(POPULATE_NAMES)
 #undef POPULATE_NAMES
 };
 // clang-format on
 
 const char *const llvm::DecisionName = "inlining_decision";
-const TensorSpec llvm::InlineDecisionSpec =
-    TensorSpec::createSpec<int64_t>(DecisionName, {1});
 const char *const llvm::DefaultDecisionName = "inlining_default";
-const TensorSpec llvm::DefaultDecisionSpec =
-    TensorSpec::createSpec<int64_t>(DefaultDecisionName, {1});
 const char *const llvm::RewardName = "delta_size";
 
 CallBase *getInlinableCS(Instruction &I) {
@@ -121,17 +86,15 @@ CallBase *getInlinableCS(Instruction &I) {
   return nullptr;
 }
 
-MLInlineAdvisor::MLInlineAdvisor(
-    Module &M, ModuleAnalysisManager &MAM,
-    std::unique_ptr<MLModelRunner> Runner,
-    std::function<bool(CallBase &)> GetDefaultAdvice)
+MLInlineAdvisor::MLInlineAdvisor(Module &M, ModuleAnalysisManager &MAM,
+                                 std::unique_ptr<MLModelRunner> Runner)
     : InlineAdvisor(
           M, MAM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager()),
-      ModelRunner(std::move(Runner)), GetDefaultAdvice(GetDefaultAdvice),
+      ModelRunner(std::move(Runner)),
       CG(MAM.getResult<LazyCallGraphAnalysis>(M)),
       InitialIRSize(getModuleIRSize()), CurrentIRSize(InitialIRSize) {
   assert(ModelRunner);
-  ModelRunner->switchContext("");
+
   // Extract the 'call site height' feature - the position of a call site
   // relative to the farthest statically reachable SCC node. We don't mutate
   // this value while inlining happens. Empirically, this feature proved
@@ -381,27 +344,26 @@ std::unique_ptr<InlineAdvice> MLInlineAdvisor::getAdviceImpl(CallBase &CB) {
   auto &CallerBefore = getCachedFPI(Caller);
   auto &CalleeBefore = getCachedFPI(Callee);
 
-  *ModelRunner->getTensor<int64_t>(FeatureIndex::callee_basic_block_count) =
+  *ModelRunner->getTensor<int64_t>(FeatureIndex::CalleeBasicBlockCount) =
       CalleeBefore.BasicBlockCount;
-  *ModelRunner->getTensor<int64_t>(FeatureIndex::callsite_height) =
+  *ModelRunner->getTensor<int64_t>(FeatureIndex::CallSiteHeight) =
       getInitialFunctionLevel(Caller);
-  *ModelRunner->getTensor<int64_t>(FeatureIndex::node_count) = NodeCount;
-  *ModelRunner->getTensor<int64_t>(FeatureIndex::nr_ctant_params) =
-      NrCtantParams;
-  *ModelRunner->getTensor<int64_t>(FeatureIndex::edge_count) = EdgeCount;
-  *ModelRunner->getTensor<int64_t>(FeatureIndex::caller_users) =
+  *ModelRunner->getTensor<int64_t>(FeatureIndex::NodeCount) = NodeCount;
+  *ModelRunner->getTensor<int64_t>(FeatureIndex::NrCtantParams) = NrCtantParams;
+  *ModelRunner->getTensor<int64_t>(FeatureIndex::EdgeCount) = EdgeCount;
+  *ModelRunner->getTensor<int64_t>(FeatureIndex::CallerUsers) =
       CallerBefore.Uses;
   *ModelRunner->getTensor<int64_t>(
-      FeatureIndex::caller_conditionally_executed_blocks) =
+      FeatureIndex::CallerConditionallyExecutedBlocks) =
       CallerBefore.BlocksReachedFromConditionalInstruction;
-  *ModelRunner->getTensor<int64_t>(FeatureIndex::caller_basic_block_count) =
+  *ModelRunner->getTensor<int64_t>(FeatureIndex::CallerBasicBlockCount) =
       CallerBefore.BasicBlockCount;
   *ModelRunner->getTensor<int64_t>(
-      FeatureIndex::callee_conditionally_executed_blocks) =
+      FeatureIndex::CalleeConditionallyExecutedBlocks) =
       CalleeBefore.BlocksReachedFromConditionalInstruction;
-  *ModelRunner->getTensor<int64_t>(FeatureIndex::callee_users) =
+  *ModelRunner->getTensor<int64_t>(FeatureIndex::CalleeUsers) =
       CalleeBefore.Uses;
-  *ModelRunner->getTensor<int64_t>(FeatureIndex::cost_estimate) = CostEstimate;
+  *ModelRunner->getTensor<int64_t>(FeatureIndex::CostEstimate) = CostEstimate;
 
   // Add the cost features
   for (size_t I = 0;
@@ -409,10 +371,7 @@ std::unique_ptr<InlineAdvice> MLInlineAdvisor::getAdviceImpl(CallBase &CB) {
     *ModelRunner->getTensor<int64_t>(inlineCostFeatureToMlFeature(
         static_cast<InlineCostFeatureIndex>(I))) = CostFeatures->at(I);
   }
-  // This one would have been set up to be right at the end.
-  if (!InteractiveChannelBaseName.empty() && InteractiveIncludeDefault)
-    *ModelRunner->getTensor<int64_t>(InlineCostFeatureIndex::NumberOfFeatures) =
-        GetDefaultAdvice(CB);
+
   return getAdviceFromModel(CB, ORE);
 }
 
@@ -456,8 +415,8 @@ void MLInlineAdvisor::print(raw_ostream &OS) const {
      << " EdgesOfLastSeenNodes: " << EdgesOfLastSeenNodes << "\n";
   OS << "[MLInlineAdvisor] FPI:\n";
   for (auto I : FPICache) {
-    OS << I.first->getName() << ":\n";
-    I.second.print(OS);
+    OS << I.getFirst()->getName() << ":\n";
+    I.getSecond().print(OS);
     OS << "\n";
   }
   OS << "\n";

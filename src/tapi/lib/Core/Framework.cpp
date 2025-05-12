@@ -13,6 +13,7 @@
 
 #include "tapi/Core/Framework.h"
 #include "tapi/Core/HeaderFile.h"
+#include "llvm/ADT/None.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/raw_ostream.h"
 #include <set>
@@ -83,20 +84,6 @@ StringRef Framework::getAdditionalFrameworkPath() const {
     return sys::path::parent_path(sys::path::parent_path(parentPath));
 
   return StringRef();
-}
-
-void Framework::addDynamicLibraryFile(StringRef path) {
-  // Check if the dynamic library is a build variant of the main framework
-  // library (e.g. _debug or _profile) and do not add it to the list of
-  // binaries to be scanned by SDKDB. This removes unnecessary duplicates from
-  // the database.
-  static const Regex Rule("(.+)/(.+)\\.framework/(.+)(_.+)");
-  SmallVector<StringRef, 5> match;
-  Rule.match(path, &match);
-  if ((match.size() == 5) && match[2] == match[3])
-    return;
-
-  _dynamicLibraryFiles.emplace_back(path);
 }
 
 TAPI_NAMESPACE_INTERNAL_END

@@ -50,8 +50,7 @@ public:
   void addInstruction(const MCInst &Inst, const DebugLoc &DL = DebugLoc());
   void addInstructions(ArrayRef<MCInst> Insts, const DebugLoc &DL = DebugLoc());
 
-  void addReturn(const ExegesisTarget &ET, bool SubprocessCleanup,
-                 const DebugLoc &DL = DebugLoc());
+  void addReturn(const DebugLoc &DL = DebugLoc());
 
   MachineFunction &MF;
   MachineBasicBlock *const MBB;
@@ -92,9 +91,7 @@ Error assembleToStream(const ExegesisTarget &ET,
                        std::unique_ptr<LLVMTargetMachine> TM,
                        ArrayRef<unsigned> LiveIns,
                        ArrayRef<RegisterValue> RegisterInitialValues,
-                       const FillFunction &Fill, raw_pwrite_stream &AsmStreamm,
-                       const BenchmarkKey &Key,
-                       bool GenerateMemoryInstructions);
+                       const FillFunction &Fill, raw_pwrite_stream &AsmStream);
 
 // Creates an ObjectFile in the format understood by the host.
 // Note: the resulting object keeps a copy of Buffer so it can be discarded once
@@ -123,10 +120,6 @@ struct ExecutableFunction {
   std::unique_ptr<ExecutionEngine> ExecEngine;
   StringRef FunctionBytes;
 };
-
-// Copies benchmark function's bytes from benchmark object.
-Error getBenchmarkFunctionBytes(const StringRef InputData,
-                                std::vector<uint8_t> &Bytes);
 
 // Creates a void(int8*) MachineFunction.
 MachineFunction &createVoidVoidPtrMachineFunction(StringRef FunctionID,

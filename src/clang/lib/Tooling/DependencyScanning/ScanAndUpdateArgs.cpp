@@ -26,19 +26,15 @@ void tooling::dependencies::configureInvocationForCaching(
   auto &FrontendOpts = CI.getFrontendOpts();
   FrontendOpts.CacheCompileJob = true;
   FrontendOpts.IncludeTimestamps = false;
-
   // Clear this otherwise it defeats the purpose of making the compilation key
   // independent of certain arguments.
-  auto &CodeGenOpts = CI.getCodeGenOpts();
-  if (CI.getFrontendOpts().ProgramAction != frontend::ActionKind::EmitObj) {
-    CodeGenOpts.UseCASBackend = false;
-    CodeGenOpts.EmitCASIDFile = false;
-    auto &LLVMArgs = FrontendOpts.LLVMArgs;
-    llvm::erase_value(LLVMArgs, "-cas-friendly-debug-info");
+  CI.getCodeGenOpts().DwarfDebugFlags.clear();
+  if (FrontendOpts.ProgramAction == frontend::GeneratePCH) {
+    // Clear paths that are emitted into binaries; they do not affect PCH.
+    // For modules this is handled in ModuleDepCollector.
+    CI.getCodeGenOpts().CoverageDataFile.clear();
+    CI.getCodeGenOpts().CoverageNotesFile.clear();
   }
-  CodeGenOpts.DwarfDebugFlags.clear();
-  resetBenignCodeGenOptions(FrontendOpts.ProgramAction, CI.getLangOpts(),
-                            CodeGenOpts);
 
   HeaderSearchOptions &HSOpts = CI.getHeaderSearchOpts();
   // Avoid writing potentially volatile diagnostic options into pcms.
@@ -62,9 +58,6 @@ void tooling::dependencies::configureInvocationForCaching(
     HSOpts.ResourceDir = std::move(OriginalHSOpts.ResourceDir);
     // Preserve fmodule-file options.
     HSOpts.PrebuiltModuleFiles = std::move(OriginalHSOpts.PrebuiltModuleFiles);
-    // Preserve -gmodules (see below for caveats).
-    HSOpts.ModuleFormat = OriginalHSOpts.ModuleFormat;
-
     auto &PPOpts = CI.getPreprocessorOpts();
     // We don't need this because we save the contents of the PCH file in the
     // include tree root.
@@ -79,13 +72,12 @@ void tooling::dependencies::configureInvocationForCaching(
       PPOpts.MacroIncludes.clear();
       PPOpts.Includes.clear();
     }
-    if (!FrontendOpts.IncludeTreePreservePCHPath) {
-      // Disable `-gmodules` to avoid debug info referencing a non-existent PCH
-      // filename.
-      // FIXME: we should also allow -gmodules if there is no PCH involved.
-      CodeGenOpts.DebugTypeExtRefs = false;
-      HSOpts.ModuleFormat = "raw";
-    }
+    // Disable `-gmodules` to avoid debug info referencing a non-existent PCH
+    // filename.
+    // NOTE: We'd have to preserve \p HeaderSearchOptions::ModuleFormat (code
+    // above resets \p HeaderSearchOptions) when properly supporting
+    // `-gmodules`.
+    CI.getCodeGenOpts().DebugTypeExtRefs = false;
     // Clear APINotes options.
     CI.getAPINotesOpts().ModuleSearchPaths = {};
   } else {
@@ -186,7 +178,7 @@ void DepscanPrefixMapping::remapInvocationPaths(CompilerInvocation &Invocation,
   Mapper.mapInPlace(CodeGenOpts.CoverageCompilationDir);
 
   // Sanitizer options.
-  mapInPlaceAll(Invocation.getLangOpts().NoSanitizeFiles);
+  mapInPlaceAll(Invocation.getLangOpts()->NoSanitizeFiles);
 
   // Handle coverage mappings.
   Mapper.mapInPlace(CodeGenOpts.ProfileInstrumentUsePath);
@@ -247,7 +239,7 @@ Expected<llvm::cas::CASID> clang::scanAndUpdateCC1InlineWithTool(
   // failed, but warnings are ignored and deferred for the main compilation.
   ScanInvocation->getDiagnosticOpts().IgnoreWarnings = true;
 
-  std::optional<llvm::cas::CASID> Root;
+  Optional<llvm::cas::CASID> Root;
   if (ProduceIncludeTree) {
     if (Error E =
             Tool.getIncludeTreeFromCompilerInvocation(

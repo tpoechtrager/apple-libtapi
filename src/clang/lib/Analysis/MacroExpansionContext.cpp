@@ -8,7 +8,6 @@
 
 #include "clang/Analysis/MacroExpansionContext.h"
 #include "llvm/Support/Debug.h"
-#include <optional>
 
 #define DEBUG_TYPE "macro-expansion-context"
 
@@ -97,12 +96,12 @@ void MacroExpansionContext::registerForPreprocessor(Preprocessor &NewPP) {
   PP->setTokenWatcher([this](const Token &Tok) { onTokenLexed(Tok); });
 }
 
-std::optional<StringRef>
+Optional<StringRef>
 MacroExpansionContext::getExpandedText(SourceLocation MacroExpansionLoc) const {
   if (MacroExpansionLoc.isMacroID())
     return std::nullopt;
 
-  // If there was no macro expansion at that location, return std::nullopt.
+  // If there was no macro expansion at that location, return None.
   if (ExpansionRanges.find_as(MacroExpansionLoc) == ExpansionRanges.end())
     return std::nullopt;
 
@@ -115,7 +114,7 @@ MacroExpansionContext::getExpandedText(SourceLocation MacroExpansionLoc) const {
   return It->getSecond().str();
 }
 
-std::optional<StringRef>
+Optional<StringRef>
 MacroExpansionContext::getOriginalText(SourceLocation MacroExpansionLoc) const {
   if (MacroExpansionLoc.isMacroID())
     return std::nullopt;

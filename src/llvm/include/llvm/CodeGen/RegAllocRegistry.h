@@ -66,7 +66,7 @@ public:
 
 /// RegisterRegAlloc's global Registry tracks allocator registration.
 template <class T>
-MachinePassRegistry<typename RegisterRegAllocBase<T>::FunctionPassCtor>
+MachinePassRegistry<RegisterRegAlloc::FunctionPassCtor>
 RegisterRegAllocBase<T>::Registry;
 
 } // end namespace llvm

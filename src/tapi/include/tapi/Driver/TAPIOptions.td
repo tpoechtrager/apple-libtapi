@@ -50,7 +50,7 @@ def version : Flag<["-", "--"], "version">, Flags<[DriverOption]>,
   HelpText<"Display the version">;
 def help : Flag<["-", "--"], "help">, Flags<[DriverOption]>,
   HelpText<"Display this help message">;
-def help_hidden : Flag<["-", "--"], "help-hidden">, Flags<[DriverOption, InstallAPIOption]>;
+def help_hidden : Flag<["-", "--"], "help-hidden">, Flags<[DriverOption]>;
 def snapshot : Flag<["--"], "snapshot">, Flags<[DriverOption]>,
   HelpText<"Force creation of a snapshot">;
 
@@ -167,9 +167,6 @@ def iframework : JoinedOrSeparate<["-"], "iframework">,
 def isystem : JoinedOrSeparate<["-"], "isystem">,
   Flags<[SDKDBOption, InstallAPIOption, ReexportOption]>,
   HelpText<"Add directory to SYSTEM include search path">, MetaVarName<"<directory>">;
-def idirafter: JoinedOrSeparate<["-"], "idirafter">,
-  Flags<[SDKDBOption, InstallAPIOption, ReexportOption]>,
-  HelpText<"Add directory to AFTER include search path">, MetaVarName<"<directory>">;
 def D : JoinedOrSeparate<["-"], "D">, Flags<[SDKDBOption, InstallAPIOption, ReexportOption]>,
   HelpText<"Define macro">;
 def U : JoinedOrSeparate<["-"], "U">, Flags<[SDKDBOption, InstallAPIOption, ReexportOption]>,
@@ -180,9 +177,6 @@ def L : JoinedOrSeparate<["-"], "L">, Flags<[StubOption, InstallAPIOption]>,
   HelpText<"Add directory to the library search path">;
 def I : JoinedOrSeparate<["-"], "I">, Flags<[SDKDBOption, InstallAPIOption, ReexportOption]>,
   HelpText<"Add directory to include search path">;
-def X : Joined<["-"], "X">, Flags<[InstallAPIOption]>,
-  HelpText<"Pass <arg> to run unique clang invocation identified as <label>">, 
-  MetaVarName<"<label> <arg>">;
 def iquote: JoinedOrSeparate<["-"], "iquote">, Flags<[InstallAPIOption,ReexportOption]>,
   HelpText<"Add directory to QUOTE include search path">, MetaVarName<"<directory>">;
 def Xparser : Separate<["-"], "Xparser">, Flags<[SDKDBOption, InstallAPIOption, ReexportOption, APIVerifyOption]>,
@@ -257,7 +251,6 @@ def umbrella : Separate<["-"], "umbrella">,
 
 def Xarch__ : Joined<["-"], "Xarch_">, Flags<[InstallAPIOption]>;
 def Xplatform__ : Joined<["-"], "Xplatform_">, Flags<[InstallAPIOption]>;
-def Xproject : Joined<["-"], "Xproject">, Flags<[InstallAPIOption]>;
 
 def inferIncludePaths : Flag<["--"], "infer-include-paths">, Flags<[InstallAPIOption]>,
   HelpText<"Infer include paths based on the provided/found header files">;
@@ -276,8 +269,6 @@ def deletePrivateFrameworks : Flag<["--"], "delete-private-frameworks">,
   Flags<[StubOption]>, HelpText<"Delete private frameworks from the SDK">;
 def setInstallAPI : Flag<["--"], "set-installapi-flag">, Flags<[StubOption]>,
   HelpText<"Set the installapi flag in the text-based stub file">;
-def removeSharedCacheFlag: Flag<["--"], "remove-shared-cache-flag">, Flags<[StubOption]>,
-  HelpText<"Remove flag for shared cache attribute">;
 
 //
 // InstallAPI options
@@ -302,9 +293,6 @@ def allowable_client : Separate<["-"], "allowable_client">,
 def rpath: Separate<["-"], "rpath">,
   Flags<[InstallAPIOption]>,
   HelpText<"Add path to the runpath search path list for the dynamic library being created.">;
-def relinked_library: Separate<["-"], "relinked_library">,
-  Flags<[InstallAPIOption]>,
-  HelpText<"Add relinked library.">;
 def reexport_install_name : Separate<["-"], "reexport_install_name">,
   MetaVarName<"<name>">, Flags<[InstallAPIOption]>,
   HelpText<"Re-export the specified internal \"install path\" (LC_ID_DYLIB)">;
@@ -365,10 +353,6 @@ def file_list_EQ : Joined<["--"], "filelist=">,
 def file_list : Separate<["-"], "filelist">,
   Flags<[InstallAPIOption]>, Alias<file_list_EQ>;
 
-def option_list : Separate<["-"], "optionlist">,
-  Flags<[InstallAPIOption]>, MetaVarName<"<path>">, 
-  HelpText<"Specifies the <path> to a file that contains X<label> arguments to parse.">;
-
 def extra_project_header : Separate<["-"], "extra-project-header">,
   Flags<[InstallAPIOption]>, MetaVarName<"<path>">,
   HelpText<"Add additional project header location for parsing">;
@@ -398,33 +382,12 @@ def verify_swift: Flag<["-"], "verify-swift">,
 
 def dSYM : Joined<["--"], "dSYM=">, Flags<[InstallAPIOption]>,
   MetaVarName<"<path>">, HelpText<"Specify dSYM path.">;
-def dsym_alternate_spelling : Joined<["--"], "dsym=">,
-  Flags<[InstallAPIOption]>, Alias<dSYM>;
 
 def product_name : Joined<["--"], "product-name=">, Flags<[InstallAPIOption]>,
   MetaVarName<"<name>">, HelpText<"Specify the product name">;
 
 def t: Flag<["-"], "t">, Flags<[InstallAPIOption, StubOption]>,
   HelpText<"Logs each dylib tapi loads. Useful for debugging problems with search paths where the wrong library is loaded.">;
-
-def include_pch : JoinedOrSeparate<["-", "--"], "include-pch">, Flags<[InstallAPIOption]>;
-def include_ : JoinedOrSeparate<["-", "--"], "include">, Flags<[InstallAPIOption]>,
-  MetaVarName<"<file>">, HelpText<"Include file before parsing, can only be used with -Xproject">;
-
-def not_for_dyld_shared_cache : Joined<["-"], "not_for_dyld_shared_cache">, Flags<[InstallAPIOption]>,
-  HelpText<"Mark library as shared cache ineligible">;
-
-//
-/// InstallAPI Options that are invalid to workaround project errors. 
-/// rdar://116354828 ( tapi invalid drivers options: project failures)
-//
-def log : Joined<["-"], "log">, Flags<[InstallAPIOption]>;
-def fvisibility_inlines: Joined<["-"], "fvisibility-inlines-hidden">, Flags<[InstallAPIOption]>;
-def l: Joined<["-"], "l">, Flags<[InstallAPIOption]>;
-def framework: Joined<["-"], "framework">, Flags<[InstallAPIOption]>;
-def fnortt: Joined<["-"], "fno-rtt">, Flags<[InstallAPIOption]>;
-def fno_exceptions: Joined<["-"], "fno-exceptions">, Flags<[InstallAPIOption]>;
-
 
 //
 // SDKDB options

@@ -8,7 +8,6 @@
 #include "clang/AST/FormatString.h"
 #include "clang/Basic/Builtins.h"
 #include "llvm/ADT/SmallBitVector.h"
-#include <optional>
 
 using namespace clang;
 
@@ -21,11 +20,11 @@ class OSLogFormatStringHandler
 private:
   struct ArgData {
     const Expr *E = nullptr;
-    std::optional<OSLogBufferItem::Kind> Kind;
-    std::optional<unsigned> Size;
-    std::optional<const Expr *> Count;
-    std::optional<const Expr *> Precision;
-    std::optional<const Expr *> FieldWidth;
+    Optional<OSLogBufferItem::Kind> Kind;
+    Optional<unsigned> Size;
+    Optional<const Expr *> Count;
+    Optional<const Expr *> Precision;
+    Optional<const Expr *> FieldWidth;
     unsigned char Flags = 0;
     StringRef MaskType;
   };

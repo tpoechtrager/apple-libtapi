@@ -13,6 +13,7 @@
 #include "llvm/MC/MCWinCOFFStreamer.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/Triple.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/BinaryFormat/COFF.h"
 #include "llvm/MC/MCAsmBackend.h"
@@ -32,7 +33,6 @@
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/SMLoc.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/TargetParser/Triple.h"
 #include <algorithm>
 #include <cstdint>
 
@@ -53,7 +53,8 @@ void MCWinCOFFStreamer::emitInstToData(const MCInst &Inst,
 
   SmallVector<MCFixup, 4> Fixups;
   SmallString<256> Code;
-  getAssembler().getEmitter().encodeInstruction(Inst, Code, Fixups, STI);
+  raw_svector_ostream VecOS(Code);
+  getAssembler().getEmitter().encodeInstruction(Inst, VecOS, Fixups, STI);
 
   // Add the fixups and data.
   for (unsigned i = 0, e = Fixups.size(); i != e; ++i) {
@@ -70,13 +71,13 @@ void MCWinCOFFStreamer::initSections(bool NoExecStack,
   // This emulates the same behavior of GNU as. This makes it easier
   // to compare the output as the major sections are in the same order.
   switchSection(getContext().getObjectFileInfo()->getTextSection());
-  emitCodeAlignment(Align(4), &STI);
+  emitCodeAlignment(4, &STI);
 
   switchSection(getContext().getObjectFileInfo()->getDataSection());
-  emitCodeAlignment(Align(4), &STI);
+  emitCodeAlignment(4, &STI);
 
   switchSection(getContext().getObjectFileInfo()->getBSSSection());
-  emitCodeAlignment(Align(4), &STI);
+  emitCodeAlignment(4, &STI);
 
   switchSection(getContext().getObjectFileInfo()->getTextSection());
 }
@@ -115,13 +116,8 @@ bool MCWinCOFFStreamer::emitSymbolAttribute(MCSymbol *S,
   default: return false;
   case MCSA_WeakReference:
   case MCSA_Weak:
-    Symbol->setWeakExternalCharacteristics(COFF::IMAGE_WEAK_EXTERN_SEARCH_ALIAS);
+    Symbol->setIsWeakExternal();
     Symbol->setExternal(true);
-    break;
-  case MCSA_WeakAntiDep:
-    Symbol->setWeakExternalCharacteristics(COFF::IMAGE_WEAK_EXTERN_ANTI_DEPENDENCY);
-    Symbol->setExternal(true);
-    Symbol->setIsWeakExternal(true);
     break;
   case MCSA_Global:
     Symbol->setExternal(true);
@@ -194,7 +190,8 @@ void MCWinCOFFStreamer::emitCOFFSafeSEH(MCSymbol const *Symbol) {
 
   MCSection *SXData = getContext().getObjectFileInfo()->getSXDataSection();
   getAssembler().registerSection(*SXData);
-  SXData->ensureMinAlignment(Align(4));
+  if (SXData->getAlignment() < 4)
+    SXData->setAlignment(Align(4));
 
   new MCSymbolIdFragment(Symbol, SXData);
 
@@ -210,7 +207,8 @@ void MCWinCOFFStreamer::emitCOFFSafeSEH(MCSymbol const *Symbol) {
 void MCWinCOFFStreamer::emitCOFFSymbolIndex(MCSymbol const *Symbol) {
   MCSection *Sec = getCurrentSectionOnly();
   getAssembler().registerSection(*Sec);
-  Sec->ensureMinAlignment(Align(4));
+  if (Sec->getAlignment() < 4)
+    Sec->setAlignment(Align(4));
 
   new MCSymbolIdFragment(Symbol, getCurrentSectionOnly());
 
@@ -264,7 +262,7 @@ void MCWinCOFFStreamer::emitCOFFImgRel32(const MCSymbol *Symbol,
 }
 
 void MCWinCOFFStreamer::emitCommonSymbol(MCSymbol *S, uint64_t Size,
-                                         Align ByteAlignment) {
+                                         unsigned ByteAlignment) {
   auto *Symbol = cast<MCSymbolCOFF>(S);
 
   const Triple &T = getContext().getTargetTriple();
@@ -273,7 +271,7 @@ void MCWinCOFFStreamer::emitCommonSymbol(MCSymbol *S, uint64_t Size,
       report_fatal_error("alignment is limited to 32-bytes");
 
     // Round size up to alignment so that we will honor the alignment request.
-    Size = std::max(Size, ByteAlignment.value());
+    Size = std::max(Size, static_cast<uint64_t>(ByteAlignment));
   }
 
   getAssembler().registerSymbol(*Symbol);
@@ -286,7 +284,7 @@ void MCWinCOFFStreamer::emitCommonSymbol(MCSymbol *S, uint64_t Size,
     const MCObjectFileInfo *MFI = getContext().getObjectFileInfo();
 
     OS << " -aligncomm:\"" << Symbol->getName() << "\","
-       << Log2_32_Ceil(ByteAlignment.value());
+       << Log2_32_Ceil(ByteAlignment);
 
     pushSection();
     switchSection(MFI->getDrectveSection());
@@ -296,7 +294,7 @@ void MCWinCOFFStreamer::emitCommonSymbol(MCSymbol *S, uint64_t Size,
 }
 
 void MCWinCOFFStreamer::emitLocalCommonSymbol(MCSymbol *S, uint64_t Size,
-                                              Align ByteAlignment) {
+                                              unsigned ByteAlignment) {
   auto *Symbol = cast<MCSymbolCOFF>(S);
 
   MCSection *Section = getContext().getObjectFileInfo()->getBSSSection();
@@ -320,13 +318,13 @@ void MCWinCOFFStreamer::emitWeakReference(MCSymbol *AliasS,
 }
 
 void MCWinCOFFStreamer::emitZerofill(MCSection *Section, MCSymbol *Symbol,
-                                     uint64_t Size, Align ByteAlignment,
+                                     uint64_t Size, unsigned ByteAlignment,
                                      SMLoc Loc) {
   llvm_unreachable("not implemented");
 }
 
 void MCWinCOFFStreamer::emitTBSSSymbol(MCSection *Section, MCSymbol *Symbol,
-                                       uint64_t Size, Align ByteAlignment) {
+                                       uint64_t Size, unsigned ByteAlignment) {
   llvm_unreachable("not implemented");
 }
 
@@ -349,7 +347,9 @@ void MCWinCOFFStreamer::emitCGProfileEntry(const MCSymbolRefExpr *From,
 
 void MCWinCOFFStreamer::finalizeCGProfileEntry(const MCSymbolRefExpr *&SRE) {
   const MCSymbol *S = &SRE->getSymbol();
-  if (getAssembler().registerSymbol(*S))
+  bool Created;
+  getAssembler().registerSymbol(*S, &Created);
+  if (Created)
     cast<MCSymbolCOFF>(S)->setExternal(true);
 }
 

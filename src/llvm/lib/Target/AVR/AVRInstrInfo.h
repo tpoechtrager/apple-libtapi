@@ -23,8 +23,6 @@
 
 namespace llvm {
 
-class AVRSubtarget;
-
 namespace AVRCC {
 
 /// AVR specific condition codes.
@@ -65,7 +63,7 @@ enum TOF {
 /// Utilities related to the AVR instruction set.
 class AVRInstrInfo : public AVRGenInstrInfo {
 public:
-  explicit AVRInstrInfo(AVRSubtarget &STI);
+  explicit AVRInstrInfo();
 
   const AVRRegisterInfo &getRegisterInfo() const { return RI; }
   const MCInstrDesc &getBrCond(AVRCC::CondCodes CC) const;
@@ -80,13 +78,11 @@ public:
                            MachineBasicBlock::iterator MI, Register SrcReg,
                            bool isKill, int FrameIndex,
                            const TargetRegisterClass *RC,
-                           const TargetRegisterInfo *TRI,
-                           Register VReg) const override;
+                           const TargetRegisterInfo *TRI) const override;
   void loadRegFromStackSlot(MachineBasicBlock &MBB,
                             MachineBasicBlock::iterator MI, Register DestReg,
                             int FrameIndex, const TargetRegisterClass *RC,
-                            const TargetRegisterInfo *TRI,
-                            Register VReg) const override;
+                            const TargetRegisterInfo *TRI) const override;
   unsigned isLoadFromStackSlot(const MachineInstr &MI,
                                int &FrameIndex) const override;
   unsigned isStoreToStackSlot(const MachineInstr &MI,
@@ -118,9 +114,6 @@ public:
 
 private:
   const AVRRegisterInfo RI;
-
-protected:
-  const AVRSubtarget &STI;
 };
 
 } // end namespace llvm

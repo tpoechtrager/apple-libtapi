@@ -50,7 +50,7 @@ WebAssemblyRegisterInfo::getReservedRegs(const MachineFunction & /*MF*/) const {
   return Reserved;
 }
 
-bool WebAssemblyRegisterInfo::eliminateFrameIndex(
+void WebAssemblyRegisterInfo::eliminateFrameIndex(
     MachineBasicBlock::iterator II, int SPAdj, unsigned FIOperandNum,
     RegScavenger * /*RS*/) const {
   assert(SPAdj == 0);
@@ -82,7 +82,7 @@ bool WebAssemblyRegisterInfo::eliminateFrameIndex(
       MI.getOperand(OffsetOperandNum).setImm(Offset);
       MI.getOperand(FIOperandNum)
           .ChangeToRegister(FrameRegister, /*isDef=*/false);
-      return false;
+      return;
     }
   }
 
@@ -92,7 +92,7 @@ bool WebAssemblyRegisterInfo::eliminateFrameIndex(
     MachineOperand &OtherMO = MI.getOperand(3 - FIOperandNum);
     if (OtherMO.isReg()) {
       Register OtherMOReg = OtherMO.getReg();
-      if (OtherMOReg.isVirtual()) {
+      if (Register::isVirtualRegister(OtherMOReg)) {
         MachineInstr *Def = MF.getRegInfo().getUniqueVRegDef(OtherMOReg);
         // TODO: For now we just opportunistically do this in the case where
         // the CONST_I32/64 happens to have exactly one def and one use. We
@@ -105,7 +105,7 @@ bool WebAssemblyRegisterInfo::eliminateFrameIndex(
             ImmMO.setImm(ImmMO.getImm() + uint32_t(FrameOffset));
             MI.getOperand(FIOperandNum)
                 .ChangeToRegister(FrameRegister, /*isDef=*/false);
-            return false;
+            return;
           }
         }
       }
@@ -133,7 +133,6 @@ bool WebAssemblyRegisterInfo::eliminateFrameIndex(
         .addReg(OffsetOp);
   }
   MI.getOperand(FIOperandNum).ChangeToRegister(FIRegOperand, /*isDef=*/false);
-  return false;
 }
 
 Register

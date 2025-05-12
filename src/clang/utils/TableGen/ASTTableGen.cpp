@@ -15,7 +15,6 @@
 #include "ASTTableGen.h"
 #include "llvm/TableGen/Record.h"
 #include "llvm/TableGen/Error.h"
-#include <optional>
 
 using namespace llvm;
 using namespace clang;
@@ -82,7 +81,7 @@ void PropertyType::emitCXXValueTypeName(bool forRead, raw_ostream &out) const {
     elementType.emitCXXValueTypeName(forRead, out);
     out << ">";
   } else if (auto valueType = getOptionalElementType()) {
-    out << "std::optional<";
+    out << "llvm::Optional<";
     valueType.emitCXXValueTypeName(forRead, out);
     out << ">";
   } else {

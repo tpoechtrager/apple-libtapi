@@ -16,12 +16,12 @@
 #include "tapi/Core/APIVisitor.h"
 #include "tapi/Core/LLVM.h"
 #include "tapi/Core/MachOReader.h"
+#include "tapi/ObjCMetadata/ObjCMachOBinary.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/ADT/Triple.h"
 #include "llvm/BinaryFormat/Magic.h"
-#include "tapi/ObjCMetadata/ObjCMetadata.h"
 #include "llvm/Object/MachO.h"
 #include "llvm/Object/MachOUniversal.h"
-#include "llvm/TargetParser/Triple.h"
 #include <tuple>
 
 using namespace llvm;
@@ -59,10 +59,10 @@ MachODylibReader::readFile(std::unique_ptr<MemoryBuffer> memBuffer,
   option.arches = arches;
   if (readFlags < ReadFlags::ObjCMetadata)
     option.parseObjCMetadata = false;
-  if (readFlags < ReadFlags::Symbols)
-    option.parseUndefined = false;
-  if (readFlags < ReadFlags::DefinedSymbols)
+  if (readFlags < ReadFlags::Symbols) {
     option.parseSymbolTable = false;
+    option.parseUndefined = false;
+  }
   if (readFlags < ReadFlags::Header)
     option.parseObjCMetadata = false;
 

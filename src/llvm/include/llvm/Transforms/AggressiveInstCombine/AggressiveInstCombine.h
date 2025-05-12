@@ -7,8 +7,10 @@
 //===----------------------------------------------------------------------===//
 /// \file
 ///
-/// AggressiveInstCombiner - Combine expression patterns to form expressions
-/// with fewer, simple instructions. This pass does not modify the CFG.
+/// This file provides the primary interface to the aggressive instcombine pass.
+/// This pass is suitable for use in the new pass manager. For a pass that works
+/// with the legacy pass manager, please use
+/// \c createAggressiveInstCombinerPass().
 ///
 //===----------------------------------------------------------------------===//
 
@@ -19,11 +21,22 @@
 
 namespace llvm {
 
+class Function;
+class FunctionPass;
+
 class AggressiveInstCombinePass
     : public PassInfoMixin<AggressiveInstCombinePass> {
+
 public:
   PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
 };
+
+//===----------------------------------------------------------------------===//
+//
+// AggressiveInstCombiner - Combine expression patterns to form expressions with
+// fewer, simple instructions. This pass does not modify the CFG.
+//
+FunctionPass *createAggressiveInstCombinerPass();
 }
 
 #endif

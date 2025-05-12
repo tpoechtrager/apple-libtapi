@@ -36,7 +36,7 @@
 #ifndef EMMINTRIN_H_
 #define EMMINTRIN_H_
 
-#if defined(__powerpc64__) &&                                                  \
+#if defined(__ppc64__) &&                                                      \
     (defined(__linux__) || defined(__FreeBSD__) || defined(_AIX))
 
 #include <altivec.h>
@@ -46,7 +46,6 @@
 
 /* SSE2 */
 typedef __vector double __v2df;
-typedef __vector float __v4f;
 typedef __vector long long __v2di;
 typedef __vector unsigned long long __v2du;
 typedef __vector int __v4si;
@@ -952,7 +951,7 @@ extern __inline __m128d
     _mm_cvtpi32_pd(__m64 __A) {
   __v4si __temp;
   __v2di __tmp2;
-  __v4f __result;
+  __v2df __result;
 
   __temp = (__v4si)vec_splats(__A);
   __tmp2 = (__v2di)vec_unpackl(__temp);
@@ -2263,7 +2262,7 @@ extern __inline __m128d
 
 #else
 #include_next <emmintrin.h>
-#endif /* defined(__powerpc64__) &&                                            \
+#endif /* defined(__ppc64__) &&
         *   (defined(__linux__) || defined(__FreeBSD__) || defined(_AIX)) */
 
 #endif /* EMMINTRIN_H_ */

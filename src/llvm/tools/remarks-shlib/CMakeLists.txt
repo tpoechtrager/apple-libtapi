@@ -9,9 +9,7 @@ if(LLVM_ENABLE_PIC)
     libremarks.cpp
     )
 
-  if (NOT (BUILD_SHARED_LIBS OR LLVM_LINK_LLVM_DYLIB))
-    set(LLVM_EXPORTED_SYMBOL_FILE ${CMAKE_CURRENT_SOURCE_DIR}/Remarks.exports)
-  endif()
+  set(LLVM_EXPORTED_SYMBOL_FILE ${CMAKE_CURRENT_SOURCE_DIR}/Remarks.exports)
 
   add_llvm_library(Remarks SHARED INSTALL_WITH_TOOLCHAIN ${SOURCES})
 

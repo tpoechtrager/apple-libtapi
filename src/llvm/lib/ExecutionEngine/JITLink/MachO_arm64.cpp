@@ -25,10 +25,9 @@ namespace {
 
 class MachOLinkGraphBuilder_arm64 : public MachOLinkGraphBuilder {
 public:
-  MachOLinkGraphBuilder_arm64(const object::MachOObjectFile &Obj,
-                              SubtargetFeatures Features)
+  MachOLinkGraphBuilder_arm64(const object::MachOObjectFile &Obj)
       : MachOLinkGraphBuilder(Obj, Triple("arm64-apple-darwin"),
-                              std::move(Features), aarch64::getEdgeKindName),
+                              aarch64::getEdgeKindName),
         NumSymbols(Obj.getSymtabLoadCommand().nsyms) {}
 
 private:
@@ -333,7 +332,7 @@ private:
           if ((Instr & 0x7fffffff) != 0x14000000)
             return make_error<JITLinkError>("BRANCH26 target is not a B or BL "
                                             "instruction with a zero addend");
-          Kind = aarch64::Branch26PCRel;
+          Kind = aarch64::Branch26;
           break;
         }
         case MachOPointer32:
@@ -363,12 +362,12 @@ private:
           else
             return TargetSymbolOrErr.takeError();
           Addend = TargetAddress - TargetSymbol->getAddress();
-          Kind = aarch64::Pointer64;
+          Kind = aarch64::Pointer64Anon;
           break;
         }
         case MachOPage21:
-        case MachOGOTPage21:
-        case MachOTLVPage21: {
+        case MachOTLVPage21:
+        case MachOGOTPage21: {
           if (auto TargetSymbolOrErr = findSymbolByIndex(RI.r_symbolnum))
             TargetSymbol = TargetSymbolOrErr->GraphSymbol;
           else
@@ -381,10 +380,10 @@ private:
 
           if (*MachORelocKind == MachOPage21) {
             Kind = aarch64::Page21;
-          } else if (*MachORelocKind == MachOGOTPage21) {
-            Kind = aarch64::RequestGOTAndTransformToPage21;
           } else if (*MachORelocKind == MachOTLVPage21) {
-            Kind = aarch64::RequestTLVPAndTransformToPage21;
+            Kind = aarch64::TLVPage21;
+          } else if (*MachORelocKind == MachOGOTPage21) {
+            Kind = aarch64::GOTPage21;
           }
           break;
         }
@@ -401,8 +400,8 @@ private:
           Kind = aarch64::PageOffset12;
           break;
         }
-        case MachOGOTPageOffset12:
-        case MachOTLVPageOffset12: {
+        case MachOTLVPageOffset12:
+        case MachOGOTPageOffset12: {
           if (auto TargetSymbolOrErr = findSymbolByIndex(RI.r_symbolnum))
             TargetSymbol = TargetSymbolOrErr->GraphSymbol;
           else
@@ -413,10 +412,10 @@ private:
                                             "immediate instruction with a zero "
                                             "addend");
 
-          if (*MachORelocKind == MachOGOTPageOffset12) {
-            Kind = aarch64::RequestGOTAndTransformToPageOffset12;
-          } else if (*MachORelocKind == MachOTLVPageOffset12) {
-            Kind = aarch64::RequestTLVPAndTransformToPageOffset12;
+          if (*MachORelocKind == MachOTLVPageOffset12) {
+            Kind = aarch64::TLVPageOffset12;
+          } else if (*MachORelocKind == MachOGOTPageOffset12) {
+            Kind = aarch64::GOTPageOffset12;
           }
           break;
         }
@@ -426,7 +425,7 @@ private:
           else
             return TargetSymbolOrErr.takeError();
 
-          Kind = aarch64::RequestGOTAndTransformToDelta32;
+          Kind = aarch64::Delta32ToGOT;
           break;
         case MachODelta32:
         case MachODelta64: {
@@ -542,13 +541,7 @@ createLinkGraphFromMachOObject_arm64(MemoryBufferRef ObjectBuffer) {
   auto MachOObj = object::ObjectFile::createMachOObjectFile(ObjectBuffer);
   if (!MachOObj)
     return MachOObj.takeError();
-
-  auto Features = (*MachOObj)->getFeatures();
-  if (!Features)
-    return Features.takeError();
-
-  return MachOLinkGraphBuilder_arm64(**MachOObj, std::move(*Features))
-      .buildGraph();
+  return MachOLinkGraphBuilder_arm64(**MachOObj).buildGraph();
 }
 
 void link_MachO_arm64(std::unique_ptr<LinkGraph> G,

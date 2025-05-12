@@ -1,4 +1,4 @@
-//===--- RISCV.cpp - Implement RISC-V target feature support --------------===//
+//===--- RISCV.cpp - Implement RISCV target feature support ---------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -6,7 +6,7 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// This file implements RISC-V TargetInfo objects.
+// This file implements RISCV TargetInfo objects.
 //
 //===----------------------------------------------------------------------===//
 
@@ -15,9 +15,8 @@
 #include "clang/Basic/MacroBuilder.h"
 #include "clang/Basic/TargetBuiltins.h"
 #include "llvm/ADT/StringSwitch.h"
+#include "llvm/Support/TargetParser.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/TargetParser/RISCVTargetParser.h"
-#include <optional>
 
 using namespace clang;
 using namespace clang::targets;
@@ -41,7 +40,7 @@ ArrayRef<const char *> RISCVTargetInfo::getGCCRegNames() const {
       "v8",  "v9",  "v10", "v11", "v12", "v13", "v14", "v15",
       "v16", "v17", "v18", "v19", "v20", "v21", "v22", "v23",
       "v24", "v25", "v26", "v27", "v28", "v29", "v30", "v31"};
-  return llvm::ArrayRef(GCCRegNames);
+  return llvm::makeArrayRef(GCCRegNames);
 }
 
 ArrayRef<TargetInfo::GCCRegAlias> RISCVTargetInfo::getGCCRegAliases() const {
@@ -62,7 +61,7 @@ ArrayRef<TargetInfo::GCCRegAlias> RISCVTargetInfo::getGCCRegAliases() const {
       {{"fs4"}, "f20"}, {{"fs5"}, "f21"}, {{"fs6"}, "f22"},  {{"fs7"}, "f23"},
       {{"fs8"}, "f24"}, {{"fs9"}, "f25"}, {{"fs10"}, "f26"}, {{"fs11"}, "f27"},
       {{"ft8"}, "f28"}, {{"ft9"}, "f29"}, {{"ft10"}, "f30"}, {{"ft11"}, "f31"}};
-  return llvm::ArrayRef(GCCRegAliases);
+  return llvm::makeArrayRef(GCCRegAliases);
 }
 
 bool RISCVTargetInfo::validateAsmConstraint(
@@ -118,12 +117,9 @@ std::string RISCVTargetInfo::convertConstraint(const char *&Constraint) const {
   return R;
 }
 
-static unsigned getVersionValue(unsigned MajorVersion, unsigned MinorVersion) {
-  return MajorVersion * 1000000 + MinorVersion * 1000;
-}
-
 void RISCVTargetInfo::getTargetDefines(const LangOptions &Opts,
                                        MacroBuilder &Builder) const {
+  Builder.defineMacro("__ELF__");
   Builder.defineMacro("__riscv");
   bool Is64Bit = getTriple().getArch() == llvm::Triple::riscv64;
   Builder.defineMacro("__riscv_xlen", Is64Bit ? "64" : "32");
@@ -156,10 +152,10 @@ void RISCVTargetInfo::getTargetDefines(const LangOptions &Opts,
   for (auto &Extension : ISAInfo->getExtensions()) {
     auto ExtName = Extension.first;
     auto ExtInfo = Extension.second;
+    unsigned Version =
+        (ExtInfo.MajorVersion * 1000000) + (ExtInfo.MinorVersion * 1000);
 
-    Builder.defineMacro(
-        Twine("__riscv_", ExtName),
-        Twine(getVersionValue(ExtInfo.MajorVersion, ExtInfo.MinorVersion)));
+    Builder.defineMacro(Twine("__riscv_", ExtName), Twine(Version));
   }
 
   if (ISAInfo->hasExtension("m") || ISAInfo->hasExtension("zmmul"))
@@ -194,34 +190,26 @@ void RISCVTargetInfo::getTargetDefines(const LangOptions &Opts,
   if (ISAInfo->hasExtension("c"))
     Builder.defineMacro("__riscv_compressed");
 
-  if (ISAInfo->hasExtension("zve32x")) {
+  if (ISAInfo->hasExtension("zve32x"))
     Builder.defineMacro("__riscv_vector");
-    // Currently we support the v0.12 RISC-V V intrinsics.
-    Builder.defineMacro("__riscv_v_intrinsic", Twine(getVersionValue(0, 12)));
-  }
-
-  auto VScale = getVScaleRange(Opts);
-  if (VScale && VScale->first && VScale->first == VScale->second)
-    Builder.defineMacro("__riscv_v_fixed_vlen",
-                        Twine(VScale->first * llvm::RISCV::RVVBitsPerBlock));
 }
 
-static constexpr Builtin::Info BuiltinInfo[] = {
+const Builtin::Info RISCVTargetInfo::BuiltinInfo[] = {
 #define BUILTIN(ID, TYPE, ATTRS)                                               \
-  {#ID, TYPE, ATTRS, nullptr, HeaderDesc::NO_HEADER, ALL_LANGUAGES},
+  {#ID, TYPE, ATTRS, nullptr, ALL_LANGUAGES, nullptr},
 #define TARGET_BUILTIN(ID, TYPE, ATTRS, FEATURE)                               \
-  {#ID, TYPE, ATTRS, FEATURE, HeaderDesc::NO_HEADER, ALL_LANGUAGES},
+    {#ID, TYPE, ATTRS, nullptr, ALL_LANGUAGES, FEATURE},
 #include "clang/Basic/BuiltinsRISCVVector.def"
 #define BUILTIN(ID, TYPE, ATTRS)                                               \
-  {#ID, TYPE, ATTRS, nullptr, HeaderDesc::NO_HEADER, ALL_LANGUAGES},
+  {#ID, TYPE, ATTRS, nullptr, ALL_LANGUAGES, nullptr},
 #define TARGET_BUILTIN(ID, TYPE, ATTRS, FEATURE)                               \
-  {#ID, TYPE, ATTRS, FEATURE, HeaderDesc::NO_HEADER, ALL_LANGUAGES},
+    {#ID, TYPE, ATTRS, nullptr, ALL_LANGUAGES, FEATURE},
 #include "clang/Basic/BuiltinsRISCV.def"
 };
 
 ArrayRef<Builtin::Info> RISCVTargetInfo::getTargetBuiltins() const {
-  return llvm::ArrayRef(BuiltinInfo,
-                        clang::RISCV::LastTSBuiltin - Builtin::FirstTSBuiltin);
+  return llvm::makeArrayRef(BuiltinInfo, clang::RISCV::LastTSBuiltin -
+                                             Builtin::FirstTSBuiltin);
 }
 
 bool RISCVTargetInfo::initFeatureMap(
@@ -258,40 +246,18 @@ bool RISCVTargetInfo::initFeatureMap(
   return TargetInfo::initFeatureMap(Features, Diags, CPU, ImpliedFeatures);
 }
 
-std::optional<std::pair<unsigned, unsigned>>
-RISCVTargetInfo::getVScaleRange(const LangOptions &LangOpts) const {
-  // RISCV::RVVBitsPerBlock is 64.
-  unsigned VScaleMin = ISAInfo->getMinVLen() / llvm::RISCV::RVVBitsPerBlock;
-
-  if (LangOpts.VScaleMin || LangOpts.VScaleMax) {
-    // Treat Zvl*b as a lower bound on vscale.
-    VScaleMin = std::max(VScaleMin, LangOpts.VScaleMin);
-    unsigned VScaleMax = LangOpts.VScaleMax;
-    if (VScaleMax != 0 && VScaleMax < VScaleMin)
-      VScaleMax = VScaleMin;
-    return std::pair<unsigned, unsigned>(VScaleMin ? VScaleMin : 1, VScaleMax);
-  }
-
-  if (VScaleMin > 0) {
-    unsigned VScaleMax = ISAInfo->getMaxVLen() / llvm::RISCV::RVVBitsPerBlock;
-    return std::make_pair(VScaleMin, VScaleMax);
-  }
-
-  return std::nullopt;
-}
-
 /// Return true if has this feature, need to sync with handleTargetFeatures.
 bool RISCVTargetInfo::hasFeature(StringRef Feature) const {
   bool Is64Bit = getTriple().getArch() == llvm::Triple::riscv64;
-  auto Result = llvm::StringSwitch<std::optional<bool>>(Feature)
+  auto Result = llvm::StringSwitch<Optional<bool>>(Feature)
                     .Case("riscv", true)
                     .Case("riscv32", !Is64Bit)
                     .Case("riscv64", Is64Bit)
                     .Case("32bit", !Is64Bit)
                     .Case("64bit", Is64Bit)
-                    .Default(std::nullopt);
+                    .Default(None);
   if (Result)
-    return *Result;
+    return Result.value();
 
   if (ISAInfo->isSupportedExtensionFeature(Feature))
     return ISAInfo->hasExtension(Feature);
@@ -319,15 +285,12 @@ bool RISCVTargetInfo::handleTargetFeatures(std::vector<std::string> &Features,
   if (ABI.empty())
     ABI = ISAInfo->computeDefaultABI().str();
 
-  if (ISAInfo->hasExtension("zfh") || ISAInfo->hasExtension("zhinx"))
-    HasLegalHalfType = true;
-
   return true;
 }
 
 bool RISCVTargetInfo::isValidCPUName(StringRef Name) const {
   bool Is64Bit = getTriple().isArch64Bit();
-  return llvm::RISCV::parseCPU(Name, Is64Bit);
+  return llvm::RISCV::checkCPUKind(llvm::RISCV::parseCPUKind(Name), Is64Bit);
 }
 
 void RISCVTargetInfo::fillValidCPUList(
@@ -338,7 +301,8 @@ void RISCVTargetInfo::fillValidCPUList(
 
 bool RISCVTargetInfo::isValidTuneCPUName(StringRef Name) const {
   bool Is64Bit = getTriple().isArch64Bit();
-  return llvm::RISCV::parseTuneCPU(Name, Is64Bit);
+  return llvm::RISCV::checkTuneCPUKind(
+      llvm::RISCV::parseTuneCPUKind(Name, Is64Bit), Is64Bit);
 }
 
 void RISCVTargetInfo::fillValidTuneCPUList(

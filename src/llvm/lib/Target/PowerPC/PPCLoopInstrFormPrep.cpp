@@ -910,7 +910,7 @@ bool PPCLoopInstrFormPrep::prepareBaseForDispFormChain(Bucket &BucketChain,
       unsigned Remainder = cast<SCEVConstant>(BucketChain.Elements[j].Offset)
                                ->getAPInt()
                                .urem(Form);
-      if (!RemainderOffsetInfo.contains(Remainder))
+      if (RemainderOffsetInfo.find(Remainder) == RemainderOffsetInfo.end())
         RemainderOffsetInfo[Remainder] = std::make_pair(j, 1);
       else
         RemainderOffsetInfo[Remainder].second++;
@@ -933,7 +933,7 @@ bool PPCLoopInstrFormPrep::prepareBaseForDispFormChain(Bucket &BucketChain,
   // 1 X form.
   unsigned MaxCountRemainder = 0;
   for (unsigned j = 0; j < (unsigned)Form; j++)
-    if ((RemainderOffsetInfo.contains(j)) &&
+    if ((RemainderOffsetInfo.find(j) != RemainderOffsetInfo.end()) &&
         RemainderOffsetInfo[j].second >
             RemainderOffsetInfo[MaxCountRemainder].second)
       MaxCountRemainder = j;
@@ -1179,8 +1179,6 @@ Value *PPCLoopInstrFormPrep::getNodeForInc(Loop *L, Instruction *MemI,
 
     // Get the incoming value from the loop latch and check if the value has
     // the add form with the required increment.
-    if (CurrentPHINode->getBasicBlockIndex(LatchBB) < 0)
-      continue;
     if (Instruction *I = dyn_cast<Instruction>(
             CurrentPHINode->getIncomingValueForBlock(LatchBB))) {
       Value *StrippedBaseI = I;

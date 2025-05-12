@@ -43,7 +43,7 @@ public:
   initiate(const ClassType *Container, ArrayRef<const MethodType *> Methods,
            bool CreateOperation) {
     if (Methods.empty())
-      return std::nullopt;
+      return None;
 
     RefactoringOperationResult Result;
     Result.Initiated = true;
@@ -128,7 +128,7 @@ clang::tooling::initiateImplementDeclaredMethodsOperation(
            isa<ObjCCategoryDecl>(D);
   });
   if (!SelectedDecl)
-    return std::nullopt;
+    return None;
   // Look at the set of methods that intersect with the selection.
   if (const auto *CXXClass = dyn_cast<CXXRecordDecl>(SelectedDecl->getDecl())) {
     if (CXXClass->isDependentType())
@@ -194,7 +194,7 @@ ImplementDeclaredCXXMethodsOperation::perform(
   using namespace indexer;
   return continueInExternalASTUnit(
       fileThatShouldContainImplementationOf(Container), runInImplementationAST,
-      Container, filter(ArrayRef(SelectedMethods),
+      Container, filter(llvm::makeArrayRef(SelectedMethods),
                         [](const DeclEntity &D) { return !D.isDefined(); }));
 }
 
@@ -403,7 +403,7 @@ ImplementDeclaredObjCMethodsOperation::perform(
   return continueInExternalASTUnit(
       fileThatShouldContainImplementationOf(Container), runInImplementationAST,
       Container, Interface, MethodDeclarations,
-      filter(ArrayRef(SelectedMethods),
+      filter(llvm::makeArrayRef(SelectedMethods),
              [](const DeclEntity &D) { return !D.isDefined(); }));
 }
 

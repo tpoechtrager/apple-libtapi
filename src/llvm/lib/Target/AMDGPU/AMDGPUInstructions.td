@@ -83,12 +83,19 @@ def FalsePredicate : Predicate<"false">;
 
 // Add a predicate to the list if does not already exist to deduplicate it.
 class PredConcat<list<Predicate> lst, Predicate pred> {
-  list<Predicate> ret = !listconcat(lst, !listremove([pred], lst));
+  list<Predicate> ret =
+      !listconcat([pred], !filter(item, lst, !ne(item, pred)));
 }
 
+// Add a Register to the list if does not already exist
+class RegAppend<list<Register> lst, Register reg> {
+  list<Register> ret =
+      !listconcat([reg], !filter(item, lst, !ne(item, reg)));
+}
 // Get the union of two Register lists
 class RegListUnion<list<Register> lstA, list<Register> lstB> {
-  list<Register> ret = !listconcat(lstA, !listremove(lstB, lstA));
+  list<Register> ret =
+      !foldl(lstA, lstB, temp, item, RegAppend<temp, item>.ret);
 }
 
 class PredicateControl {
@@ -104,18 +111,15 @@ class PredicateControl {
 }
 
 class AMDGPUPat<dag pattern, dag result> : Pat<pattern, result>,
-      PredicateControl, GISelFlags;
-
-let GIIgnoreCopies = 1 in
-class AMDGPUPatIgnoreCopies<dag pattern, dag result> : AMDGPUPat<pattern, result>;
+      PredicateControl;
 
 let RecomputePerFunction = 1 in {
-def FP16Denormals : Predicate<"MF->getInfo<SIMachineFunctionInfo>()->getMode().FP64FP16Denormals != DenormalMode::getPreserveSign()">;
-def FP32Denormals : Predicate<"MF->getInfo<SIMachineFunctionInfo>()->getMode().FP32Denormals != DenormalMode::getPreserveSign()">;
-def FP64Denormals : Predicate<"MF->getInfo<SIMachineFunctionInfo>()->getMode().FP64FP16Denormals != DenormalMode::getPreserveSign()">;
-def NoFP16Denormals : Predicate<"MF->getInfo<SIMachineFunctionInfo>()->getMode().FP64FP16Denormals == DenormalMode::getPreserveSign()">;
-def NoFP32Denormals : Predicate<"MF->getInfo<SIMachineFunctionInfo>()->getMode().FP32Denormals == DenormalMode::getPreserveSign()">;
-def NoFP64Denormals : Predicate<"MF->getInfo<SIMachineFunctionInfo>()->getMode().FP64FP16Denormals == DenormalMode::getPreserveSign()">;
+def FP16Denormals : Predicate<"MF->getInfo<SIMachineFunctionInfo>()->getMode().allFP64FP16Denormals()">;
+def FP32Denormals : Predicate<"MF->getInfo<SIMachineFunctionInfo>()->getMode().allFP32Denormals()">;
+def FP64Denormals : Predicate<"MF->getInfo<SIMachineFunctionInfo>()->getMode().allFP64FP16Denormals()">;
+def NoFP16Denormals : Predicate<"!MF->getInfo<SIMachineFunctionInfo>()->getMode().allFP64FP16Denormals()">;
+def NoFP32Denormals : Predicate<"!MF->getInfo<SIMachineFunctionInfo>()->getMode().allFP32Denormals()">;
+def NoFP64Denormals : Predicate<"!MF->getInfo<SIMachineFunctionInfo>()->getMode().allFP64FP16Denormals()">;
 def UnsafeFPMath : Predicate<"TM.Options.UnsafeFPMath">;
 }
 
@@ -123,45 +127,37 @@ def FMA : Predicate<"Subtarget->hasFMA()">;
 
 def InstFlag : OperandWithDefaultOps <i32, (ops (i32 0))>;
 
-def i1imm_0 : OperandWithDefaultOps<i1, (ops (i1 0))>;
-
-class CustomOperandClass<string name, bit optional, string parserMethod,
-                         string defaultMethod>
-    : AsmOperandClass {
-  let Name = name;
-  let PredicateMethod = "is"#name;
-  let ParserMethod = parserMethod;
+def u16ImmTarget : AsmOperandClass {
+  let Name = "U16Imm";
   let RenderMethod = "addImmOperands";
-  let IsOptional = optional;
-  let DefaultMethod = defaultMethod;
 }
 
-class CustomOperandProps<bit optional = 0, string name = NAME> {
-  string ImmTy = "ImmTy"#name;
-  string ParserMethod = "parse"#name;
-  string DefaultValue = "0";
-  string DefaultMethod = "[this]() { return "#
-    "AMDGPUOperand::CreateImm(this, "#DefaultValue#", SMLoc(), "#
-    "AMDGPUOperand::"#ImmTy#"); }";
-  string PrintMethod = "print"#name;
-  AsmOperandClass ParserMatchClass =
-    CustomOperandClass<name, optional, ParserMethod, DefaultMethod>;
-  string OperandType = "OPERAND_IMMEDIATE";
+def s16ImmTarget : AsmOperandClass {
+  let Name = "S16Imm";
+  let RenderMethod = "addImmOperands";
 }
 
-class CustomOperand<ValueType type, bit optional = 0, string name = NAME>
-  : Operand<type>, CustomOperandProps<optional, name>;
+let OperandType = "OPERAND_IMMEDIATE" in {
 
-class ImmOperand<ValueType type, string name = NAME, bit optional = 0,
-                 string printer = "print"#name>
-    : CustomOperand<type, optional, name> {
-  let ImmTy = "ImmTyNone";
-  let ParserMethod = "";
-  let PrintMethod = printer;
+def u32imm : Operand<i32> {
+  let PrintMethod = "printU32ImmOperand";
 }
 
-def s16imm : ImmOperand<i16, "S16Imm", 0, "printU16ImmOperand">;
-def u16imm : ImmOperand<i16, "U16Imm", 0, "printU16ImmOperand">;
+def u16imm : Operand<i16> {
+  let PrintMethod = "printU16ImmOperand";
+  let ParserMatchClass = u16ImmTarget;
+}
+
+def s16imm : Operand<i16> {
+  let PrintMethod = "printU16ImmOperand";
+  let ParserMatchClass = s16ImmTarget;
+}
+
+def u8imm : Operand<i8> {
+  let PrintMethod = "printU8ImmOperand";
+}
+
+} // End OperandType = "OPERAND_IMMEDIATE"
 
 //===--------------------------------------------------------------------===//
 // Custom Operands
@@ -221,12 +217,6 @@ class is_canonicalized<SDPatternOperator op> : PatFrag<
   }];
 }
 
-class FoldTernaryOpPat<SDPatternOperator op1, SDPatternOperator op2> : PatFrag<
-  (ops node:$src0, node:$src1, node:$src2),
-  (op2 (op1 node:$src0, node:$src1), node:$src2)
->;
-
-def imad : FoldTernaryOpPat<mul, add>;
 
 let Properties = [SDNPCommutative, SDNPAssociative] in {
 def smax_oneuse : HasOneUseBinOp<smax>;
@@ -655,8 +645,6 @@ defm atomic_load_umax : binary_atomic_op_all_as<atomic_load_umax>;
 defm atomic_load_umin : binary_atomic_op_all_as<atomic_load_umin>;
 defm atomic_load_xor : binary_atomic_op_all_as<atomic_load_xor>;
 defm atomic_load_fadd : binary_atomic_op_all_as<atomic_load_fadd, 0>;
-defm atomic_load_uinc_wrap : binary_atomic_op_all_as<atomic_load_uinc_wrap>;
-defm atomic_load_udec_wrap : binary_atomic_op_all_as<atomic_load_udec_wrap>;
 let MemoryVT = v2f16 in
 defm atomic_load_fadd_v2f16 : binary_atomic_op_all_as<atomic_load_fadd, 0>;
 defm AMDGPUatomic_cmp_swap : binary_atomic_op_all_as<AMDGPUatomic_cmp_swap>;
@@ -817,25 +805,6 @@ def fminnum_like : PatFrags<(ops node:$src0, node:$src1),
 
 // Instructions which select to the same v_max_f*
 def fmaxnum_like : PatFrags<(ops node:$src0, node:$src1),
-  [(fmaxnum_ieee node:$src0, node:$src1),
-   (fmaxnum node:$src0, node:$src1)]
->;
-
-class NeverNaNPats<dag ops, list<dag> frags> : PatFrags<ops, frags> {
-  let PredicateCode = [{
-    return CurDAG->isKnownNeverNaN(SDValue(N,0));
-  }];
-  let GISelPredicateCode = [{
-    return isKnownNeverNaN(MI.getOperand(0).getReg(), MRI);
-  }];
-}
-
-def fminnum_like_nnan : NeverNaNPats<(ops node:$src0, node:$src1),
-  [(fminnum_ieee node:$src0, node:$src1),
-   (fminnum node:$src0, node:$src1)]
->;
-
-def fmaxnum_like_nnan : NeverNaNPats<(ops node:$src0, node:$src1),
   [(fmaxnum_ieee node:$src0, node:$src1),
    (fmaxnum node:$src0, node:$src1)]
 >;

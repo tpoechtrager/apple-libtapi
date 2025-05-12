@@ -10,6 +10,7 @@
 #define LLVM_LIB_CAS_HASHMAPPEDTRIEINDEXGENERATOR_H
 
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/Optional.h"
 
 namespace llvm {
 namespace cas {
@@ -18,7 +19,7 @@ struct IndexGenerator {
   size_t NumRootBits;
   size_t NumSubtrieBits;
   ArrayRef<uint8_t> Bytes;
-  std::optional<size_t> StartBit = std::nullopt;
+  Optional<size_t> StartBit = None;
 
   size_t getNumBits() const {
     assert(StartBit);

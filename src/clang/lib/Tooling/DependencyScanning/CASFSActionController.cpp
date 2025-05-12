@@ -32,7 +32,7 @@ public:
   initializeModuleBuild(CompilerInstance &ModuleScanInstance) override;
   llvm::Error
   finalizeModuleBuild(CompilerInstance &ModuleScanInstance) override;
-  llvm::Error finalizeModuleInvocation(CowCompilerInvocation &CI,
+  llvm::Error finalizeModuleInvocation(CompilerInvocation &CI,
                                        const ModuleDeps &MD) override;
 
 private:
@@ -158,7 +158,7 @@ Error CASFSActionController::finalizeModuleBuild(
     CompilerInstance &ModuleScanInstance) {
   trackFilesCommon(ModuleScanInstance, CacheFS);
 
-  std::optional<cas::CASID> RootID;
+  Optional<cas::CASID> RootID;
   auto E = CacheFS
                .createTreeFromNewAccesses(
                    [&](const llvm::vfs::CachedDirectoryEntry &Entry,
@@ -169,20 +169,15 @@ Error CASFSActionController::finalizeModuleBuild(
   if (E)
     return E;
 
-#ifndef NDEBUG
   Module *M = ModuleScanInstance.getPreprocessor().getCurrentModule();
   assert(M && "finalizing without a module");
-#endif
 
   ModuleScanInstance.getASTContext().setCASFileSystemRootID(RootID->toString());
   return Error::success();
 }
 
-Error CASFSActionController::finalizeModuleInvocation(
-    CowCompilerInvocation &CowCI, const ModuleDeps &MD) {
-  // TODO: Avoid this copy.
-  CompilerInvocation CI(CowCI);
-
+Error CASFSActionController::finalizeModuleInvocation(CompilerInvocation &CI,
+                                                      const ModuleDeps &MD) {
   if (auto ID = MD.CASFileSystemRootID) {
     configureInvocationForCaching(CI, CASOpts, ID->toString(),
                                   CacheFS.getCurrentWorkingDirectory().get(),
@@ -192,7 +187,6 @@ Error CASFSActionController::finalizeModuleInvocation(
   if (Mapper)
     DepscanPrefixMapping::remapInvocationPaths(CI, *Mapper);
 
-  CowCI = CI;
   return llvm::Error::success();
 }
 

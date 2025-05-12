@@ -16,7 +16,6 @@
 #define LLVM_CLANG_SEMA_SEMALAMBDA_H
 
 #include "clang/AST/ASTLambda.h"
-#include <optional>
 
 namespace clang {
 namespace sema {
@@ -31,9 +30,9 @@ class Sema;
 /// of the capture-capable lambda's LambdaScopeInfo.
 /// See Implementation for more detailed comments.
 
-std::optional<unsigned> getStackIndexOfNearestEnclosingCaptureCapableLambda(
+Optional<unsigned> getStackIndexOfNearestEnclosingCaptureCapableLambda(
     ArrayRef<const sema::FunctionScopeInfo *> FunctionScopes,
-    ValueDecl *VarToCapture, Sema &S);
+    VarDecl *VarToCapture, Sema &S);
 
 } // clang
 

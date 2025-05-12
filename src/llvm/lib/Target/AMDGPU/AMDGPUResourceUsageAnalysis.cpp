@@ -104,7 +104,6 @@ bool AMDGPUResourceUsageAnalysis::runOnModule(Module &M) {
 
   MachineModuleInfo &MMI = getAnalysis<MachineModuleInfoWrapperPass>().getMMI();
   const TargetMachine &TM = TPC->getTM<TargetMachine>();
-  const MCSubtargetInfo &STI = *TM.getMCSubtargetInfo();
   bool HasIndirectCall = false;
 
   CallGraph CG = CallGraph(M);
@@ -112,8 +111,7 @@ bool AMDGPUResourceUsageAnalysis::runOnModule(Module &M) {
 
   // By default, for code object v5 and later, track only the minimum scratch
   // size
-  if (AMDGPU::getCodeObjectVersion(M) >= AMDGPU::AMDHSA_COV5 ||
-      STI.getTargetTriple().getOS() == Triple::AMDPAL) {
+  if (AMDGPU::getAmdhsaCodeObjectVersion() >= 5) {
     if (!AssumedStackSizeForDynamicSizeObjects.getNumOccurrences())
       AssumedStackSizeForDynamicSizeObjects = 0;
     if (!AssumedStackSizeForExternalCall.getNumOccurrences())
@@ -128,8 +126,8 @@ bool AMDGPUResourceUsageAnalysis::runOnModule(Module &M) {
     MachineFunction *MF = MMI.getMachineFunction(*F);
     assert(MF && "function must have been generated already");
 
-    auto CI =
-        CallGraphResourceInfo.insert(std::pair(F, SIFunctionResourceInfo()));
+    auto CI = CallGraphResourceInfo.insert(
+        std::make_pair(F, SIFunctionResourceInfo()));
     SIFunctionResourceInfo &Info = CI.first->second;
     assert(CI.second && "should only be called once per function");
     Info = analyzeResourceUsage(*MF, TM);
@@ -144,8 +142,8 @@ bool AMDGPUResourceUsageAnalysis::runOnModule(Module &M) {
     if (!F || F->isDeclaration())
       continue;
 
-    auto CI =
-        CallGraphResourceInfo.insert(std::pair(F, SIFunctionResourceInfo()));
+    auto CI = CallGraphResourceInfo.insert(
+      std::make_pair(F, SIFunctionResourceInfo()));
     if (!CI.second) // Skip already visited functions
       continue;
 
@@ -275,13 +273,9 @@ AMDGPUResourceUsageAnalysis::analyzeResourceUsage(
         case AMDGPU::M0:
         case AMDGPU::M0_LO16:
         case AMDGPU::M0_HI16:
-        case AMDGPU::SRC_SHARED_BASE_LO:
         case AMDGPU::SRC_SHARED_BASE:
-        case AMDGPU::SRC_SHARED_LIMIT_LO:
         case AMDGPU::SRC_SHARED_LIMIT:
-        case AMDGPU::SRC_PRIVATE_BASE_LO:
         case AMDGPU::SRC_PRIVATE_BASE:
-        case AMDGPU::SRC_PRIVATE_LIMIT_LO:
         case AMDGPU::SRC_PRIVATE_LIMIT:
         case AMDGPU::SGPR_NULL:
         case AMDGPU::SGPR_NULL64:
@@ -340,9 +334,11 @@ AMDGPUResourceUsageAnalysis::analyzeResourceUsage(
           break;
         }
 
-        if (AMDGPU::SGPR_32RegClass.contains(Reg) ||
-            AMDGPU::SGPR_LO16RegClass.contains(Reg) ||
+        if (AMDGPU::SReg_32RegClass.contains(Reg) ||
+            AMDGPU::SReg_LO16RegClass.contains(Reg) ||
             AMDGPU::SGPR_HI16RegClass.contains(Reg)) {
+          assert(!AMDGPU::TTMP_32RegClass.contains(Reg) &&
+                 "trap handler registers should not be used");
           IsSGPR = true;
           Width = 1;
         } else if (AMDGPU::VGPR_32RegClass.contains(Reg) ||
@@ -355,7 +351,9 @@ AMDGPUResourceUsageAnalysis::analyzeResourceUsage(
           IsSGPR = false;
           IsAGPR = true;
           Width = 1;
-        } else if (AMDGPU::SGPR_64RegClass.contains(Reg)) {
+        } else if (AMDGPU::SReg_64RegClass.contains(Reg)) {
+          assert(!AMDGPU::TTMP_64RegClass.contains(Reg) &&
+                 "trap handler registers should not be used");
           IsSGPR = true;
           Width = 2;
         } else if (AMDGPU::VReg_64RegClass.contains(Reg)) {
@@ -375,7 +373,9 @@ AMDGPUResourceUsageAnalysis::analyzeResourceUsage(
           IsSGPR = false;
           IsAGPR = true;
           Width = 3;
-        } else if (AMDGPU::SGPR_128RegClass.contains(Reg)) {
+        } else if (AMDGPU::SReg_128RegClass.contains(Reg)) {
+          assert(!AMDGPU::TTMP_128RegClass.contains(Reg) &&
+                 "trap handler registers should not be used");
           IsSGPR = true;
           Width = 4;
         } else if (AMDGPU::VReg_128RegClass.contains(Reg)) {
@@ -416,6 +416,8 @@ AMDGPUResourceUsageAnalysis::analyzeResourceUsage(
           IsAGPR = true;
           Width = 7;
         } else if (AMDGPU::SReg_256RegClass.contains(Reg)) {
+          assert(!AMDGPU::TTMP_256RegClass.contains(Reg) &&
+                 "trap handler registers should not be used");
           IsSGPR = true;
           Width = 8;
         } else if (AMDGPU::VReg_256RegClass.contains(Reg)) {
@@ -425,47 +427,9 @@ AMDGPUResourceUsageAnalysis::analyzeResourceUsage(
           IsSGPR = false;
           IsAGPR = true;
           Width = 8;
-        } else if (AMDGPU::VReg_288RegClass.contains(Reg)) {
-          IsSGPR = false;
-          Width = 9;
-        } else if (AMDGPU::SReg_288RegClass.contains(Reg)) {
-          IsSGPR = true;
-          Width = 9;
-        } else if (AMDGPU::AReg_288RegClass.contains(Reg)) {
-          IsSGPR = false;
-          IsAGPR = true;
-          Width = 9;
-        } else if (AMDGPU::VReg_320RegClass.contains(Reg)) {
-          IsSGPR = false;
-          Width = 10;
-        } else if (AMDGPU::SReg_320RegClass.contains(Reg)) {
-          IsSGPR = true;
-          Width = 10;
-        } else if (AMDGPU::AReg_320RegClass.contains(Reg)) {
-          IsSGPR = false;
-          IsAGPR = true;
-          Width = 10;
-        } else if (AMDGPU::VReg_352RegClass.contains(Reg)) {
-          IsSGPR = false;
-          Width = 11;
-        } else if (AMDGPU::SReg_352RegClass.contains(Reg)) {
-          IsSGPR = true;
-          Width = 11;
-        } else if (AMDGPU::AReg_352RegClass.contains(Reg)) {
-          IsSGPR = false;
-          IsAGPR = true;
-          Width = 11;
-        } else if (AMDGPU::VReg_384RegClass.contains(Reg)) {
-          IsSGPR = false;
-          Width = 12;
-        } else if (AMDGPU::SReg_384RegClass.contains(Reg)) {
-          IsSGPR = true;
-          Width = 12;
-        } else if (AMDGPU::AReg_384RegClass.contains(Reg)) {
-          IsSGPR = false;
-          IsAGPR = true;
-          Width = 12;
         } else if (AMDGPU::SReg_512RegClass.contains(Reg)) {
+          assert(!AMDGPU::TTMP_512RegClass.contains(Reg) &&
+                 "trap handler registers should not be used");
           IsSGPR = true;
           Width = 16;
         } else if (AMDGPU::VReg_512RegClass.contains(Reg)) {
@@ -486,15 +450,7 @@ AMDGPUResourceUsageAnalysis::analyzeResourceUsage(
           IsAGPR = true;
           Width = 32;
         } else {
-          // We only expect TTMP registers or registers that do not belong to
-          // any RC.
-          assert((AMDGPU::TTMP_32RegClass.contains(Reg) ||
-                  AMDGPU::TTMP_64RegClass.contains(Reg) ||
-                  AMDGPU::TTMP_128RegClass.contains(Reg) ||
-                  AMDGPU::TTMP_256RegClass.contains(Reg) ||
-                  AMDGPU::TTMP_512RegClass.contains(Reg) ||
-                  !TRI.getPhysRegBaseClass(Reg)) &&
-                 "Unknown register class");
+          llvm_unreachable("Unknown register class");
         }
         unsigned HWReg = TRI.getHWRegIndex(Reg);
         int MaxUsed = HWReg + Width - 1;

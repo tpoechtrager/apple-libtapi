@@ -36,7 +36,7 @@ class AMDGPUTargetStreamer : public MCTargetStreamer {
 
 protected:
   // TODO: Move HSAMetadataStream to AMDGPUTargetStreamer.
-  std::optional<AMDGPU::IsaInfo::AMDGPUTargetID> TargetID;
+  Optional<AMDGPU::IsaInfo::AMDGPUTargetID> TargetID;
 
   MCContext &getContext() const { return Streamer.getContext(); }
 
@@ -45,25 +45,25 @@ public:
 
   AMDGPUPALMetadata *getPALMetadata() { return &PALMetadata; }
 
-  virtual void EmitDirectiveAMDGCNTarget(){};
+  virtual void EmitDirectiveAMDGCNTarget() = 0;
 
   virtual void EmitDirectiveHSACodeObjectVersion(uint32_t Major,
-                                                 uint32_t Minor){};
+                                                 uint32_t Minor) = 0;
 
   virtual void EmitDirectiveHSACodeObjectISAV2(uint32_t Major, uint32_t Minor,
                                                uint32_t Stepping,
                                                StringRef VendorName,
-                                               StringRef ArchName){};
+                                               StringRef ArchName) = 0;
 
-  virtual void EmitAMDKernelCodeT(const amd_kernel_code_t &Header){};
+  virtual void EmitAMDKernelCodeT(const amd_kernel_code_t &Header) = 0;
 
-  virtual void EmitAMDGPUSymbolType(StringRef SymbolName, unsigned Type){};
+  virtual void EmitAMDGPUSymbolType(StringRef SymbolName, unsigned Type) = 0;
 
-  virtual void emitAMDGPULDS(MCSymbol *Symbol, unsigned Size, Align Alignment) {
-  }
+  virtual void emitAMDGPULDS(MCSymbol *Symbol, unsigned Size,
+                             Align Alignment) = 0;
 
   /// \returns True on success, false on failure.
-  virtual bool EmitISAVersion() { return true; }
+  virtual bool EmitISAVersion() = 0;
 
   /// \returns True on success, false on failure.
   virtual bool EmitHSAMetadataV2(StringRef HSAMetadataString);
@@ -78,44 +78,36 @@ public:
   /// the \p HSAMetadata structure is updated with the correct types.
   ///
   /// \returns True on success, false on failure.
-  virtual bool EmitHSAMetadata(msgpack::Document &HSAMetadata, bool Strict) {
-    return true;
-  }
+  virtual bool EmitHSAMetadata(msgpack::Document &HSAMetadata, bool Strict) = 0;
 
   /// \returns True on success, false on failure.
-  virtual bool EmitHSAMetadata(const AMDGPU::HSAMD::Metadata &HSAMetadata) {
-    return true;
-  }
+  virtual bool EmitHSAMetadata(const AMDGPU::HSAMD::Metadata &HSAMetadata) = 0;
 
   /// \returns True on success, false on failure.
-  virtual bool EmitCodeEnd(const MCSubtargetInfo &STI) { return true; }
+  virtual bool EmitCodeEnd(const MCSubtargetInfo &STI) = 0;
 
   virtual void EmitAmdhsaKernelDescriptor(
       const MCSubtargetInfo &STI, StringRef KernelName,
       const amdhsa::kernel_descriptor_t &KernelDescriptor, uint64_t NextVGPR,
-      uint64_t NextSGPR, bool ReserveVCC, bool ReserveFlatScr,
-      unsigned CodeObjectVersion){};
+      uint64_t NextSGPR, bool ReserveVCC, bool ReserveFlatScr) = 0;
 
   static StringRef getArchNameFromElfMach(unsigned ElfMach);
   static unsigned getElfMach(StringRef GPU);
 
-  const std::optional<AMDGPU::IsaInfo::AMDGPUTargetID> &getTargetID() const {
+  const Optional<AMDGPU::IsaInfo::AMDGPUTargetID> &getTargetID() const {
     return TargetID;
   }
-  std::optional<AMDGPU::IsaInfo::AMDGPUTargetID> &getTargetID() {
+  Optional<AMDGPU::IsaInfo::AMDGPUTargetID> &getTargetID() {
     return TargetID;
   }
-  void initializeTargetID(const MCSubtargetInfo &STI,
-                          unsigned CodeObjectVersion) {
-    assert(TargetID == std::nullopt && "TargetID can only be initialized once");
+  void initializeTargetID(const MCSubtargetInfo &STI) {
+    assert(TargetID == None && "TargetID can only be initialized once");
     TargetID.emplace(STI);
-    getTargetID()->setCodeObjectVersion(CodeObjectVersion);
   }
-  void initializeTargetID(const MCSubtargetInfo &STI, StringRef FeatureString,
-                          unsigned CodeObjectVersion) {
-    initializeTargetID(STI, CodeObjectVersion);
+  void initializeTargetID(const MCSubtargetInfo &STI, StringRef FeatureString) {
+    initializeTargetID(STI);
 
-    assert(getTargetID() != std::nullopt && "TargetID is None");
+    assert(getTargetID() != None && "TargetID is None");
     getTargetID()->setTargetIDFromFeaturesString(FeatureString);
   }
 };
@@ -157,8 +149,7 @@ public:
   void EmitAmdhsaKernelDescriptor(
       const MCSubtargetInfo &STI, StringRef KernelName,
       const amdhsa::kernel_descriptor_t &KernelDescriptor, uint64_t NextVGPR,
-      uint64_t NextSGPR, bool ReserveVCC, bool ReserveFlatScr,
-      unsigned CodeObjectVersion) override;
+      uint64_t NextSGPR, bool ReserveVCC, bool ReserveFlatScr) override;
 };
 
 class AMDGPUTargetELFStreamer final : public AMDGPUTargetStreamer {
@@ -218,8 +209,7 @@ public:
   void EmitAmdhsaKernelDescriptor(
       const MCSubtargetInfo &STI, StringRef KernelName,
       const amdhsa::kernel_descriptor_t &KernelDescriptor, uint64_t NextVGPR,
-      uint64_t NextSGPR, bool ReserveVCC, bool ReserveFlatScr,
-      unsigned CodeObjectVersion) override;
+      uint64_t NextSGPR, bool ReserveVCC, bool ReserveFlatScr) override;
 };
 
 }

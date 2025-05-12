@@ -13,7 +13,6 @@
 
 #include "llvm/Analysis/InlineAdvisor.h"
 #include "llvm/ADT/Statistic.h"
-#include "llvm/ADT/StringExtras.h"
 #include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/Analysis/InlineCost.h"
 #include "llvm/Analysis/OptimizationRemarkEmitter.h"
@@ -62,9 +61,7 @@ static cl::opt<bool>
                         cl::desc("If true, annotate inline advisor remarks "
                                  "with LTO and pass information."));
 
-namespace llvm {
 extern cl::opt<InlinerFunctionImportStatsOpts> InlinerFunctionImportStats;
-}
 
 namespace {
 using namespace llvm::ore;
@@ -131,7 +128,7 @@ void DefaultInlineAdvice::recordInliningImpl() {
                                Advisor->getAnnotatedInlinePassName());
 }
 
-std::optional<llvm::InlineCost> static getDefaultInlineAdvice(
+llvm::Optional<llvm::InlineCost> static getDefaultInlineAdvice(
     CallBase &CB, FunctionAnalysisManager &FAM, const InlineParams &Params) {
   Function &Caller = *CB.getCaller();
   ProfileSummaryInfo *PSI =
@@ -197,22 +194,11 @@ void InlineAdvice::recordInliningWithCalleeDeleted() {
 }
 
 AnalysisKey InlineAdvisorAnalysis::Key;
-AnalysisKey PluginInlineAdvisorAnalysis::Key;
-bool PluginInlineAdvisorAnalysis::HasBeenRegistered = false;
 
 bool InlineAdvisorAnalysis::Result::tryCreate(
     InlineParams Params, InliningAdvisorMode Mode,
     const ReplayInlinerSettings &ReplaySettings, InlineContext IC) {
   auto &FAM = MAM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
-  if (PluginInlineAdvisorAnalysis::HasBeenRegistered) {
-    auto &DA = MAM.getResult<PluginInlineAdvisorAnalysis>(M);
-    Advisor.reset(DA.Factory(M, FAM, Params, IC));
-    return !!Advisor;
-  }
-  auto GetDefaultAdvice = [&FAM, Params](CallBase &CB) {
-    auto OIC = getDefaultInlineAdvice(CB, FAM, Params);
-    return OIC.has_value();
-  };
   switch (Mode) {
   case InliningAdvisorMode::Default:
     LLVM_DEBUG(dbgs() << "Using default inliner heuristic.\n");
@@ -226,14 +212,20 @@ bool InlineAdvisorAnalysis::Result::tryCreate(
     }
     break;
   case InliningAdvisorMode::Development:
-#ifdef LLVM_HAVE_TFLITE
+#ifdef LLVM_HAVE_TF_API
     LLVM_DEBUG(dbgs() << "Using development-mode inliner policy.\n");
-    Advisor = llvm::getDevelopmentModeAdvisor(M, MAM, GetDefaultAdvice);
+    Advisor =
+        llvm::getDevelopmentModeAdvisor(M, MAM, [&FAM, Params](CallBase &CB) {
+          auto OIC = getDefaultInlineAdvice(CB, FAM, Params);
+          return OIC.hasValue();
+        });
 #endif
     break;
   case InliningAdvisorMode::Release:
+#ifdef LLVM_HAVE_TF_AOT
     LLVM_DEBUG(dbgs() << "Using release-mode inliner policy.\n");
-    Advisor = llvm::getReleaseModeAdvisor(M, MAM, GetDefaultAdvice);
+    Advisor = llvm::getReleaseModeAdvisor(M, MAM);
+#endif
     break;
   }
 
@@ -370,9 +362,9 @@ void llvm::setInlineRemark(CallBase &CB, StringRef Message) {
 
 /// Return the cost only if the inliner should attempt to inline at the given
 /// CallSite. If we return the cost, we will emit an optimisation remark later
-/// using that cost, so we won't do so from this function. Return std::nullopt
-/// if inlining should not be attempted.
-std::optional<InlineCost>
+/// using that cost, so we won't do so from this function. Return None if
+/// inlining should not be attempted.
+Optional<InlineCost>
 llvm::shouldInline(CallBase &CB,
                    function_ref<InlineCost(CallBase &CB)> GetInlineCost,
                    OptimizationRemarkEmitter &ORE, bool EnableDeferral) {
@@ -408,7 +400,7 @@ llvm::shouldInline(CallBase &CB,
       });
     }
     setInlineRemark(CB, inlineCostStr(IC));
-    return std::nullopt;
+    return None;
   }
 
   int TotalSecondaryCost = 0;
@@ -425,7 +417,7 @@ llvm::shouldInline(CallBase &CB,
              << "' in other contexts";
     });
     setInlineRemark(CB, "deferred");
-    return std::nullopt;
+    return None;
   }
 
   LLVM_DEBUG(dbgs() << "    Inlining " << inlineCostStr(IC) << ", Call: " << CB
@@ -520,7 +512,7 @@ void llvm::emitInlinedIntoBasedOnCost(
 }
 
 InlineAdvisor::InlineAdvisor(Module &M, FunctionAnalysisManager &FAM,
-                             std::optional<InlineContext> IC)
+                             Optional<InlineContext> IC)
     : M(M), FAM(FAM), IC(IC),
       AnnotatedInlinePassName((IC && AnnotateInlinePhase)
                                   ? llvm::AnnotateInlinePassName(*IC)

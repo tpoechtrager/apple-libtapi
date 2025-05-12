@@ -99,6 +99,10 @@ void HexagonMCExpr::setS27_2_reloc(bool Val) {
   S27_2_reloc = Val;
 }
 
+bool HexagonMCExpr::classof(MCExpr const *E) {
+  return E->getKind() == MCExpr::Target;
+}
+
 HexagonMCExpr::HexagonMCExpr(MCExpr const *Expr)
     : Expr(Expr), MustNotExtend(false), MustExtend(false), S27_2_reloc(false),
       SignMismatch(false) {}

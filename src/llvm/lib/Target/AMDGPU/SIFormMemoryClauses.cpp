@@ -119,7 +119,9 @@ static bool isValidClauseInst(const MachineInstr &MI, bool IsVMEMClause) {
   // If this is a load instruction where the result has been coalesced with an operand, then we cannot clause it.
   for (const MachineOperand &ResMO : MI.defs()) {
     Register ResReg = ResMO.getReg();
-    for (const MachineOperand &MO : MI.all_uses()) {
+    for (const MachineOperand &MO : MI.uses()) {
+      if (!MO.isReg() || MO.isDef())
+        continue;
       if (MO.getReg() == ResReg)
         return false;
     }
@@ -230,7 +232,7 @@ void SIFormMemoryClauses::collectRegUses(const MachineInstr &MI,
     auto Loc = Map.find(Reg);
     unsigned State = getMopState(MO);
     if (Loc == Map.end()) {
-      Map[Reg] = std::pair(State, Mask);
+      Map[Reg] = std::make_pair(State, Mask);
     } else {
       Loc->second.first |= State;
       Loc->second.second |= Mask;
@@ -272,8 +274,8 @@ bool SIFormMemoryClauses::runOnMachineFunction(MachineFunction &MF) {
 
   MaxVGPRs = TRI->getAllocatableSet(MF, &AMDGPU::VGPR_32RegClass).count();
   MaxSGPRs = TRI->getAllocatableSet(MF, &AMDGPU::SGPR_32RegClass).count();
-  unsigned FuncMaxClause = MF.getFunction().getFnAttributeAsParsedInteger(
-      "amdgpu-max-memory-clause", MaxClause);
+  unsigned FuncMaxClause = AMDGPU::getIntegerAttribute(
+      MF.getFunction(), "amdgpu-max-memory-clause", MaxClause);
 
   for (MachineBasicBlock &MBB : MF) {
     GCNDownwardRPTracker RPT(*LIS);
@@ -391,11 +393,13 @@ bool SIFormMemoryClauses::runOnMachineFunction(MachineFunction &MF) {
         Ind->insertMachineInstrInMaps(*Kill);
       }
 
-      // Restore the state after processing the end of the bundle.
-      RPT.reset(MI, &LiveRegsCopy);
-
-      if (!Kill)
+      if (!Kill) {
+        RPT.reset(MI, &LiveRegsCopy);
         continue;
+      }
+
+      // Restore the state after processing the end of the bundle.
+      RPT.reset(*Kill, &LiveRegsCopy);
 
       for (auto &&R : Defs) {
         Register Reg = R.first;

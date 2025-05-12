@@ -40,7 +40,7 @@ def archive_headers : Flag<["--"], "archive-headers">,
 
 defm build_id :
   Eq<"build-id", "Build ID to look up. Once found, added as an input file">,
-  MetaVarName<"<hex>">;
+  MetaVarName<"<dir>">;
 
 def : Flag<["-"], "a">, Alias<archive_headers>,
   HelpText<"Alias for --archive-headers">;
@@ -65,11 +65,7 @@ def : Flag<["-"], "D">, Alias<disassemble_all>,
 
 def symbol_description : Flag<["--"], "symbol-description">,
   HelpText<"Add symbol description for disassembly. This "
-           "option is for XCOFF files only">;
-
-def traceback_table : Flag<["--"], "traceback-table">,
-  HelpText<"Decode traceback table in disassembly. Implies --disassemble. "
-           "This option is for XCOFF files only">;
+           "option is for XCOFF files only.">;
 
 def disassemble_symbols_EQ : Joined<["--"], "disassemble-symbols=">,
   HelpText<"List of symbols to disassemble. "
@@ -138,8 +134,7 @@ def no_show_raw_insn : Flag<["--"], "no-show-raw-insn">,
 
 def no_leading_addr : Flag<["--"], "no-leading-addr">,
   HelpText<"When disassembling, do not print leading addresses for instructions or inline relocations">;
-def : Flag<["--"], "no-addresses">, Alias<no_leading_addr>,
-  HelpText<"Alias for --no-leading-addr">;
+def : Flag<["--"], "no-addresses">, Alias<no_leading_addr>;
 
 def raw_clang_ast : Flag<["--"], "raw-clang-ast">,
   HelpText<"Dump the raw binary contents of the clang AST section">;
@@ -149,10 +144,10 @@ def reloc : Flag<["--"], "reloc">,
 def : Flag<["-"], "r">, Alias<reloc>, HelpText<"Alias for --reloc">;
 
 def print_imm_hex : Flag<["--"], "print-imm-hex">,
-  HelpText<"Use hex format for immediate values (default)">;
+  HelpText<"Use hex format for immediate values">;
 
 def no_print_imm_hex : Flag<["--"], "no-print-imm-hex">,
-  HelpText<"Do not use hex format for immediate values">;
+  HelpText<"Do not use hex format for immediate values (default)">;
 def : Flag<["--"], "print-imm-hex=false">, Alias<no_print_imm_hex>;
 
 def private_headers : Flag<["--"], "private-headers">,
@@ -309,14 +304,10 @@ def data_in_code : Flag<["--"], "data-in-code">,
   HelpText<"Print the data in code table for Mach-O objects (requires --macho)">,
   Group<grp_mach_o>;
 
-def function_starts_EQ : Joined<["--"], "function-starts=">,
-  HelpText<"Print the function starts table for Mach-O objects. "
-           "Options: addrs (default), names, both (requires --macho)">,
-  Values<"addrs,names,both">,
+def function_starts : Flag<["--"], "function-starts">,
+  HelpText<"Print the function starts table for "
+           "Mach-O objects (requires --macho)">,
   Group<grp_mach_o>;
-
-def : Flag<["--"], "function-starts">, Alias<function_starts_EQ>,
-  AliasArgs<["addrs"]>, Group<grp_mach_o>;
 
 def link_opt_hints : Flag<["--"], "link-opt-hints">,
   HelpText<"Print the linker optimization hints for "

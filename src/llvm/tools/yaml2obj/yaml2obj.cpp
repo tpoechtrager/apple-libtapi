@@ -24,7 +24,6 @@
 #include "llvm/Support/WithColor.h"
 #include "llvm/Support/YAMLTraits.h"
 #include "llvm/Support/raw_ostream.h"
-#include <optional>
 #include <system_error>
 
 using namespace llvm;
@@ -60,8 +59,8 @@ cl::opt<std::string> OutputFilename("o", cl::desc("Output filename"),
                                     cl::Prefix, cl::cat(Cat));
 } // namespace
 
-static std::optional<std::string> preprocess(StringRef Buf,
-                                             yaml::ErrorHandler ErrHandler) {
+static Optional<std::string> preprocess(StringRef Buf,
+                                        yaml::ErrorHandler ErrHandler) {
   DenseMap<StringRef, StringRef> Defines;
   for (StringRef Define : D) {
     StringRef Macro, Definition;
@@ -89,7 +88,7 @@ static std::optional<std::string> preprocess(StringRef Buf,
         // When the -D option is requested, we use the provided value.
         // Otherwise we use a default macro value if present.
         auto It = Defines.find(Macro);
-        std::optional<StringRef> Value;
+        Optional<StringRef> Value;
         if (It != Defines.end())
           Value = It->second;
         else if (!Default.empty() || MacroExpr.endswith("="))
@@ -134,8 +133,7 @@ int main(int argc, char **argv) {
   if (!Buf)
     return 1;
 
-  std::optional<std::string> Buffer =
-      preprocess(Buf.get()->getBuffer(), ErrHandler);
+  Optional<std::string> Buffer = preprocess(Buf.get()->getBuffer(), ErrHandler);
   if (!Buffer)
     return 1;
 

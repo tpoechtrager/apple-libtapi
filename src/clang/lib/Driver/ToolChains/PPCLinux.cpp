@@ -49,10 +49,7 @@ PPCLinuxToolChain::PPCLinuxToolChain(const Driver &D,
     : Linux(D, Triple, Args) {
   if (Arg *A = Args.getLastArg(options::OPT_mabi_EQ)) {
     StringRef ABIName = A->getValue();
-
-    if ((ABIName == "ieeelongdouble" &&
-         !SupportIEEEFloat128(D, Triple, Args)) ||
-        (ABIName == "ibmlongdouble" && !supportIBMLongDouble(D, Args)))
+    if (ABIName == "ieeelongdouble" && !SupportIEEEFloat128(D, Triple, Args))
       D.Diag(diag::warn_drv_unsupported_float_abi_by_lib) << ABIName;
   }
 }
@@ -70,18 +67,6 @@ void PPCLinuxToolChain::AddClangSystemIncludeArgs(const ArgList &DriverArgs,
   Linux::AddClangSystemIncludeArgs(DriverArgs, CC1Args);
 }
 
-bool PPCLinuxToolChain::supportIBMLongDouble(
-    const Driver &D, const llvm::opt::ArgList &Args) const {
-  if (Args.hasArg(options::OPT_nostdlib, options::OPT_nostdlibxx))
-    return true;
-
-  CXXStdlibType StdLib = ToolChain::GetCXXStdlibType(Args);
-  if (StdLib == CST_Libstdcxx)
-    return true;
-
-  return StdLib == CST_Libcxx && !defaultToIEEELongDouble();
-}
-
 bool PPCLinuxToolChain::SupportIEEEFloat128(
     const Driver &D, const llvm::Triple &Triple,
     const llvm::opt::ArgList &Args) const {
@@ -93,11 +78,10 @@ bool PPCLinuxToolChain::SupportIEEEFloat128(
 
   CXXStdlibType StdLib = ToolChain::GetCXXStdlibType(Args);
   bool HasUnsupportedCXXLib =
-      (StdLib == CST_Libcxx && !defaultToIEEELongDouble()) ||
+      StdLib == CST_Libcxx ||
       (StdLib == CST_Libstdcxx &&
        GCCInstallation.getVersion().isOlderThan(12, 1, 0));
 
-  std::string Linker = Linux::getDynamicLinker(Args);
-  return GlibcSupportsFloat128((Twine(D.DyldPrefix) + Linker).str()) &&
+  return GlibcSupportsFloat128(Linux::getDynamicLinker(Args)) &&
          !(D.CCCIsCXX() && HasUnsupportedCXXLib);
 }

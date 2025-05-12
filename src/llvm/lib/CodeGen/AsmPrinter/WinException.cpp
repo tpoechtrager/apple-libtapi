@@ -646,7 +646,7 @@ void WinException::emitSEHActionsForRange(const WinEHFuncInfo &FuncInfo,
     const SEHUnwindMapEntry &UME = FuncInfo.SEHUnwindMap[State];
     const MCExpr *FilterOrFinally;
     const MCExpr *ExceptOrNull;
-    auto *Handler = cast<MachineBasicBlock *>(UME.Handler);
+    auto *Handler = UME.Handler.get<MachineBasicBlock *>();
     if (UME.IsFinally) {
       FilterOrFinally = create32bitRef(getMCSymbolForMBB(Asm, Handler));
       ExceptOrNull = MCConstantExpr::create(0, Ctx);
@@ -736,7 +736,7 @@ void WinException::emitCXXFrameHandler3Table(const MachineFunction *MF) {
   // EHFlags & 1 -> Synchronous exceptions only, no async exceptions.
   // EHFlags & 2 -> ???
   // EHFlags & 4 -> The function is noexcept(true), unwinding can't continue.
-  OS.emitValueToAlignment(Align(4));
+  OS.emitValueToAlignment(4);
   OS.emitLabel(FuncInfoXData);
 
   AddComment("MagicNumber");
@@ -770,11 +770,7 @@ void WinException::emitCXXFrameHandler3Table(const MachineFunction *MF) {
   OS.emitInt32(0);
 
   AddComment("EHFlags");
-  if (MMI->getModule()->getModuleFlag("eh-asynch")) {
-    OS.emitInt32(0);
-  } else {
-    OS.emitInt32(1);
-  }
+  OS.emitInt32(1);
 
   // UnwindMapEntry {
   //   int32_t ToState;
@@ -783,8 +779,8 @@ void WinException::emitCXXFrameHandler3Table(const MachineFunction *MF) {
   if (UnwindMapXData) {
     OS.emitLabel(UnwindMapXData);
     for (const CxxUnwindMapEntry &UME : FuncInfo.CxxUnwindMap) {
-      MCSymbol *CleanupSym = getMCSymbolForMBB(
-          Asm, dyn_cast_if_present<MachineBasicBlock *>(UME.Cleanup));
+      MCSymbol *CleanupSym =
+          getMCSymbolForMBB(Asm, UME.Cleanup.dyn_cast<MachineBasicBlock *>());
       AddComment("ToState");
       OS.emitInt32(UME.ToState);
 
@@ -871,8 +867,8 @@ void WinException::emitCXXFrameHandler3Table(const MachineFunction *MF) {
           FrameAllocOffsetRef = MCConstantExpr::create(0, Asm->OutContext);
         }
 
-        MCSymbol *HandlerSym = getMCSymbolForMBB(
-            Asm, dyn_cast_if_present<MachineBasicBlock *>(HT.Handler));
+        MCSymbol *HandlerSym =
+            getMCSymbolForMBB(Asm, HT.Handler.dyn_cast<MachineBasicBlock *>());
 
         AddComment("Adjectives");
         OS.emitInt32(HT.Adjectives);
@@ -1014,7 +1010,7 @@ void WinException::emitExceptHandlerTable(const MachineFunction *MF) {
 
   // Emit the __ehtable label that we use for llvm.x86.seh.lsda.
   MCSymbol *LSDALabel = Asm->OutContext.getOrCreateLSDASymbol(FLinkageName);
-  OS.emitValueToAlignment(Align(4));
+  OS.emitValueToAlignment(4);
   OS.emitLabel(LSDALabel);
 
   const auto *Per = cast<Function>(F.getPersonalityFn()->stripPointerCasts());
@@ -1077,7 +1073,7 @@ void WinException::emitExceptHandlerTable(const MachineFunction *MF) {
 
   assert(!FuncInfo.SEHUnwindMap.empty());
   for (const SEHUnwindMapEntry &UME : FuncInfo.SEHUnwindMap) {
-    auto *Handler = cast<MachineBasicBlock *>(UME.Handler);
+    auto *Handler = UME.Handler.get<MachineBasicBlock *>();
     const MCSymbol *ExceptOrFinally =
         UME.IsFinally ? getMCSymbolForMBB(Asm, Handler) : Handler->getSymbol();
     // -1 is usually the base state for "unwind to caller", but for
@@ -1148,7 +1144,7 @@ void WinException::emitCLRExceptionTable(const MachineFunction *MF) {
   DenseMap<const MachineBasicBlock *, int> HandlerStates;
   for (int State = 0; State < NumStates; ++State) {
     MachineBasicBlock *HandlerBlock =
-        cast<MachineBasicBlock *>(FuncInfo.ClrEHUnwindMap[State].Handler);
+        FuncInfo.ClrEHUnwindMap[State].Handler.get<MachineBasicBlock *>();
     HandlerStates[HandlerBlock] = State;
     // Use this loop through all handlers to verify our assumption (used in
     // the MinEnclosingState computation) that enclosing funclets have lower
@@ -1309,7 +1305,7 @@ void WinException::emitCLRExceptionTable(const MachineFunction *MF) {
     const MCExpr *ClauseEnd = getOffsetPlusOne(Clause.EndLabel, FuncBeginSym);
 
     const ClrEHUnwindMapEntry &Entry = FuncInfo.ClrEHUnwindMap[Clause.State];
-    MachineBasicBlock *HandlerBlock = cast<MachineBasicBlock *>(Entry.Handler);
+    MachineBasicBlock *HandlerBlock = Entry.Handler.get<MachineBasicBlock *>();
     MCSymbol *BeginSym = getMCSymbolForMBB(Asm, HandlerBlock);
     const MCExpr *HandlerBegin = getOffset(BeginSym, FuncBeginSym);
     MCSymbol *EndSym = EndSymbolMap[Clause.State];

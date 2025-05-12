@@ -66,14 +66,13 @@ class StatepointGC : public GCStrategy {
 public:
   StatepointGC() {
     UseStatepoints = true;
-    UseRS4GC = true;
     // These options are all gc.root specific, we specify them so that the
     // gc.root lowering code doesn't run.
     NeededSafePoints = false;
     UsesMetadata = false;
   }
 
-  std::optional<bool> isGCManagedPointer(const Type *Ty) const override {
+  Optional<bool> isGCManagedPointer(const Type *Ty) const override {
     // Method is only valid on pointer typed values.
     const PointerType *PT = cast<PointerType>(Ty);
     // For the sake of this example GC, we arbitrarily pick addrspace(1) as our
@@ -99,14 +98,13 @@ class CoreCLRGC : public GCStrategy {
 public:
   CoreCLRGC() {
     UseStatepoints = true;
-    UseRS4GC = true;
     // These options are all gc.root specific, we specify them so that the
     // gc.root lowering code doesn't run.
     NeededSafePoints = false;
     UsesMetadata = false;
   }
 
-  std::optional<bool> isGCManagedPointer(const Type *Ty) const override {
+  Optional<bool> isGCManagedPointer(const Type *Ty) const override {
     // Method is only valid on pointer typed values.
     const PointerType *PT = cast<PointerType>(Ty);
     // We pick addrspace(1) as our GC managed heap.

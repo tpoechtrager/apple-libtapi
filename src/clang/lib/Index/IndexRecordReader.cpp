@@ -247,16 +247,15 @@ struct IndexRecordReader::Implementation {
             llvm::function_ref<bool(const IndexRecordOccurrence &)> receiver) {
     // FIXME: Use binary search and make this more efficient.
     unsigned lineEnd = lineStart+lineCount;
-    return foreachOccurrence(std::nullopt, std::nullopt,
-                             [&](const IndexRecordOccurrence &occur) -> bool {
-                               if (occur.Line > lineEnd)
-                                 return false; // we're done.
-                               if (occur.Line >= lineStart) {
-                                 if (!receiver(occur))
-                                   return false;
-                               }
-                               return true;
-                             });
+    return foreachOccurrence(None, None, [&](const IndexRecordOccurrence &occur) -> bool {
+      if (occur.Line > lineEnd)
+        return false; // we're done.
+      if (occur.Line >= lineStart) {
+        if (!receiver(occur))
+          return false;
+      }
+      return true;
+    });
   }
 
   static uint64_t read(RecordDataImpl &Record, unsigned &I) {
@@ -325,7 +324,7 @@ public:
     }
     case REC_DECLOFFSETS_BLOCK_ID:
       assert(RecID == REC_DECLOFFSETS);
-      Reader.setDeclOffsets(ArrayRef((const uint32_t*)Blob.data(),
+      Reader.setDeclOffsets(makeArrayRef((const uint32_t*)Blob.data(),
                             Record[0]));
       break;
 
@@ -426,7 +425,7 @@ bool IndexRecordReader::foreachOccurrence(
 
 bool IndexRecordReader::foreachOccurrence(
             llvm::function_ref<bool(const IndexRecordOccurrence &)> Receiver) {
-  return foreachOccurrence(std::nullopt, std::nullopt, std::move(Receiver));
+  return foreachOccurrence(None, None, std::move(Receiver));
 }
 
 bool IndexRecordReader::foreachOccurrenceInLineRange(unsigned lineStart,

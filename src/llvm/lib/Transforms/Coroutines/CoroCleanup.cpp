@@ -127,16 +127,10 @@ PreservedAnalyses CoroCleanupPass::run(Module &M,
   FunctionPassManager FPM;
   FPM.addPass(SimplifyCFGPass());
 
-  PreservedAnalyses FuncPA;
-  FuncPA.preserveSet<CFGAnalyses>();
-
   Lowerer L(M);
-  for (auto &F : M) {
-    if (L.lower(F)) {
-      FAM.invalidate(F, FuncPA);
+  for (auto &F : M)
+    if (L.lower(F))
       FPM.run(F, FAM);
-    }
-  }
 
   return PreservedAnalyses::none();
 }

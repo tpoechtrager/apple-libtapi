@@ -137,14 +137,6 @@ private:
   Expected<std::optional<T>> Value;
 };
 
-class Cancellable {
-  virtual void anchor();
-
-public:
-  virtual ~Cancellable() {}
-  virtual void cancel() = 0;
-};
-
 } // namespace cas
 
 template <> struct DenseMapInfo<cas::CASID> {

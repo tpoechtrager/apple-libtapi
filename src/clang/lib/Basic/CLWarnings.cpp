@@ -12,11 +12,10 @@
 
 #include "clang/Basic/CLWarnings.h"
 #include "clang/Basic/DiagnosticCategories.h"
-#include <optional>
 
 using namespace clang;
 
-std::optional<diag::Group>
+llvm::Optional<diag::Group>
 clang::diagGroupFromCLWarningID(unsigned CLWarningID) {
   switch (CLWarningID) {
   case 4005: return diag::Group::MacroRedefined;

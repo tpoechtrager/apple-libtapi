@@ -22,17 +22,15 @@ using namespace llvm::cas;
 TEST_P(CASTest, PrintIDs) {
   std::shared_ptr<ObjectStore> CAS = createObjectStore();
 
-  std::optional<CASID> ID1, ID2;
-  ASSERT_THAT_ERROR(CAS->createProxy(std::nullopt, "1").moveInto(ID1),
-                    Succeeded());
-  ASSERT_THAT_ERROR(CAS->createProxy(std::nullopt, "2").moveInto(ID2),
-                    Succeeded());
+  Optional<CASID> ID1, ID2;
+  ASSERT_THAT_ERROR(CAS->createProxy(None, "1").moveInto(ID1), Succeeded());
+  ASSERT_THAT_ERROR(CAS->createProxy(None, "2").moveInto(ID2), Succeeded());
   EXPECT_NE(ID1, ID2);
   std::string PrintedID1 = ID1->toString();
   std::string PrintedID2 = ID2->toString();
   EXPECT_NE(PrintedID1, PrintedID2);
 
-  std::optional<CASID> ParsedID1, ParsedID2;
+  Optional<CASID> ParsedID1, ParsedID2;
   ASSERT_THAT_ERROR(CAS->parseID(PrintedID1).moveInto(ParsedID1), Succeeded());
   ASSERT_THAT_ERROR(CAS->parseID(PrintedID2).moveInto(ParsedID2), Succeeded());
   EXPECT_EQ(ID1, ParsedID1);
@@ -57,8 +55,8 @@ multiline text multiline text multiline text multiline text multiline text)",
     // Use StringRef::str() to create a temporary std::string. This could cause
     // problems if the CAS is storing references to the input string instead of
     // copying it.
-    std::optional<ObjectProxy> Blob;
-    ASSERT_THAT_ERROR(CAS1->createProxy(std::nullopt, Content).moveInto(Blob),
+    Optional<ObjectProxy> Blob;
+    ASSERT_THAT_ERROR(CAS1->createProxy(None, Content).moveInto(Blob),
                       Succeeded());
     IDs.push_back(Blob->getID());
 
@@ -70,10 +68,9 @@ multiline text multiline text multiline text multiline text multiline text)",
 
   // Check that the blobs give the same IDs later.
   for (int I = 0, E = IDs.size(); I != E; ++I) {
-    std::optional<ObjectProxy> Blob;
-    ASSERT_THAT_ERROR(
-        CAS1->createProxy(std::nullopt, ContentStrings[I]).moveInto(Blob),
-        Succeeded());
+    Optional<ObjectProxy> Blob;
+    ASSERT_THAT_ERROR(CAS1->createProxy(None, ContentStrings[I]).moveInto(Blob),
+                      Succeeded());
     EXPECT_EQ(IDs[I], Blob->getID());
   }
 
@@ -84,7 +81,7 @@ multiline text multiline text multiline text multiline text multiline text)",
   // Check that the blobs can be retrieved multiple times.
   for (int I = 0, E = IDs.size(); I != E; ++I) {
     for (int J = 0, JE = 3; J != JE; ++J) {
-      std::optional<ObjectProxy> Buffer;
+      Optional<ObjectProxy> Buffer;
       ASSERT_THAT_ERROR(CAS1->getProxy(IDs[I]).moveInto(Buffer), Succeeded());
       EXPECT_EQ(ContentStrings[I], Buffer->getData());
     }
@@ -93,7 +90,7 @@ multiline text multiline text multiline text multiline text multiline text)",
   // Confirm these blobs don't exist in a fresh CAS instance.
   std::shared_ptr<ObjectStore> CAS2 = createObjectStore();
   for (int I = 0, E = IDs.size(); I != E; ++I) {
-    std::optional<ObjectProxy> Proxy;
+    Optional<ObjectProxy> Proxy;
     EXPECT_THAT_ERROR(CAS2->getProxy(IDs[I]).moveInto(Proxy), Failed());
   }
 
@@ -102,12 +99,12 @@ multiline text multiline text multiline text multiline text multiline text)",
   for (int I = IDs.size(), E = 0; I != E; --I) {
     auto &ID = IDs[I - 1];
     auto &Content = ContentStrings[I - 1];
-    std::optional<ObjectProxy> Blob;
-    ASSERT_THAT_ERROR(CAS2->createProxy(std::nullopt, Content).moveInto(Blob),
+    Optional<ObjectProxy> Blob;
+    ASSERT_THAT_ERROR(CAS2->createProxy(None, Content).moveInto(Blob),
                       Succeeded());
     EXPECT_EQ(ID, Blob->getID());
 
-    std::optional<ObjectProxy> Buffer;
+    Optional<ObjectProxy> Buffer;
     ASSERT_THAT_ERROR(CAS2->getProxy(ID).moveInto(Buffer), Succeeded());
     EXPECT_EQ(Content, Buffer->getData());
   }
@@ -119,20 +116,20 @@ TEST_P(CASTest, BlobsBig) {
   SmallString<256> String1 = StringRef("a few words");
   SmallString<256> String2 = StringRef("others");
   while (String1.size() < 1024U * 1024U) {
-    std::optional<CASID> ID1;
-    std::optional<CASID> ID2;
-    ASSERT_THAT_ERROR(CAS->createProxy(std::nullopt, String1).moveInto(ID1),
+    Optional<CASID> ID1;
+    Optional<CASID> ID2;
+    ASSERT_THAT_ERROR(CAS->createProxy(None, String1).moveInto(ID1),
                       Succeeded());
-    ASSERT_THAT_ERROR(CAS->createProxy(std::nullopt, String1).moveInto(ID2),
+    ASSERT_THAT_ERROR(CAS->createProxy(None, String1).moveInto(ID2),
                       Succeeded());
     ASSERT_THAT_ERROR(CAS->validate(*ID1), Succeeded());
     ASSERT_THAT_ERROR(CAS->validate(*ID2), Succeeded());
     ASSERT_EQ(ID1, ID2);
 
     String1.append(String2);
-    ASSERT_THAT_ERROR(CAS->createProxy(std::nullopt, String2).moveInto(ID1),
+    ASSERT_THAT_ERROR(CAS->createProxy(None, String2).moveInto(ID1),
                       Succeeded());
-    ASSERT_THAT_ERROR(CAS->createProxy(std::nullopt, String2).moveInto(ID2),
+    ASSERT_THAT_ERROR(CAS->createProxy(None, String2).moveInto(ID2),
                       Succeeded());
     ASSERT_THAT_ERROR(CAS->validate(*ID1), Succeeded());
     ASSERT_THAT_ERROR(CAS->validate(*ID2), Succeeded());
@@ -149,9 +146,8 @@ TEST_P(CASTest, BlobsBig) {
     Storage.resize(SizeE, '\01');
   for (size_t Size = InterestingSize - 2; Size != SizeE; ++Size) {
     StringRef Data(Storage.data(), Size);
-    std::optional<ObjectProxy> Blob;
-    ASSERT_THAT_ERROR(CAS->createProxy(std::nullopt, Data).moveInto(Blob),
-                      Succeeded());
+    Optional<ObjectProxy> Blob;
+    ASSERT_THAT_ERROR(CAS->createProxy(None, Data).moveInto(Blob), Succeeded());
     ASSERT_EQ(Data, Blob->getData());
     ASSERT_EQ(0, Blob->getData().end()[0]);
   }
@@ -176,9 +172,9 @@ multiline text multiline text multiline text multiline text multiline text)",
     // Use StringRef::str() to create a temporary std::string. This could cause
     // problems if the CAS is storing references to the input string instead of
     // copying it.
-    std::optional<ObjectRef> Node;
+    Optional<ObjectRef> Node;
     ASSERT_THAT_ERROR(
-        CAS1->store(std::nullopt, arrayRefFromStringRef<char>(Content)).moveInto(Node),
+        CAS1->store(None, arrayRefFromStringRef<char>(Content)).moveInto(Node),
         Succeeded());
     Nodes.push_back(*Node);
 
@@ -197,18 +193,18 @@ multiline text multiline text multiline text multiline text multiline text)",
 
   // Check that the blobs give the same IDs later.
   for (int I = 0, E = IDs.size(); I != E; ++I) {
-    std::optional<ObjectRef> Node;
-    ASSERT_THAT_ERROR(CAS1->store(std::nullopt, arrayRefFromStringRef<char>(
-                                                    ContentStrings[I]))
-                          .moveInto(Node),
-                      Succeeded());
+    Optional<ObjectRef> Node;
+    ASSERT_THAT_ERROR(
+        CAS1->store(None, arrayRefFromStringRef<char>(ContentStrings[I]))
+            .moveInto(Node),
+        Succeeded());
     EXPECT_EQ(IDs[I], CAS1->getID(*Node));
   }
 
   // Check that the blobs can be retrieved multiple times.
   for (int I = 0, E = IDs.size(); I != E; ++I) {
     for (int J = 0, JE = 3; J != JE; ++J) {
-      std::optional<ObjectProxy> Object;
+      Optional<ObjectProxy> Object;
       ASSERT_THAT_ERROR(CAS1->getProxy(IDs[I]).moveInto(Object), Succeeded());
       ASSERT_TRUE(Object);
       EXPECT_EQ(ContentStrings[I], Object->getData());
@@ -218,7 +214,7 @@ multiline text multiline text multiline text multiline text multiline text)",
   // Confirm these blobs don't exist in a fresh CAS instance.
   std::shared_ptr<ObjectStore> CAS2 = createObjectStore();
   for (int I = 0, E = IDs.size(); I != E; ++I) {
-    std::optional<ObjectProxy> Object;
+    Optional<ObjectProxy> Object;
     EXPECT_THAT_ERROR(CAS2->getProxy(IDs[I]).moveInto(Object), Failed());
   }
 
@@ -227,13 +223,13 @@ multiline text multiline text multiline text multiline text multiline text)",
   for (int I = IDs.size(), E = 0; I != E; --I) {
     auto &ID = IDs[I - 1];
     auto &Content = ContentStrings[I - 1];
-    std::optional<ObjectRef> Node;
+    Optional<ObjectRef> Node;
     ASSERT_THAT_ERROR(
-        CAS2->store(std::nullopt, arrayRefFromStringRef<char>(Content)).moveInto(Node),
+        CAS2->store(None, arrayRefFromStringRef<char>(Content)).moveInto(Node),
         Succeeded());
     EXPECT_EQ(ID, CAS2->getID(*Node));
 
-    std::optional<ObjectProxy> Object;
+    Optional<ObjectProxy> Object;
     ASSERT_THAT_ERROR(CAS2->getProxy(ID).moveInto(Object), Succeeded());
     ASSERT_TRUE(Object);
     EXPECT_EQ(Content, Object->getData());
@@ -264,7 +260,7 @@ TEST_P(CASTest, NodesBig) {
   for (size_t Size = SizeB; Size < SizeE; Size += WordSize) {
     for (bool IsAligned : {false, true}) {
       StringRef Data(Storage.data(), Size - (IsAligned ? 0 : 1));
-      std::optional<ObjectProxy> Node;
+      Optional<ObjectProxy> Node;
       ASSERT_THAT_ERROR(CAS->createProxy(CreatedNodes, Data).moveInto(Node),
                         Succeeded());
       ASSERT_EQ(Data, Node->getData());
@@ -307,7 +303,7 @@ static void testBlobsParallel(ObjectStore &Read1, ObjectStore &Read2,
     EXPECT_THAT_ERROR(CAS->createProxy({}, Blobs[I]).moveInto(Node),
                       Succeeded());
     {
-      std::lock_guard<std::mutex> L(NodesMtx);
+      std::lock_guard L(NodesMtx);
       CreatedNodes[I] = Node ? Node->getID() : CASID::getDenseMapTombstoneKey();
     }
   };
@@ -316,7 +312,7 @@ static void testBlobsParallel(ObjectStore &Read1, ObjectStore &Read2,
     std::optional<CASID> ID;
     while (!ID) {
       // Busy wait.
-      std::lock_guard<std::mutex> L(NodesMtx);
+      std::lock_guard L(NodesMtx);
       ID = CreatedNodes[I];
     }
     if (ID == CASID::getDenseMapTombstoneKey())
@@ -416,7 +412,6 @@ TEST(OnDiskCASTest, BlobsBigParallelMultiCAS) {
 
 #ifndef _WIN32 // FIXME: resize support on Windows.
 TEST(OnDiskCASTest, DiskSize) {
-  setMaxOnDiskCASMappingSize();
   unittest::TempDir Temp("on-disk-cas", /*Unique=*/true);
   std::unique_ptr<ObjectStore> CAS;
   ASSERT_THAT_ERROR(createOnDiskCAS(Temp.path()).moveInto(CAS), Succeeded());

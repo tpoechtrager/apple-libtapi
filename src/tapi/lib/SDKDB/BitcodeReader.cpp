@@ -559,10 +559,6 @@ SDKDBBitcodeReader::Implementation::readAPIBlock(BitstreamCursor &cursor,
           return lib.takeError();
         continue;
       }
-      case api_block::DYLIB_VERSION:
-        api.getBinaryInfo().currentVersion = scratch[0];
-        api.getBinaryInfo().compatibilityVersion = scratch[1];
-        continue;
       case api_block::FLAGS:
         api.getBinaryInfo().isTwoLevelNamespace = (bool)scratch[0];
         api.getBinaryInfo().isAppExtensionSafe = (bool)scratch[1];
@@ -675,8 +671,6 @@ Error SDKDBBitcodeReader::Implementation::readAvailabilityInfoFromScratch(
     return make_error<StringError>(
         "scratch entry is too small for availability",
         inconvertibleErrorCode());
-  record.availability = {scratch[0],       0,     scratch[1],
-                         (bool)scratch[2], false, (bool)scratch[3]};
 
   return Error::success();
 }
@@ -808,17 +802,13 @@ Error SDKDBBitcodeReader::Implementation::readObjCClassBlock(
         auto superName = readStringFromTable(offset, size);
         if (!superName)
           return superName.takeError();
-        ObjCIFSymbolKind symType =
-            ObjCIFSymbolKind::Class | ObjCIFSymbolKind::MetaClass;
-        // Old format might not have the exception attribute.
-        bool hasExceptionAttribute =
-            scratch.size() < 8 ? false : (bool)scratch[7];
-        if (hasExceptionAttribute)
-          symType |= ObjCIFSymbolKind::EHType;
         record = api.addObjCInterface(apiRecord->name, apiRecord->loc,
                                       apiRecord->availability,
                                       apiRecord->access, apiRecord->linkage,
-                                      *superName, /*Decl=*/nullptr, symType);
+                                      *superName, /*Decl=*/nullptr);
+        // Old format might not have the exception attribute.
+        record->hasExceptionAttribute =
+            scratch.size() < 8 ? false : (bool)scratch[7];
         continue;
       }
       case objc_class_block::AVAILABILITY: {

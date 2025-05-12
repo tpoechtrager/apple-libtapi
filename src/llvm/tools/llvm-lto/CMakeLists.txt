@@ -14,7 +14,6 @@ set(LLVM_LINK_COMPONENTS
   Object
   Support
   Target
-  TargetParser
   )
 
 add_llvm_tool(llvm-lto

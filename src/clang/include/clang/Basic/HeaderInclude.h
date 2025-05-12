@@ -54,7 +54,6 @@ inline const char *headerIncludeFormatKindToString(HeaderIncludeFormatKind K) {
   case HIFMT_JSON:
     return "json";
   }
-  llvm_unreachable("Unknown HeaderIncludeFormatKind enum");
 }
 
 inline const char *
@@ -65,7 +64,6 @@ headerIncludeFilteringKindToString(HeaderIncludeFilteringKind K) {
   case HIFIL_Only_Direct_System:
     return "only-direct-system";
   }
-  llvm_unreachable("Unknown HeaderIncludeFilteringKind enum");
 }
 
 } // end namespace clang

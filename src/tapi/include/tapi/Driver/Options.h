@@ -17,9 +17,8 @@
 #include "tapi/Diagnostics/Diagnostics.h"
 #include "tapi/Driver/DriverOptions.h"
 #include "clang/Frontend/FrontendOptions.h"
-#include "llvm/Option/ArgList.h"
+#include "llvm/ADT/Triple.h"
 #include "llvm/Option/Option.h"
-#include "llvm/TargetParser/Triple.h"
 #include "llvm/TextAPI/Architecture.h"
 #include "llvm/TextAPI/InterfaceFile.h"
 #include "llvm/TextAPI/PackedVersion.h"
@@ -131,17 +130,12 @@ struct LinkerOptions {
   /// \brief Is application extension safe.
   bool isApplicationExtensionSafe = false;
 
-  /// \brief Is OS library that is not for shared cache.
-  bool isOSLibNotForSharedCache = false;
-
   /// \brief Path to the alias list file.
-  PathSeq aliasLists;
+  std::vector<std::pair<std::string, ArchitectureSet>> aliasLists;
 
   /// \brief List of run search paths.
   std::vector<std::pair<std::string, ArchitectureSet>> rpaths;
 
-  /// \brief List of relinked libraries to use for dynamic library.
-  std::vector<InterfaceFileRef> relinkedLibraries;
 };
 
 struct FrontendOptions {
@@ -174,9 +168,6 @@ struct FrontendOptions {
 
   /// \brief Additional SYSTEM include paths.
   PathSeq systemIncludePaths;
-
-  /// \brief Additional AFTER include paths.
-  PathSeq afterIncludePaths;
 
   /// \brief Additional include paths.
   PathSeq includePaths;
@@ -224,12 +215,6 @@ struct FrontendOptions {
 
   /// \brief Verbose, show scan content and options.
   bool verbose = false;
-
-  /// \brief Unique clang options to pass per key in map.
-  std::map<std::string, std::vector<std::string>> uniqueClangArgs;
-
-  /// \brief Prefix headers to include before parsing.
-  std::vector<std::string> prefixHeaders;
 };
 
 struct DiagnosticsOptions {
@@ -301,9 +286,6 @@ struct TAPIOptions {
 
   /// \brief Delete private frameworks.
   bool deletePrivateFrameworks = false;
-
-  /// \brief Remove shared cache flags.
-  bool removeSharedCacheFlag = false;
 
 
   /// \brief Specify the output file type.
@@ -380,26 +362,11 @@ struct SDKDBOptions {
 
 class Options {
 private:
-  // Handle options passed that must bind with pre-determined condition.
-  // e.g. architecture specific options.
-  bool processXOptions(DiagnosticsEngine &diag, llvm::opt::InputArgList &args,
-                       bool clearOptions = true);
-
-  bool processOptionList(DiagnosticsEngine &diag,
-                         llvm::opt::InputArgList &args);
-
-  using arg_iterator = llvm::opt::arg_iterator<llvm::opt::Arg **>;
   bool processXarchOptions(DiagnosticsEngine &diag,
-                           llvm::opt::InputArgList &args, arg_iterator curr);
+                           llvm::opt::InputArgList &args);
 
   bool processXplatformOptions(DiagnosticsEngine &diag,
-                               llvm::opt::InputArgList &args,
-                               arg_iterator curr);
-
-  void processXparserOptions(llvm::opt::InputArgList &args, arg_iterator curr);
-
-  bool processXprojectOptions(DiagnosticsEngine &diag,
-                              llvm::opt::InputArgList &args, arg_iterator curr);
+                               llvm::opt::InputArgList &args);
 
   bool processDriverOptions(DiagnosticsEngine &diag,
                             llvm::opt::InputArgList &args);
@@ -442,10 +409,6 @@ public:
 
   FileManager &getFileManager() const { return *fm; }
 
-  const FrontendOptions &getProjectHeaderOptions() {
-    return projectLevelOptions;
-  }
-
   /// \brief Print the help depending on the recognized coomand.
   void printHelp() const;
 
@@ -455,7 +418,6 @@ private:
   IntrusiveRefCntPtr<FileManager> fm;
   std::map<const llvm::opt::Arg *, Architecture> argToArchMap;
   std::map<const llvm::opt::Arg *, PlatformType> argToPlatformMap;
-  FrontendOptions projectLevelOptions;
 
   friend class Context;
 };

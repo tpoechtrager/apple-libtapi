@@ -37,15 +37,13 @@ template <typename T> struct EnumEntry {
   StringRef Name;
 };
 
-class COFFDumper : public Dumper {
+class COFFDumper {
 public:
-  explicit COFFDumper(const llvm::object::COFFObjectFile &O)
-      : Dumper(O), Obj(O) {
+  explicit COFFDumper(const llvm::object::COFFObjectFile &Obj) : Obj(Obj) {
     Is64 = !Obj.getPE32Header();
   }
 
   template <class PEHeader> void printPEHeader(const PEHeader &Hdr) const;
-  void printPrivateHeaders(bool MachOOnlyFirst) override;
 
 private:
   template <typename T> FormattedNumber formatAddr(T V) const {
@@ -60,11 +58,6 @@ private:
   bool Is64;
 };
 } // namespace
-
-std::unique_ptr<Dumper>
-objdump::createCOFFDumper(const object::COFFObjectFile &Obj) {
-  return std::make_unique<COFFDumper>(Obj);
-}
 
 constexpr EnumEntry<uint16_t> PEHeaderMagic[] = {
     {uint16_t(COFF::PE32Header::PE32), "PE32"},
@@ -109,7 +102,7 @@ void COFFDumper::printPEHeader(const PEHeader &Hdr) const {
   };
 
   printU16("Magic", Hdr.Magic, "%04x");
-  printOptionalEnumName(Hdr.Magic, ArrayRef(PEHeaderMagic));
+  printOptionalEnumName(Hdr.Magic, makeArrayRef(PEHeaderMagic));
   outs() << '\n';
   print("MajorLinkerVersion", Hdr.MajorLinkerVersion);
   print("MinorLinkerVersion", Hdr.MinorLinkerVersion);
@@ -134,7 +127,7 @@ void COFFDumper::printPEHeader(const PEHeader &Hdr) const {
   printU32("SizeOfHeaders", Hdr.SizeOfHeaders, "%08x\n");
   printU32("CheckSum", Hdr.CheckSum, "%08x\n");
   printU16("Subsystem", Hdr.Subsystem, "%08x");
-  printOptionalEnumName(Hdr.Subsystem, ArrayRef(PEWindowsSubsystem));
+  printOptionalEnumName(Hdr.Subsystem, makeArrayRef(PEWindowsSubsystem));
   outs() << '\n';
 
   printU16("DllCharacteristics", Hdr.DLLCharacteristics, "%08x\n");
@@ -316,7 +309,7 @@ static void printAllUnwindCodes(ArrayRef<UnwindCode> UCs) {
              << " remaining in buffer";
       return ;
     }
-    printUnwindCode(ArrayRef(I, E));
+    printUnwindCode(makeArrayRef(I, E));
     I += UsedSlots;
   }
 }
@@ -552,17 +545,11 @@ static void printExportTable(const COFFObjectFile *Obj) {
   outs() << " Ordinal base: " << OrdinalBase << "\n";
   outs() << " Ordinal      RVA  Name\n";
   for (; I != E; I = ++I) {
-    uint32_t RVA;
-    if (I->getExportRVA(RVA))
-      return;
-    StringRef Name;
-    if (I->getSymbolName(Name))
-      continue;
-    if (!RVA && Name.empty())
-      continue;
-
     uint32_t Ordinal;
     if (I->getOrdinal(Ordinal))
+      return;
+    uint32_t RVA;
+    if (I->getExportRVA(RVA))
       return;
     bool IsForwarder;
     if (I->isForwarder(IsForwarder))
@@ -572,11 +559,14 @@ static void printExportTable(const COFFObjectFile *Obj) {
       // Export table entries can be used to re-export symbols that
       // this COFF file is imported from some DLLs. This is rare.
       // In most cases IsForwarder is false.
-      outs() << format("   %5d         ", Ordinal);
+      outs() << format("    % 4d         ", Ordinal);
     } else {
-      outs() << format("   %5d %# 8x", Ordinal, RVA);
+      outs() << format("    % 4d %# 8x", Ordinal, RVA);
     }
 
+    StringRef Name;
+    if (I->getSymbolName(Name))
+      continue;
     if (!Name.empty())
       outs() << "  " << Name;
     if (IsForwarder) {
@@ -665,7 +655,7 @@ static void printWin64EHUnwindInfo(const Win64EH::UnwindInfo *UI) {
   if (UI->NumCodes)
     outs() << "    Unwind Codes:\n";
 
-  printAllUnwindCodes(ArrayRef(&UI->UnwindCodes[0], UI->NumCodes));
+  printAllUnwindCodes(makeArrayRef(&UI->UnwindCodes[0], UI->NumCodes));
 
   outs() << "\n";
   outs().flush();
@@ -771,7 +761,7 @@ void objdump::printCOFFUnwindInfo(const COFFObjectFile *Obj) {
   }
 }
 
-void COFFDumper::printPrivateHeaders(bool MachOOnlyFirst) {
+void objdump::printCOFFFileHeader(const COFFObjectFile &Obj) {
   COFFDumper CD(Obj);
   const uint16_t Cha = Obj.getCharacteristics();
   outs() << "Characteristics 0x" << Twine::utohexstr(Cha) << '\n';
@@ -859,7 +849,8 @@ void objdump::printCOFFSymbolTable(const COFFObjectFile &coff) {
            << Name;
     if (Demangle && Name.startswith("?")) {
       int Status = -1;
-      char *DemangledSymbol = microsoftDemangle(Name, nullptr, &Status);
+      char *DemangledSymbol =
+          microsoftDemangle(Name.data(), nullptr, nullptr, nullptr, &Status);
 
       if (Status == 0 && DemangledSymbol) {
         outs() << " (" << StringRef(DemangledSymbol) << ")";

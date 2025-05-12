@@ -9,6 +9,7 @@
 #ifndef LLVM_DEBUGINFO_PDB_NATIVE_INFOSTREAMBUILDER_H
 #define LLVM_DEBUGINFO_PDB_NATIVE_INFOSTREAMBUILDER_H
 
+#include "llvm/ADT/Optional.h"
 #include "llvm/Support/Error.h"
 
 #include "llvm/DebugInfo/CodeView/GUID.h"
@@ -45,7 +46,7 @@ public:
   bool hashPDBContentsToGUID() const { return HashPDBContentsToGUID; }
   uint32_t getAge() const { return Age; }
   codeview::GUID getGuid() const { return Guid; }
-  std::optional<uint32_t> getSignature() const { return Signature; }
+  Optional<uint32_t> getSignature() const { return Signature; }
 
   uint32_t finalize();
 
@@ -60,7 +61,7 @@ private:
   std::vector<PdbRaw_FeatureSig> Features;
   PdbRaw_ImplVer Ver;
   uint32_t Age;
-  std::optional<uint32_t> Signature;
+  Optional<uint32_t> Signature;
   codeview::GUID Guid;
 
   bool HashPDBContentsToGUID = false;

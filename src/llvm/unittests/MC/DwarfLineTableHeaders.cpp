@@ -118,10 +118,10 @@ public:
     TheStreamer->switchSection(C.MOFI->getDwarfLineSection());
     MCDwarfLineTableHeader Header;
     MCDwarfLineTableParams Params = Assembler.getDWARFLinetableParams();
-    std::optional<MCDwarfLineStr> LineStr(std::nullopt);
+    Optional<MCDwarfLineStr> LineStr(None);
     if (Ctx.getDwarfVersion() >= 5) {
       LineStr.emplace(Ctx);
-      Header.setRootFile("dir", "file", std::nullopt, std::nullopt);
+      Header.setRootFile("dir", "file", None, None);
     }
     MCSymbol *LineEndSym = Header.Emit(TheStreamer, Params, LineStr).second;
 
@@ -200,7 +200,7 @@ public:
 
 TEST_F(DwarfLineTableHeaders, TestDWARF4HeaderEmission) {
   if (!MRI)
-    GTEST_SKIP();
+    return;
 
   SmallString<0> EmittedBinContents;
   raw_svector_ostream VecOS(EmittedBinContents);
@@ -224,7 +224,7 @@ TEST_F(DwarfLineTableHeaders, TestDWARF4HeaderEmission) {
 
 TEST_F(DwarfLineTableHeaders, TestDWARF5HeaderEmission) {
   if (!MRI)
-    GTEST_SKIP();
+    return;
 
   SmallString<0> EmittedBinContents;
   raw_svector_ostream VecOS(EmittedBinContents);

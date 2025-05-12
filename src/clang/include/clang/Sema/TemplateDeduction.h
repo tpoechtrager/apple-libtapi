@@ -22,10 +22,10 @@
 #include "clang/AST/TemplateBase.h"
 #include "clang/Basic/PartialDiagnostic.h"
 #include "clang/Basic/SourceLocation.h"
+#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/SmallVector.h"
 #include <cassert>
 #include <cstddef>
-#include <optional>
 #include <utility>
 
 namespace clang {
@@ -41,7 +41,7 @@ namespace sema {
 /// TemplateDeductionResult value.
 class TemplateDeductionInfo {
   /// The deduced template argument list.
-  TemplateArgumentList *DeducedSugared = nullptr, *DeducedCanonical = nullptr;
+  TemplateArgumentList *Deduced = nullptr;
 
   /// The source location at which template argument
   /// deduction is occurring.
@@ -71,8 +71,8 @@ public:
   /// Create temporary template deduction info for speculatively deducing
   /// against a base class of an argument's type.
   TemplateDeductionInfo(ForBaseTag, const TemplateDeductionInfo &Info)
-      : DeducedSugared(Info.DeducedSugared), Loc(Info.Loc),
-        DeducedDepth(Info.DeducedDepth), ExplicitArgs(Info.ExplicitArgs) {}
+      : Deduced(Info.Deduced), Loc(Info.Loc), DeducedDepth(Info.DeducedDepth),
+        ExplicitArgs(Info.ExplicitArgs) {}
 
   /// Returns the location at which template argument is
   /// occurring.
@@ -91,15 +91,10 @@ public:
     return ExplicitArgs;
   }
 
-  /// Take ownership of the deduced template argument lists.
-  TemplateArgumentList *takeSugared() {
-    TemplateArgumentList *Result = DeducedSugared;
-    DeducedSugared = nullptr;
-    return Result;
-  }
-  TemplateArgumentList *takeCanonical() {
-    TemplateArgumentList *Result = DeducedCanonical;
-    DeducedCanonical = nullptr;
+  /// Take ownership of the deduced template argument list.
+  TemplateArgumentList *take() {
+    TemplateArgumentList *Result = Deduced;
+    Deduced = nullptr;
     return Result;
   }
 
@@ -125,20 +120,15 @@ public:
 
   /// Provide an initial template argument list that contains the
   /// explicitly-specified arguments.
-  void setExplicitArgs(TemplateArgumentList *NewDeducedSugared,
-                       TemplateArgumentList *NewDeducedCanonical) {
-    assert(NewDeducedSugared->size() == NewDeducedCanonical->size());
-    DeducedSugared = NewDeducedSugared;
-    DeducedCanonical = NewDeducedCanonical;
-    ExplicitArgs = DeducedSugared->size();
+  void setExplicitArgs(TemplateArgumentList *NewDeduced) {
+    Deduced = NewDeduced;
+    ExplicitArgs = Deduced->size();
   }
 
   /// Provide a new template argument list that contains the
   /// results of template argument deduction.
-  void reset(TemplateArgumentList *NewDeducedSugared,
-             TemplateArgumentList *NewDeducedCanonical) {
-    DeducedSugared = NewDeducedSugared;
-    DeducedCanonical = NewDeducedCanonical;
+  void reset(TemplateArgumentList *NewDeduced) {
+    Deduced = NewDeduced;
   }
 
   /// Is a SFINAE diagnostic available?
@@ -234,13 +224,6 @@ public:
   ///   different argument type from its substituted parameter type.
   unsigned CallArgIndex = 0;
 
-  // C++20 [over.match.class.deduct]p5.2:
-  //   During template argument deduction for the aggregate deduction
-  //   candidate, the number of elements in a trailing parameter pack is only
-  //   deduced from the number of remaining function arguments if it is not
-  //   otherwise deduced.
-  bool AggregateDeductionCandidateHasMismatchedArity = false;
-
   /// Information on packs that we're currently expanding.
   ///
   /// FIXME: This should be kept internal to SemaTemplateDeduction.
@@ -291,7 +274,7 @@ struct DeductionFailureInfo {
 
   /// Return the index of the call argument that this deduction
   /// failure refers to, if any.
-  std::optional<unsigned> getCallArgIndex();
+  llvm::Optional<unsigned> getCallArgIndex();
 
   /// Free any memory associated with this deduction failure.
   void Destroy();

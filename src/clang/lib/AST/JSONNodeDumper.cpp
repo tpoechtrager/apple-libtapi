@@ -3,8 +3,6 @@
 #include "clang/Basic/SourceManager.h"
 #include "clang/Basic/Specifiers.h"
 #include "clang/Lex/Lexer.h"
-#include "llvm/ADT/StringExtras.h"
-#include <optional>
 
 using namespace clang;
 
@@ -663,9 +661,6 @@ void JSONNodeDumper::VisitVectorType(const VectorType *VT) {
   case VectorType::SveFixedLengthPredicateVector:
     JOS.attribute("vectorKind", "fixed-length sve predicate vector");
     break;
-  case VectorType::RVVFixedLengthDataVector:
-    JOS.attribute("vectorKind", "fixed-length rvv data vector");
-    break;
   }
 }
 
@@ -697,14 +692,8 @@ void JSONNodeDumper::VisitTemplateTypeParmType(
 
 void JSONNodeDumper::VisitSubstTemplateTypeParmType(
     const SubstTemplateTypeParmType *STTPT) {
-  JOS.attribute("index", STTPT->getIndex());
   if (auto PackIndex = STTPT->getPackIndex())
     JOS.attribute("pack_index", *PackIndex);
-}
-
-void JSONNodeDumper::VisitSubstTemplateTypeParmPackType(
-    const SubstTemplateTypeParmPackType *T) {
-  JOS.attribute("index", T->getIndex());
 }
 
 void JSONNodeDumper::VisitAutoType(const AutoType *AT) {
@@ -742,7 +731,7 @@ void JSONNodeDumper::VisitObjCInterfaceType(const ObjCInterfaceType *OIT) {
 }
 
 void JSONNodeDumper::VisitPackExpansionType(const PackExpansionType *PET) {
-  if (std::optional<unsigned> N = PET->getNumExpansions())
+  if (llvm::Optional<unsigned> N = PET->getNumExpansions())
     JOS.attribute("numExpansions", *N);
 }
 
@@ -774,12 +763,6 @@ void JSONNodeDumper::VisitNamedDecl(const NamedDecl *ND) {
     if (isa<RequiresExprBodyDecl>(ND->getDeclContext()))
       return;
 
-    // If the declaration is dependent or is in a dependent context, then the
-    // mangling is unlikely to be meaningful (and in some cases may cause
-    // "don't know how to mangle this" assertion failures.
-    if (ND->isTemplated())
-      return;
-
     // Mangled names are not meaningful for locals, and may not be well-defined
     // in the case of VLAs.
     auto *VD = dyn_cast<VarDecl>(ND);
@@ -805,7 +788,6 @@ void JSONNodeDumper::VisitTypeAliasDecl(const TypeAliasDecl *TAD) {
 void JSONNodeDumper::VisitNamespaceDecl(const NamespaceDecl *ND) {
   VisitNamedDecl(ND);
   attributeOnlyIfTrue("isInline", ND->isInline());
-  attributeOnlyIfTrue("isNested", ND->isNested());
   if (!ND->isOriginalNamespace())
     JOS.attribute("originalNamespace",
                   createBareDeclRef(ND->getOriginalNamespace()));
@@ -861,9 +843,6 @@ void JSONNodeDumper::VisitVarDecl(const VarDecl *VD) {
     case VarDecl::CInit: JOS.attribute("init", "c");  break;
     case VarDecl::CallInit: JOS.attribute("init", "call"); break;
     case VarDecl::ListInit: JOS.attribute("init", "list"); break;
-    case VarDecl::ParenListInit:
-      JOS.attribute("init", "paren-list");
-      break;
     }
   }
   attributeOnlyIfTrue("isParameterPack", VD->isParameterPack());
@@ -890,7 +869,6 @@ void JSONNodeDumper::VisitFunctionDecl(const FunctionDecl *FD) {
   attributeOnlyIfTrue("explicitlyDeleted", FD->isDeletedAsWritten());
   attributeOnlyIfTrue("constexpr", FD->isConstexpr());
   attributeOnlyIfTrue("variadic", FD->isVariadic());
-  attributeOnlyIfTrue("immediate", FD->isImmediateFunction());
 
   if (FD->isDefaulted())
     JOS.attribute("explicitlyDefaulted",
@@ -1251,7 +1229,6 @@ void JSONNodeDumper::VisitDeclRefExpr(const DeclRefExpr *DRE) {
   case NOUR_Constant: JOS.attribute("nonOdrUseReason", "constant"); break;
   case NOUR_Discarded: JOS.attribute("nonOdrUseReason", "discarded"); break;
   }
-  attributeOnlyIfTrue("isImmediateEscalating", DRE->isImmediateEscalating());
 }
 
 void JSONNodeDumper::VisitSYCLUniqueStableNameExpr(
@@ -1411,7 +1388,6 @@ void JSONNodeDumper::VisitCXXConstructExpr(const CXXConstructExpr *CE) {
   attributeOnlyIfTrue("initializer_list", CE->isStdInitListInitialization());
   attributeOnlyIfTrue("zeroing", CE->requiresZeroInitialization());
   attributeOnlyIfTrue("hadMultipleCandidates", CE->hadMultipleCandidates());
-  attributeOnlyIfTrue("isImmediateEscalating", CE->isImmediateEscalating());
 
   switch (CE->getConstructionKind()) {
   case CXXConstructExpr::CK_Complete:

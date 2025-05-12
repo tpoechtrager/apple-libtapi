@@ -11,7 +11,5 @@ add_public_tablegen_target(MtTableGen)
 
 add_llvm_tool(llvm-mt
   llvm-mt.cpp
-  DEPENDS
-  MtTableGen
   GENERATE_DRIVER
   )

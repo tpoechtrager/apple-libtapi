@@ -44,7 +44,6 @@
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/GenericDomTree.h"
-#include <optional>
 #include <queue>
 
 #define DEBUG_TYPE "dom-tree-builder"
@@ -404,7 +403,7 @@ struct SemiNCAInfo {
       // immune to swap successors transformation (e.g. canonicalizing branch
       // predicates). SuccOrder is initialized lazily only for successors of
       // reverse unreachable nodes.
-      std::optional<NodeOrderMap> SuccOrder;
+      Optional<NodeOrderMap> SuccOrder;
       auto InitSuccOrderOnce = [&]() {
         SuccOrder = NodeOrderMap();
         for (const auto Node : nodes(DT.Parent))

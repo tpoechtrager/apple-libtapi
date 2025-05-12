@@ -13,6 +13,7 @@
 #ifndef LLVM_TOOLS_LLVM_TAPI_DIFF_DIFFENGINE_H
 #define LLVM_TOOLS_LLVM_TAPI_DIFF_DIFFENGINE_H
 
+#include "llvm/ADT/Optional.h"
 #include "llvm/Object/TapiUniversal.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/TextAPI/Symbol.h"
@@ -94,7 +95,7 @@ private:
   /// The order is the file from which the diff is found.
   InterfaceInputOrder Order;
   const MachO::Symbol *Val;
-  StringLiteral getSymbolNamePrefix(MachO::EncodeKind Kind);
+  StringLiteral getSymbolNamePrefix(MachO::SymbolKind Kind);
 };
 
 class DiffStrVec : public AttributeDiff {
@@ -141,14 +142,14 @@ public:
 /// output of the differences found in the files.
 class DiffEngine {
 public:
-  DiffEngine(MachO::InterfaceFile *InputFileNameLHS,
-             MachO::InterfaceFile *InputFileNameRHS)
+  DiffEngine(object::TapiUniversal *InputFileNameLHS,
+             object::TapiUniversal *InputFileNameRHS)
       : FileLHS(InputFileNameLHS), FileRHS(InputFileNameRHS){};
   bool compareFiles(raw_ostream &);
 
 private:
-  MachO::InterfaceFile *FileLHS;
-  MachO::InterfaceFile *FileRHS;
+  object::TapiUniversal *FileLHS;
+  object::TapiUniversal *FileRHS;
 
   /// Function that prints the differences found in the files.
   void printDifferences(raw_ostream &, const std::vector<DiffOutput> &, int);

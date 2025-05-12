@@ -18,7 +18,6 @@ static_library("Driver") {
     "//llvm/lib/BinaryFormat",
     "//llvm/lib/Option",
     "//llvm/lib/Support",
-    "//llvm/lib/TargetParser",
     "//llvm/lib/WindowsDriver",
   ]
   public_deps = [
@@ -37,7 +36,6 @@ static_library("Driver") {
     "DriverOptions.cpp",
     "Job.cpp",
     "Multilib.cpp",
-    "MultilibBuilder.cpp",
     "OffloadBundler.cpp",
     "OptionUtils.cpp",
     "Phases.cpp",
@@ -92,7 +90,6 @@ static_library("Driver") {
     "ToolChains/Myriad.cpp",
     "ToolChains/NaCl.cpp",
     "ToolChains/NetBSD.cpp",
-    "ToolChains/OHOS.cpp",
     "ToolChains/OpenBSD.cpp",
     "ToolChains/PPCFreeBSD.cpp",
     "ToolChains/PPCLinux.cpp",

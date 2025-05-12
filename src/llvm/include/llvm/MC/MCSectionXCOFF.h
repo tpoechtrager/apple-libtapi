@@ -32,10 +32,10 @@ namespace llvm {
 class MCSectionXCOFF final : public MCSection {
   friend class MCContext;
 
-  std::optional<XCOFF::CsectProperties> CsectProp;
+  Optional<XCOFF::CsectProperties> CsectProp;
   MCSymbolXCOFF *const QualName;
   StringRef SymbolTableName;
-  std::optional<XCOFF::DwarfSectionSubtypeFlags> DwarfSubtypeFlags;
+  Optional<XCOFF::DwarfSectionSubtypeFlags> DwarfSubtypeFlags;
   bool MultiSymbolsAllowed;
   static constexpr unsigned DefaultAlignVal = 4;
   static constexpr unsigned DefaultTextAlignVal = 32;
@@ -46,7 +46,7 @@ class MCSectionXCOFF final : public MCSection {
                  bool MultiSymbolsAllowed)
       : MCSection(SV_XCOFF, Name, K, Begin),
         CsectProp(XCOFF::CsectProperties(SMC, ST)), QualName(QualName),
-        SymbolTableName(SymbolTableName), DwarfSubtypeFlags(std::nullopt),
+        SymbolTableName(SymbolTableName), DwarfSubtypeFlags(None),
         MultiSymbolsAllowed(MultiSymbolsAllowed) {
     assert(
         (ST == XCOFF::XTY_SD || ST == XCOFF::XTY_CM || ST == XCOFF::XTY_ER) &&
@@ -118,12 +118,10 @@ public:
   bool isMultiSymbolsAllowed() const { return MultiSymbolsAllowed; }
   bool isCsect() const { return CsectProp.has_value(); }
   bool isDwarfSect() const { return DwarfSubtypeFlags.has_value(); }
-  std::optional<XCOFF::DwarfSectionSubtypeFlags> getDwarfSubtypeFlags() const {
+  Optional<XCOFF::DwarfSectionSubtypeFlags> getDwarfSubtypeFlags() const {
     return DwarfSubtypeFlags;
   }
-  std::optional<XCOFF::CsectProperties> getCsectProp() const {
-    return CsectProp;
-  }
+  Optional<XCOFF::CsectProperties> getCsectProp() const { return CsectProp; }
 };
 
 } // end namespace llvm

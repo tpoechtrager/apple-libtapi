@@ -24,6 +24,8 @@
 #ifndef __PTRAUTH_H
 #define __PTRAUTH_H
 
+#include <stdint.h>
+
 typedef enum {
   ptrauth_key_asia = 0,
   ptrauth_key_asib = 1,
@@ -88,10 +90,10 @@ typedef enum {
 } ptrauth_key;
 
 /* An integer type of the appropriate size for a discriminator argument. */
-typedef __UINTPTR_TYPE__ ptrauth_extra_data_t;
+typedef uintptr_t ptrauth_extra_data_t;
 
 /* An integer type of the appropriate size for a generic signature. */
-typedef __UINTPTR_TYPE__ ptrauth_generic_signature_t;
+typedef uintptr_t ptrauth_generic_signature_t;
 
 /* A signed pointer value embeds the original pointer together with
    a signature that attests to the validity of that pointer.  Because
@@ -147,7 +149,7 @@ typedef __UINTPTR_TYPE__ ptrauth_generic_signature_t;
 
    The first argument must be an expression of pointer type.
    The second argument must be an expression of integer type.
-   The result will have type __UINTPTR_TYPE__. */
+   The result will have type uintptr_t. */
 #define ptrauth_blend_discriminator(__pointer, __integer) \
   __builtin_ptrauth_blend_discriminator(__pointer, __integer)
 
@@ -278,7 +280,7 @@ typedef __UINTPTR_TYPE__ ptrauth_generic_signature_t;
    if the arguments were a pointer and a discriminator.
 
    The arguments must be either pointers or integers; if integers, they
-   will be coerce to __UINTPTR_TYPE__. */
+   will be coerce to uintptr_t. */
 #define ptrauth_sign_generic_data(__value, __data) \
   __builtin_ptrauth_sign_generic_data(__value, __data)
 
@@ -322,14 +324,14 @@ typedef __UINTPTR_TYPE__ ptrauth_generic_signature_t;
 #else
 
 #define ptrauth_strip(__value, __key) __value
-#define ptrauth_blend_discriminator(__pointer, __integer) ((__UINTPTR_TYPE__)0)
+#define ptrauth_blend_discriminator(__pointer, __integer) ((uintptr_t)0)
 #define ptrauth_sign_constant(__value, __key, __data) __value
 #define ptrauth_sign_unauthenticated(__value, __key, __data) __value
 #define ptrauth_auth_and_resign(__value, __old_key, __old_data, __new_key, __new_data) __value
 #define ptrauth_auth_function(__value, __old_key, __old_data) __value
 #define ptrauth_auth_data(__value, __old_key, __old_data) __value
-#define ptrauth_string_discriminator(__string) ((__UINTPTR_TYPE__)0)
-#define ptrauth_type_discriminator(__type) ((__UINTPTR_TYPE__)0)
+#define ptrauth_string_discriminator(__string) ((uintptr_t)0)
+#define ptrauth_type_discriminator(__type) ((uintptr_t)0)
 #define ptrauth_sign_generic_data(__value, __data) ((ptrauth_generic_signature_t)0)
 
 #define __ptrauth_function_pointer

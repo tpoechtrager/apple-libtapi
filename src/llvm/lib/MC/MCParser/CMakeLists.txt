@@ -20,5 +20,4 @@ add_llvm_component_library(LLVMMCParser
   LINK_COMPONENTS
   MC
   Support
-  TargetParser
   )

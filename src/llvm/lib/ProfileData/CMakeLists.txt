@@ -4,14 +4,12 @@ add_llvm_component_library(LLVMProfileData
   InstrProfCorrelator.cpp
   InstrProfReader.cpp
   InstrProfWriter.cpp
-  ItaniumManglingCanonicalizer.cpp
   MemProf.cpp
   ProfileSummaryBuilder.cpp
-  RawMemProfReader.cpp
   SampleProf.cpp
   SampleProfReader.cpp
   SampleProfWriter.cpp
-  SymbolRemappingReader.cpp
+  RawMemProfReader.cpp
 
   ADDITIONAL_HEADER_DIRS
   ${LLVM_MAIN_INCLUDE_DIR}/llvm/ProfileData
@@ -26,7 +24,6 @@ add_llvm_component_library(LLVMProfileData
   Demangle
   Symbolize
   DebugInfoDWARF
-  TargetParser
   )
 
 add_subdirectory(Coverage)

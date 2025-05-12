@@ -20,11 +20,11 @@
 using namespace clang;
 using namespace clang::targets;
 
-static constexpr Builtin::Info BuiltinInfo[] = {
+const Builtin::Info SystemZTargetInfo::BuiltinInfo[] = {
 #define BUILTIN(ID, TYPE, ATTRS)                                               \
-  {#ID, TYPE, ATTRS, nullptr, HeaderDesc::NO_HEADER, ALL_LANGUAGES},
+  {#ID, TYPE, ATTRS, nullptr, ALL_LANGUAGES, nullptr},
 #define TARGET_BUILTIN(ID, TYPE, ATTRS, FEATURE)                               \
-  {#ID, TYPE, ATTRS, FEATURE, HeaderDesc::NO_HEADER, ALL_LANGUAGES},
+  {#ID, TYPE, ATTRS, nullptr, ALL_LANGUAGES, FEATURE},
 #include "clang/Basic/BuiltinsSystemZ.def"
 };
 
@@ -46,11 +46,11 @@ const TargetInfo::AddlRegName GCCAddlRegNames[] = {
 };
 
 ArrayRef<const char *> SystemZTargetInfo::getGCCRegNames() const {
-  return llvm::ArrayRef(GCCRegNames);
+  return llvm::makeArrayRef(GCCRegNames);
 }
 
 ArrayRef<TargetInfo::AddlRegName> SystemZTargetInfo::getGCCAddlRegNames() const {
-  return llvm::ArrayRef(GCCAddlRegNames);
+  return llvm::makeArrayRef(GCCAddlRegNames);
 }
 
 bool SystemZTargetInfo::validateAsmConstraint(
@@ -161,6 +161,6 @@ void SystemZTargetInfo::getTargetDefines(const LangOptions &Opts,
 }
 
 ArrayRef<Builtin::Info> SystemZTargetInfo::getTargetBuiltins() const {
-  return llvm::ArrayRef(BuiltinInfo, clang::SystemZ::LastTSBuiltin -
-                                         Builtin::FirstTSBuiltin);
+  return llvm::makeArrayRef(BuiltinInfo, clang::SystemZ::LastTSBuiltin -
+                                             Builtin::FirstTSBuiltin);
 }

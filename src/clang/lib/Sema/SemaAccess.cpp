@@ -199,16 +199,6 @@ struct AccessTarget : public AccessedEntity {
         : Target(S.Target), Has(S.Has) {
       S.Target = nullptr;
     }
-
-    // The move assignment operator is defined as deleted pending further
-    // motivation.
-    SavedInstanceContext &operator=(SavedInstanceContext &&) = delete;
-
-    // The copy constrcutor and copy assignment operator is defined as deleted
-    // pending further motivation.
-    SavedInstanceContext(const SavedInstanceContext &) = delete;
-    SavedInstanceContext &operator=(const SavedInstanceContext &) = delete;
-
     ~SavedInstanceContext() {
       if (Target)
         Target->HasInstanceContext = Has;
@@ -1503,8 +1493,6 @@ void Sema::HandleDelayedAccessCheck(DelayedDiagnostic &DD, Decl *D) {
   } else if (TemplateDecl *TD = dyn_cast<TemplateDecl>(D)) {
     if (isa<DeclContext>(TD->getTemplatedDecl()))
       DC = cast<DeclContext>(TD->getTemplatedDecl());
-  } else if (auto *RD = dyn_cast<RequiresExprBodyDecl>(D)) {
-    DC = RD;
   }
 
   EffectiveContext EC(DC);
@@ -1661,8 +1649,7 @@ Sema::AccessResult Sema::CheckConstructorAccess(SourceLocation UseLoc,
        << Entity.getBaseSpecifier()->getType() << getSpecialMember(Constructor);
     break;
 
-  case InitializedEntity::EK_Member:
-  case InitializedEntity::EK_ParenAggInitMember: {
+  case InitializedEntity::EK_Member: {
     const FieldDecl *Field = cast<FieldDecl>(Entity.getDecl());
     PD = PDiag(diag::err_access_field_ctor);
     PD << Field->getType() << getSpecialMember(Constructor);

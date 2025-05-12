@@ -30,7 +30,6 @@ add_llvm_target(MSP430CodeGen
   LINK_COMPONENTS
   AsmPrinter
   CodeGen
-  CodeGenTypes
   Core
   MC
   MSP430Desc

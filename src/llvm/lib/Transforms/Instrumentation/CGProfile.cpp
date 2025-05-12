@@ -15,9 +15,9 @@
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/MDBuilder.h"
 #include "llvm/IR/PassManager.h"
+#include "llvm/InitializePasses.h"
 #include "llvm/ProfileData/InstrProf.h"
 #include "llvm/Transforms/Instrumentation.h"
-#include <optional>
 
 using namespace llvm;
 
@@ -45,7 +45,8 @@ addModuleFlags(Module &M,
 }
 
 static bool runCGProfilePass(
-    Module &M, FunctionAnalysisManager &FAM) {
+    Module &M, function_ref<BlockFrequencyInfo &(Function &)> GetBFI,
+    function_ref<TargetTransformInfo &(Function &)> GetTTI, bool LazyBFI) {
   MapVector<std::pair<Function *, Function *>, uint64_t> Counts;
   InstrProfSymtab Symtab;
   auto UpdateCounts = [&](TargetTransformInfo &TTI, Function *F,
@@ -62,15 +63,17 @@ static bool runCGProfilePass(
   (void)(bool) Symtab.create(M);
   for (auto &F : M) {
     // Avoid extra cost of running passes for BFI when the function doesn't have
-    // entry count.
-    if (F.isDeclaration() || !F.getEntryCount())
+    // entry count. Since LazyBlockFrequencyInfoPass only exists in LPM, check
+    // if using LazyBlockFrequencyInfoPass.
+    // TODO: Remove LazyBFI when LazyBlockFrequencyInfoPass is available in NPM.
+    if (F.isDeclaration() || (LazyBFI && !F.getEntryCount()))
       continue;
-    auto &BFI = FAM.getResult<BlockFrequencyAnalysis>(F);
+    auto &BFI = GetBFI(F);
     if (BFI.getEntryFreq() == 0)
       continue;
-    TargetTransformInfo &TTI = FAM.getResult<TargetIRAnalysis>(F);
+    TargetTransformInfo &TTI = GetTTI(F);
     for (auto &BB : F) {
-      std::optional<uint64_t> BBCount = BFI.getBlockProfileCount(&BB);
+      Optional<uint64_t> BBCount = BFI.getBlockProfileCount(&BB);
       if (!BBCount)
         continue;
       for (auto &I : BB) {
@@ -101,7 +104,14 @@ static bool runCGProfilePass(
 PreservedAnalyses CGProfilePass::run(Module &M, ModuleAnalysisManager &MAM) {
   FunctionAnalysisManager &FAM =
       MAM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
-  runCGProfilePass(M, FAM);
+  auto GetBFI = [&FAM](Function &F) -> BlockFrequencyInfo & {
+    return FAM.getResult<BlockFrequencyAnalysis>(F);
+  };
+  auto GetTTI = [&FAM](Function &F) -> TargetTransformInfo & {
+    return FAM.getResult<TargetIRAnalysis>(F);
+  };
+
+  runCGProfilePass(M, GetBFI, GetTTI, false);
 
   return PreservedAnalyses::all();
 }

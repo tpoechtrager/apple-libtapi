@@ -11,7 +11,7 @@ include "clang/Basic/TypeNodes.td"
 
 let Class = ComplexType in {
   def : Property<"elementType", QualType> {
-    let Read = [{ node->getElementType() }];
+    let Read = [{ node->getElementType() }];    
   }
 
   def : Creator<[{ return ctx.getComplexType(elementType); }]>;
@@ -591,7 +591,7 @@ let Class = ParenType in {
 
   def : Creator<[{
     return ctx.getParenType(innerType);
-  }]>;
+  }]>;  
 }
 
 let Class = MacroQualifiedType in {
@@ -614,16 +614,12 @@ let Class = AttributedType in {
   def : Property<"equivalentType", QualType> {
     let Read = [{ node->getEquivalentType() }];
   }
-  def : Property<"attrKind", AttrKind> {
+  def : Property<"attribute", AttrKind> {
     let Read = [{ node->getAttrKind() }];
-  }
-  def : Property<"attribute", Attr> {
-    let Read = [{ node->getAttr() }];
   }
 
   def : Creator<[{
-    return ctx.getAttributedType(attrKind, modifiedType,
-                                 equivalentType, attribute);
+    return ctx.getAttributedType(attribute, modifiedType, equivalentType);
   }]>;
 }
 
@@ -670,10 +666,10 @@ let Class = TemplateSpecializationType in {
   def : Property<"underlyingType", Optional<QualType>> {
     let Read = [{
       node->isTypeAlias()
-        ? std::optional<QualType>(node->getAliasedType())
+        ? llvm::Optional<QualType>(node->getAliasedType())
         : node->isCanonicalUnqualified()
-            ? std::nullopt
-            : std::optional<QualType>(node->getCanonicalTypeInternal())
+            ? llvm::None
+            : llvm::Optional<QualType>(node->getCanonicalTypeInternal())
     }];
   }
 
@@ -736,23 +732,20 @@ let Class = TemplateTypeParmType in {
 }
 
 let Class = SubstTemplateTypeParmType in {
+  def : Property<"replacedParameter", QualType> {
+    let Read = [{ QualType(node->getReplacedParameter(), 0) }];
+  }
   def : Property<"replacementType", QualType> {
     let Read = [{ node->getReplacementType() }];
-  }
-  def : Property<"associatedDecl", DeclRef> {
-    let Read = [{ node->getAssociatedDecl() }];
-  }
-  def : Property<"Index", UInt32> {
-    let Read = [{ node->getIndex() }];
   }
   def : Property<"PackIndex", Optional<UInt32>> {
     let Read = [{ node->getPackIndex() }];
   }
 
-  // The call to getCanonicalType here existed in ASTReader.cpp, too.
   def : Creator<[{
     return ctx.getSubstTemplateTypeParmType(
-        replacementType, associatedDecl, Index, PackIndex);
+        cast<TemplateTypeParmType>(replacedParameter),
+        replacementType, PackIndex);
   }]>;
 }
 
@@ -771,14 +764,8 @@ let Class = PackExpansionType in {
 }
 
 let Class = SubstTemplateTypeParmPackType in {
-  def : Property<"associatedDecl", DeclRef> {
-    let Read = [{ node->getAssociatedDecl() }];
-  }
-  def : Property<"Index", UInt32> {
-    let Read = [{ node->getIndex() }];
-  }
-  def : Property<"Final", Bool> {
-    let Read = [{ node->getFinal() }];
+  def : Property<"replacedParameter", QualType> {
+    let Read = [{ QualType(node->getReplacedParameter(), 0) }];
   }
   def : Property<"replacementPack", TemplateArgument> {
     let Read = [{ node->getArgumentPack() }];
@@ -786,7 +773,8 @@ let Class = SubstTemplateTypeParmPackType in {
 
   def : Creator<[{
     return ctx.getSubstTemplateTypeParmPackType(
-                        associatedDecl, Index, Final, replacementPack);
+                         cast<TemplateTypeParmType>(replacedParameter),
+                        replacementPack);
   }]>;
 }
 
@@ -817,10 +805,6 @@ let Class = BuiltinType in {
       case BuiltinType::ID: return ctx.SINGLETON_ID;
 #include "clang/Basic/RISCVVTypes.def"
 
-#define WASM_TYPE(NAME, ID, SINGLETON_ID) \
-      case BuiltinType::ID: return ctx.SINGLETON_ID;
-#include "clang/Basic/WebAssemblyReferenceTypes.def"
-
 #define BUILTIN_TYPE(ID, SINGLETON_ID) \
       case BuiltinType::ID: return ctx.SINGLETON_ID;
 #include "clang/AST/BuiltinTypes.def"
@@ -842,8 +826,8 @@ let Class = DependentNameType in {
   def : Property<"underlyingType", Optional<QualType>> {
     let Read = [{
       node->isCanonicalUnqualified()
-        ? std::nullopt
-        : std::optional<QualType>(node->getCanonicalTypeInternal())
+        ? llvm::None
+        : llvm::Optional<QualType>(node->getCanonicalTypeInternal())
     }];
   }
 
@@ -897,7 +881,7 @@ let Class = ObjCInterfaceType in {
 let Class = ObjCTypeParamType in {
   def : Property<"declaration", ObjCTypeParamDeclRef> {
     let Read = [{ node->getDecl() }];
-  }
+  }  
   def : Property<"qualifiers", Array<ObjCProtocolDeclRef>> {
     let Read = [{ node->getProtocols() }];
   }

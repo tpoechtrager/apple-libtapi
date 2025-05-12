@@ -17,7 +17,6 @@
 #include "clang/StaticAnalyzer/Core/PathSensitive/CallEvent.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/CheckerContext.h"
 #include "llvm/ADT/FoldingSet.h"
-#include <optional>
 
 using namespace clang;
 using namespace ento;
@@ -101,7 +100,7 @@ DivisionBRVisitor::VisitNode(const ExplodedNode *Succ, BugReporterContext &BRC,
 
   const Expr *E = nullptr;
 
-  if (std::optional<PostStmt> P = Succ->getLocationAs<PostStmt>())
+  if (Optional<PostStmt> P = Succ->getLocationAs<PostStmt>())
     if (const BinaryOperator *BO = P->getStmtAs<BinaryOperator>()) {
       BinaryOperator::Opcode Op = BO->getOpcode();
       if (Op == BO_Div || Op == BO_Rem || Op == BO_DivAssign ||
@@ -133,7 +132,7 @@ DivisionBRVisitor::VisitNode(const ExplodedNode *Succ, BugReporterContext &BRC,
 }
 
 bool TestAfterDivZeroChecker::isZero(SVal S, CheckerContext &C) const {
-  std::optional<DefinedSVal> DSV = S.getAs<DefinedSVal>();
+  Optional<DefinedSVal> DSV = S.getAs<DefinedSVal>();
 
   if (!DSV)
     return false;
@@ -188,7 +187,10 @@ void TestAfterDivZeroChecker::checkEndFunction(const ReturnStmt *,
     return;
 
   DivZeroMapTy::Factory &F = State->get_context<DivZeroMap>();
-  for (const ZeroState &ZS : DivZeroes) {
+  for (llvm::ImmutableSet<ZeroState>::iterator I = DivZeroes.begin(),
+                                               E = DivZeroes.end();
+       I != E; ++I) {
+    ZeroState ZS = *I;
     if (ZS.getStackFrameContext() == C.getStackFrame())
       DivZeroes = F.remove(DivZeroes, ZS);
   }

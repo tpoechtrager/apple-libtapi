@@ -19,9 +19,6 @@
 #include "llvm/Support/DataTypes.h"
 #include "llvm/Support/ErrorHandling.h"
 
-namespace llvm {
-class raw_ostream;
-} // namespace llvm
 namespace clang {
 
   /// Define the meaning of possible values of the kind in ExplicitSpecifier.
@@ -34,7 +31,7 @@ namespace clang {
   /// Define the kind of constexpr specifier.
   enum class ConstexprSpecKind { Unspecified, Constexpr, Consteval, Constinit };
 
-  /// In an if statement, this denotes whether the statement is
+  /// In an if statement, this denotes whether the the statement is
   /// a constexpr or consteval if statement.
   enum class IfStatementKind : unsigned {
     Ordinary,
@@ -336,8 +333,6 @@ namespace clang {
     // parameters are assumed to only get null on error.
     NullableResult,
   };
-  /// Prints human-readable debug representation.
-  llvm::raw_ostream &operator<<(llvm::raw_ostream&, NullabilityKind);
 
   /// Return true if \p L has a weaker nullability annotation than \p R. The
   /// ordering is: Unspecified < Nullable < NonNull.

@@ -8,5 +8,4 @@ add_llvm_component_library(LLVMMCDisassembler
   LINK_COMPONENTS
   MC
   Support
-  TargetParser
   )

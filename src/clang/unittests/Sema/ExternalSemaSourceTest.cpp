@@ -121,7 +121,7 @@ public:
           CurrentSema->getPreprocessor().getIdentifierInfo(CorrectTo);
       NamespaceDecl *NewNamespace =
           NamespaceDecl::Create(Context, DestContext, false, Typo.getBeginLoc(),
-                                Typo.getLoc(), ToIdent, nullptr, false);
+                                Typo.getLoc(), ToIdent, nullptr);
       DestContext->addDecl(NewNamespace);
       TypoCorrection Correction(ToIdent);
       Correction.addCorrectionDecl(NewNamespace);

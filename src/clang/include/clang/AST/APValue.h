@@ -238,7 +238,7 @@ public:
     }
   };
   class LValuePathSerializationHelper {
-    const void *Ty;
+    const void *ElemTy;
 
   public:
     ArrayRef<LValuePathEntry> Path;
@@ -267,9 +267,9 @@ private:
   };
   struct LV;
   struct Vec {
-    APValue *Elts = nullptr;
-    unsigned NumElts = 0;
-    Vec() = default;
+    APValue *Elts;
+    unsigned NumElts;
+    Vec() : Elts(nullptr), NumElts(0) {}
     ~Vec() { delete[] Elts; }
   };
   struct Arr {

@@ -24,7 +24,6 @@
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringSwitch.h"
-#include <optional>
 
 using namespace clang;
 using namespace clang::dependency_directives_scan;
@@ -99,11 +98,11 @@ private:
   StringRef cleanStringIfNeeded(const dependency_directives_scan::Token &Tok);
 
   /// Lexes next token and if it is identifier returns its string, otherwise
-  /// it skips the current line and returns \p std::nullopt.
+  /// it skips the current line and returns \p None.
   ///
   /// In any case (whatever the token kind) \p First and the \p Lexer will
   /// advance beyond the token.
-  [[nodiscard]] std::optional<StringRef>
+  [[nodiscard]] Optional<StringRef>
   tryLexIdentifierOrSkipLine(const char *&First, const char *const End);
 
   /// Used when it is certain that next token is an identifier.
@@ -575,28 +574,27 @@ Scanner::cleanStringIfNeeded(const dependency_directives_scan::Token &Tok) {
       .first->first();
 }
 
-std::optional<StringRef>
+Optional<StringRef>
 Scanner::tryLexIdentifierOrSkipLine(const char *&First, const char *const End) {
   const dependency_directives_scan::Token &Tok = lexToken(First, End);
   if (Tok.isNot(tok::raw_identifier)) {
     if (!Tok.is(tok::eod))
       skipLine(First, End);
-    return std::nullopt;
+    return None;
   }
 
   return cleanStringIfNeeded(Tok);
 }
 
 StringRef Scanner::lexIdentifier(const char *&First, const char *const End) {
-  std::optional<StringRef> Id = tryLexIdentifierOrSkipLine(First, End);
+  Optional<StringRef> Id = tryLexIdentifierOrSkipLine(First, End);
   assert(Id && "expected identifier token");
-  return *Id;
+  return Id.value();
 }
 
 bool Scanner::isNextIdentifierOrSkipLine(StringRef Id, const char *&First,
                                          const char *const End) {
-  if (std::optional<StringRef> FoundId =
-          tryLexIdentifierOrSkipLine(First, End)) {
+  if (Optional<StringRef> FoundId = tryLexIdentifierOrSkipLine(First, End)) {
     if (*FoundId == Id)
       return true;
     skipLine(First, End);
@@ -644,7 +642,7 @@ bool Scanner::lexModule(const char *&First, const char *const End) {
   bool Export = false;
   if (Id == "export") {
     Export = true;
-    std::optional<StringRef> NextId = tryLexIdentifierOrSkipLine(First, End);
+    Optional<StringRef> NextId = tryLexIdentifierOrSkipLine(First, End);
     if (!NextId)
       return false;
     Id = *NextId;
@@ -719,7 +717,7 @@ bool Scanner::lex_Pragma(const char *&First, const char *const End) {
 }
 
 bool Scanner::lexPragma(const char *&First, const char *const End) {
-  std::optional<StringRef> FoundId = tryLexIdentifierOrSkipLine(First, End);
+  Optional<StringRef> FoundId = tryLexIdentifierOrSkipLine(First, End);
   if (!FoundId)
     return false;
 
@@ -864,7 +862,7 @@ bool Scanner::lexPPLine(const char *&First, const char *const End) {
   assert(HashTok.is(tok::hash));
   (void)HashTok;
 
-  std::optional<StringRef> FoundId = tryLexIdentifierOrSkipLine(First, End);
+  Optional<StringRef> FoundId = tryLexIdentifierOrSkipLine(First, End);
   if (!FoundId)
     return false;
 
@@ -984,7 +982,7 @@ void clang::printDependencyDirectivesAsSource(
   for (const dependency_directives_scan::Directive &Directive : Directives) {
     if (Directive.Kind == tokens_present_before_eof)
       OS << "<TokBeforeEOF>";
-    std::optional<tok::TokenKind> PrevTokenKind;
+    Optional<tok::TokenKind> PrevTokenKind;
     for (const dependency_directives_scan::Token &Tok : Directive.Tokens) {
       if (PrevTokenKind && needsSpaceSeparator(*PrevTokenKind, Tok))
         OS << ' ';

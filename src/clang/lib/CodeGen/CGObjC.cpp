@@ -29,7 +29,6 @@
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/InlineAsm.h"
-#include <optional>
 using namespace clang;
 using namespace CodeGen;
 
@@ -140,8 +139,8 @@ llvm::Value *CodeGenFunction::EmitObjCCollectionLiteral(const Expr *E,
     LValue LV = MakeNaturalAlignAddrLValue(Constant, IdTy);
     llvm::Value *Ptr = EmitLoadOfScalar(LV, E->getBeginLoc());
     cast<llvm::LoadInst>(Ptr)->setMetadata(
-        llvm::LLVMContext::MD_invariant_load,
-        llvm::MDNode::get(getLLVMContext(), std::nullopt));
+        CGM.getModule().getMDKindID("invariant.load"),
+        llvm::MDNode::get(getLLVMContext(), None));
     return Builder.CreateBitCast(Ptr, ConvertType(E->getType()));
   }
 
@@ -373,14 +372,16 @@ static const Expr *findWeakLValue(const Expr *E) {
 ///
 /// If the runtime does support a required entrypoint, then this method will
 /// generate a call and return the resulting value.  Otherwise it will return
-/// std::nullopt and the caller can generate a msgSend instead.
-static std::optional<llvm::Value *> tryGenerateSpecializedMessageSend(
-    CodeGenFunction &CGF, QualType ResultType, llvm::Value *Receiver,
-    const CallArgList &Args, Selector Sel, const ObjCMethodDecl *method,
-    bool isClassMessage) {
+/// None and the caller can generate a msgSend instead.
+static Optional<llvm::Value *>
+tryGenerateSpecializedMessageSend(CodeGenFunction &CGF, QualType ResultType,
+                                  llvm::Value *Receiver,
+                                  const CallArgList& Args, Selector Sel,
+                                  const ObjCMethodDecl *method,
+                                  bool isClassMessage) {
   auto &CGM = CGF.CGM;
   if (!CGM.getCodeGenOpts().ObjCConvertMessagesToRuntimeCalls)
-    return std::nullopt;
+    return None;
 
   auto &Runtime = CGM.getLangOpts().ObjCRuntime;
   switch (Sel.getMethodFamily()) {
@@ -401,7 +402,7 @@ static std::optional<llvm::Value *> tryGenerateSpecializedMessageSend(
           if (isa<llvm::ConstantPointerNull>(arg))
             return CGF.EmitObjCAllocWithZone(Receiver,
                                              CGF.ConvertType(ResultType));
-          return std::nullopt;
+          return None;
         }
     }
     break;
@@ -432,7 +433,7 @@ static std::optional<llvm::Value *> tryGenerateSpecializedMessageSend(
   default:
     break;
   }
-  return std::nullopt;
+  return None;
 }
 
 CodeGen::RValue CGObjCRuntime::GeneratePossiblySpecializedMessageSend(
@@ -440,7 +441,7 @@ CodeGen::RValue CGObjCRuntime::GeneratePossiblySpecializedMessageSend(
     Selector Sel, llvm::Value *Receiver, const CallArgList &Args,
     const ObjCInterfaceDecl *OID, const ObjCMethodDecl *Method,
     bool isClassMessage) {
-  if (std::optional<llvm::Value *> SpecializedResult =
+  if (Optional<llvm::Value *> SpecializedResult =
           tryGenerateSpecializedMessageSend(CGF, ResultType, Receiver, Args,
                                             Sel, Method, isClassMessage)) {
     return RValue::get(*SpecializedResult);
@@ -521,36 +522,36 @@ CGObjCRuntime::GetRuntimeProtocolList(ObjCProtocolDecl::protocol_iterator begin,
 /// Instead of '[[MyClass alloc] init]', try to generate
 /// 'objc_alloc_init(MyClass)'. This provides a code size improvement on the
 /// caller side, as well as the optimized objc_alloc.
-static std::optional<llvm::Value *>
+static Optional<llvm::Value *>
 tryEmitSpecializedAllocInit(CodeGenFunction &CGF, const ObjCMessageExpr *OME) {
   auto &Runtime = CGF.getLangOpts().ObjCRuntime;
   if (!Runtime.shouldUseRuntimeFunctionForCombinedAllocInit())
-    return std::nullopt;
+    return None;
 
   // Match the exact pattern '[[MyClass alloc] init]'.
   Selector Sel = OME->getSelector();
   if (OME->getReceiverKind() != ObjCMessageExpr::Instance ||
       !OME->getType()->isObjCObjectPointerType() || !Sel.isUnarySelector() ||
       Sel.getNameForSlot(0) != "init")
-    return std::nullopt;
+    return None;
 
   // Okay, this is '[receiver init]', check if 'receiver' is '[cls alloc]'
   // with 'cls' a Class.
   auto *SubOME =
       dyn_cast<ObjCMessageExpr>(OME->getInstanceReceiver()->IgnoreParenCasts());
   if (!SubOME)
-    return std::nullopt;
+    return None;
   Selector SubSel = SubOME->getSelector();
 
   if (!SubOME->getType()->isObjCObjectPointerType() ||
       !SubSel.isUnarySelector() || SubSel.getNameForSlot(0) != "alloc")
-    return std::nullopt;
+    return None;
 
   llvm::Value *Receiver = nullptr;
   switch (SubOME->getReceiverKind()) {
   case ObjCMessageExpr::Instance:
     if (!SubOME->getInstanceReceiver()->getType()->isObjCClassType())
-      return std::nullopt;
+      return None;
     Receiver = CGF.EmitScalarExpr(SubOME->getInstanceReceiver());
     break;
 
@@ -564,7 +565,7 @@ tryEmitSpecializedAllocInit(CodeGenFunction &CGF, const ObjCMessageExpr *OME) {
   }
   case ObjCMessageExpr::SuperInstance:
   case ObjCMessageExpr::SuperClass:
-    return std::nullopt;
+    return None;
   }
 
   return CGF.EmitObjCAllocInit(Receiver, CGF.ConvertType(OME->getType()));
@@ -591,7 +592,7 @@ RValue CodeGenFunction::EmitObjCMessageExpr(const ObjCMessageExpr *E,
     }
   }
 
-  if (std::optional<llvm::Value *> Val = tryEmitSpecializedAllocInit(*this, E))
+  if (Optional<llvm::Value *> Val = tryEmitSpecializedAllocInit(*this, E))
     return AdjustObjCObjectType(*this, E->getType(), RValue::get(*Val));
 
   // We don't retain the receiver in delegate init calls, and this is
@@ -1190,7 +1191,7 @@ CodeGenFunction::generateObjCGetterBody(const ObjCImplementationDecl *classImpl,
 
     // Perform an atomic load.  This does not impose ordering constraints.
     Address ivarAddr = LV.getAddress(*this);
-    ivarAddr = ivarAddr.withElementType(bitcastType);
+    ivarAddr = Builder.CreateElementBitCast(ivarAddr, bitcastType);
     llvm::LoadInst *load = Builder.CreateLoad(ivarAddr, "load");
     load->setAtomic(llvm::AtomicOrdering::Unordered);
 
@@ -1204,7 +1205,8 @@ CodeGenFunction::generateObjCGetterBody(const ObjCImplementationDecl *classImpl,
       bitcastType = llvm::Type::getIntNTy(getLLVMContext(), retTySize);
       ivarVal = Builder.CreateTrunc(load, bitcastType);
     }
-    Builder.CreateStore(ivarVal, ReturnValue.withElementType(bitcastType));
+    Builder.CreateStore(ivarVal,
+                        Builder.CreateElementBitCast(ReturnValue, bitcastType));
 
     // Make sure we don't do an autorelease.
     AutoreleaseResult = false;
@@ -1226,7 +1228,7 @@ CodeGenFunction::generateObjCGetterBody(const ObjCImplementationDecl *classImpl,
     llvm::Value *cmd = emitCmdValueForGetterSetterBody(*this, getterMethod);
     llvm::Value *self = Builder.CreateBitCast(LoadObjCSelf(), VoidPtrTy);
     llvm::Value *ivarOffset =
-        EmitIvarOffsetAsPointerDiff(classImpl->getClassInterface(), ivar);
+      EmitIvarOffset(classImpl->getClassInterface(), ivar);
 
     CallArgList args;
     args.add(RValue::get(self), getContext().getObjCIdType());
@@ -1484,13 +1486,15 @@ CodeGenFunction::generateObjCSetterBody(const ObjCImplementationDecl *classImpl,
 
     // Currently, all atomic accesses have to be through integer
     // types, so there's no point in trying to pick a prettier type.
-    llvm::Type *castType = llvm::Type::getIntNTy(
-        getLLVMContext(), getContext().toBits(strategy.getIvarSize()));
+    llvm::Type *bitcastType =
+      llvm::Type::getIntNTy(getLLVMContext(),
+                            getContext().toBits(strategy.getIvarSize()));
 
     // Cast both arguments to the chosen operation type.
-    argAddr = argAddr.withElementType(castType);
-    ivarAddr = ivarAddr.withElementType(castType);
+    argAddr = Builder.CreateElementBitCast(argAddr, bitcastType);
+    ivarAddr = Builder.CreateElementBitCast(ivarAddr, bitcastType);
 
+    // This bitcast load is likely to cause some nasty IR.
     llvm::Value *load = Builder.CreateLoad(argAddr);
 
     // Perform an atomic store.  There are no memory ordering requirements.
@@ -1528,7 +1532,7 @@ CodeGenFunction::generateObjCSetterBody(const ObjCImplementationDecl *classImpl,
     llvm::Value *self =
       Builder.CreateBitCast(LoadObjCSelf(), VoidPtrTy);
     llvm::Value *ivarOffset =
-        EmitIvarOffsetAsPointerDiff(classImpl->getClassInterface(), ivar);
+      EmitIvarOffset(classImpl->getClassInterface(), ivar);
     Address argAddr = GetAddrOfLocalVar(*setterMethod->param_begin());
     llvm::Value *arg = Builder.CreateLoad(argAddr, "arg");
     arg = Builder.CreateBitCast(arg, VoidPtrTy);
@@ -2202,7 +2206,18 @@ static llvm::Value *emitARCLoadOperation(CodeGenFunction &CGF, Address addr,
   if (!fn)
     fn = getARCIntrinsic(IntID, CGF.CGM);
 
-  return CGF.EmitNounwindRuntimeCall(fn, addr.getPointer());
+  // Cast the argument to 'id*'.
+  llvm::Type *origType = addr.getElementType();
+  addr = CGF.Builder.CreateElementBitCast(addr, CGF.Int8PtrTy);
+
+  // Call the function.
+  llvm::Value *result = CGF.EmitNounwindRuntimeCall(fn, addr.getPointer());
+
+  // Cast the result back to a dereference of the original type.
+  if (origType != CGF.Int8PtrTy)
+    result = CGF.Builder.CreateBitCast(result, origType);
+
+  return result;
 }
 
 /// Perform an operation having the following signature:
@@ -2328,7 +2343,7 @@ llvm::Value *CodeGenFunction::EmitARCRetainBlock(llvm::Value *value,
            CGM.getObjCEntrypoints().objc_retainBlock);
 
     call->setMetadata("clang.arc.copy_on_escape",
-                      llvm::MDNode::get(Builder.getContext(), std::nullopt));
+                      llvm::MDNode::get(Builder.getContext(), None));
   }
 
   return result;
@@ -2370,8 +2385,7 @@ static void emitAutoreleasedReturnValueMarker(CodeGenFunction &CGF) {
 
   // Call the marker asm if we made one, which we do only at -O0.
   if (marker)
-    CGF.Builder.CreateCall(marker, std::nullopt,
-                           CGF.getBundlesForFunclet(marker));
+    CGF.Builder.CreateCall(marker, None, CGF.getBundlesForFunclet(marker));
 }
 
 static llvm::Value *emitOptimizedARCReturnCall(llvm::Value *value,
@@ -2457,7 +2471,7 @@ void CodeGenFunction::EmitARCRelease(llvm::Value *value,
 
   if (precise == ARCImpreciseLifetime) {
     call->setMetadata("clang.imprecise_release",
-                      llvm::MDNode::get(Builder.getContext(), std::nullopt));
+                      llvm::MDNode::get(Builder.getContext(), None));
   }
 }
 
@@ -2646,6 +2660,9 @@ void CodeGenFunction::EmitARCDestroyWeak(Address addr) {
   llvm::Function *&fn = CGM.getObjCEntrypoints().objc_destroyWeak;
   if (!fn)
     fn = getARCIntrinsic(llvm::Intrinsic::objc_destroyWeak, CGM);
+
+  // Cast the argument to 'id*'.
+  addr = Builder.CreateElementBitCast(addr, Int8PtrTy);
 
   EmitNounwindRuntimeCall(fn, addr.getPointer());
 }
@@ -2852,7 +2869,7 @@ void CodeGenFunction::EmitObjCRelease(llvm::Value *value,
 
   if (precise == ARCImpreciseLifetime) {
     call->setMetadata("clang.imprecise_release",
-                      llvm::MDNode::get(Builder.getContext(), std::nullopt));
+                      llvm::MDNode::get(Builder.getContext(), None));
   }
 }
 
@@ -3967,12 +3984,10 @@ static unsigned getBaseMachOPlatformID(const llvm::Triple &TT) {
     return llvm::MachO::PLATFORM_TVOS;
   case llvm::Triple::WatchOS:
     return llvm::MachO::PLATFORM_WATCHOS;
-  case llvm::Triple::XROS:
-    return llvm::MachO::PLATFORM_XROS;
   case llvm::Triple::DriverKit:
     return llvm::MachO::PLATFORM_DRIVERKIT;
   default:
-    return llvm::MachO::PLATFORM_UNKNOWN;
+    return /*Unknown platform*/ 0;
   }
 }
 
@@ -3985,8 +4000,7 @@ static llvm::Value *emitIsPlatformVersionAtLeast(CodeGenFunction &CGF,
   llvm::SmallVector<llvm::Value *, 8> Args;
 
   auto EmitArgs = [&](const VersionTuple &Version, const llvm::Triple &TT) {
-    std::optional<unsigned> Min = Version.getMinor(),
-                            SMin = Version.getSubminor();
+    Optional<unsigned> Min = Version.getMinor(), SMin = Version.getSubminor();
     Args.push_back(
         llvm::ConstantInt::get(CGM.Int32Ty, getBaseMachOPlatformID(TT)));
     Args.push_back(llvm::ConstantInt::get(CGM.Int32Ty, Version.getMajor()));
@@ -4024,8 +4038,7 @@ CodeGenFunction::EmitBuiltinAvailable(const VersionTuple &Version) {
         CGM.CreateRuntimeFunction(FTy, "__isOSVersionAtLeast");
   }
 
-  std::optional<unsigned> Min = Version.getMinor(),
-                          SMin = Version.getSubminor();
+  Optional<unsigned> Min = Version.getMinor(), SMin = Version.getSubminor();
   llvm::Value *Args[] = {
       llvm::ConstantInt::get(CGM.Int32Ty, Version.getMajor()),
       llvm::ConstantInt::get(CGM.Int32Ty, Min.value_or(0)),
@@ -4052,9 +4065,6 @@ static bool isFoundationNeededForDarwinAvailabilityCheck(
   case llvm::Triple::MacOSX:
     FoundationDroppedInVersion = VersionTuple(/*Major=*/10, /*Minor=*/15);
     break;
-  case llvm::Triple::XROS:
-    // XROS doesn't need Foundation.
-    return false;
   case llvm::Triple::DriverKit:
     // DriverKit doesn't need Foundation.
     return false;

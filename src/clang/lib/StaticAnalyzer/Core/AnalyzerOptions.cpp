@@ -23,7 +23,6 @@
 #include "llvm/Support/raw_ostream.h"
 #include <cassert>
 #include <cstddef>
-#include <optional>
 #include <utility>
 #include <vector>
 
@@ -65,7 +64,7 @@ void AnalyzerOptions::printFormattedEntry(
 ExplorationStrategyKind
 AnalyzerOptions::getExplorationStrategy() const {
   auto K =
-      llvm::StringSwitch<std::optional<ExplorationStrategyKind>>(
+      llvm::StringSwitch<llvm::Optional<ExplorationStrategyKind>>(
           ExplorationStrategy)
           .Case("dfs", ExplorationStrategyKind::DFS)
           .Case("bfs", ExplorationStrategyKind::BFS)
@@ -78,22 +77,22 @@ AnalyzerOptions::getExplorationStrategy() const {
                 ExplorationStrategyKind::BFSBlockDFSContents)
           .Default(std::nullopt);
   assert(K && "User mode is invalid.");
-  return *K;
+  return K.value();
 }
 
 CTUPhase1InliningKind AnalyzerOptions::getCTUPhase1Inlining() const {
-  auto K = llvm::StringSwitch<std::optional<CTUPhase1InliningKind>>(
+  auto K = llvm::StringSwitch<llvm::Optional<CTUPhase1InliningKind>>(
                CTUPhase1InliningMode)
                .Case("none", CTUPhase1InliningKind::None)
                .Case("small", CTUPhase1InliningKind::Small)
                .Case("all", CTUPhase1InliningKind::All)
                .Default(std::nullopt);
   assert(K && "CTU inlining mode is invalid.");
-  return *K;
+  return K.value();
 }
 
 IPAKind AnalyzerOptions::getIPAMode() const {
-  auto K = llvm::StringSwitch<std::optional<IPAKind>>(IPAMode)
+  auto K = llvm::StringSwitch<llvm::Optional<IPAKind>>(IPAMode)
                .Case("none", IPAK_None)
                .Case("basic-inlining", IPAK_BasicInlining)
                .Case("inlining", IPAK_Inlining)
@@ -102,7 +101,7 @@ IPAKind AnalyzerOptions::getIPAMode() const {
                .Default(std::nullopt);
   assert(K && "IPA Mode is invalid.");
 
-  return *K;
+  return K.value();
 }
 
 bool
@@ -111,7 +110,7 @@ AnalyzerOptions::mayInlineCXXMemberFunction(
   if (getIPAMode() < IPAK_Inlining)
     return false;
 
-  auto K = llvm::StringSwitch<std::optional<CXXInlineableMemberKind>>(
+  auto K = llvm::StringSwitch<llvm::Optional<CXXInlineableMemberKind>>(
                CXXMemberInliningMode)
                .Case("constructors", CIMK_Constructors)
                .Case("destructors", CIMK_Destructors)
@@ -162,7 +161,7 @@ bool AnalyzerOptions::getCheckerBooleanOption(StringRef CheckerName,
                                               StringRef OptionName,
                                               bool SearchInParents) const {
   auto Ret =
-      llvm::StringSwitch<std::optional<bool>>(
+      llvm::StringSwitch<llvm::Optional<bool>>(
           getCheckerStringOption(CheckerName, OptionName, SearchInParents))
           .Case("true", true)
           .Case("false", false)

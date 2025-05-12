@@ -16,7 +16,6 @@
 #include "llvm/Testing/Support/Error.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
-#include <optional>
 
 using namespace clang;
 using namespace transformer;
@@ -70,21 +69,21 @@ struct TestMatch {
 // `StatementCode` exactly -- that is, produce exactly one match. However,
 // `StatementCode` may contain other statements not described by `Matcher`.
 // `ExtraPreface` (optionally) adds extra decls to the TU, before the code.
-static std::optional<TestMatch> matchStmt(StringRef StatementCode,
-                                          StatementMatcher Matcher,
-                                          StringRef ExtraPreface = "") {
+static llvm::Optional<TestMatch> matchStmt(StringRef StatementCode,
+                                           StatementMatcher Matcher,
+                                           StringRef ExtraPreface = "") {
   auto AstUnit = tooling::buildASTFromCodeWithArgs(
       wrapSnippet(ExtraPreface, StatementCode), {"-Wno-unused-value"});
   if (AstUnit == nullptr) {
     ADD_FAILURE() << "AST construction failed";
-    return std::nullopt;
+    return llvm::None;
   }
   ASTContext &Context = AstUnit->getASTContext();
   auto Matches = ast_matchers::match(wrapMatcher(Matcher), Context);
   // We expect a single, exact match for the statement.
   if (Matches.size() != 1) {
     ADD_FAILURE() << "Wrong number of matches: " << Matches.size();
-    return std::nullopt;
+    return llvm::None;
   }
   return TestMatch{std::move(AstUnit), MatchResult(Matches[0], &Context)};
 }

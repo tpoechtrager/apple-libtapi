@@ -10,7 +10,6 @@
 
 #include "gtest/gtest.h"
 #include <climits>
-#include <optional>
 
 using namespace llvm;
 using namespace clang;
@@ -22,7 +21,7 @@ using LocSeq = SourceLocationSequence;
 // If ExpectedEncoded is provided, verify the encoded value too.
 // Loc is the raw (in-memory) form of SourceLocation.
 void roundTrip(SourceLocation::UIntTy Loc,
-               std::optional<uint64_t> ExpectedEncoded = std::nullopt) {
+               llvm::Optional<uint64_t> ExpectedEncoded = llvm::None) {
   uint64_t ActualEncoded =
       SourceLocationEncoding::encode(SourceLocation::getFromRawEncoding(Loc));
   if (ExpectedEncoded)

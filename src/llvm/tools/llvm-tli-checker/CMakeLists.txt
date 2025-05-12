@@ -11,7 +11,6 @@ set(LLVM_LINK_COMPONENTS
   Option
   Remarks
   Support
-  TargetParser
   TextAPI
   )
 

@@ -30,6 +30,9 @@ class MachineDominatorTree;
 class MachineRegisterInfo;
 class TargetRegisterInfo;
 
+} // namespace llvm
+
+namespace llvm {
 namespace rdf {
 namespace detail {
 
@@ -50,111 +53,123 @@ template <> struct hash<llvm::rdf::detail::NodeRef> {
 
 } // namespace std
 
-namespace llvm::rdf {
+namespace llvm {
+namespace rdf {
 
-struct Liveness {
-public:
-  using LiveMapType = RegisterAggrMap<MachineBasicBlock *>;
-  using NodeRef = detail::NodeRef;
-  using NodeRefSet = std::unordered_set<NodeRef>;
-  using RefMap = std::unordered_map<RegisterId, NodeRefSet>;
+  struct Liveness {
+  public:
+    // This is really a std::map, except that it provides a non-trivial
+    // default constructor to the element accessed via [].
+    struct LiveMapType {
+      LiveMapType(const PhysicalRegisterInfo &pri) : Empty(pri) {}
 
-  Liveness(MachineRegisterInfo &mri, const DataFlowGraph &g)
-      : DFG(g), TRI(g.getTRI()), PRI(g.getPRI()), MDT(g.getDT()),
-        MDF(g.getDF()), LiveMap(g.getPRI()), Empty(), NoRegs(g.getPRI()) {}
+      RegisterAggr &operator[] (MachineBasicBlock *B) {
+        return Map.emplace(B, Empty).first->second;
+      }
 
-  NodeList getAllReachingDefs(RegisterRef RefRR, NodeAddr<RefNode *> RefA,
-                              bool TopShadows, bool FullChain,
-                              const RegisterAggr &DefRRs);
+    private:
+      RegisterAggr Empty;
+      std::map<MachineBasicBlock*,RegisterAggr> Map;
+    };
 
-  NodeList getAllReachingDefs(NodeAddr<RefNode *> RefA) {
-    return getAllReachingDefs(RefA.Addr->getRegRef(DFG), RefA, false, false,
-                              NoRegs);
-  }
+    using NodeRef = detail::NodeRef;
+    using NodeRefSet = std::unordered_set<NodeRef>;
+    using RefMap = std::unordered_map<RegisterId, NodeRefSet>;
 
-  NodeList getAllReachingDefs(RegisterRef RefRR, NodeAddr<RefNode *> RefA) {
-    return getAllReachingDefs(RefRR, RefA, false, false, NoRegs);
-  }
+    Liveness(MachineRegisterInfo &mri, const DataFlowGraph &g)
+        : DFG(g), TRI(g.getTRI()), PRI(g.getPRI()), MDT(g.getDT()),
+          MDF(g.getDF()), LiveMap(g.getPRI()), Empty(), NoRegs(g.getPRI()) {}
 
-  NodeSet getAllReachedUses(RegisterRef RefRR, NodeAddr<DefNode *> DefA,
-                            const RegisterAggr &DefRRs);
+    NodeList getAllReachingDefs(RegisterRef RefRR, NodeAddr<RefNode*> RefA,
+        bool TopShadows, bool FullChain, const RegisterAggr &DefRRs);
 
-  NodeSet getAllReachedUses(RegisterRef RefRR, NodeAddr<DefNode *> DefA) {
-    return getAllReachedUses(RefRR, DefA, NoRegs);
-  }
+    NodeList getAllReachingDefs(NodeAddr<RefNode*> RefA) {
+      return getAllReachingDefs(RefA.Addr->getRegRef(DFG), RefA, false,
+                                false, NoRegs);
+    }
 
-  std::pair<NodeSet, bool> getAllReachingDefsRec(RegisterRef RefRR,
-                                                 NodeAddr<RefNode *> RefA,
-                                                 NodeSet &Visited,
-                                                 const NodeSet &Defs);
+    NodeList getAllReachingDefs(RegisterRef RefRR, NodeAddr<RefNode*> RefA) {
+      return getAllReachingDefs(RefRR, RefA, false, false, NoRegs);
+    }
 
-  NodeAddr<RefNode *> getNearestAliasedRef(RegisterRef RefRR,
-                                           NodeAddr<InstrNode *> IA);
+    NodeSet getAllReachedUses(RegisterRef RefRR, NodeAddr<DefNode*> DefA,
+        const RegisterAggr &DefRRs);
 
-  LiveMapType &getLiveMap() { return LiveMap; }
-  const LiveMapType &getLiveMap() const { return LiveMap; }
+    NodeSet getAllReachedUses(RegisterRef RefRR, NodeAddr<DefNode*> DefA) {
+      return getAllReachedUses(RefRR, DefA, NoRegs);
+    }
 
-  const RefMap &getRealUses(NodeId P) const {
-    auto F = RealUseMap.find(P);
-    return F == RealUseMap.end() ? Empty : F->second;
-  }
+    std::pair<NodeSet,bool> getAllReachingDefsRec(RegisterRef RefRR,
+        NodeAddr<RefNode*> RefA, NodeSet &Visited, const NodeSet &Defs);
 
-  void computePhiInfo();
-  void computeLiveIns();
-  void resetLiveIns();
-  void resetKills();
-  void resetKills(MachineBasicBlock *B);
+    NodeAddr<RefNode*> getNearestAliasedRef(RegisterRef RefRR,
+        NodeAddr<InstrNode*> IA);
 
-  void trace(bool T) { Trace = T; }
+    LiveMapType &getLiveMap() { return LiveMap; }
+    const LiveMapType &getLiveMap() const { return LiveMap; }
 
-private:
-  const DataFlowGraph &DFG;
-  const TargetRegisterInfo &TRI;
-  const PhysicalRegisterInfo &PRI;
-  const MachineDominatorTree &MDT;
-  const MachineDominanceFrontier &MDF;
-  LiveMapType LiveMap;
-  const RefMap Empty;
-  const RegisterAggr NoRegs;
-  bool Trace = false;
+    const RefMap &getRealUses(NodeId P) const {
+      auto F = RealUseMap.find(P);
+      return F == RealUseMap.end() ? Empty : F->second;
+    }
 
-  // Cache of mapping from node ids (for RefNodes) to the containing
-  // basic blocks. Not computing it each time for each node reduces
-  // the liveness calculation time by a large fraction.
-  DenseMap<NodeId, MachineBasicBlock *> NBMap;
+    void computePhiInfo();
+    void computeLiveIns();
+    void resetLiveIns();
+    void resetKills();
+    void resetKills(MachineBasicBlock *B);
 
-  // Phi information:
-  //
-  // RealUseMap
-  // map: NodeId -> (map: RegisterId -> NodeRefSet)
-  //      phi id -> (map: register -> set of reached non-phi uses)
-  DenseMap<NodeId, RefMap> RealUseMap;
+    void trace(bool T) { Trace = T; }
 
-  // Inverse iterated dominance frontier.
-  std::map<MachineBasicBlock *, std::set<MachineBasicBlock *>> IIDF;
+  private:
+    const DataFlowGraph &DFG;
+    const TargetRegisterInfo &TRI;
+    const PhysicalRegisterInfo &PRI;
+    const MachineDominatorTree &MDT;
+    const MachineDominanceFrontier &MDF;
+    LiveMapType LiveMap;
+    const RefMap Empty;
+    const RegisterAggr NoRegs;
+    bool Trace = false;
 
-  // Live on entry.
-  std::map<MachineBasicBlock *, RefMap> PhiLON;
+    // Cache of mapping from node ids (for RefNodes) to the containing
+    // basic blocks. Not computing it each time for each node reduces
+    // the liveness calculation time by a large fraction.
+    DenseMap<NodeId, MachineBasicBlock *> NBMap;
 
-  // Phi uses are considered to be located at the end of the block that
-  // they are associated with. The reaching def of a phi use dominates the
-  // block that the use corresponds to, but not the block that contains
-  // the phi itself. To include these uses in the liveness propagation (up
-  // the dominator tree), create a map: block -> set of uses live on exit.
-  std::map<MachineBasicBlock *, RefMap> PhiLOX;
+    // Phi information:
+    //
+    // RealUseMap
+    // map: NodeId -> (map: RegisterId -> NodeRefSet)
+    //      phi id -> (map: register -> set of reached non-phi uses)
+    DenseMap<NodeId, RefMap> RealUseMap;
 
-  MachineBasicBlock *getBlockWithRef(NodeId RN) const;
-  void traverse(MachineBasicBlock *B, RefMap &LiveIn);
-  void emptify(RefMap &M);
+    // Inverse iterated dominance frontier.
+    std::map<MachineBasicBlock*,std::set<MachineBasicBlock*>> IIDF;
 
-  std::pair<NodeSet, bool>
-  getAllReachingDefsRecImpl(RegisterRef RefRR, NodeAddr<RefNode *> RefA,
-                            NodeSet &Visited, const NodeSet &Defs,
-                            unsigned Nest, unsigned MaxNest);
-};
+    // Live on entry.
+    std::map<MachineBasicBlock*,RefMap> PhiLON;
 
-raw_ostream &operator<<(raw_ostream &OS, const Print<Liveness::RefMap> &P);
+    // Phi uses are considered to be located at the end of the block that
+    // they are associated with. The reaching def of a phi use dominates the
+    // block that the use corresponds to, but not the block that contains
+    // the phi itself. To include these uses in the liveness propagation (up
+    // the dominator tree), create a map: block -> set of uses live on exit.
+    std::map<MachineBasicBlock*,RefMap> PhiLOX;
 
-} // end namespace llvm::rdf
+    MachineBasicBlock *getBlockWithRef(NodeId RN) const;
+    void traverse(MachineBasicBlock *B, RefMap &LiveIn);
+    void emptify(RefMap &M);
+
+    std::pair<NodeSet,bool> getAllReachingDefsRecImpl(RegisterRef RefRR,
+        NodeAddr<RefNode*> RefA, NodeSet &Visited, const NodeSet &Defs,
+        unsigned Nest, unsigned MaxNest);
+  };
+
+  raw_ostream &operator<<(raw_ostream &OS, const Print<Liveness::RefMap> &P);
+
+} // end namespace rdf
+
+} // end namespace llvm
 
 #endif // LLVM_CODEGEN_RDFLIVENESS_H

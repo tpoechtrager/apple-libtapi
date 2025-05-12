@@ -64,12 +64,6 @@ namespace clang {
         return CharUnits(Quantity);
       }
 
-      /// fromQuantity - Construct a CharUnits quantity from an llvm::Align
-      /// quantity.
-      static CharUnits fromQuantity(llvm::Align Quantity) {
-        return CharUnits(Quantity.value());
-      }
-
       // Compound assignment.
       CharUnits& operator+= (const CharUnits &Other) {
         Quantity += Other.Quantity;
@@ -189,8 +183,7 @@ namespace clang {
       llvm::Align getAsAlign() const { return llvm::Align(Quantity); }
 
       /// getAsMaybeAlign - Returns Quantity as a valid llvm::Align or
-      /// std::nullopt, Beware llvm::MaybeAlign assumes power of two 8-bit
-      /// bytes.
+      /// llvm::None, Beware llvm::MaybeAlign assumes power of two 8-bit bytes.
       llvm::MaybeAlign getAsMaybeAlign() const {
         return llvm::MaybeAlign(Quantity);
       }

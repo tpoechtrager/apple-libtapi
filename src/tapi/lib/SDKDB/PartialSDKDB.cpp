@@ -146,7 +146,7 @@ Error PartialSDKDB::serialize(
       /*compact*/ false,
       /*noUUID*/ true,
       /*noTarget*/ false,
-      /*noHiddenGlobal*/ true,
+      /*externalOnly*/ true,
       /*publicOnly*/ false,
       /*ignore line and col*/ true,
   };

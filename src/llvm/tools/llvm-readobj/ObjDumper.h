@@ -13,8 +13,10 @@
 #include <memory>
 #include <system_error>
 
+#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/STLFunctionalExtras.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Object/ObjectFile.h"
 #include "llvm/Support/CommandLine.h"
@@ -83,7 +85,7 @@ public:
       printDynamicSymbols();
   }
   virtual void printSymbols(bool PrintSymbols, bool PrintDynamicSymbols,
-                            std::optional<SymbolComparator> SymComp) {
+                            llvm::Optional<SymbolComparator> SymComp) {
     if (SymComp) {
       if (PrintSymbols)
         printSymbols(SymComp);
@@ -135,7 +137,6 @@ public:
   virtual void printStackSizes() {}
   virtual void printSectionDetails() {}
   virtual void printArchSpecificInfo() {}
-  virtual void printMemtag() {}
 
   // Only implemented for PE/COFF.
   virtual void printCOFFImports() { }
@@ -154,12 +155,9 @@ public:
                      llvm::codeview::GlobalTypeTableBuilder &GlobalCVTypes,
                      bool GHash) {}
 
-  // Only implemented for XCOFF.
-  virtual void printStringTable() {}
+  // Only implement for XCOFF
   virtual void printAuxiliaryHeader() {}
   virtual void printExceptionSection() {}
-  virtual void printLoaderSection(bool PrintHeader, bool PrintSymbols,
-                                  bool PrintRelocations) {}
 
   // Only implemented for MachO.
   virtual void printMachODataInCode() { }
@@ -168,6 +166,9 @@ public:
   virtual void printMachOSegment() { }
   virtual void printMachOIndirectSymbols() { }
   virtual void printMachOLinkerOptions() { }
+
+  // Currently only implemented for XCOFF.
+  virtual void printStringTable() { }
 
   virtual void printStackMap() const = 0;
 
@@ -187,9 +188,9 @@ protected:
 
 private:
   virtual void printSymbols() {}
-  virtual void printSymbols(std::optional<SymbolComparator> Comp) {}
+  virtual void printSymbols(llvm::Optional<SymbolComparator> Comp) {}
   virtual void printDynamicSymbols() {}
-  virtual void printDynamicSymbols(std::optional<SymbolComparator> Comp) {}
+  virtual void printDynamicSymbols(llvm::Optional<SymbolComparator> Comp) {}
   virtual void printProgramHeaders() {}
   virtual void printSectionMapping() {}
 

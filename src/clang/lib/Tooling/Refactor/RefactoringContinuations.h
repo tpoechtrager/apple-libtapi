@@ -266,9 +266,9 @@ private:
   ConsumerFn Consumer;
   std::unique_ptr<ASTQueryType> ASTQuery;
   /// Inputs store state that's dependent on the original TU.
-  std::optional<std::tuple<QueryOrState...>> Inputs;
+  llvm::Optional<std::tuple<QueryOrState...>> Inputs;
   /// State contains TU-independent values.
-  std::optional<
+  llvm::Optional<
       std::tuple<typename StateTraits<QueryOrState>::PersistentType...>>
       State;
 
@@ -349,7 +349,7 @@ public:
     ASTQuery->invalidateTUSpecificState();
     State =
         convertToPersistentImpl(std::index_sequence_for<QueryOrState...>());
-    Inputs = std::nullopt;
+    Inputs = None;
   }
 
   /// The state is converted to the AST representation in the given ASTContext

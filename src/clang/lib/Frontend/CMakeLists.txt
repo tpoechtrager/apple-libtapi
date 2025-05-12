@@ -4,13 +4,10 @@ set(LLVM_LINK_COMPONENTS
   BitReader
   BitstreamReader
   CAS
-  CASUtil
-  MCCAS
   Option
   ProfileData
   RemoteCachingService
   Support
-  TargetParser
   )
 
 add_clang_library(clangFrontend

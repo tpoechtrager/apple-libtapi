@@ -134,14 +134,13 @@ public:
   explicit IdentifierResolver(Preprocessor &PP);
   ~IdentifierResolver();
 
-  /// Returns a range of decls with the name 'Name'.
-  llvm::iterator_range<iterator> decls(DeclarationName Name);
-
-  /// Returns an iterator over decls with the name 'Name'.
+  /// begin - Returns an iterator for decls with the name 'Name'.
   iterator begin(DeclarationName Name);
 
-  /// Returns the end iterator.
-  iterator end() { return iterator(); }
+  /// end - Returns an iterator that has 'finished'.
+  iterator end() {
+    return iterator();
+  }
 
   /// isDeclInScope - If 'Ctx' is a function/method, isDeclInScope returns true
   /// if 'D' is in Scope 'S', otherwise 'S' is ignored and isDeclInScope returns

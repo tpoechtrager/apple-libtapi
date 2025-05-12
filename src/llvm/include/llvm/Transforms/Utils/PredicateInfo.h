@@ -103,7 +103,7 @@ public:
   }
 
   /// Fetch condition in the form of PredicateConstraint, if possible.
-  std::optional<PredicateConstraint> getConstraint() const;
+  Optional<PredicateConstraint> getConstraint() const;
 
 protected:
   PredicateBase(PredicateType PT, Value *Op, Value *Condition)

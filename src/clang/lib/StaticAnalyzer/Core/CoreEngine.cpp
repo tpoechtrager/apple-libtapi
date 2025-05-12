@@ -26,6 +26,7 @@
 #include "clang/StaticAnalyzer/Core/PathSensitive/ExprEngine.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/FunctionSummary.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/WorkList.h"
+#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Support/Casting.h"
@@ -33,7 +34,6 @@
 #include <algorithm>
 #include <cassert>
 #include <memory>
-#include <optional>
 #include <utility>
 
 using namespace clang;
@@ -273,10 +273,10 @@ void CoreEngine::HandleBlockEdge(const BlockEdge &L, ExplodedNode *Pred) {
     const ReturnStmt *RS = nullptr;
     if (!L.getSrc()->empty()) {
       CFGElement LastElement = L.getSrc()->back();
-      if (std::optional<CFGStmt> LastStmt = LastElement.getAs<CFGStmt>()) {
+      if (Optional<CFGStmt> LastStmt = LastElement.getAs<CFGStmt>()) {
         RS = dyn_cast<ReturnStmt>(LastStmt->getStmt());
-      } else if (std::optional<CFGAutomaticObjDtor> AutoDtor =
-                     LastElement.getAs<CFGAutomaticObjDtor>()) {
+      } else if (Optional<CFGAutomaticObjDtor> AutoDtor =
+                 LastElement.getAs<CFGAutomaticObjDtor>()) {
         RS = dyn_cast<ReturnStmt>(AutoDtor->getTriggerStmt());
       }
     }
@@ -314,10 +314,11 @@ void CoreEngine::HandleBlockEntrance(const BlockEntrance &L,
   setBlockCounter(Counter);
 
   // Process the entrance of the block.
-  if (std::optional<CFGElement> E = L.getFirstElement()) {
+  if (Optional<CFGElement> E = L.getFirstElement()) {
     NodeBuilderContext Ctx(*this, L.getBlock(), Pred);
     ExprEng.processCFGElement(*E, Pred, 0, &Ctx);
-  } else
+  }
+  else
     HandleBlockExit(L.getBlock(), Pred);
 }
 

@@ -49,7 +49,7 @@ static StringRef canonicalize(SmallVectorImpl<char> &Path,
   return StringRef(Path.begin(), Path.size());
 }
 
-void HierarchicalTreeBuilder::pushImpl(std::optional<ObjectRef> Ref,
+void HierarchicalTreeBuilder::pushImpl(Optional<ObjectRef> Ref,
                                        TreeEntry::EntryKind Kind,
                                        const Twine &Path) {
   SmallVector<char, 256> CanonicalPath;
@@ -73,8 +73,7 @@ Expected<ObjectProxy> HierarchicalTreeBuilder::create(ObjectStore &CAS) {
     StringRef Path = TreeContent.getPath();
     Error E = Schema.walkFileTreeRecursively(
         CAS, *TreeContent.getRef(),
-        [&](const NamedTreeEntry &Entry,
-            std::optional<TreeProxy> Tree) -> Error {
+        [&](const NamedTreeEntry &Entry, Optional<TreeProxy> Tree) -> Error {
           if (Entry.getKind() != TreeEntry::Tree) {
             pushImpl(Entry.getRef(), Entry.getKind(), Path + Entry.getName());
             return Error::success();
@@ -107,7 +106,7 @@ Expected<ObjectProxy> HierarchicalTreeBuilder::create(ObjectStore &CAS) {
   struct Node {
     Node *Next = nullptr;
     Tree *Parent = nullptr;
-    std::optional<ObjectRef> Ref;
+    Optional<ObjectRef> Ref;
     TreeEntry::EntryKind Kind;
     StringRef Name;
 

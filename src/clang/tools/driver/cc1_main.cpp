@@ -180,8 +180,7 @@ static int PrintSupportedCPUs(std::string TargetStr) {
   // the target machine will handle the mcpu printing
   llvm::TargetOptions Options;
   std::unique_ptr<llvm::TargetMachine> TheTargetMachine(
-      TheTarget->createTargetMachine(TargetStr, "", "+cpuhelp", Options,
-                                     std::nullopt));
+      TheTarget->createTargetMachine(TargetStr, "", "+cpuhelp", Options, None));
   return 0;
 }
 
@@ -217,7 +216,9 @@ int cc1_main(ArrayRef<const char *> Argv, const char *Argv0, void *MainAddr) {
   bool Success = CompilerInvocation::CreateFromArgs(Clang->getInvocation(),
                                                     Argv, Diags, Argv0);
 
-  if (!Clang->getFrontendOpts().TimeTracePath.empty()) {
+  if (Clang->getFrontendOpts().TimeTrace ||
+      !Clang->getFrontendOpts().TimeTracePath.empty()) {
+    Clang->getFrontendOpts().TimeTrace = 1;
     llvm::timeTraceProfilerInitialize(
         Clang->getFrontendOpts().TimeTraceGranularity, Argv0);
   }
@@ -283,26 +284,22 @@ int cc1_main(ArrayRef<const char *> Argv, const char *Argv0, void *MainAddr) {
   llvm::TimerGroup::clearAll();
 
   if (llvm::timeTraceProfilerEnabled()) {
-    // It is possible that the compiler instance doesn't own a file manager here
-    // if we're compiling a module unit. Since the file manager are owned by AST
-    // when we're compiling a module unit. So the file manager may be invalid
-    // here.
-    //
-    // It should be fine to create file manager here since the file system
-    // options are stored in the compiler invocation and we can recreate the VFS
-    // from the compiler invocation.
-    if (!Clang->hasFileManager())
-      Clang->createFileManager(createVFSFromCompilerInvocation(
-          Clang->getInvocation(), Clang->getDiagnostics()));
-
+    SmallString<128> Path(Clang->getFrontendOpts().OutputFile);
+    llvm::sys::path::replace_extension(Path, "json");
+    if (!Clang->getFrontendOpts().TimeTracePath.empty()) {
+      // replace the suffix to '.json' directly
+      SmallString<128> TracePath(Clang->getFrontendOpts().TimeTracePath);
+      if (llvm::sys::fs::is_directory(TracePath))
+        llvm::sys::path::append(TracePath, llvm::sys::path::filename(Path));
+      Path.assign(TracePath);
+    }
     llvm::vfs::OnDiskOutputBackend Backend;
-    if (std::optional<llvm::vfs::OutputFile> profilerOutput =
+    if (Optional<llvm::vfs::OutputFile> profilerOutput =
             llvm::expectedToOptional(
-                Backend.createFile(Clang->getFrontendOpts().TimeTracePath,
-                                   llvm::vfs::OutputConfig()
-                                       .setTextWithCRLF()
-                                       .setNoDiscardOnSignal()
-                                       .setNoAtomicWrite()))) {
+                Backend.createFile(Path, llvm::vfs::OutputConfig()
+                                                  .setTextWithCRLF()
+                                                  .setNoDiscardOnSignal()
+                                                  .setNoAtomicWrite()))) {
       llvm::timeTraceProfilerWrite(*profilerOutput);
       llvm::consumeError(profilerOutput->keep());
       llvm::timeTraceProfilerCleanup();

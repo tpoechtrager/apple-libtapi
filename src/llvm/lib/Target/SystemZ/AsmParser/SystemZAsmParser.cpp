@@ -13,7 +13,6 @@
 #include "TargetInfo/SystemZTargetInfo.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
-#include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCContext.h"
@@ -237,7 +236,7 @@ public:
     return Kind == KindImm;
   }
   bool isImm(int64_t MinValue, int64_t MaxValue) const {
-    return Kind == KindImm && inRange(Imm, MinValue, MaxValue, true);
+    return Kind == KindImm && inRange(Imm, MinValue, MaxValue);
   }
   const MCExpr *getImm() const {
     assert(Kind == KindImm && "Not an immediate");
@@ -380,6 +379,7 @@ public:
   bool isU2Imm() const { return isImm(0, 3); }
   bool isU3Imm() const { return isImm(0, 7); }
   bool isU4Imm() const { return isImm(0, 15); }
+  bool isU6Imm() const { return isImm(0, 63); }
   bool isU8Imm() const { return isImm(0, 255); }
   bool isS8Imm() const { return isImm(-128, 127); }
   bool isU12Imm() const { return isImm(0, 4095); }
@@ -432,7 +432,6 @@ private:
 
   bool ParseDirectiveInsn(SMLoc L);
   bool ParseDirectiveMachine(SMLoc L);
-  bool ParseGNUAttribute(SMLoc L);
 
   OperandMatchResultTy parseAddress(OperandVector &Operands,
                                     MemoryKind MemKind,
@@ -494,12 +493,11 @@ public:
   }
 
   // Override MCTargetAsmParser.
-  ParseStatus parseDirective(AsmToken DirectiveID) override;
-  bool parseRegister(MCRegister &RegNo, SMLoc &StartLoc,
-                     SMLoc &EndLoc) override;
-  bool ParseRegister(MCRegister &RegNo, SMLoc &StartLoc, SMLoc &EndLoc,
+  bool ParseDirective(AsmToken DirectiveID) override;
+  bool ParseRegister(unsigned &RegNo, SMLoc &StartLoc, SMLoc &EndLoc) override;
+  bool ParseRegister(unsigned &RegNo, SMLoc &StartLoc, SMLoc &EndLoc,
                      bool RestoreOnFailure);
-  OperandMatchResultTy tryParseRegister(MCRegister &RegNo, SMLoc &StartLoc,
+  OperandMatchResultTy tryParseRegister(unsigned &RegNo, SMLoc &StartLoc,
                                         SMLoc &EndLoc) override;
   bool ParseInstruction(ParseInstructionInfo &Info, StringRef Name,
                         SMLoc NameLoc, OperandVector &Operands) override;
@@ -1219,17 +1217,15 @@ SystemZAsmParser::parseAddress(OperandVector &Operands, MemoryKind MemKind,
   return MatchOperand_Success;
 }
 
-ParseStatus SystemZAsmParser::parseDirective(AsmToken DirectiveID) {
+bool SystemZAsmParser::ParseDirective(AsmToken DirectiveID) {
   StringRef IDVal = DirectiveID.getIdentifier();
 
   if (IDVal == ".insn")
     return ParseDirectiveInsn(DirectiveID.getLoc());
   if (IDVal == ".machine")
     return ParseDirectiveMachine(DirectiveID.getLoc());
-  if (IDVal.startswith(".gnu_attribute"))
-    return ParseGNUAttribute(DirectiveID.getLoc());
 
-  return ParseStatus::NoMatch;
+  return true;
 }
 
 /// ParseDirectiveInsn
@@ -1346,12 +1342,12 @@ bool SystemZAsmParser::ParseDirectiveMachine(SMLoc L) {
   MCAsmParser &Parser = getParser();
   if (Parser.getTok().isNot(AsmToken::Identifier) &&
       Parser.getTok().isNot(AsmToken::String))
-    return TokError("unexpected token in '.machine' directive");
+    return Error(L, "unexpected token in '.machine' directive");
 
   StringRef CPU = Parser.getTok().getIdentifier();
   Parser.Lex();
-  if (parseEOL())
-    return true;
+  if (parseToken(AsmToken::EndOfStatement))
+    return addErrorSuffix(" in '.machine' directive");
 
   MCSubtargetInfo &STI = copySTI();
   STI.setDefaultFeatures(CPU, /*TuneCPU*/ CPU, "");
@@ -1362,22 +1358,7 @@ bool SystemZAsmParser::ParseDirectiveMachine(SMLoc L) {
   return false;
 }
 
-bool SystemZAsmParser::ParseGNUAttribute(SMLoc L) {
-  int64_t Tag;
-  int64_t IntegerValue;
-  if (!Parser.parseGNUAttribute(L, Tag, IntegerValue))
-    return Error(L, "malformed .gnu_attribute directive");
-
-  // Tag_GNU_S390_ABI_Vector tag is '8' and can be 0, 1, or 2.
-  if (Tag != 8 || (IntegerValue < 0 || IntegerValue > 2))
-    return Error(L, "unrecognized .gnu_attribute tag/value pair.");
-
-  Parser.getStreamer().emitGNUAttribute(Tag, IntegerValue);
-
-  return parseEOL();
-}
-
-bool SystemZAsmParser::ParseRegister(MCRegister &RegNo, SMLoc &StartLoc,
+bool SystemZAsmParser::ParseRegister(unsigned &RegNo, SMLoc &StartLoc,
                                      SMLoc &EndLoc, bool RestoreOnFailure) {
   Register Reg;
   if (parseRegister(Reg, RestoreOnFailure))
@@ -1397,12 +1378,12 @@ bool SystemZAsmParser::ParseRegister(MCRegister &RegNo, SMLoc &StartLoc,
   return false;
 }
 
-bool SystemZAsmParser::parseRegister(MCRegister &RegNo, SMLoc &StartLoc,
+bool SystemZAsmParser::ParseRegister(unsigned &RegNo, SMLoc &StartLoc,
                                      SMLoc &EndLoc) {
   return ParseRegister(RegNo, StartLoc, EndLoc, /*RestoreOnFailure=*/false);
 }
 
-OperandMatchResultTy SystemZAsmParser::tryParseRegister(MCRegister &RegNo,
+OperandMatchResultTy SystemZAsmParser::tryParseRegister(unsigned &RegNo,
                                                         SMLoc &StartLoc,
                                                         SMLoc &EndLoc) {
   bool Result =

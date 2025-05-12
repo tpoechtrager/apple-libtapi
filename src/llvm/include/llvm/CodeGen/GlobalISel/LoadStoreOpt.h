@@ -15,7 +15,6 @@
 #define LLVM_CODEGEN_GLOBALISEL_LOADSTOREOPT_H
 
 #include "llvm/ADT/BitVector.h"
-#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/CodeGen/GlobalISel/MachineIRBuilder.h"
@@ -69,11 +68,11 @@ private:
   /// on the given MachineFunction.
   std::function<bool(const MachineFunction &)> DoNotRunPass;
 
-  MachineRegisterInfo *MRI = nullptr;
-  const TargetLowering *TLI = nullptr;
-  MachineFunction *MF = nullptr;
-  AliasAnalysis *AA = nullptr;
-  const LegalizerInfo *LI = nullptr;
+  MachineRegisterInfo *MRI;
+  const TargetLowering *TLI;
+  MachineFunction *MF;
+  AliasAnalysis *AA;
+  const LegalizerInfo *LI;
 
   MachineIRBuilder Builder;
 
@@ -132,10 +131,6 @@ private:
   bool mergeBlockStores(MachineBasicBlock &MBB);
   bool mergeFunctionStores(MachineFunction &MF);
 
-  bool mergeTruncStore(GStore &StoreMI,
-                       SmallPtrSetImpl<GStore *> &DeletedStores);
-  bool mergeTruncStoresBlock(MachineBasicBlock &MBB);
-
   /// Initialize some target-specific data structures for the store merging
   /// optimization. \p AddrSpace indicates which address space to use when
   /// probing the legalizer info for legal stores.
@@ -145,7 +140,7 @@ private:
   /// that bit's value is legal. E.g. if bit 64 is set, then 64 bit scalar
   /// stores are legal.
   DenseMap<unsigned, BitVector> LegalStoreSizes;
-  bool IsPreLegalizer = false;
+  bool IsPreLegalizer;
   /// Contains instructions to be erased at the end of a block scan.
   SmallSet<MachineInstr *, 16> InstsToErase;
 

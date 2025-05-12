@@ -12,6 +12,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "clang/Basic/Stack.h"
+#include "llvm/ADT/Optional.h"
 #include "llvm/Support/CrashRecoveryContext.h"
 
 #ifdef _MSC_VER

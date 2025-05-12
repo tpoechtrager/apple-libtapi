@@ -14,7 +14,7 @@ namespace llvm {
 namespace orc {
 
 int runAsMain(int (*Main)(int, char *[]), ArrayRef<std::string> Args,
-              std::optional<StringRef> ProgramName) {
+              Optional<StringRef> ProgramName) {
   std::vector<std::unique_ptr<char[]>> ArgVStorage;
   std::vector<char *> ArgV;
 

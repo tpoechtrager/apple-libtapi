@@ -11,13 +11,12 @@
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Path.h"
-#include <optional>
 
 using namespace clang;
 
-std::optional<VersionTuple> DarwinSDKInfo::RelatedTargetVersionMapping::map(
+Optional<VersionTuple> DarwinSDKInfo::RelatedTargetVersionMapping::map(
     const VersionTuple &Key, const VersionTuple &MinimumValue,
-    std::optional<VersionTuple> MaximumValue) const {
+    Optional<VersionTuple> MaximumValue) const {
   if (Key < MinimumKeyVersion)
     return MinimumValue;
   if (Key > MaximumKeyVersion)
@@ -30,11 +29,11 @@ std::optional<VersionTuple> DarwinSDKInfo::RelatedTargetVersionMapping::map(
   // the major-only check.
   if (Key.getMinor())
     return map(VersionTuple(Key.getMajor()), MinimumValue, MaximumValue);
-  // If this a major only key, return std::nullopt for a missing entry.
-  return std::nullopt;
+  // If this a major only key, return None for a missing entry.
+  return None;
 }
 
-std::optional<DarwinSDKInfo::RelatedTargetVersionMapping>
+Optional<DarwinSDKInfo::RelatedTargetVersionMapping>
 DarwinSDKInfo::RelatedTargetVersionMapping::parseJSON(
     const llvm::json::Object &Obj, VersionTuple MaximumDeploymentTarget) {
   VersionTuple Min = VersionTuple(std::numeric_limits<unsigned>::max());
@@ -46,7 +45,7 @@ DarwinSDKInfo::RelatedTargetVersionMapping::parseJSON(
       llvm::VersionTuple KeyVersion;
       llvm::VersionTuple ValueVersion;
       if (KeyVersion.tryParse(KV.getFirst()) || ValueVersion.tryParse(*Val))
-        return std::nullopt;
+        return None;
       Mapping[KeyVersion.normalize()] = ValueVersion;
       if (KeyVersion < Min)
         Min = KeyVersion;
@@ -57,33 +56,32 @@ DarwinSDKInfo::RelatedTargetVersionMapping::parseJSON(
     }
   }
   if (Mapping.empty())
-    return std::nullopt;
+    return None;
   return RelatedTargetVersionMapping(
       Min, Max, MinValue, MaximumDeploymentTarget, std::move(Mapping));
 }
 
-static std::optional<VersionTuple> getVersionKey(const llvm::json::Object &Obj,
-                                                 StringRef Key) {
+static Optional<VersionTuple> getVersionKey(const llvm::json::Object &Obj,
+                                            StringRef Key) {
   auto Value = Obj.getString(Key);
   if (!Value)
-    return std::nullopt;
+    return None;
   VersionTuple Version;
   if (Version.tryParse(*Value))
-    return std::nullopt;
+    return None;
   return Version;
 }
 
-std::optional<DarwinSDKInfo>
+Optional<DarwinSDKInfo>
 DarwinSDKInfo::parseDarwinSDKSettingsJSON(const llvm::json::Object *Obj) {
   auto Version = getVersionKey(*Obj, "Version");
   if (!Version)
-    return std::nullopt;
+    return None;
   auto MaximumDeploymentVersion =
       getVersionKey(*Obj, "MaximumDeploymentTarget");
   if (!MaximumDeploymentVersion)
-    return std::nullopt;
-  llvm::DenseMap<OSEnvPair::StorageType,
-                 std::optional<RelatedTargetVersionMapping>>
+    return None;
+  llvm::DenseMap<OSEnvPair::StorageType, Optional<RelatedTargetVersionMapping>>
       VersionMappings;
   if (const auto *VM = Obj->getObject("VersionMap")) {
     // FIXME: Generalize this out beyond iOS-deriving targets.
@@ -109,7 +107,7 @@ DarwinSDKInfo::parseDarwinSDKSettingsJSON(const llvm::json::Object *Obj) {
       auto VersionMap = RelatedTargetVersionMapping::parseJSON(
           *Mapping, *MaximumDeploymentVersion);
       if (!VersionMap)
-        return std::nullopt;
+        return None;
       VersionMappings[OSEnvPair::macOStoMacCatalystPair().Value] =
           std::move(VersionMap);
     }
@@ -117,7 +115,7 @@ DarwinSDKInfo::parseDarwinSDKSettingsJSON(const llvm::json::Object *Obj) {
       auto VersionMap = RelatedTargetVersionMapping::parseJSON(
           *Mapping, *MaximumDeploymentVersion);
       if (!VersionMap)
-        return std::nullopt;
+        return None;
       VersionMappings[OSEnvPair::macCatalystToMacOSPair().Value] =
           std::move(VersionMap);
     }
@@ -128,7 +126,7 @@ DarwinSDKInfo::parseDarwinSDKSettingsJSON(const llvm::json::Object *Obj) {
                        std::move(VersionMappings));
 }
 
-Expected<std::optional<DarwinSDKInfo>>
+Expected<Optional<DarwinSDKInfo>>
 clang::parseDarwinSDKInfo(llvm::vfs::FileSystem &VFS, StringRef SDKRootPath) {
   llvm::SmallString<256> Filepath = SDKRootPath;
   llvm::sys::path::append(Filepath, "SDKSettings.json");
@@ -136,7 +134,7 @@ clang::parseDarwinSDKInfo(llvm::vfs::FileSystem &VFS, StringRef SDKRootPath) {
       VFS.getBufferForFile(Filepath);
   if (!File) {
     // If the file couldn't be read, assume it just doesn't exist.
-    return std::nullopt;
+    return None;
   }
   Expected<llvm::json::Value> Result =
       llvm::json::parse(File.get()->getBuffer());

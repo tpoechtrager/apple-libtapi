@@ -22,7 +22,6 @@
 #include "llvm/CodeGen/MachineOptimizationRemarkEmitter.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/TargetLowering.h"
-#include "llvm/CodeGen/TargetOpcodes.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/Config/config.h"
@@ -105,7 +104,7 @@ bool InstructionSelect::runOnMachineFunction(MachineFunction &MF) {
 
   CodeGenCoverage CoverageInfo;
   assert(ISel && "Cannot work without InstructionSelector");
-  ISel->setupMF(MF, KB, &CoverageInfo, PSI, BFI);
+  ISel->setupMF(MF, KB, CoverageInfo, PSI, BFI);
 
   // An optimization remark emitter. Used to report failures.
   MachineOptimizationRemarkEmitter MORE(MF, /*MBFI=*/nullptr);
@@ -166,12 +165,12 @@ bool InstructionSelect::runOnMachineFunction(MachineFunction &MF) {
         continue;
       }
 
-      // Eliminate hints or G_CONSTANT_FOLD_BARRIER.
-      if (isPreISelGenericOptimizationHint(MI.getOpcode()) ||
-          MI.getOpcode() == TargetOpcode::G_CONSTANT_FOLD_BARRIER) {
-        auto [DstReg, SrcReg] = MI.getFirst2Regs();
+      // Eliminate hints.
+      if (isPreISelGenericOptimizationHint(MI.getOpcode())) {
+        Register DstReg = MI.getOperand(0).getReg();
+        Register SrcReg = MI.getOperand(1).getReg();
 
-        // At this point, the destination register class of the op may have
+        // At this point, the destination register class of the hint may have
         // been decided.
         //
         // Propagate that through to the source register.
@@ -182,11 +181,6 @@ bool InstructionSelect::runOnMachineFunction(MachineFunction &MF) {
                "Must be able to replace dst with src!");
         MI.eraseFromParent();
         MRI.replaceRegWith(DstReg, SrcReg);
-        continue;
-      }
-
-      if (MI.getOpcode() == TargetOpcode::G_INVOKE_REGION_START) {
-        MI.eraseFromParent();
         continue;
       }
 
@@ -236,7 +230,8 @@ bool InstructionSelect::runOnMachineFunction(MachineFunction &MF) {
         continue;
       Register SrcReg = MI.getOperand(1).getReg();
       Register DstReg = MI.getOperand(0).getReg();
-      if (SrcReg.isVirtual() && DstReg.isVirtual()) {
+      if (Register::isVirtualRegister(SrcReg) &&
+          Register::isVirtualRegister(DstReg)) {
         auto SrcRC = MRI.getRegClass(SrcReg);
         auto DstRC = MRI.getRegClass(DstReg);
         if (SrcRC == DstRC) {
@@ -253,7 +248,7 @@ bool InstructionSelect::runOnMachineFunction(MachineFunction &MF) {
   // that the size of the now-constrained vreg is unchanged and that it has a
   // register class.
   for (unsigned I = 0, E = MRI.getNumVirtRegs(); I != E; ++I) {
-    Register VReg = Register::index2VirtReg(I);
+    unsigned VReg = Register::index2VirtReg(I);
 
     MachineInstr *MI = nullptr;
     if (!MRI.def_empty(VReg))

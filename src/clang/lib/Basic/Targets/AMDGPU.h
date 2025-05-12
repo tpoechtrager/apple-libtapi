@@ -17,16 +17,16 @@
 #include "clang/Basic/TargetInfo.h"
 #include "clang/Basic/TargetOptions.h"
 #include "llvm/ADT/StringSet.h"
+#include "llvm/ADT/Triple.h"
 #include "llvm/Support/Compiler.h"
-#include "llvm/TargetParser/TargetParser.h"
-#include "llvm/TargetParser/Triple.h"
-#include <optional>
+#include "llvm/Support/TargetParser.h"
 
 namespace clang {
 namespace targets {
 
 class LLVM_LIBRARY_VISIBILITY AMDGPUTargetInfo final : public TargetInfo {
 
+  static const Builtin::Info BuiltinInfo[];
   static const char *const GCCRegNames[];
 
   enum AddrSpace {
@@ -42,12 +42,6 @@ class LLVM_LIBRARY_VISIBILITY AMDGPUTargetInfo final : public TargetInfo {
   llvm::AMDGPU::GPUKind GPUKind;
   unsigned GPUFeatures;
   unsigned WavefrontSize;
-
-  /// Whether to use cumode or WGP mode. True for cumode. False for WGP mode.
-  bool CUMode;
-
-  /// Whether having image instructions.
-  bool HasImage = false;
 
   /// Target ID is device name followed by optional feature name postfixed
   /// by plus or minus sign delimitted by colon, e.g. gfx908:xnack+:sramecc-.
@@ -101,18 +95,17 @@ public:
 
   void adjust(DiagnosticsEngine &Diags, LangOptions &Opts) override;
 
-  uint64_t getPointerWidthV(LangAS AS) const override {
+  uint64_t getPointerWidthV(unsigned AddrSpace) const override {
     if (isR600(getTriple()))
       return 32;
-    unsigned TargetAS = getTargetAddressSpace(AS);
 
-    if (TargetAS == Private || TargetAS == Local)
+    if (AddrSpace == Private || AddrSpace == Local)
       return 32;
 
     return 64;
   }
 
-  uint64_t getPointerAlignV(LangAS AddrSpace) const override {
+  uint64_t getPointerAlignV(unsigned AddrSpace) const override {
     return getPointerWidthV(AddrSpace);
   }
 
@@ -120,14 +113,12 @@ public:
     return getTriple().getArch() == llvm::Triple::amdgcn ? 64 : 32;
   }
 
-  bool hasBFloat16Type() const override { return isAMDGCN(getTriple()); }
-
-  std::string_view getClobbers() const override { return ""; }
+  const char *getClobbers() const override { return ""; }
 
   ArrayRef<const char *> getGCCRegNames() const override;
 
   ArrayRef<TargetInfo::GCCRegAlias> getGCCRegAliases() const override {
-    return std::nullopt;
+    return None;
   }
 
   /// Accepted register names: (n, m is unsigned integer, n < m)
@@ -375,7 +366,7 @@ public:
     }
   }
 
-  std::optional<LangAS> getConstantAddressSpace() const override {
+  llvm::Optional<LangAS> getConstantAddressSpace() const override {
     return getLangASFromTargetAS(Constant);
   }
 
@@ -399,9 +390,9 @@ public:
   /// space \p AddressSpace to be converted in order to be used, then return the
   /// corresponding target specific DWARF address space.
   ///
-  /// \returns Otherwise return std::nullopt and no conversion will be emitted
-  /// in the DWARF.
-  std::optional<unsigned>
+  /// \returns Otherwise return None and no conversion will be emitted in the
+  /// DWARF.
+  Optional<unsigned>
   getDWARFAddressSpace(unsigned AddressSpace) const override {
     const unsigned DWARF_Private = 1;
     const unsigned DWARF_Local = 2;
@@ -410,7 +401,7 @@ public:
     } else if (AddressSpace == Local) {
       return DWARF_Local;
     } else {
-      return std::nullopt;
+      return None;
     }
   }
 
@@ -448,25 +439,19 @@ public:
       assert(F.front() == '+' || F.front() == '-');
       if (F == "+wavefrontsize64")
         WavefrontSize = 64;
-      else if (F == "+cumode")
-        CUMode = true;
-      else if (F == "-cumode")
-        CUMode = false;
-      else if (F == "+image-insts")
-        HasImage = true;
       bool IsOn = F.front() == '+';
       StringRef Name = StringRef(F).drop_front();
       if (!llvm::is_contained(TargetIDFeatures, Name))
         continue;
-      assert(!OffloadArchFeatures.contains(Name));
+      assert(OffloadArchFeatures.find(Name) == OffloadArchFeatures.end());
       OffloadArchFeatures[Name] = IsOn;
     }
     return true;
   }
 
-  std::optional<std::string> getTargetID() const override {
+  Optional<std::string> getTargetID() const override {
     if (!isAMDGCN(getTriple()))
-      return std::nullopt;
+      return llvm::None;
     // When -target-cpu is not set, we assume generic code that it is valid
     // for all GPU and use an empty string as target ID to represent that.
     if (GPUKind == llvm::AMDGPU::GK_NONE)
@@ -474,8 +459,6 @@ public:
     return getCanonicalTargetID(getArchNameAMDGCN(GPUKind),
                                 OffloadArchFeatures);
   }
-
-  bool hasHIPImageSupport() const override { return HasImage; }
 };
 
 } // namespace targets

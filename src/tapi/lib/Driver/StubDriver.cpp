@@ -55,7 +55,6 @@ struct Context {
   bool inlinePrivateFrameworks = false;
   bool deletePrivateFrameworks = false;
   bool traceLibraryLocation = false;
-  bool removeSharedCacheFlag = false;
 
 
   PathSeq sysroots;
@@ -128,8 +127,6 @@ findAndGetReexportedLibrary(const StringRef reexportName, Context &ctx,
     return nullptr;
   }
   auto interface = convertToInterfaceFile(*file);
-  if (ctx.removeSharedCacheFlag) 
-    interface->setOSLibNotForSharedCache(false);
   return std::move(interface);
 }
 
@@ -257,8 +254,6 @@ static bool stubifyDynamicLibrary(Context &ctx) {
     errs() << ctx.inputPath << "\n";
 
   auto interface = convertToInterfaceFile(*file);
-  if (ctx.removeSharedCacheFlag) 
-    interface->setOSLibNotForSharedCache(false);
   auto *dylib = interface.get();
   if (!ctx.registry.canWrite(dylib, ctx.fileType)) {
     ctx.diag.report(diag::err_cannot_convert_dylib) << dylib->getPath();
@@ -384,11 +379,11 @@ static bool stubifyDirectory(Context &ctx) {
         sys::path::append(linkTarget, symlinkPath);
       }
 
-      // The symlink src is guaranteed to be a canonical path, because we don't
+      // The symlink src is guarenteed to be a canonical path, because we don't
       // follow symlinks when scanning the SDK. The symlink target is
       // constructed from the symlink path and need to be canonicalized.
       if (auto ec = realpath(linkTarget)) {
-        ctx.diag.report(diag::warn) << (linkTarget + " " + ec.message()).str();
+        ctx.diag.report(diag::warn) << linkTarget << ec.message();
         continue;
       }
 
@@ -462,9 +457,6 @@ static bool stubifyDirectory(Context &ctx) {
       if (dylibs.count(normalizedPath.c_str()))
         continue;
     }
-
-    if (ctx.removeSharedCacheFlag) 
-      interface->setOSLibNotForSharedCache(false);
 
     // FIXME: Once we use C++17, this can be simplified.
     auto it = dylibs.find(normalizedPath.c_str());
@@ -586,7 +578,6 @@ bool Driver::Stub::run(DiagnosticsEngine &diag, Options &opts) {
   ctx.inlinePrivateFrameworks = opts.tapiOptions.inlinePrivateFrameworks;
   ctx.deletePrivateFrameworks = opts.tapiOptions.deletePrivateFrameworks;
   ctx.traceLibraryLocation = opts.tapiOptions.traceLibraryLocation;
-  ctx.removeSharedCacheFlag = opts.tapiOptions.removeSharedCacheFlag;
 
 
   // Handle isysroot.
@@ -656,15 +647,8 @@ bool Driver::Stub::run(DiagnosticsEngine &diag, Options &opts) {
     ctx.outputPath = ctx.inputPath;
   }
 
-  if (isDirectory) {
+  if (isDirectory)
     ctx.searchPaths.emplace_back(ctx.inputPath);
-    // Remove shared cache flag when processing for the Public SDK, this avoids
-    // older toolchains reading newer SDKs that would otherwise look malformed.
-    // Secrecy is not a concern here, so this can be revisited once all supported 
-    // environments have updated. 
-    if (StringRef(ctx.inputPath).contains("PublicSDKContentRoot")) 
-      ctx.removeSharedCacheFlag = true;
-  }
 
   for (auto &path : ctx.sysroots)
     ctx.searchPaths.emplace_back(path);

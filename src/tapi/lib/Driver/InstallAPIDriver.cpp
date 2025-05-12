@@ -44,7 +44,6 @@
 #include "llvm/Support/Program.h"
 #include "llvm/Support/Regex.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/TextAPI/Symbol.h"
 #include <algorithm>
 #include <numeric>
 #include <string>
@@ -61,15 +60,14 @@ using LibAttrs = llvm::SmallSet<InterfaceFileRef, 5>;
 static bool verifyBinaryInfo(bool &autoZippered,
                              const std::vector<Triple> &targets,
                              const APIs &dylibFile, const BinaryInfo &apiInfo,
-                             LibAttrs &apiClients, LibAttrs &apiReexports,
-                             LibAttrs &apiRelinks, LibAttrs &apiRPaths,
+                             LibAttrs &apiClients, LibAttrs &apiReexports
+                             , LibAttrs &apiRPaths,
                              DiagnosticsEngine &diag, const FileType tbdType) {
 
   TargetList dylibTargets;
   const BinaryInfo &dylibInfo = (*dylibFile.begin())->getBinaryInfo();
   LibAttrs dylibReexports;
   LibAttrs dylibClients;
-  LibAttrs dylibRelinks;
   LibAttrs dylibRPaths;
   auto addLib = [&](StringRef libName, LibAttrs &libs, Target &target) -> void {
     auto it = llvm::find_if(
@@ -95,8 +93,6 @@ static bool verifyBinaryInfo(bool &autoZippered,
     if (tbdType >= FileType::TBD_V5) {
       for (const StringRef name : binInfo.rpaths)
         addLib(name, dylibRPaths, target);
-      for (const StringRef libName : binInfo.relinkedLibraries)
-        addLib(libName, dylibRelinks, target);
     }
   }
 
@@ -105,6 +101,7 @@ static bool verifyBinaryInfo(bool &autoZippered,
   auto apiPlatforms = mapToPlatformVersionSet(apiTargets);
   auto dylibPlatforms = mapToPlatformVersionSet(dylibTargets);
   if (apiPlatforms != dylibPlatforms) {
+
     const bool diffMinOS =
         mapToPlatformSet(apiTargets) == mapToPlatformSet(dylibTargets);
     if (autoZippered || diffMinOS)
@@ -151,13 +148,6 @@ static bool verifyBinaryInfo(bool &autoZippered,
 
   if (!dylibInfo.isTwoLevelNamespace) {
     diag.report(diag::err_no_twolevel_namespace);
-    return false;
-  }
-
-  if (apiInfo.isOSLibNotForSharedCache != dylibInfo.isOSLibNotForSharedCache) {
-    diag.report(diag::err_shared_cache_eligiblity_mismatch)
-        << (apiInfo.isOSLibNotForSharedCache ? "true" : "false")
-        << (dylibInfo.isOSLibNotForSharedCache ? "true" : "false");
     return false;
   }
 
@@ -231,11 +221,6 @@ static bool verifyBinaryInfo(bool &autoZippered,
     return false;
 
   if (tbdType >= FileType::TBD_V5) {
-    if (!compareLibraries(apiRelinks, dylibRelinks,
-                          diag::err_relinkable_libraries_missing,
-                          diag::err_relinkable_libraries_mismatch))
-      return false;
-
     // Ignore rpath differences if building asan variant, since the compiler
     // injects additional paths.
     if (!apiInfo.installName.endswith("_asan")) {
@@ -270,7 +255,8 @@ static Expected<std::string> findClangExecutable(DiagnosticsEngine &diag) {
   // the default search PATH.
   auto mainExecutable = sys::fs::getMainExecutable("tapi", &staticSymbol);
   StringRef toolchainBinDir = sys::path::parent_path(mainExecutable);
-  auto clangBinary = sys::findProgramByName("clang", ArrayRef(toolchainBinDir));
+  auto clangBinary =
+      sys::findProgramByName("clang", makeArrayRef(toolchainBinDir));
   if (clangBinary.getError()) {
     diag.report(diag::warn) << "cannot find 'clang' in toolchain directory. "
                                "Looking for 'clang' in PATH instead.";
@@ -337,13 +323,12 @@ static Expected<APIs> getCodeCoverageSymbols(DiagnosticsEngine &diag,
                                      ec);
     FileRemover removeStderrFile(stderrFile);
 
-    const std::optional<StringRef> redirects[] = {
-        /*STDIN=*/std::nullopt,
-        /*STDOUT=*/std::nullopt,
-        /*STDERR=*/StringRef(stderrFile)};
+    const Optional<StringRef> redirects[] = {/*STDIN=*/llvm::None,
+                                             /*STDOUT=*/llvm::None,
+                                             /*STDERR=*/StringRef(stderrFile)};
 
     bool failed = sys::ExecuteAndWait(clangBinary.get(), clangArgs,
-                                      /*env=*/std::nullopt, redirects);
+                                      /*env=*/llvm::None, redirects);
 
     if (failed) {
       auto bufferOr = MemoryBuffer::getFile(stderrFile);
@@ -429,10 +414,10 @@ bool collectHeadersFromFramework(DiagnosticsEngine &diag, FileManager &fm,
   return true;
 }
 
-std::optional<APIs> readFile(InterfaceFileManager &manager,
-                             DiagnosticsEngine &diag, const std::string &path) {
+Optional<APIs> readFile(InterfaceFileManager &manager, DiagnosticsEngine &diag,
+                        const std::string &path) {
   // Files in B&I env can be overwritten thus volatile.
-  auto file = manager.readFile(path, ReadFlags::DefinedSymbols);
+  auto file = manager.readFile(path);
   if (!file) {
     diag.report(diag::err_cannot_read_file)
         << path << toString(file.takeError());
@@ -440,54 +425,6 @@ std::optional<APIs> readFile(InterfaceFileManager &manager,
   }
 
   return *file;
-}
-
-bool setModuleOptions(DiagnosticsEngine &diag, FrontendJob &job,
-                      const FrontendOptions &options, bool &customModuleCache) {
-  if (!options.enableModules)
-    return true;
-  job.enableModules = options.enableModules;
-  // Generate specific module cache if one was not provided.
-  if (job.moduleCachePath.empty()) {
-    SmallString<1024> moduleCachePath;
-    llvm::sys::path::system_temp_directory(/*erasedOnReboot=*/true,
-                                           moduleCachePath);
-    const std::error_code ec =
-        llvm::sys::fs::createUniqueDirectory(moduleCachePath, moduleCachePath);
-    if (ec) {
-      diag.report(clang::diag::err_unable_to_make_temp) << ec.message();
-      return false;
-    }
-    job.moduleCachePath =
-        std::string(moduleCachePath) + "/org.llvm.clang.tapi/ModuleCache";
-    customModuleCache = true;
-  }
-  return true;
-}
-
-std::optional<FrontendJob>
-setOverridingOptionsToJob(DiagnosticsEngine &diag, const FrontendJob &job,
-                          const FrontendOptions &optionsToOverride,
-                          bool &customModuleCache,
-                          ArrayRef<std::string> extraXArgs) {
-  FrontendJob overrideJob = job;
-  llvm::for_each(extraXArgs, [&overrideJob](const auto &arg) {
-    overrideJob.clangExtraArgs.emplace_back(arg);
-  });
-
-  if (job.type != HeaderType::Project)
-    return std::move(overrideJob);
-
-  if (!setModuleOptions(diag, overrideJob, optionsToOverride,
-                        customModuleCache))
-    return std::nullopt;
-
-  // Because overrides can only be additive, only override options if not empty.
-  if (!optionsToOverride.prefixHeaders.empty())
-    overrideJob.prefixHeaders = optionsToOverride.prefixHeaders;
-  if (optionsToOverride.useObjectiveCARC)
-    overrideJob.useObjectiveCARC = optionsToOverride.useObjectiveCARC;
-  return std::move(overrideJob);
 }
 
 } // end anonymous namespace.
@@ -557,8 +494,6 @@ bool Driver::InstallAPI::run(DiagnosticsEngine &diag, Options &opts) {
                     opts.frontendOptions.targetVariants.begin(),
                     opts.frontendOptions.targetVariants.end());
 
-  // Check to see if we need to AutoZipper the output.
-  // If auto zippered, add ios mac to the platform.
   bool autoZippered = false;
   const auto platforms = mapToPlatformSet(allTargets);
 
@@ -661,7 +596,6 @@ bool Driver::InstallAPI::run(DiagnosticsEngine &diag, Options &opts) {
   job.isysroot = opts.frontendOptions.isysroot;
   job.macros = opts.frontendOptions.macros;
   job.systemIncludePaths = opts.frontendOptions.systemIncludePaths;
-  job.afterIncludePaths = opts.frontendOptions.afterIncludePaths;
   job.quotedIncludePaths = opts.frontendOptions.quotedIncludePaths;
   job.frameworkPaths = opts.frontendOptions.frameworkPaths;
   job.includePaths = opts.frontendOptions.includePaths;
@@ -751,8 +685,23 @@ bool Driver::InstallAPI::run(DiagnosticsEngine &diag, Options &opts) {
           job.frameworkPaths.begin(),
           sys::path::parent_path(framework->getPath()).str());
 
-    if (!setModuleOptions(diag, job, opts.frontendOptions, customModuleCache))
-      return false;
+    if (opts.frontendOptions.enableModules) {
+      // Generate specific module cache if one was not provided.
+      if (job.moduleCachePath.empty()) {
+        SmallString<1024> moduleCachePath;
+        llvm::sys::path::system_temp_directory(/*erasedOnReboot=*/true,
+                                               moduleCachePath);
+        std::error_code ec = llvm::sys::fs::createUniqueDirectory(
+            moduleCachePath, moduleCachePath);
+        if (ec) {
+          diag.report(clang::diag::err_unable_to_make_temp) << ec.message();
+          return false;
+        }
+        job.moduleCachePath =
+            std::string(moduleCachePath) + "/org.llvm.clang.tapi/ModuleCache";
+        customModuleCache = true;
+      }
+    }
 
     if (!framework->_versions.empty()) {
       if (framework->_versions.back().empty()) {
@@ -808,11 +757,7 @@ bool Driver::InstallAPI::run(DiagnosticsEngine &diag, Options &opts) {
     if (fm.exists(path)) {
       SmallString<PATH_MAX> fullPath(path);
       fm.makeAbsolutePath(fullPath);
-      std::string includeName;
-      if (auto nameOrNull = createIncludeHeaderName(fullPath))
-        includeName = *nameOrNull;
-      headerFiles.emplace_back(fullPath, HeaderType::Public,
-                               /*relativePath=*/StringRef(), includeName);
+      headerFiles.emplace_back(fullPath, HeaderType::Public);
       headerFiles.back().isExtra = true;
     } else {
       diag.report(diag::err_no_such_header_file)
@@ -825,11 +770,7 @@ bool Driver::InstallAPI::run(DiagnosticsEngine &diag, Options &opts) {
     if (fm.exists(path)) {
       SmallString<PATH_MAX> fullPath(path);
       fm.makeAbsolutePath(fullPath);
-      std::string includeName;
-      if (auto nameOrNull = createIncludeHeaderName(fullPath))
-        includeName = *nameOrNull;
-      headerFiles.emplace_back(fullPath, HeaderType::Private,
-                               /*relativePath=*/StringRef(), includeName);
+      headerFiles.emplace_back(fullPath, HeaderType::Private);
       headerFiles.back().isExtra = true;
     } else {
       diag.report(diag::err_no_such_header_file)
@@ -988,16 +929,11 @@ bool Driver::InstallAPI::run(DiagnosticsEngine &diag, Options &opts) {
   binaryInfo.currentVersion = opts.linkerOptions.currentVersion;
   binaryInfo.compatibilityVersion = opts.linkerOptions.compatibilityVersion;
   binaryInfo.isAppExtensionSafe = opts.linkerOptions.isApplicationExtensionSafe;
-  binaryInfo.isOSLibNotForSharedCache =
-      opts.linkerOptions.isOSLibNotForSharedCache;
   binaryInfo.parentUmbrella = opts.frontendOptions.umbrella;
   binaryInfo.installName = opts.linkerOptions.installName;
   binaryInfo.path = opts.tapiOptions.verifyAgainst;
   LibAttrs allowableClients;
   addToLibrary(opts.linkerOptions.allowableClients, allowableClients);
-  LibAttrs relinkedLibraries;
-  relinkedLibraries.insert(opts.linkerOptions.relinkedLibraries.begin(),
-                           opts.linkerOptions.relinkedLibraries.end());
   LibAttrs rpaths;
   addToLibrary(opts.linkerOptions.rpaths, rpaths);
 
@@ -1017,7 +953,7 @@ bool Driver::InstallAPI::run(DiagnosticsEngine &diag, Options &opts) {
   llvm::SmallVector<std::unique_ptr<MemoryBuffer>, 2> aliasBuffers;
   for (const auto &it : opts.linkerOptions.aliasLists) {
     std::unique_ptr<MemoryBuffer> buffer = nullptr;
-    auto result = parseAliasList(fm, it, buffer);
+    auto result = parseAliasList(fm, it.first, buffer);
     if (!result) {
       diag.report(diag::err)
           << "could not read alias list" << toString(result.takeError());
@@ -1042,7 +978,7 @@ bool Driver::InstallAPI::run(DiagnosticsEngine &diag, Options &opts) {
     // Compare Binary Info.
     if (!verifyBinaryInfo(autoZippered, allTargets, dylib, binaryInfo,
                           allowableClients, reexportedLibraries,
-                          relinkedLibraries, rpaths, diag,
+                          rpaths, diag,
                           opts.tapiOptions.fileType))
       return false;
   }
@@ -1106,24 +1042,6 @@ bool Driver::InstallAPI::run(DiagnosticsEngine &diag, Options &opts) {
   job.headerFiles = headerFiles;
 
   std::vector<FrontendContext> frontendResults;
-  auto runAndRecordFrontendResults = [&](const Twine label,
-                                         ArrayRef<std::string> args = {}) {
-    job.label = label.str();
-
-    const auto initialArgs = job.clangExtraArgs;
-    auto overrideJob = setOverridingOptionsToJob(
-        diag, job, opts.getProjectHeaderOptions(), customModuleCache, args);
-    if (!overrideJob)
-      return false;
-
-    auto contextOrError = runFrontend(*overrideJob);
-    if (auto err = contextOrError.takeError())
-      return canIgnoreFrontendError(err);
-
-    frontendResults.emplace_back(std::move(*contextOrError));
-    return true;
-  };
-
   for (auto &target : allTargets) {
     auto systemFrameworkPaths = getPathsForPlatform(
         opts.frontendOptions.systemFrameworkPaths, mapToPlatformType(target));
@@ -1138,14 +1056,13 @@ bool Driver::InstallAPI::run(DiagnosticsEngine &diag, Options &opts) {
     for (auto type :
          {HeaderType::Public, HeaderType::Private, HeaderType::Project}) {
       job.type = type;
-      const StringRef headerLabel = getName(job.type);
-      if (!runAndRecordFrontendResults(headerLabel))
+      auto contextOrError = runFrontend(job);
+      if (auto err = contextOrError.takeError()) {
+        if (canIgnoreFrontendError(err))
+          continue;
         return false;
-      // Run extra passes for unique compiler arguments.
-      for (const auto &[label, extraArgs] :
-           opts.frontendOptions.uniqueClangArgs)
-        if (!runAndRecordFrontendResults(label + " " + headerLabel, extraArgs))
-          return false;
+      }
+      frontendResults.emplace_back(std::move(*contextOrError));
     }
   }
 
@@ -1162,15 +1079,17 @@ bool Driver::InstallAPI::run(DiagnosticsEngine &diag, Options &opts) {
       errs() << "\n";
     }
   }
+  
+  std::vector<Target> targetTriples;
+  for (auto t: opts.frontendOptions.targets)
+    targetTriples.emplace_back(t);
 
   // Verify remaining symbols from binary per architecture.
   if (verifySyms) {
-    for (auto T : allTargets) {
-      auto arch = mapToArchitecture(T);
+    for (auto arch : mapToArchitectureSet(targetTriples))
       if (job.verifier->verifyRemainingSymbols(arch) ==
-            SymbolVerifier::Result::Invalid)
+          SymbolVerifier::Result::Invalid)
         passedBinary = false;
-    }
   }
 
   bool passedFrontend =
@@ -1189,8 +1108,6 @@ bool Driver::InstallAPI::run(DiagnosticsEngine &diag, Options &opts) {
   scanFile->setTwoLevelNamespace();
   scanFile->setApplicationExtensionSafe(
       opts.linkerOptions.isApplicationExtensionSafe);
-  scanFile->setOSLibNotForSharedCache(
-      opts.linkerOptions.isOSLibNotForSharedCache);
   for (const auto &lib : opts.linkerOptions.allowableClients)
     for (const auto &target : scanFile->targets(lib.second))
       scanFile->addAllowableClient(lib.first, target);

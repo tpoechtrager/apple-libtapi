@@ -20,6 +20,8 @@
 #define LLVM_SUPPORT_COMMANDLINE_H
 
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/None.h"
+#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
@@ -220,7 +222,7 @@ public:
   static SubCommand &getTopLevel();
 
   // Get the special subcommand that can be used to put an option into all
-  // subcommands.
+  // subcomands.
   static SubCommand &getAll();
 
   void reset();
@@ -315,7 +317,7 @@ public:
   }
 
   bool isInAllSubCommands() const {
-    return Subs.contains(&SubCommand::getAll());
+    return llvm::is_contained(Subs, &SubCommand::getAll());
   }
 
   //-------------------------------------------------------------------------===
@@ -503,10 +505,10 @@ struct callback_traits<R (C::*)(Args...) const> {
   using result_type = R;
   using arg_type = std::tuple_element_t<0, std::tuple<Args...>>;
   static_assert(sizeof...(Args) == 1, "callback function must have one and only one parameter");
-  static_assert(std::is_same_v<result_type, void>,
+  static_assert(std::is_same<result_type, void>::value,
                 "callback return type must be void");
-  static_assert(std::is_lvalue_reference_v<arg_type> &&
-                    std::is_const_v<std::remove_reference_t<arg_type>>,
+  static_assert(std::is_lvalue_reference<arg_type>::value &&
+                    std::is_const<std::remove_reference_t<arg_type>>::value,
                 "callback arg_type must be a const lvalue reference");
 };
 } // namespace detail
@@ -613,7 +615,7 @@ protected:
 // Top-level option class.
 template <class DataType>
 struct OptionValue final
-    : OptionValueBase<DataType, std::is_class_v<DataType>> {
+    : OptionValueBase<DataType, std::is_class<DataType>::value> {
   OptionValue() = default;
 
   OptionValue(const DataType &V) { this->setValue(V); }
@@ -1407,9 +1409,9 @@ public:
 //
 template <class DataType, bool ExternalStorage = false,
           class ParserClass = parser<DataType>>
-class opt
-    : public Option,
-      public opt_storage<DataType, ExternalStorage, std::is_class_v<DataType>> {
+class opt : public Option,
+            public opt_storage<DataType, ExternalStorage,
+                               std::is_class<DataType>::value> {
   ParserClass Parser;
 
   bool handleOccurrence(unsigned pos, StringRef ArgName,
@@ -1448,7 +1450,8 @@ class opt
     }
   }
 
-  template <class T, class = std::enable_if_t<std::is_assignable_v<T &, T>>>
+  template <class T,
+            class = std::enable_if_t<std::is_assignable<T &, T>::value>>
   void setDefaultImpl() {
     const OptionValue<DataType> &V = this->getDefault();
     if (V.hasValue())
@@ -1457,7 +1460,8 @@ class opt
       this->setValue(T());
   }
 
-  template <class T, class = std::enable_if_t<!std::is_assignable_v<T &, T>>>
+  template <class T,
+            class = std::enable_if_t<!std::is_assignable<T &, T>::value>>
   void setDefaultImpl(...) {}
 
   void setDefault() override { setDefaultImpl<DataType>(); }
@@ -2136,9 +2140,6 @@ class ExpansionContext {
   /// current directory is used instead.
   StringRef CurrentDir;
 
-  /// Directories used for search of config files.
-  ArrayRef<StringRef> SearchDirs;
-
   /// True if names of nested response files must be resolved relative to
   /// including file.
   bool RelativeNames = false;
@@ -2171,26 +2172,10 @@ public:
     return *this;
   }
 
-  ExpansionContext &setSearchDirs(ArrayRef<StringRef> X) {
-    SearchDirs = X;
-    return *this;
-  }
-
   ExpansionContext &setVFS(vfs::FileSystem *X) {
     FS = X;
     return *this;
   }
-
-  /// Looks for the specified configuration file.
-  ///
-  /// \param[in]  FileName Name of the file to search for.
-  /// \param[out] FilePath File absolute path, if it was found.
-  /// \return True if file was found.
-  ///
-  /// If the specified file name contains a directory separator, it is searched
-  /// for by its absolute path. Otherwise looks for file sequentially in
-  /// directories specified by SearchDirs field.
-  bool findConfigFile(StringRef FileName, SmallVectorImpl<char> &FilePath);
 
   /// Reads command line options from the given configuration file.
   ///
@@ -2202,10 +2187,10 @@ public:
   /// commands resolving file names in them relative to the directory where
   /// CfgFilename resides. It also expands "<CFGDIR>" to the base path of the
   /// current config file.
-  Error readConfigFile(StringRef CfgFile, SmallVectorImpl<const char *> &Argv);
+  bool readConfigFile(StringRef CfgFile, SmallVectorImpl<const char *> &Argv);
 
   /// Expands constructs "@file" in the provided array of arguments recursively.
-  Error expandResponseFiles(SmallVectorImpl<const char *> &Argv);
+  bool expandResponseFiles(SmallVectorImpl<const char *> &Argv);
 };
 
 /// A convenience helper which concatenates the options specified by the
@@ -2217,8 +2202,11 @@ bool expandResponseFiles(int Argc, const char *const *Argv, const char *EnvVar,
 
 /// A convenience helper which supports the typical use case of expansion
 /// function call.
-bool ExpandResponseFiles(StringSaver &Saver, TokenizerCallback Tokenizer,
-                         SmallVectorImpl<const char *> &Argv);
+inline bool ExpandResponseFiles(StringSaver &Saver, TokenizerCallback Tokenizer,
+                                SmallVectorImpl<const char *> &Argv) {
+  ExpansionContext ECtx(Saver.getAllocator(), Tokenizer);
+  return ECtx.expandResponseFiles(Argv);
+}
 
 /// A convenience helper which concatenates the options specified by the
 /// environment variable EnvVar and command line options, then expands response

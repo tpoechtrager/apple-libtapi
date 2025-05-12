@@ -33,8 +33,8 @@ using namespace llvm;
 #define PRINT_ALIAS_INSTR
 #include "X86GenAsmWriter1.inc"
 
-void X86IntelInstPrinter::printRegName(raw_ostream &OS, MCRegister Reg) const {
-  markup(OS, Markup::Register) << getRegisterName(Reg);
+void X86IntelInstPrinter::printRegName(raw_ostream &OS, unsigned RegNo) const {
+  OS << markup("<reg:") << getRegisterName(RegNo) << markup(">");
 }
 
 void X86IntelInstPrinter::printInst(const MCInst *MI, uint64_t Address,
@@ -44,7 +44,7 @@ void X86IntelInstPrinter::printInst(const MCInst *MI, uint64_t Address,
 
   // In 16-bit mode, print data16 as data32.
   if (MI->getOpcode() == X86::DATA16_PREFIX &&
-      STI.hasFeature(X86::Is16Bit)) {
+      STI.getFeatureBits()[X86::Is16Bit]) {
     OS << "\tdata32";
   } else if (!printAliasInstr(MI, Address, OS) && !printVecCompareInstr(MI, OS))
     printInstruction(MI, Address, OS);
@@ -168,9 +168,9 @@ bool X86IntelInstPrinter::printVecCompareInstr(const MCInst *MI, raw_ostream &OS
           // Broadcast form.
           // Load size is word for TA map. Otherwise it is based on W-bit.
           if ((Desc.TSFlags & X86II::OpMapMask) == X86II::TA) {
-            assert(!(Desc.TSFlags & X86II::REX_W) && "Unknown W-bit value!");
+            assert(!(Desc.TSFlags & X86II::VEX_W) && "Unknown W-bit value!");
             printwordmem(MI, CurOp++, OS);
-          } else if (Desc.TSFlags & X86II::REX_W) {
+          } else if (Desc.TSFlags & X86II::VEX_W) {
             printqwordmem(MI, CurOp++, OS);
           } else {
             printdwordmem(MI, CurOp++, OS);
@@ -179,13 +179,13 @@ bool X86IntelInstPrinter::printVecCompareInstr(const MCInst *MI, raw_ostream &OS
           // Print the number of elements broadcasted.
           unsigned NumElts;
           if (Desc.TSFlags & X86II::EVEX_L2)
-            NumElts = (Desc.TSFlags & X86II::REX_W) ? 8 : 16;
+            NumElts = (Desc.TSFlags & X86II::VEX_W) ? 8 : 16;
           else if (Desc.TSFlags & X86II::VEX_L)
-            NumElts = (Desc.TSFlags & X86II::REX_W) ? 4 : 8;
+            NumElts = (Desc.TSFlags & X86II::VEX_W) ? 4 : 8;
           else
-            NumElts = (Desc.TSFlags & X86II::REX_W) ? 2 : 4;
+            NumElts = (Desc.TSFlags & X86II::VEX_W) ? 2 : 4;
           if ((Desc.TSFlags & X86II::OpMapMask) == X86II::TA) {
-            assert(!(Desc.TSFlags & X86II::REX_W) && "Unknown W-bit value!");
+            assert(!(Desc.TSFlags & X86II::VEX_W) && "Unknown W-bit value!");
             NumElts *= 2;
           }
           OS << "{1to" << NumElts << "}";
@@ -321,7 +321,7 @@ bool X86IntelInstPrinter::printVecCompareInstr(const MCInst *MI, raw_ostream &OS
         if (Desc.TSFlags & X86II::EVEX_B) {
           // Broadcast form.
           // Load size is based on W-bit as only D and Q are supported.
-          if (Desc.TSFlags & X86II::REX_W)
+          if (Desc.TSFlags & X86II::VEX_W)
             printqwordmem(MI, CurOp++, OS);
           else
             printdwordmem(MI, CurOp++, OS);
@@ -329,11 +329,11 @@ bool X86IntelInstPrinter::printVecCompareInstr(const MCInst *MI, raw_ostream &OS
           // Print the number of elements broadcasted.
           unsigned NumElts;
           if (Desc.TSFlags & X86II::EVEX_L2)
-            NumElts = (Desc.TSFlags & X86II::REX_W) ? 8 : 16;
+            NumElts = (Desc.TSFlags & X86II::VEX_W) ? 8 : 16;
           else if (Desc.TSFlags & X86II::VEX_L)
-            NumElts = (Desc.TSFlags & X86II::REX_W) ? 4 : 8;
+            NumElts = (Desc.TSFlags & X86II::VEX_W) ? 4 : 8;
           else
-            NumElts = (Desc.TSFlags & X86II::REX_W) ? 2 : 4;
+            NumElts = (Desc.TSFlags & X86II::VEX_W) ? 2 : 4;
           OS << "{1to" << NumElts << "}";
         } else {
           if (Desc.TSFlags & X86II::EVEX_L2)
@@ -361,7 +361,7 @@ void X86IntelInstPrinter::printOperand(const MCInst *MI, unsigned OpNo,
   if (Op.isReg()) {
     printRegName(O, Op.getReg());
   } else if (Op.isImm()) {
-    markup(O, Markup::Immediate) << formatImm((int64_t)Op.getImm());
+    O << markup("<imm:") << formatImm((int64_t)Op.getImm()) << markup(">");
   } else {
     assert(Op.isExpr() && "unknown operand kind in printOperand");
     O << "offset ";
@@ -388,8 +388,7 @@ void X86IntelInstPrinter::printMemReference(const MCInst *MI, unsigned Op,
   // If this has a segment register, print it.
   printOptionalSegReg(MI, Op + X86::AddrSegmentReg, O);
 
-  WithMarkup M = markup(O, Markup::Memory);
-  O << '[';
+  O << markup("<mem:") << '[';
 
   bool NeedPlus = false;
   if (BaseReg.getReg()) {
@@ -399,7 +398,7 @@ void X86IntelInstPrinter::printMemReference(const MCInst *MI, unsigned Op,
 
   if (IndexReg.getReg()) {
     if (NeedPlus) O << " + ";
-    if (ScaleVal != 1 || !BaseReg.getReg())
+    if (ScaleVal != 1)
       O << ScaleVal << '*';
     printOperand(MI, Op+X86::AddrIndexReg, O);
     NeedPlus = true;
@@ -420,33 +419,28 @@ void X86IntelInstPrinter::printMemReference(const MCInst *MI, unsigned Op,
           DispVal = -DispVal;
         }
       }
-      markup(O, Markup::Immediate) << formatImm(DispVal);
+      O << markup("<imm:") << formatImm(DispVal) << markup(">");
     }
   }
 
-  O << ']';
+  O << ']' << markup(">");
 }
 
 void X86IntelInstPrinter::printSrcIdx(const MCInst *MI, unsigned Op,
                                       raw_ostream &O) {
   // If this has a segment register, print it.
   printOptionalSegReg(MI, Op + 1, O);
-
-  WithMarkup M = markup(O, Markup::Memory);
-  O << '[';
+  O << markup("<mem:") << '[';
   printOperand(MI, Op, O);
-  O << ']';
+  O << ']' << markup(">");
 }
 
 void X86IntelInstPrinter::printDstIdx(const MCInst *MI, unsigned Op,
                                       raw_ostream &O) {
   // DI accesses are always ES-based.
-  O << "es:";
-
-  WithMarkup M = markup(O, Markup::Memory);
-  O << '[';
+  O << "es:" << markup("<mem:") << '[';
   printOperand(MI, Op, O);
-  O << ']';
+  O << ']' << markup(">");
 }
 
 void X86IntelInstPrinter::printMemOffset(const MCInst *MI, unsigned Op,
@@ -456,17 +450,16 @@ void X86IntelInstPrinter::printMemOffset(const MCInst *MI, unsigned Op,
   // If this has a segment register, print it.
   printOptionalSegReg(MI, Op + 1, O);
 
-  WithMarkup M = markup(O, Markup::Memory);
-  O << '[';
+  O << markup("<mem:") << '[';
 
   if (DispSpec.isImm()) {
-    markup(O, Markup::Immediate) << formatImm(DispSpec.getImm());
+    O << markup("<imm:") << formatImm(DispSpec.getImm()) << markup(">");
   } else {
     assert(DispSpec.isExpr() && "non-immediate displacement?");
     DispSpec.getExpr()->print(O, &MAI);
   }
 
-  O << ']';
+  O << ']' << markup(">");
 }
 
 void X86IntelInstPrinter::printU8Imm(const MCInst *MI, unsigned Op,
@@ -474,7 +467,8 @@ void X86IntelInstPrinter::printU8Imm(const MCInst *MI, unsigned Op,
   if (MI->getOperand(Op).isExpr())
     return MI->getOperand(Op).getExpr()->print(O, &MAI);
 
-  markup(O, Markup::Immediate) << formatImm(MI->getOperand(Op).getImm() & 0xff);
+  O << markup("<imm:") << formatImm(MI->getOperand(Op).getImm() & 0xff)
+    << markup(">");
 }
 
 void X86IntelInstPrinter::printSTiRegOperand(const MCInst *MI, unsigned OpNo,

@@ -16,7 +16,6 @@
 #include "clang/Tooling/Tooling.h"
 #include "llvm/Support/Errc.h"
 #include "gtest/gtest.h"
-#include <optional>
 
 using namespace clang;
 using namespace tooling;
@@ -48,7 +47,7 @@ createReplacements(const std::unique_ptr<RefactoringActionRule> &Rule,
     }
 
   public:
-    std::optional<Expected<AtomicChanges>> Result;
+    Optional<Expected<AtomicChanges>> Result;
   };
 
   Consumer C;
@@ -176,8 +175,8 @@ TEST_F(RefactoringActionRulesTest, ReturnError) {
   EXPECT_EQ(Message, "Error");
 }
 
-std::optional<SymbolOccurrences>
-findOccurrences(RefactoringActionRule &Rule, RefactoringRuleContext &Context) {
+Optional<SymbolOccurrences> findOccurrences(RefactoringActionRule &Rule,
+                                            RefactoringRuleContext &Context) {
   class Consumer final : public RefactoringResultConsumer {
     void handleError(llvm::Error) override {}
     void handle(SymbolOccurrences Occurrences) override {
@@ -188,7 +187,7 @@ findOccurrences(RefactoringActionRule &Rule, RefactoringRuleContext &Context) {
     }
 
   public:
-    std::optional<SymbolOccurrences> Result;
+    Optional<SymbolOccurrences> Result;
   };
 
   Consumer C;
@@ -211,9 +210,9 @@ TEST_F(RefactoringActionRulesTest, ReturnSymbolOccurrences) {
     Expected<SymbolOccurrences>
     findSymbolOccurrences(RefactoringRuleContext &) override {
       SymbolOccurrences Occurrences;
-      Occurrences.push_back(SymbolOccurrence(
-          SymbolName("test", /*IsObjectiveCSelector=*/false),
-          SymbolOccurrence::MatchingSymbol, Selection.getBegin()));
+      Occurrences.push_back(SymbolOccurrence(SymbolName("test"),
+                                             SymbolOccurrence::MatchingSymbol,
+                                             Selection.getBegin()));
       return std::move(Occurrences);
     }
   };
@@ -225,7 +224,7 @@ TEST_F(RefactoringActionRulesTest, ReturnSymbolOccurrences) {
   SourceLocation Cursor =
       Context.Sources.getLocForStartOfFile(Context.Sources.getMainFileID());
   RefContext.setSelectionRange({Cursor, Cursor});
-  std::optional<SymbolOccurrences> Result = findOccurrences(*Rule, RefContext);
+  Optional<SymbolOccurrences> Result = findOccurrences(*Rule, RefContext);
 
   ASSERT_FALSE(!Result);
   SymbolOccurrences Occurrences = std::move(*Result);

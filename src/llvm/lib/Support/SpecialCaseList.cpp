@@ -37,6 +37,7 @@ bool SpecialCaseList::Matcher::insert(std::string Regexp,
     Strings[Regexp] = LineNumber;
     return true;
   }
+  Trigrams.insert(Regexp);
 
   // Replace * with .*
   for (size_t pos = 0; (pos = Regexp.find('*', pos)) != std::string::npos;
@@ -60,6 +61,8 @@ unsigned SpecialCaseList::Matcher::match(StringRef Query) const {
   auto It = Strings.find(Query);
   if (It != Strings.end())
     return It->second;
+  if (Trigrams.isDefinitelyOut(Query))
+    return false;
   for (const auto &RegExKV : RegExes)
     if (RegExKV.first->match(Query))
       return RegExKV.second;
@@ -172,7 +175,7 @@ bool SpecialCaseList::parse(const MemoryBuffer *MB,
     StringRef Category = SplitRegexp.second;
 
     // Create this section if it has not been seen before.
-    if (!SectionsMap.contains(Section)) {
+    if (SectionsMap.find(Section) == SectionsMap.end()) {
       std::unique_ptr<Matcher> M = std::make_unique<Matcher>();
       std::string REError;
       if (!M->insert(std::string(Section), LineNo, REError)) {

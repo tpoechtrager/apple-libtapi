@@ -50,7 +50,6 @@ struct FrameworkConfiguration {
   std::vector<Macro> macros;
   HeaderConfiguration publicHeaderConfiguration;
   HeaderConfiguration privateHeaderConfiguration;
-  bool scanSwiftModule = false;
   bool useOverlay = false;
   std::vector<std::string> clangExtraArgs;
 };
@@ -64,12 +63,9 @@ struct ProjectConfiguration {
   std::vector<Macro> macros;
   bool isiOSMac = false;
   bool isZippered = false;
-  bool scanSwiftModule = false;
   bool useOverlay = false;
   bool useUmbrellaOnly = false;
   bool useSplitHeaderDir = false;
-  bool scanPublicHeadersInSDKContentRoot = false;
-  bool ignoreExistingPartialSDKDBs = false;
   PathSeq rootMaskPaths;
   PathSeq sdkMaskPaths;
   HeaderConfiguration publicHeaderConfiguration;

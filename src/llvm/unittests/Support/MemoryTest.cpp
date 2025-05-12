@@ -92,7 +92,7 @@ protected:
   do { \
     if ((Flags & Memory::MF_WRITE) && (Flags & Memory::MF_EXEC) && \
         IsMPROTECT()) \
-      GTEST_SKIP();   \
+      return; \
   } while (0)
 
 TEST_P(MappedMemoryTest, AllocAndRelease) {
@@ -158,7 +158,7 @@ TEST_P(MappedMemoryTest, BasicWrite) {
   // This test applies only to readable and writeable combinations
   if (Flags &&
       !((Flags & Memory::MF_READ) && (Flags & Memory::MF_WRITE)))
-    GTEST_SKIP();
+    return;
   CHECK_UNSUPPORTED();
 
   std::error_code EC;
@@ -179,7 +179,7 @@ TEST_P(MappedMemoryTest, MultipleWrite) {
   // This test applies only to readable and writeable combinations
   if (Flags &&
       !((Flags & Memory::MF_READ) && (Flags & Memory::MF_WRITE)))
-    GTEST_SKIP();
+    return;
   CHECK_UNSUPPORTED();
 
   std::error_code EC;
@@ -243,7 +243,7 @@ TEST_P(MappedMemoryTest, EnabledWrite) {
   // MPROTECT prevents W+X, and since this test always adds W we need
   // to block any variant with X.
   if ((Flags & Memory::MF_EXEC) && IsMPROTECT())
-    GTEST_SKIP();
+    return;
 
   std::error_code EC;
   MemoryBlock M1 = Memory::allocateMappedMemory(2 * sizeof(int), nullptr, Flags,

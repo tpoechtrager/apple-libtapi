@@ -84,12 +84,6 @@ static cl::opt<unsigned> ReductionSize(
     cl::desc("A huge scheduling region will have maps reduced by this many "
              "nodes at a time. Defaults to HugeRegion / 2."));
 
-#if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
-static cl::opt<bool> SchedPrintCycles(
-    "sched-print-cycles", cl::Hidden, cl::init(false),
-    cl::desc("Report top/bottom cycles when dumping SUnit instances"));
-#endif
-
 static unsigned getReductionSize() {
   // Always reduce a huge region with half of the elements, except
   // when user sets this number explicitly.
@@ -208,12 +202,13 @@ void ScheduleDAGInstrs::addSchedBarrierDeps() {
   ExitSU.setInstr(ExitMI);
   // Add dependencies on the defs and uses of the instruction.
   if (ExitMI) {
-    for (const MachineOperand &MO : ExitMI->all_uses()) {
+    for (const MachineOperand &MO : ExitMI->operands()) {
+      if (!MO.isReg() || MO.isDef()) continue;
       Register Reg = MO.getReg();
-      if (Reg.isPhysical()) {
+      if (Register::isPhysicalRegister(Reg)) {
         Uses.insert(PhysRegSUOper(&ExitSU, -1, Reg));
-      } else if (Reg.isVirtual() && MO.readsReg()) {
-        addVRegUseDeps(&ExitSU, MO.getOperandNo());
+      } else if (Register::isVirtualRegister(Reg) && MO.readsReg()) {
+        addVRegUseDeps(&ExitSU, ExitMI->getOperandNo(&MO));
       }
     }
   }
@@ -333,11 +328,11 @@ void ScheduleDAGInstrs::addPhysRegDeps(SUnit *SU, unsigned OperIdx) {
     addPhysRegDataDeps(SU, OperIdx);
 
     // Clear previous uses and defs of this register and its subergisters.
-    for (MCPhysReg SubReg : TRI->subregs_inclusive(Reg)) {
-      if (Uses.contains(SubReg))
-        Uses.eraseAll(SubReg);
+    for (MCSubRegIterator SubReg(Reg, TRI, true); SubReg.isValid(); ++SubReg) {
+      if (Uses.contains(*SubReg))
+        Uses.eraseAll(*SubReg);
       if (!MO.isDead())
-        Defs.eraseAll(SubReg);
+        Defs.eraseAll(*SubReg);
     }
     if (MO.isDead() && SU->isCall) {
       // Calls will not be reordered because of chain dependencies (see
@@ -844,9 +839,9 @@ void ScheduleDAGInstrs::buildSchedGraph(AAResults *AA,
       if (!MO.isReg() || !MO.isDef())
         continue;
       Register Reg = MO.getReg();
-      if (Reg.isPhysical()) {
+      if (Register::isPhysicalRegister(Reg)) {
         addPhysRegDeps(SU, j);
-      } else if (Reg.isVirtual()) {
+      } else if (Register::isVirtualRegister(Reg)) {
         HasVRegDef = true;
         addVRegDefDeps(SU, j);
       }
@@ -861,9 +856,9 @@ void ScheduleDAGInstrs::buildSchedGraph(AAResults *AA,
       if (!MO.isReg() || !MO.isUse())
         continue;
       Register Reg = MO.getReg();
-      if (Reg.isPhysical()) {
+      if (Register::isPhysicalRegister(Reg)) {
         addPhysRegDeps(SU, j);
-      } else if (Reg.isVirtual() && MO.readsReg()) {
+      } else if (Register::isVirtualRegister(Reg) && MO.readsReg()) {
         addVRegUseDeps(SU, j);
       }
     }
@@ -1025,14 +1020,15 @@ raw_ostream &llvm::operator<<(raw_ostream &OS, const PseudoSourceValue* PSV) {
 
 void ScheduleDAGInstrs::Value2SUsMap::dump() {
   for (const auto &[ValType, SUs] : *this) {
-    if (isa<const Value *>(ValType)) {
-      const Value *V = cast<const Value *>(ValType);
+    if (ValType.is<const Value*>()) {
+      const Value *V = ValType.get<const Value*>();
       if (isa<UndefValue>(V))
         dbgs() << "Unknown";
       else
         V->printAsOperand(dbgs());
-    } else if (isa<const PseudoSourceValue *>(ValType))
-      dbgs() << cast<const PseudoSourceValue *>(ValType);
+    }
+    else if (ValType.is<const PseudoSourceValue*>())
+      dbgs() << ValType.get<const PseudoSourceValue*>();
     else
       llvm_unreachable("Unknown Value type.");
 
@@ -1162,9 +1158,6 @@ void ScheduleDAGInstrs::fixupKills(MachineBasicBlock &MBB) {
 void ScheduleDAGInstrs::dumpNode(const SUnit &SU) const {
 #if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
   dumpNodeName(SU);
-  if (SchedPrintCycles)
-    dbgs() << " [TopReadyCycle = " << SU.TopReadyCycle
-           << ", BottomReadyCycle = " << SU.BotReadyCycle << "]";
   dbgs() << ": ";
   SU.getInstr()->dump();
 #endif
@@ -1520,7 +1513,7 @@ LLVM_DUMP_METHOD void ILPValue::dump() const {
 
 namespace llvm {
 
-LLVM_ATTRIBUTE_UNUSED
+LLVM_DUMP_METHOD
 raw_ostream &operator<<(raw_ostream &OS, const ILPValue &Val) {
   Val.print(OS);
   return OS;

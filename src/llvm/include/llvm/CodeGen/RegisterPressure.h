@@ -201,8 +201,6 @@ class PressureDiffs {
 
 public:
   PressureDiffs() = default;
-  PressureDiffs &operator=(const PressureDiffs &other) = delete;
-  PressureDiffs(const PressureDiffs &other) = delete;
   ~PressureDiffs() { free(PDiffArray); }
 
   void clear() { Size = 0; }
@@ -274,7 +272,7 @@ private:
 
   using RegSet = SparseSet<IndexMaskPair>;
   RegSet Regs;
-  unsigned NumRegUnits = 0u;
+  unsigned NumRegUnits;
 
   unsigned getSparseIndexFromReg(Register Reg) const {
     if (Reg.isVirtual())
@@ -360,7 +358,7 @@ class RegPressureTracker {
   const MachineFunction *MF = nullptr;
   const TargetRegisterInfo *TRI = nullptr;
   const RegisterClassInfo *RCI = nullptr;
-  const MachineRegisterInfo *MRI = nullptr;
+  const MachineRegisterInfo *MRI;
   const LiveIntervals *LIS = nullptr;
 
   /// We currently only allow pressure tracking within a block.

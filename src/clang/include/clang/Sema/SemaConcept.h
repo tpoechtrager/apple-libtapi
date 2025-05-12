@@ -18,8 +18,8 @@
 #include "clang/AST/DeclTemplate.h"
 #include "clang/Basic/SourceLocation.h"
 #include "llvm/ADT/PointerUnion.h"
+#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/SmallVector.h"
-#include <optional>
 #include <string>
 #include <utility>
 
@@ -28,7 +28,7 @@ class Sema;
 
 struct AtomicConstraint {
   const Expr *ConstraintExpr;
-  std::optional<ArrayRef<TemplateArgumentLoc>> ParameterMapping;
+  Optional<ArrayRef<TemplateArgumentLoc>> ParameterMapping;
 
   AtomicConstraint(Sema &S, const Expr *ConstraintExpr) :
       ConstraintExpr(ConstraintExpr) { };
@@ -144,9 +144,9 @@ struct NormalizedConstraint {
   }
 
 private:
-  static std::optional<NormalizedConstraint>
+  static Optional<NormalizedConstraint>
   fromConstraintExprs(Sema &S, NamedDecl *D, ArrayRef<const Expr *> E);
-  static std::optional<NormalizedConstraint>
+  static Optional<NormalizedConstraint>
   fromConstraintExpr(Sema &S, NamedDecl *D, const Expr *E);
 };
 

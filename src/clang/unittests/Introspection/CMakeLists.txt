@@ -11,10 +11,10 @@ clang_target_link_libraries(IntrospectionTests
   PRIVATE
   clangAST
   clangASTMatchers
-  clangBasic
-  clangFrontend
-  clangSerialization
   clangTooling
+  clangBasic
+  clangSerialization
+  clangFrontend
   )
 target_link_libraries(IntrospectionTests
   PRIVATE

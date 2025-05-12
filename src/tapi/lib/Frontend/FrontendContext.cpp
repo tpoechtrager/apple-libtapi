@@ -25,10 +25,10 @@ FrontendContext::FrontendContext(const llvm::Triple &triple,
   fileManager = new FileManager(clang::FileSystemOptions(), vfs);
 }
 
-std::optional<HeaderType>
+llvm::Optional<HeaderType>
 FrontendContext::findAndRecordFile(const FileEntry *file) {
   if (!file)
-    return std::nullopt;
+    return llvm::None;
 
   auto it = knownFiles.find(file);
   if (it != knownFiles.end())
@@ -37,7 +37,7 @@ FrontendContext::findAndRecordFile(const FileEntry *file) {
   // Check if file was previously found, but not one tapi is interested in.
   auto unused = unusedFiles.find(file);
   if (unused != unusedFiles.end())
-    return std::nullopt;
+    return llvm::None;
 
   // If file was not found, search by how the header was
   // included. This is primarily to resolve headers found
@@ -52,7 +52,7 @@ FrontendContext::findAndRecordFile(const FileEntry *file) {
   // Record that the file was found to avoid future string searches for the
   // same file.
   unusedFiles.insert(file);
-  return std::nullopt;
+  return llvm::None;
 }
 
 TAPI_NAMESPACE_INTERNAL_END

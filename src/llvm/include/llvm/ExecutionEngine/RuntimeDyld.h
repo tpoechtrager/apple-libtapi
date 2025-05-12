@@ -134,10 +134,11 @@ public:
     ///
     /// Note that by default the callback is disabled. To enable it
     /// redefine the method needsToReserveAllocationSpace to return true.
-    virtual void reserveAllocationSpace(uintptr_t CodeSize, Align CodeAlign,
-                                        uintptr_t RODataSize, Align RODataAlign,
+    virtual void reserveAllocationSpace(uintptr_t CodeSize, uint32_t CodeAlign,
+                                        uintptr_t RODataSize,
+                                        uint32_t RODataAlign,
                                         uintptr_t RWDataSize,
-                                        Align RWDataAlign) {}
+                                        uint32_t RWDataAlign) {}
 
     /// Override to return true to enable the reserveAllocationSpace callback.
     virtual bool needsToReserveAllocationSpace() { return false; }
@@ -230,7 +231,7 @@ public:
   StringRef getSectionContent(unsigned SectionID) const;
 
   /// If the section was loaded, return the section's load address,
-  /// otherwise return std::nullopt.
+  /// otherwise return None.
   uint64_t getSectionLoadAddress(unsigned SectionID) const;
 
   /// Set the NotifyStubEmitted callback. This is used for debugging

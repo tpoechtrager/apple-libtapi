@@ -23,7 +23,6 @@
 #include "llvm/Support/Path.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
-#include <optional>
 #include <system_error>
 
 using namespace llvm;
@@ -140,7 +139,10 @@ bool GCOVFile::readGCNO(GCOVBuffer &buf) {
         if (version >= GCOV::V900)
           fn->endColumn = buf.getWord();
       }
-      fn->srcIdx = addNormalizedPathToMap(filename);
+      auto r = filenameToIdx.try_emplace(filename, filenameToIdx.size());
+      if (r.second)
+        filenames.emplace_back(filename);
+      fn->srcIdx = r.first->second;
       identToFunction[fn->ident] = fn;
     } else if (tag == GCOV_TAG_BLOCKS && fn) {
       if (version < GCOV::V800) {
@@ -323,19 +325,6 @@ void GCOVFile::print(raw_ostream &OS) const {
 LLVM_DUMP_METHOD void GCOVFile::dump() const { print(dbgs()); }
 #endif
 
-unsigned GCOVFile::addNormalizedPathToMap(StringRef filename) {
-  // unify filename, as the same path can have different form
-  SmallString<256> P(filename);
-  sys::path::remove_dots(P, true);
-  filename = P.str();
-
-  auto r = filenameToIdx.try_emplace(filename, filenameToIdx.size());
-  if (r.second)
-    filenames.emplace_back(filename);
-
-  return r.first->second;
-}
-
 bool GCOVArc::onTree() const { return flags & GCOV_ARC_ON_TREE; }
 
 //===----------------------------------------------------------------------===//
@@ -347,8 +336,10 @@ StringRef GCOVFunction::getName(bool demangle) const {
   if (demangled.empty()) {
     do {
       if (Name.startswith("_Z")) {
+        int status = 0;
         // Name is guaranteed to be NUL-terminated.
-        if (char *res = itaniumDemangle(Name.data())) {
+        char *res = itaniumDemangle(Name.data(), nullptr, nullptr, &status);
+        if (status == 0) {
           demangled = res;
           free(res);
           break;
@@ -887,7 +878,7 @@ void Context::print(StringRef filename, StringRef gcno, StringRef gcda,
 
     if (options.NoOutput || options.Intermediate)
       continue;
-    std::optional<raw_fd_ostream> os;
+    Optional<raw_fd_ostream> os;
     if (!options.UseStdout) {
       std::error_code ec;
       os.emplace(gcovName, ec, sys::fs::OF_TextWithCRLF);

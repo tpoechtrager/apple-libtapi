@@ -9,6 +9,7 @@
 #ifndef LLVM_DEBUGINFO_DWARF_DWARFDEBUGLINE_H
 #define LLVM_DEBUGINFO_DWARF_DWARFDEBUGLINE_H
 
+#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/BinaryFormat/Dwarf.h"
 #include "llvm/DebugInfo/DIContext.h"
@@ -113,7 +114,7 @@ public:
 
     bool hasFileAtIndex(uint64_t FileIndex) const;
 
-    std::optional<uint64_t> getLastValidFileIndex() const;
+    Optional<uint64_t> getLastValidFileIndex() const;
 
     bool
     getFileNameByIndex(uint64_t FileIndex, StringRef CompDir,
@@ -167,10 +168,6 @@ public:
     /// An unsigned integer whose value encodes the applicable instruction set
     /// architecture for the current instruction.
     uint8_t Isa;
-    /// An unsigned integer representing the index of an operation within a
-    /// VLIW instruction. The index of the first operation is 0.
-    /// For non-VLIW architectures, this register will always be 0.
-    uint8_t OpIndex;
     /// A boolean indicating that the current instruction is the beginning of a
     /// statement.
     uint8_t IsStmt : 1,
@@ -249,7 +246,7 @@ public:
       return Prologue.hasFileAtIndex(FileIndex);
     }
 
-    std::optional<uint64_t> getLastValidFileIndex() const {
+    Optional<uint64_t> getLastValidFileIndex() const {
       return Prologue.getLastValidFileIndex();
     }
 
@@ -270,11 +267,6 @@ public:
                                    const char *CompDir,
                                    DILineInfoSpecifier::FileLineInfoKind Kind,
                                    DILineInfo &Result) const;
-
-    /// Extracts directory name by its Entry in include directories table
-    /// in prologue. Returns true on success.
-    bool getDirectoryForEntry(const FileNameEntry &Entry,
-                              std::string &Directory) const;
 
     void dump(raw_ostream &OS, DIDumpOptions DumpOptions) const;
     void clear();
@@ -297,7 +289,7 @@ public:
   private:
     uint32_t findRowInSeq(const DWARFDebugLine::Sequence &Seq,
                           object::SectionedAddress Address) const;
-    std::optional<StringRef>
+    Optional<StringRef>
     getSourceByIndex(uint64_t FileIndex,
                      DILineInfoSpecifier::FileLineInfoKind Kind) const;
 
@@ -359,7 +351,6 @@ public:
   private:
     DWARFUnit *prepareToParse(uint64_t Offset);
     void moveToNextTable(uint64_t OldOffset, const Prologue &P);
-    bool hasValidVersion(uint64_t Offset);
 
     LineToUnitMap LineToUnit;
 
@@ -377,37 +368,29 @@ private:
     void resetRowAndSequence();
     void appendRowToMatrix();
 
-    struct AddrOpIndexDelta {
-      uint64_t AddrOffset;
-      int16_t OpIndexDelta;
-    };
+    /// Advance the address by the \p OperationAdvance value. \returns the
+    /// amount advanced by.
+    uint64_t advanceAddr(uint64_t OperationAdvance, uint8_t Opcode,
+                         uint64_t OpcodeOffset);
 
-    /// Advance the address and op-index by the \p OperationAdvance value.
-    /// \returns the amount advanced by.
-    AddrOpIndexDelta advanceAddrOpIndex(uint64_t OperationAdvance,
-                                        uint8_t Opcode, uint64_t OpcodeOffset);
-
-    struct OpcodeAdvanceResults {
+    struct AddrAndAdjustedOpcode {
       uint64_t AddrDelta;
-      int16_t OpIndexDelta;
       uint8_t AdjustedOpcode;
     };
 
-    /// Advance the address and op-index as required by the specified \p Opcode.
+    /// Advance the address as required by the specified \p Opcode.
     /// \returns the amount advanced by and the calculated adjusted opcode.
-    OpcodeAdvanceResults advanceForOpcode(uint8_t Opcode,
-                                          uint64_t OpcodeOffset);
+    AddrAndAdjustedOpcode advanceAddrForOpcode(uint8_t Opcode,
+                                               uint64_t OpcodeOffset);
 
-    struct SpecialOpcodeDelta {
+    struct AddrAndLineDelta {
       uint64_t Address;
       int32_t Line;
-      int16_t OpIndex;
     };
 
-    /// Advance the line, address and op-index as required by the specified
-    /// special \p Opcode. \returns the address, op-index and line delta.
-    SpecialOpcodeDelta handleSpecialOpcode(uint8_t Opcode,
-                                           uint64_t OpcodeOffset);
+    /// Advance the line and address as required by the specified special \p
+    /// Opcode. \returns the address and line delta.
+    AddrAndLineDelta handleSpecialOpcode(uint8_t Opcode, uint64_t OpcodeOffset);
 
     /// Line table we're currently parsing.
     struct LineTable *LineTable;

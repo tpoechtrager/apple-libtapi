@@ -20,7 +20,7 @@
 
 namespace llvm {
 
-class MSP430RegisterInfo : public MSP430GenRegisterInfo {
+struct MSP430RegisterInfo : public MSP430GenRegisterInfo {
 public:
   MSP430RegisterInfo();
 
@@ -32,7 +32,7 @@ public:
   getPointerRegClass(const MachineFunction &MF,
                      unsigned Kind = 0) const override;
 
-  bool eliminateFrameIndex(MachineBasicBlock::iterator II,
+  void eliminateFrameIndex(MachineBasicBlock::iterator II,
                            int SPAdj, unsigned FIOperandNum,
                            RegScavenger *RS = nullptr) const override;
 

@@ -96,7 +96,7 @@ private:
   void writeBinaryInfoBlock(const BinaryInfo &info);
   void writeLibraryTable();
 
-  std::optional<StringRef> getShallowFrameworkPath(StringRef installName);
+  Optional<StringRef> getShallowFrameworkPath(StringRef installName);
 
   const SDKDBBuilder &builder;
 
@@ -132,12 +132,6 @@ static StringMap<std::string> symlinkMap = {
      "/usr/lib/swift/libswiftPencilKit.dylib"},
     {"/System/Library/Frameworks/PencilKit.framework/Versions/A/PencilKit",
      "/usr/lib/swift/libswiftPencilKit.dylib"},
-    {"/System/iOSSupport/System/Library/Frameworks/PencilKit.framework/"
-     "PencilKit",
-     "/System/iOSSupport/usr/lib/swift/libswiftPencilKit.dylib"},
-    {"/System/iOSSupport/System/Library/Frameworks/PencilKit.framework/"
-     "Versions/A/PencilKit",
-     "/System/iOSSupport/usr/lib/swift/libswiftPencilKit.dylib"},
 };
 
 void SDKDBBitcodeWriter::writeSDKDBToStream(const SDKDBBuilder &builder,
@@ -150,19 +144,19 @@ SDKDBWriter::SDKDBWriter(const SDKDBBuilder &builder) : builder(builder) {
   writer.reset(new BitstreamWriter(buffer));
 }
 
-static std::optional<StringRef> getPreviousInstallName(StringRef sym) {
+static Optional<StringRef> getPreviousInstallName(StringRef sym) {
   if (sym.consume_front("$ld$install_name$os"))
     return sym.split('$').second;
-  return std::nullopt;
+  return llvm::None;
 }
 
-std::optional<StringRef>
+Optional<StringRef>
 SDKDBWriter::getShallowFrameworkPath(StringRef installName) {
   // For install name like /S/L/F/Foo.framework/Versions/A/Foo, return the
   // shallow path /S/L/F/Foo.framework/Foo
   auto versionDir = sys::path::parent_path(sys::path::parent_path(installName));
   if (sys::path::filename(versionDir) != "Versions")
-    return std::nullopt;
+    return llvm::None;
 
   SmallString<PATH_MAX> shallowPath(sys::path::parent_path(versionDir));
   sys::path::append(shallowPath, sys::path::filename(installName));
@@ -1208,7 +1202,7 @@ void APISerializer::visitObjCInterface(const ObjCInterfaceRecord &record) {
   unsigned superOffset = stringBuilder.getOffset(record.superClass);
   scratchRecord.push_back(superOffset);
   scratchRecord.push_back(record.superClass.size());
-  scratchRecord.push_back(record.hasExceptionAttribute());
+  scratchRecord.push_back(record.hasExceptionAttribute);
   writer.EmitRecordWithAbbrev(OBJC_CLASS_INFO_ABBREV, scratchRecord);
   writeAvailabilityBlock(record.availability, objc_class_block::AVAILABILITY,
                          OBJC_CLASS_AVAILABILITY_ABBREV);

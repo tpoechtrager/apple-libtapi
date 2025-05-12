@@ -34,7 +34,7 @@ struct SparcRegisterInfo : public SparcGenRegisterInfo {
   const TargetRegisterClass *getPointerRegClass(const MachineFunction &MF,
                                                 unsigned Kind) const override;
 
-  bool eliminateFrameIndex(MachineBasicBlock::iterator II,
+  void eliminateFrameIndex(MachineBasicBlock::iterator II,
                            int SPAdj, unsigned FIOperandNum,
                            RegScavenger *RS = nullptr) const override;
 

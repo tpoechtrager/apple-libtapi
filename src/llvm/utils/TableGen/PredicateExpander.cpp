@@ -12,7 +12,6 @@
 
 #include "PredicateExpander.h"
 #include "CodeGenSchedule.h" // Definition of STIPredicateFunction.
-#include "llvm/TableGen/Record.h"
 
 namespace llvm {
 

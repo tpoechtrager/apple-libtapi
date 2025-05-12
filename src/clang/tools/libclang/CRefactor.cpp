@@ -141,36 +141,35 @@ class RenamingResult {
   }
 
 public:
-  RenamingResult(ArrayRef<SymbolName> NewNames,
+  RenamingResult(ArrayRef<OldSymbolName> NewNames,
                  ArrayRef<rename::Symbol> Symbols) {
     assert(NewNames.size() == Symbols.size());
     for (size_t I = 0, E = NewNames.size(); I != E; ++I) {
       const auto &NewName = NewNames[I];
       const auto &OldName = Symbols[I].Name;
 
-      assert(NewName.getNamePieces().size() == OldName.getNamePieces().size());
+      assert(NewName.size() == OldName.size());
       SymbolNameInfo Info;
-      for (size_t I = 0, E = NewName.getNamePieces().size(); I != E; ++I)
-        Info.push_back(
-            RenamedNameString{cxstring::createDup(NewName.getNamePieces()[I]),
-                              (unsigned)OldName.getNamePieces()[I].size()});
+      for (size_t I = 0, E = NewName.size(); I != E; ++I)
+        Info.push_back(RenamedNameString{cxstring::createDup(NewName[I]),
+                                         (unsigned)OldName[I].size()});
       NameInfo.push_back(std::move(Info));
     }
   }
 
   // FIXME: Don't duplicate code, Use just one constructor.
-  RenamingResult(ArrayRef<SymbolName> NewNames, ArrayRef<SymbolName> OldNames) {
+  RenamingResult(ArrayRef<OldSymbolName> NewNames,
+                 ArrayRef<OldSymbolName> OldNames) {
     assert(NewNames.size() == OldNames.size());
     for (size_t I = 0, E = NewNames.size(); I != E; ++I) {
       const auto &NewName = NewNames[I];
       const auto &OldName = OldNames[I];
 
-      assert(NewName.getNamePieces().size() == OldName.getNamePieces().size());
+      assert(NewName.size() == OldName.size());
       SymbolNameInfo Info;
-      for (size_t I = 0, E = NewName.getNamePieces().size(); I != E; ++I)
-        Info.push_back(
-            RenamedNameString{cxstring::createDup(NewName.getNamePieces()[I]),
-                              (unsigned)OldName.getNamePieces()[I].size()});
+      for (size_t I = 0, E = NewName.size(); I != E; ++I)
+        Info.push_back(RenamedNameString{cxstring::createDup(NewName[I]),
+                                         (unsigned)OldName[I].size()});
       NameInfo.push_back(std::move(Info));
     }
   }
@@ -212,7 +211,6 @@ public:
       Filenames.push_back(cxstring::createDup(FilenameCount.getKey()));
 
     unsigned FileIndex = 0;
-    (void)FileIndex;
     for (const auto &RenamedOccurrences : FilenamesToSymbolOccurrences) {
       assert(clang_getCString(Filenames[FileIndex]) ==
                  RenamedOccurrences.getKey() &&
@@ -304,21 +302,19 @@ class SymbolOccurrencesResult {
 public:
   SymbolOccurrencesResult(ArrayRef<rename::Symbol> Symbols) {
     for (const auto &Symbol : Symbols) {
-      const SymbolName &Name = Symbol.Name;
+      const OldSymbolName &Name = Symbol.Name;
       SymbolNameInfo Info;
-      for (size_t I = 0, E = Name.getNamePieces().size(); I != E; ++I)
-        Info.push_back(
-            SymbolNamePiece{(unsigned)Name.getNamePieces()[I].size()});
+      for (size_t I = 0, E = Name.size(); I != E; ++I)
+        Info.push_back(SymbolNamePiece{(unsigned)Name[I].size()});
       NameInfo.push_back(std::move(Info));
     }
   }
 
-  SymbolOccurrencesResult(ArrayRef<SymbolName> Names) {
-    for (const SymbolName &Name : Names) {
+  SymbolOccurrencesResult(ArrayRef<OldSymbolName> Names) {
+    for (const OldSymbolName &Name : Names) {
       SymbolNameInfo Info;
-      for (size_t I = 0, E = Name.getNamePieces().size(); I != E; ++I)
-        Info.push_back(
-            SymbolNamePiece{(unsigned)Name.getNamePieces()[I].size()});
+      for (size_t I = 0, E = Name.size(); I != E; ++I)
+        Info.push_back(SymbolNamePiece{(unsigned)Name[I].size()});
       NameInfo.push_back(std::move(Info));
     }
   }
@@ -357,7 +353,6 @@ public:
       Filenames.push_back(cxstring::createDup(FilenameCount.getKey()));
 
     unsigned FileIndex = 0;
-    (void)FileIndex;
     for (const auto &RenamedOccurrences : FilenamesToSymbolOccurrences) {
       assert(clang_getCString(Filenames[FileIndex]) ==
                  RenamedOccurrences.getKey() &&
@@ -398,7 +393,7 @@ public:
   LangOptions LangOpts;
   IdentifierTable IDs;
   // TODO: Remove
-  SmallVector<SymbolName, 4> NewNames;
+  SmallVector<OldSymbolName, 4> NewNames;
   SymbolOperation Operation;
 
   RenamingAction(const LangOptions &LangOpts, SymbolOperation Operation)
@@ -407,9 +402,8 @@ public:
   /// \brief Sets the new renaming name and returns CXError_Success on success.
   // TODO: Remove
   CXErrorCode setNewName(StringRef Name) {
-    SymbolName NewSymbolName(Name, LangOpts);
-    if (NewSymbolName.getNamePieces().size() !=
-        Operation.symbols()[0].Name.getNamePieces().size())
+    OldSymbolName NewSymbolName(Name, LangOpts);
+    if (NewSymbolName.size() != Operation.symbols()[0].Name.size())
       return CXError_RefactoringNameSizeMismatch;
     if (!rename::isNewNameValid(NewSymbolName, Operation, IDs, LangOpts))
       return CXError_RefactoringNameInvalid;
@@ -471,7 +465,7 @@ static bool isObjCSelectorKind(CXCursorKind Kind) {
 static bool isObjCSelector(const CXRenamedIndexedSymbol &Symbol) {
   if (isObjCSelectorKind(Symbol.CursorKind))
     return true;
-  for (const auto &Occurrence : ArrayRef(
+  for (const auto &Occurrence : llvm::makeArrayRef(
            Symbol.IndexedLocations, Symbol.IndexedLocationCount)) {
     if (isObjCSelectorKind(Occurrence.CursorKind))
       return true;
@@ -482,7 +476,7 @@ static bool isObjCSelector(const CXRenamedIndexedSymbol &Symbol) {
 static bool isObjCSelector(const CXIndexedSymbol &Symbol) {
   if (isObjCSelectorKind(Symbol.CursorKind))
     return true;
-  for (const auto &Occurrence : ArrayRef(
+  for (const auto &Occurrence : llvm::makeArrayRef(
            Symbol.IndexedLocations, Symbol.IndexedLocationCount)) {
     if (isObjCSelectorKind(Occurrence.CursorKind))
       return true;
@@ -492,14 +486,13 @@ static bool isObjCSelector(const CXIndexedSymbol &Symbol) {
 
 // New names are initialized and verified after the LangOptions are created.
 CXErrorCode computeNewNames(ArrayRef<CXRenamedIndexedSymbol> Symbols,
-                            ArrayRef<SymbolName> SymbolNames,
+                            ArrayRef<OldSymbolName> SymbolNames,
                             const LangOptions &LangOpts,
-                            SmallVectorImpl<SymbolName> &NewNames) {
+                            SmallVectorImpl<OldSymbolName> &NewNames) {
   IdentifierTable IDs(LangOpts);
   for (const auto &Symbol : Symbols) {
-    SymbolName NewSymbolName(Symbol.NewName, LangOpts);
-    if (NewSymbolName.getNamePieces().size() !=
-        SymbolNames[0].getNamePieces().size())
+    OldSymbolName NewSymbolName(Symbol.NewName, LangOpts);
+    if (NewSymbolName.size() != SymbolNames[0].size())
       return CXError_RefactoringNameSizeMismatch;
     if (!rename::isNewNameValid(NewSymbolName, isObjCSelector(Symbol), IDs,
                                 LangOpts))
@@ -568,7 +561,7 @@ CXErrorCode performIndexedFileRename(
       return CXError_InvalidArguments;
 
     std::vector<rename::IndexedOccurrence> IndexedOccurrences;
-    for (const auto &Loc : ArrayRef(Symbol.IndexedLocations,
+    for (const auto &Loc : llvm::makeArrayRef(Symbol.IndexedLocations,
                                               Symbol.IndexedLocationCount)) {
       rename::IndexedOccurrence Result;
       Result.Line = Loc.Location.Line;
@@ -577,7 +570,7 @@ CXErrorCode performIndexedFileRename(
       IndexedOccurrences.push_back(Result);
     }
 
-    IndexedSymbols.emplace_back(SymbolName(Symbol.Name, IsObjCSelector),
+    IndexedSymbols.emplace_back(OldSymbolName(Symbol.Name, IsObjCSelector),
                                 IndexedOccurrences,
                                 /*IsObjCSelector=*/IsObjCSelector);
   }
@@ -612,10 +605,10 @@ CXErrorCode performIndexedFileRename(
       if (Err != CXError_Success)
         return;
       if (!Result) {
-        SmallVector<SymbolName, 4> SymbolNames;
+        SmallVector<OldSymbolName, 4> SymbolNames;
         for (const auto &Symbol : IndexedSymbols)
           SymbolNames.push_back(Symbol.Name);
-        SmallVector<SymbolName, 4> NewNames;
+        SmallVector<OldSymbolName, 4> NewNames;
         Err = computeNewNames(Symbols, SymbolNames, LangOpts, NewNames);
         if (Err != CXError_Success)
           return;
@@ -682,7 +675,7 @@ CXErrorCode performIndexedSymbolSearch(
       return CXError_InvalidArguments;
 
     std::vector<rename::IndexedOccurrence> IndexedOccurrences;
-    for (const auto &Loc : ArrayRef(Symbol.IndexedLocations,
+    for (const auto &Loc : llvm::makeArrayRef(Symbol.IndexedLocations,
                                               Symbol.IndexedLocationCount)) {
       rename::IndexedOccurrence Result;
       Result.Line = Loc.Location.Line;
@@ -692,7 +685,7 @@ CXErrorCode performIndexedSymbolSearch(
     }
 
     IndexedSymbols.emplace_back(
-        SymbolName(Symbol.Name, IsObjCSelector), IndexedOccurrences,
+        OldSymbolName(Symbol.Name, IsObjCSelector), IndexedOccurrences,
         /*IsObjCSelector=*/IsObjCSelector,
         /*SearchForStringLiteralOccurrences=*/
         Symbol.CursorKind == CXCursor_ObjCInterfaceDecl);
@@ -723,7 +716,7 @@ CXErrorCode performIndexedSymbolSearch(
                           SourceManager &SM,
                           const LangOptions &LangOpts) override {
       if (!Result) {
-        SmallVector<SymbolName, 4> SymbolNames;
+        SmallVector<OldSymbolName, 4> SymbolNames;
         for (const auto &Symbol : IndexedSymbols)
           SymbolNames.push_back(Symbol.Name);
         Result = new SymbolOccurrencesResult(SymbolNames);
@@ -1030,12 +1023,12 @@ public:
                 AssociatedSymbol.second;
             CXFileRange *NamePieces =
                 Allocator.Allocate<CXFileRange>(Loc.Offsets.size());
-            assert(AssociatedSymbol.first->getName().getNamePieces().size() ==
+            assert(AssociatedSymbol.first->getName().size() ==
                        Loc.Offsets.size() &&
                    "mismatching symbol name and offsets");
             for (const auto &Offset : llvm::enumerate(Loc.Offsets)) {
-              StringRef NamePiece = AssociatedSymbol.first->getName()
-                                        .getNamePieces()[Offset.index()];
+              StringRef NamePiece =
+                  AssociatedSymbol.first->getName()[Offset.index()];
               NamePieces[Offset.index()] = translateOffsetToRelativeRange(
                   Offset.value(), NamePiece.size(),
                   RefReplacement.ReplacementString);
@@ -1178,7 +1171,7 @@ void clang_RefactoringActionSet_dispose(CXRefactoringActionSet *Set) {
 void clang_RefactoringActionSetWithDiagnostics_dispose(
     CXRefactoringActionSetWithDiagnostics *Set) {
   if (Set && Set->Actions) {
-    for (auto &S : ArrayRef(Set->Actions, Set->NumActions))
+    for (auto &S : llvm::makeArrayRef(Set->Actions, Set->NumActions))
       clang_disposeDiagnosticSet(S.Diagnostics);
     delete[] Set->Actions;
   }
@@ -1610,8 +1603,8 @@ CXErrorCode clang_Refactoring_findRenamedOccurrencesInIndexedFile(
   if (!Symbols || !NumSymbols || !Filename)
     return CXError_InvalidArguments;
   return performIndexedFileRename(
-      ArrayRef(Symbols, NumSymbols), StringRef(Filename),
-      ArrayRef(CommandLineArgs, NumCommandLineArgs), CIdx,
+      llvm::makeArrayRef(Symbols, NumSymbols), StringRef(Filename),
+      llvm::makeArrayRef(CommandLineArgs, NumCommandLineArgs), CIdx,
       MutableArrayRef<CXUnsavedFile>(UnsavedFiles, NumUnsavedFiles),
       Options ? static_cast<RefactoringOptionSet *>(Options) : nullptr,
       *OutResult);
@@ -1628,8 +1621,8 @@ CXErrorCode clang_Refactoring_findSymbolOccurrencesInIndexedFile(
   if (!Symbols || !NumSymbols || !Filename)
     return CXError_InvalidArguments;
   return performIndexedSymbolSearch(
-      ArrayRef(Symbols, NumSymbols), StringRef(Filename),
-      ArrayRef(CommandLineArgs, NumCommandLineArgs), CIdx,
+      llvm::makeArrayRef(Symbols, NumSymbols), StringRef(Filename),
+      llvm::makeArrayRef(CommandLineArgs, NumCommandLineArgs), CIdx,
       MutableArrayRef<CXUnsavedFile>(UnsavedFiles, NumUnsavedFiles),
       Options ? static_cast<RefactoringOptionSet *>(Options) : nullptr,
       *OutResult);

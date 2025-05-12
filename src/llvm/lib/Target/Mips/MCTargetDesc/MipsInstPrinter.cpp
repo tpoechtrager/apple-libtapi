@@ -71,9 +71,9 @@ const char* Mips::MipsFCCToString(Mips::CondCode CC) {
   llvm_unreachable("Impossible condition code!");
 }
 
-void MipsInstPrinter::printRegName(raw_ostream &OS, MCRegister Reg) const {
-  markup(OS, Markup::Register)
-      << '$' << StringRef(getRegisterName(Reg)).lower();
+void MipsInstPrinter::printRegName(raw_ostream &OS, unsigned RegNo) const {
+  OS << markup("<reg:") << '$' << StringRef(getRegisterName(RegNo)).lower()
+     << markup(">");
 }
 
 void MipsInstPrinter::printInst(const MCInst *MI, uint64_t Address,
@@ -133,7 +133,7 @@ void MipsInstPrinter::printOperand(const MCInst *MI, unsigned OpNo,
   }
 
   if (Op.isImm()) {
-    markup(O, Markup::Immediate) << formatImm(Op.getImm());
+    O << markup("<imm:") << formatImm(Op.getImm()) << markup(">");
     return;
   }
 
@@ -149,9 +149,9 @@ void MipsInstPrinter::printJumpOperand(const MCInst *MI, unsigned OpNo,
     return printOperand(MI, OpNo, STI, O);
 
   if (PrintBranchImmAsAddress)
-    markup(O, Markup::Immediate) << formatHex(Op.getImm());
+    O << markup("<imm:") << formatHex(Op.getImm()) << markup(">");
   else
-    markup(O, Markup::Immediate) << formatImm(Op.getImm());
+    O << markup("<imm:") << formatImm(Op.getImm()) << markup(">");
 }
 
 void MipsInstPrinter::printBranchOperand(const MCInst *MI, uint64_t Address,
@@ -168,9 +168,9 @@ void MipsInstPrinter::printBranchOperand(const MCInst *MI, uint64_t Address,
       Target &= 0xffffffff;
     else if (STI.hasFeature(Mips::FeatureMips16))
       Target &= 0xffff;
-    markup(O, Markup::Immediate) << formatHex(Target);
+    O << markup("<imm:") << formatHex(Target) << markup(">");
   } else {
-    markup(O, Markup::Immediate) << formatImm(Op.getImm());
+    O << markup("<imm:") << formatImm(Op.getImm()) << markup(">");
   }
 }
 
@@ -183,7 +183,7 @@ void MipsInstPrinter::printUImm(const MCInst *MI, int opNum,
     Imm -= Offset;
     Imm &= (1 << Bits) - 1;
     Imm += Offset;
-    markup(O, Markup::Immediate) << formatImm(Imm);
+    O << markup("<imm:") << formatImm(Imm) << markup(">");
     return;
   }
 
@@ -212,11 +212,12 @@ void MipsInstPrinter::printMemOperand(const MCInst *MI, int opNum,
     break;
   }
 
-  WithMarkup M = markup(O, Markup::Memory);
+  O << markup("<mem:");
   printOperand(MI, opNum + 1, STI, O);
   O << "(";
   printOperand(MI, opNum, STI, O);
   O << ")";
+  O << markup(">");
 }
 
 void MipsInstPrinter::printMemOperandEA(const MCInst *MI, int opNum,

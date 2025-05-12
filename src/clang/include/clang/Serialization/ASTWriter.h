@@ -76,10 +76,6 @@ class StoredDeclsList;
 class SwitchCase;
 class Token;
 
-namespace SrcMgr {
-class FileInfo;
-} // namespace SrcMgr
-
 /// Writes an AST file containing the contents of a translation unit.
 ///
 /// The ASTWriter class produces a bitstream containing the serialized
@@ -132,17 +128,10 @@ private:
   /// The module we're currently writing, if any.
   Module *WritingModule = nullptr;
 
-  /// The byte range representing all the UNHASHED_CONTROL_BLOCK.
-  std::pair<uint64_t, uint64_t> UnhashedControlBlockRange;
-  /// The bit offset of the AST block hash blob.
-  uint64_t ASTBlockHashOffset = 0;
-  /// The bit offset of the signature blob.
-  uint64_t SignatureOffset = 0;
-
-  /// The bit offset of the first bit inside the AST_BLOCK.
+  /// The offset of the first bit inside the AST_BLOCK.
   uint64_t ASTBlockStartOffset = 0;
 
-  /// The byte range representing all the AST_BLOCK.
+  /// The range representing all the AST_BLOCK.
   std::pair<uint64_t, uint64_t> ASTBlockRange;
 
   /// The base directory for any relative paths we emit.
@@ -471,15 +460,10 @@ private:
   std::vector<SourceRange> NonAffectingRanges;
   std::vector<SourceLocation::UIntTy> NonAffectingOffsetAdjustments;
 
-  /// Computes input files that didn't affect compilation of the current module,
+  /// Collects input files that didn't affect compilation of the current module,
   /// and initializes data structures necessary for leaving those files out
   /// during \c SourceManager serialization.
-  void computeNonAffectingInputFiles();
-
-  /// Some affecting files can be included from files that are not affecting.
-  /// This function erases source locations pointing into such files.
-  SourceLocation getAffectingIncludeLoc(const SourceManager &SourceMgr,
-                                        const SrcMgr::FileInfo &File);
+  void collectNonAffectingInputFiles();
 
   /// Returns an adjusted \c FileID, accounting for any non-affecting input
   /// files.
@@ -511,11 +495,12 @@ private:
                          StringRef isysroot);
 
   /// Write out the signature and diagnostic options, and return the signature.
-  void writeUnhashedControlBlock(Preprocessor &PP, ASTContext &Context);
-  ASTFileSignature backpatchSignature();
+  ASTFileSignature writeUnhashedControlBlock(Preprocessor &PP,
+                                             ASTContext &Context);
 
   /// Calculate hash of the pcm content.
-  std::pair<ASTFileSignature, ASTFileSignature> createSignature() const;
+  static std::pair<ASTFileSignature, ASTFileSignature>
+  createSignature(StringRef AllBytes, StringRef ASTBlockBytes);
 
   void WriteInputFiles(SourceManager &SourceMgr, HeaderSearchOptions &HSOpts);
   void WriteSourceManagerBlock(SourceManager &SourceMgr,
@@ -533,6 +518,7 @@ private:
   void WriteTypeAbbrevs();
   void WriteType(QualType T);
 
+  bool isLookupResultExternal(StoredDeclsList &Result, DeclContext *DC);
   bool isLookupResultEntirelyExternal(StoredDeclsList &Result, DeclContext *DC);
 
   void GenerateNameLookupTable(const DeclContext *DC,
@@ -754,7 +740,7 @@ public:
   bool hasChain() const { return Chain; }
   ASTReader *getChain() const { return Chain; }
 
-  bool isWritingStdCXXNamedModules() const {
+  bool isWritingNamedModules() const {
     return WritingModule && WritingModule->isModulePurview();
   }
 

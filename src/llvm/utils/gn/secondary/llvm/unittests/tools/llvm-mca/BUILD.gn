@@ -1,5 +1,5 @@
 import("//llvm/lib/Target/targets.gni")
-import("//third-party/unittest/unittest.gni")
+import("//llvm/utils/unittest/unittest.gni")
 
 unittest("LLVMMCATests") {
   deps = [
@@ -7,7 +7,6 @@ unittest("LLVMMCATests") {
     "//llvm/lib/MCA",
     "//llvm/lib/Object",
     "//llvm/lib/Support",
-    "//llvm/lib/TargetParser",
   ]
   if (llvm_build_X86) {
     deps += [ "X86" ]

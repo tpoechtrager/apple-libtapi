@@ -30,5 +30,5 @@ int main(int argc, const char *argv[]) {
   if (llvm::sys::Process::FixupStandardFileDescriptors())
     return 1;
 
-  return Driver::run(llvm::ArrayRef(argv, argc)) ? 0 : 1;
+  return Driver::run(llvm::makeArrayRef(argv, argc)) ? 0 : 1;
 }

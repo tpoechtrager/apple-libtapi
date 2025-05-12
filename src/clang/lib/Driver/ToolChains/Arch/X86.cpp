@@ -14,7 +14,7 @@
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/Option/ArgList.h"
-#include "llvm/TargetParser/Host.h"
+#include "llvm/Support/Host.h"
 
 using namespace clang::driver;
 using namespace clang::driver::tools;
@@ -30,6 +30,9 @@ std::string x86::getX86TargetCPU(const Driver &D, const ArgList &Args,
 
     // FIXME: Reject attempts to use -march=native unless the target matches
     // the host.
+    //
+    // FIXME: We should also incorporate the detected target features for use
+    // with -native.
     CPU = llvm::sys::getHostCPUName();
     if (!CPU.empty() && CPU != "generic")
       return std::string(CPU);
@@ -119,15 +122,6 @@ std::string x86::getX86TargetCPU(const Driver &D, const ArgList &Args,
 void x86::getX86TargetFeatures(const Driver &D, const llvm::Triple &Triple,
                                const ArgList &Args,
                                std::vector<StringRef> &Features) {
-  // Claim and report unsupported -mabi=. Note: we don't support "sysv_abi" or
-  // "ms_abi" as default function attributes.
-  if (const Arg *A = Args.getLastArg(clang::driver::options::OPT_mabi_EQ)) {
-    StringRef DefaultAbi = Triple.isOSWindows() ? "ms" : "sysv";
-    if (A->getValue() != DefaultAbi)
-      D.Diag(diag::err_drv_unsupported_opt_for_target)
-          << A->getSpelling() << Triple.getTriple();
-  }
-
   // If -march=native, autodetect the feature list.
   if (const Arg *A = Args.getLastArg(clang::driver::options::OPT_march_EQ)) {
     if (StringRef(A->getValue()) == "native") {
@@ -264,13 +258,7 @@ void x86::getX86TargetFeatures(const Driver &D, const llvm::Triple &Triple,
       Features.push_back("+harden-sls-ijmp");
     } else if (Scope != "none") {
       D.Diag(diag::err_drv_unsupported_option_argument)
-          << A->getSpelling() << Scope;
+          << A->getOption().getName() << Scope;
     }
   }
-
-  // -mno-gather, -mno-scatter support
-  if (Args.hasArg(options::OPT_mno_gather))
-    Features.push_back("+prefer-no-gather");
-  if (Args.hasArg(options::OPT_mno_scatter))
-    Features.push_back("+prefer-no-scatter");
 }

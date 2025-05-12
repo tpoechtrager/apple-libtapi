@@ -26,7 +26,7 @@ namespace rdf {
 
   struct CopyPropagation {
     CopyPropagation(DataFlowGraph &dfg) : MDT(dfg.getDT()), DFG(dfg),
-        RDefMap(std::less<RegisterRef>(DFG.getPRI())) {}
+        L(dfg.getMF().getRegInfo(), dfg) {}
 
     virtual ~CopyPropagation() = default;
 
@@ -36,23 +36,22 @@ namespace rdf {
     DataFlowGraph &getDFG() { return DFG; }
 
     using EqualityMap = std::map<RegisterRef, RegisterRef>;
+
     virtual bool interpretAsCopy(const MachineInstr *MI, EqualityMap &EM);
 
   private:
     const MachineDominatorTree &MDT;
     DataFlowGraph &DFG;
-    DataFlowGraph::DefStackMap DefM;
+    Liveness L;
     bool Trace = false;
 
-    // map: register -> (map: stmt -> reaching def)
-    std::map<RegisterRef,std::map<NodeId,NodeId>> RDefMap;
     // map: statement -> (map: dst reg -> src reg)
     std::map<NodeId, EqualityMap> CopyMap;
     std::vector<NodeId> Copies;
 
     void recordCopy(NodeAddr<StmtNode*> SA, EqualityMap &EM);
-    void updateMap(NodeAddr<InstrNode*> IA);
     bool scanBlock(MachineBasicBlock *B);
+    NodeId getLocalReachingDef(RegisterRef RefRR, NodeAddr<InstrNode*> IA);
   };
 
 } // end namespace rdf

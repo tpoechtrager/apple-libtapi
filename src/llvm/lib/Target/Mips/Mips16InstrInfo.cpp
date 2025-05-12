@@ -96,11 +96,11 @@ void Mips16InstrInfo::copyPhysReg(MachineBasicBlock &MBB,
     MIB.addReg(SrcReg, getKillRegState(KillSrc));
 }
 
-std::optional<DestSourcePair>
+Optional<DestSourcePair>
 Mips16InstrInfo::isCopyInstrImpl(const MachineInstr &MI) const {
   if (MI.isMoveReg())
     return DestSourcePair{MI.getOperand(0), MI.getOperand(1)};
-  return std::nullopt;
+  return None;
 }
 
 void Mips16InstrInfo::storeRegToStack(MachineBasicBlock &MBB,
@@ -340,8 +340,8 @@ unsigned Mips16InstrInfo::loadImmediate(unsigned FrameReg, int64_t Imm,
   int Reg =0;
   int SpReg = 0;
 
-  rs.enterBasicBlockEnd(MBB);
-  rs.backward(II);
+  rs.enterBasicBlock(MBB);
+  rs.forward(II);
   //
   // We need to know which registers can be used, in the case where there
   // are not enough free registers. We exclude all registers that
@@ -351,9 +351,10 @@ unsigned Mips16InstrInfo::loadImmediate(unsigned FrameReg, int64_t Imm,
       RI.getAllocatableSet
       (*II->getParent()->getParent(), &Mips::CPU16RegsRegClass);
   // Exclude all the registers being used by the instruction.
-  for (MachineOperand &MO : II->operands()) {
+  for (unsigned i = 0, e = II->getNumOperands(); i != e; ++i) {
+    MachineOperand &MO = II->getOperand(i);
     if (MO.isReg() && MO.getReg() != 0 && !MO.isDef() &&
-        !MO.getReg().isVirtual())
+        !Register::isVirtualRegister(MO.getReg()))
       Candidates.reset(MO.getReg());
   }
 
@@ -366,7 +367,8 @@ unsigned Mips16InstrInfo::loadImmediate(unsigned FrameReg, int64_t Imm,
   // whether the register is live before the instruction. if it's not
   // then we don't need to save it in case there are no free registers.
   int DefReg = 0;
-  for (MachineOperand &MO : II->operands()) {
+  for (unsigned i = 0, e = II->getNumOperands(); i != e; ++i) {
+    MachineOperand &MO = II->getOperand(i);
     if (MO.isReg() && MO.isDef()) {
       DefReg = MO.getReg();
       break;

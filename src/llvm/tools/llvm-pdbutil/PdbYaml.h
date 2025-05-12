@@ -11,6 +11,7 @@
 
 #include "OutputStyle.h"
 
+#include "llvm/ADT/Optional.h"
 #include "llvm/DebugInfo/CodeView/SymbolRecord.h"
 #include "llvm/DebugInfo/CodeView/TypeRecord.h"
 #include "llvm/DebugInfo/MSF/MSFCommon.h"
@@ -23,7 +24,6 @@
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/YAMLTraits.h"
 
-#include <optional>
 #include <vector>
 
 namespace llvm {
@@ -67,7 +67,7 @@ struct PdbDbiModuleInfo {
   StringRef Mod;
   std::vector<StringRef> SourceFiles;
   std::vector<CodeViewYAML::YAMLDebugSubsection> Subsections;
-  std::optional<PdbModiStream> Modi;
+  Optional<PdbModiStream> Modi;
 };
 
 struct PdbDbiStream {
@@ -94,16 +94,16 @@ struct PdbPublicsStream {
 struct PdbObject {
   explicit PdbObject(BumpPtrAllocator &Allocator) : Allocator(Allocator) {}
 
-  std::optional<MSFHeaders> Headers;
-  std::optional<std::vector<uint32_t>> StreamSizes;
-  std::optional<std::vector<StreamBlockList>> StreamMap;
-  std::optional<PdbInfoStream> PdbStream;
-  std::optional<PdbDbiStream> DbiStream;
-  std::optional<PdbTpiStream> TpiStream;
-  std::optional<PdbTpiStream> IpiStream;
-  std::optional<PdbPublicsStream> PublicsStream;
+  Optional<MSFHeaders> Headers;
+  Optional<std::vector<uint32_t>> StreamSizes;
+  Optional<std::vector<StreamBlockList>> StreamMap;
+  Optional<PdbInfoStream> PdbStream;
+  Optional<PdbDbiStream> DbiStream;
+  Optional<PdbTpiStream> TpiStream;
+  Optional<PdbTpiStream> IpiStream;
+  Optional<PdbPublicsStream> PublicsStream;
 
-  std::optional<std::vector<StringRef>> StringTable;
+  Optional<std::vector<StringRef>> StringTable;
 
   BumpPtrAllocator &Allocator;
 };

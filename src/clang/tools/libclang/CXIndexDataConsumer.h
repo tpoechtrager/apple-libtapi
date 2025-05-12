@@ -360,14 +360,14 @@ public:
 
   bool hasDiagnosticCallback() const { return CB.diagnostic; }
 
-  void enteredMainFile(OptionalFileEntryRef File);
+  void enteredMainFile(const FileEntry *File);
 
   void ppIncludedFile(SourceLocation hashLoc, StringRef filename,
-                      OptionalFileEntryRef File, bool isImport, bool isAngled,
+                      Optional<FileEntryRef> File, bool isImport, bool isAngled,
                       bool isModuleImport);
 
   void importedModule(const ImportDecl *ImportD);
-  void importedPCH(FileEntryRef File);
+  void importedPCH(const FileEntry *File);
 
   void startedTranslationUnit();
 

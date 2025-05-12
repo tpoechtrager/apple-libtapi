@@ -34,7 +34,7 @@ void HeaderFile::print(raw_ostream &os) const {
 }
 
 const Regex Rule("/(.+)\\.framework/(.+)?Headers/(.+)");
-std::optional<std::string> createIncludeHeaderName(const StringRef dstRoot) {
+Optional<std::string> createIncludeHeaderName(const StringRef dstRoot) {
   // Headers in usr(/local)*/include.
   std::string pattern = "/include/";
   auto pathPrefix = dstRoot.find(pattern);
@@ -48,7 +48,7 @@ std::optional<std::string> createIncludeHeaderName(const StringRef dstRoot) {
   Rule.match(dstRoot, &matches);
   // Returned matches are always in stable order.
   if (matches.size() != 4)
-    return std::nullopt;
+    return llvm::None;
 
   return matches[1].drop_front(matches[1].rfind('/') + 1).str() + "/" +
          matches[3].str();

@@ -12,6 +12,9 @@
 namespace llvm {
 
 DwarfStringPoolEntryRef NonRelocatableStringpool::getEntry(StringRef S) {
+  if (S.empty() && !Strings.empty())
+    return EmptyString;
+
   if (Translator)
     S = Translator(S);
   auto I = Strings.insert({S, DwarfStringPoolEntry()});

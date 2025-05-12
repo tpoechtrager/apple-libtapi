@@ -18,6 +18,7 @@
 #include "clang/Lex/Lexer.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/None.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
@@ -147,7 +148,7 @@ void DiagnosticRenderer::emitStoredDiagnostic(StoredDiagnostic &Diag) {
 
 void DiagnosticRenderer::emitBasicNote(StringRef Message) {
   emitDiagnosticMessage(FullSourceLoc(), PresumedLoc(), DiagnosticsEngine::Note,
-                        Message, std::nullopt, DiagOrStoredDiag());
+                        Message, None, DiagOrStoredDiag());
 }
 
 /// Prints an include stack when appropriate for a particular
@@ -452,7 +453,7 @@ void DiagnosticRenderer::emitSingleMacroExpansion(
     Message << "expanded from macro '" << MacroName << "'";
 
   emitDiagnostic(SpellingLoc, DiagnosticsEngine::Note, Message.str(),
-                 SpellingRanges, std::nullopt);
+                 SpellingRanges, None);
 }
 
 /// Check that the macro argument location of Loc starts with ArgumentLoc.
@@ -493,18 +494,20 @@ static bool checkRangesForMacroArgExpansion(FullSourceLoc Loc,
   SmallVector<CharSourceRange, 4> SpellingRanges;
   mapDiagnosticRanges(Loc, Ranges, SpellingRanges);
 
-  // Count all valid ranges.
-  unsigned ValidCount =
-      llvm::count_if(Ranges, [](const auto &R) { return R.isValid(); });
+  /// Count all valid ranges.
+  unsigned ValidCount = 0;
+  for (const auto &Range : Ranges)
+    if (Range.isValid())
+      ValidCount++;
 
   if (ValidCount > SpellingRanges.size())
     return false;
 
-  // To store the source location of the argument location.
+  /// To store the source location of the argument location.
   FullSourceLoc ArgumentLoc;
 
-  // Set the ArgumentLoc to the beginning location of the expansion of Loc
-  // so to check if the ranges expands to the same beginning location.
+  /// Set the ArgumentLoc to the beginning location of the expansion of Loc
+  /// so to check if the ranges expands to the same beginning location.
   if (!Loc.isMacroArgExpansion(&ArgumentLoc))
     return false;
 

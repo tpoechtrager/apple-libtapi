@@ -31,13 +31,9 @@ class HexagonDAGToDAGISel : public SelectionDAGISel {
   const HexagonInstrInfo *HII;
   const HexagonRegisterInfo *HRI;
 public:
-  static char ID;
-
-  HexagonDAGToDAGISel() = delete;
-
   explicit HexagonDAGToDAGISel(HexagonTargetMachine &tm,
                                CodeGenOpt::Level OptLevel)
-      : SelectionDAGISel(ID, tm, OptLevel), HST(nullptr), HII(nullptr),
+      : SelectionDAGISel(tm, OptLevel), HST(nullptr), HII(nullptr),
         HRI(nullptr) {}
 
   bool runOnMachineFunction(MachineFunction &MF) override {
@@ -73,6 +69,10 @@ public:
   inline bool SelectAnyImm2(SDValue &N, SDValue &R);
   inline bool SelectAnyImm3(SDValue &N, SDValue &R);
 
+  StringRef getPassName() const override {
+    return "Hexagon DAG->DAG Pattern Instruction Selection";
+  }
+
   // Generate a machine instruction node corresponding to the circ/brev
   // load intrinsic.
   MachineSDNode *LoadInstrForLoadIntrinsic(SDNode *IntN);
@@ -97,7 +97,6 @@ public:
   void SelectSHL(SDNode *N);
   void SelectIntrinsicWChain(SDNode *N);
   void SelectIntrinsicWOChain(SDNode *N);
-  void SelectExtractSubvector(SDNode *N);
   void SelectConstant(SDNode *N);
   void SelectConstantFP(SDNode *N);
   void SelectV65Gather(SDNode *N);
@@ -127,6 +126,10 @@ private:
     return SDValue(U, 0);
   }
 
+  void SelectHvxShuffle(SDNode *N);
+  void SelectHvxRor(SDNode *N);
+  void SelectHvxVAlign(SDNode *N);
+
   bool keepsLowBits(const SDValue &Val, unsigned NumBits, SDValue &Src);
   bool isAlignedMemNode(const MemSDNode *N) const;
   bool isSmallStackStore(const StoreSDNode *N) const;
@@ -134,17 +137,10 @@ private:
   bool hasOneUse(const SDNode *N) const;
 
   // DAG preprocessing functions.
-  void PreprocessHvxISelDAG();
   void ppSimplifyOrSelect0(std::vector<SDNode*> &&Nodes);
   void ppAddrReorderAddShl(std::vector<SDNode*> &&Nodes);
   void ppAddrRewriteAndSrl(std::vector<SDNode*> &&Nodes);
   void ppHoistZextI1(std::vector<SDNode*> &&Nodes);
-  void ppHvxShuffleOfShuffle(std::vector<SDNode*> &&Nodes);
-
-  void SelectHvxExtractSubvector(SDNode *N);
-  void SelectHvxShuffle(SDNode *N);
-  void SelectHvxRor(SDNode *N);
-  void SelectHvxVAlign(SDNode *N);
 
   // Function postprocessing.
   void updateAligna();

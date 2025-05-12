@@ -8,7 +8,6 @@ set(LLVM_LINK_COMPONENTS
   Object
   RuntimeDyld
   Support
-  TargetParser
   )
 
 add_llvm_tool(llvm-rtdyld

@@ -13,7 +13,8 @@
 
 #include "MCTargetDesc/WebAssemblyInstPrinter.h"
 #include "MCTargetDesc/WebAssemblyMCTargetDesc.h"
-#include "MCTargetDesc/WebAssemblyMCTypeUtilities.h"
+#include "Utils/WebAssemblyTypeUtilities.h"
+#include "Utils/WebAssemblyUtilities.h"
 #include "WebAssembly.h"
 #include "WebAssemblyMachineFunctionInfo.h"
 #include "llvm/ADT/SmallSet.h"
@@ -38,10 +39,10 @@ WebAssemblyInstPrinter::WebAssemblyInstPrinter(const MCAsmInfo &MAI,
     : MCInstPrinter(MAI, MII, MRI) {}
 
 void WebAssemblyInstPrinter::printRegName(raw_ostream &OS,
-                                          MCRegister Reg) const {
-  assert(Reg.id() != WebAssemblyFunctionInfo::UnusedReg);
+                                          unsigned RegNo) const {
+  assert(RegNo != WebAssemblyFunctionInfo::UnusedReg);
   // Note that there's an implicit local.get/local.set here!
-  OS << "$" << Reg.id();
+  OS << "$" << RegNo;
 }
 
 void WebAssemblyInstPrinter::printInst(const MCInst *MI, uint64_t Address,
@@ -239,7 +240,7 @@ void WebAssemblyInstPrinter::printInst(const MCInst *MI, uint64_t Address,
       // See if this operand denotes a basic block target.
       if (I < NumFixedOperands) {
         // A non-variable_ops operand, check its type.
-        if (Desc.operands()[I].OperandType != WebAssembly::OPERAND_BASIC_BLOCK)
+        if (Desc.OpInfo[I].OperandType != WebAssembly::OPERAND_BASIC_BLOCK)
           continue;
       } else {
         // A variable_ops operand, which currently can be immediates (used in

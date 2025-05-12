@@ -47,6 +47,7 @@ typedef std::pair<const RuntimeCheckingPtrGroup *,
                   const RuntimeCheckingPtrGroup *>
     RuntimePointerCheck;
 
+template <typename T> class Optional;
 template <typename T, unsigned N> class SmallSetVector;
 template <typename T, unsigned N> class SmallPriorityWorklist;
 
@@ -76,14 +77,10 @@ bool formDedicatedExitBlocks(Loop *L, DominatorTree *DT, LoopInfo *LI,
 /// This function may introduce unused PHI nodes. If \p PHIsToRemove is not
 /// nullptr, those are added to it (before removing, the caller has to check if
 /// they still do not have any uses). Otherwise the PHIs are directly removed.
-///
-/// If \p InsertedPHIs is not nullptr, inserted phis will be added to this
-/// vector.
 bool formLCSSAForInstructions(
     SmallVectorImpl<Instruction *> &Worklist, const DominatorTree &DT,
-    const LoopInfo &LI, ScalarEvolution *SE,
-    SmallVectorImpl<PHINode *> *PHIsToRemove = nullptr,
-    SmallVectorImpl<PHINode *> *InsertedPHIs = nullptr);
+    const LoopInfo &LI, ScalarEvolution *SE, IRBuilderBase &Builder,
+    SmallVectorImpl<PHINode *> *PHIsToRemove = nullptr);
 
 /// Put loop into LCSSA form.
 ///
@@ -120,9 +117,10 @@ public:
   // Explicitly set limits.
   SinkAndHoistLICMFlags(unsigned LicmMssaOptCap,
                         unsigned LicmMssaNoAccForPromotionCap, bool IsSink,
-                        Loop &L, MemorySSA &MSSA);
+                        Loop *L = nullptr, MemorySSA *MSSA = nullptr);
   // Use default limits.
-  SinkAndHoistLICMFlags(bool IsSink, Loop &L, MemorySSA &MSSA);
+  SinkAndHoistLICMFlags(bool IsSink, Loop *L = nullptr,
+                        MemorySSA *MSSA = nullptr);
 
   void setIsSink(bool B) { IsSink = B; }
   bool getIsSink() { return IsSink; }
@@ -178,11 +176,6 @@ bool hoistRegion(DomTreeNode *, AAResults *, LoopInfo *, DominatorTree *,
                  SinkAndHoistLICMFlags &, OptimizationRemarkEmitter *, bool,
                  bool AllowSpeculation);
 
-/// Return true if the induction variable \p IV in a Loop whose latch is
-/// \p LatchBlock would become dead if the exit test \p Cond were removed.
-/// Conservatively returns false if analysis is insufficient.
-bool isAlmostDeadIV(PHINode *IV, BasicBlock *LatchBlock, Value *Cond);
-
 /// This function deletes dead loops. The caller of this function needs to
 /// guarantee that the loop is infact dead.
 /// The function requires a bunch or prerequisites to be present:
@@ -219,7 +212,7 @@ bool promoteLoopAccessesToScalars(
     PredIteratorCache &, LoopInfo *, DominatorTree *, AssumptionCache *AC,
     const TargetLibraryInfo *, TargetTransformInfo *, Loop *,
     MemorySSAUpdater &, ICFLoopSafetyInfo *, OptimizationRemarkEmitter *,
-    bool AllowSpeculation, bool HasReadsOutsideSet);
+    bool AllowSpeculation);
 
 /// Does a BFS from a given node to all of its children inside a given loop.
 /// The returned vector of nodes includes the starting point.
@@ -232,8 +225,8 @@ SmallVector<Instruction *, 8> findDefsUsedOutsideOfLoop(Loop *L);
 /// Find a combination of metadata ("llvm.loop.vectorize.width" and
 /// "llvm.loop.vectorize.scalable.enable") for a loop and use it to construct a
 /// ElementCount. If the metadata "llvm.loop.vectorize.width" cannot be found
-/// then std::nullopt is returned.
-std::optional<ElementCount>
+/// then None is returned.
+Optional<ElementCount>
 getOptionalElementCountLoopAttribute(const Loop *TheLoop);
 
 /// Create a new loop identifier for a loop created from a loop transformation.
@@ -251,16 +244,16 @@ getOptionalElementCountLoopAttribute(const Loop *TheLoop);
 ///                    <prefix>; commonly used to remove metadata for the
 ///                    applied transformation.
 /// @param AlwaysNew If true, do not try to reuse OrigLoopID and never return
-///                  std::nullopt.
+///                  None.
 ///
 /// @return The loop ID for the after-transformation loop. The following values
 ///         can be returned:
-///         std::nullopt : No followup attribute was found; it is up to the
+///         None         : No followup attribute was found; it is up to the
 ///                        transformation to choose attributes that make sense.
 ///         @p OrigLoopID: The original identifier can be reused.
 ///         nullptr      : The new loop has no attributes.
 ///         MDNode*      : A new unique loop identifier.
-std::optional<MDNode *>
+Optional<MDNode *>
 makeFollowupLoopID(MDNode *OrigLoopID, ArrayRef<StringRef> FollowupAttrs,
                    const char *InheritOptionsAttrsPrefix = "",
                    bool AlwaysNew = false);
@@ -316,9 +309,9 @@ void addStringMetadataToLoop(Loop *TheLoop, const char *MDString,
 /// Returns a loop's estimated trip count based on branch weight metadata.
 /// In addition if \p EstimatedLoopInvocationWeight is not null it is
 /// initialized with weight of loop's latch leading to the exit.
-/// Returns 0 when the count is estimated to be 0, or std::nullopt when a
-/// meaningful estimate can not be made.
-std::optional<unsigned>
+/// Returns 0 when the count is estimated to be 0, or None when a meaningful
+/// estimate can not be made.
+Optional<unsigned>
 getLoopEstimatedTripCount(Loop *L,
                           unsigned *EstimatedLoopInvocationWeight = nullptr);
 
@@ -356,9 +349,6 @@ bool canSinkOrHoistInst(Instruction &I, AAResults *AA, DominatorTree *DT,
                         bool TargetExecutesOncePerLoop,
                         SinkAndHoistLICMFlags &LICMFlags,
                         OptimizationRemarkEmitter *ORE = nullptr);
-
-/// Returns the min/max intrinsic used when expanding a min/max reduction.
-Intrinsic::ID getMinMaxReductionIntrinsicOp(RecurKind RK);
 
 /// Returns the comparison predicate used when expanding a min/max reduction.
 CmpInst::Predicate getMinMaxReductionPredicate(RecurKind RK);
@@ -435,14 +425,6 @@ bool isKnownNegativeInLoop(const SCEV *S, const Loop *L, ScalarEvolution &SE);
 /// Returns true if we can prove that \p S is defined and always non-negative in
 /// loop \p L.
 bool isKnownNonNegativeInLoop(const SCEV *S, const Loop *L,
-                              ScalarEvolution &SE);
-/// Returns true if we can prove that \p S is defined and always positive in
-/// loop \p L.
-bool isKnownPositiveInLoop(const SCEV *S, const Loop *L, ScalarEvolution &SE);
-
-/// Returns true if we can prove that \p S is defined and always non-positive in
-/// loop \p L.
-bool isKnownNonPositiveInLoop(const SCEV *S, const Loop *L,
                               ScalarEvolution &SE);
 
 /// Returns true if \p S is defined and never is equal to signed/unsigned max.
@@ -559,10 +541,10 @@ struct IVConditionInfo {
 /// If the branch condition of the header is partially invariant, return a pair
 /// containing the instructions to duplicate and a boolean Constant to update
 /// the condition in the loops created for the true or false successors.
-std::optional<IVConditionInfo> hasPartialIVCondition(const Loop &L,
-                                                     unsigned MSSAThreshold,
-                                                     const MemorySSA &MSSA,
-                                                     AAResults &AA);
+Optional<IVConditionInfo> hasPartialIVCondition(const Loop &L,
+                                                unsigned MSSAThreshold,
+                                                const MemorySSA &MSSA,
+                                                AAResults &AA);
 
 } // end namespace llvm
 

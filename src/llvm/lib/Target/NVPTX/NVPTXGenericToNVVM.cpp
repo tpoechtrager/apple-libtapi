@@ -29,13 +29,19 @@
 using namespace llvm;
 
 namespace llvm {
-void initializeGenericToNVVMLegacyPassPass(PassRegistry &);
+void initializeGenericToNVVMPass(PassRegistry &);
 }
 
 namespace {
-class GenericToNVVM {
+class GenericToNVVM : public ModulePass {
 public:
-  bool runOnModule(Module &M);
+  static char ID;
+
+  GenericToNVVM() : ModulePass(ID) {}
+
+  bool runOnModule(Module &M) override;
+
+  void getAnalysisUsage(AnalysisUsage &AU) const override {}
 
 private:
   Value *remapConstant(Module *M, Function *F, Constant *C,
@@ -52,6 +58,15 @@ private:
   ConstantToValueMapTy ConstantToValueMap;
 };
 } // end namespace
+
+char GenericToNVVM::ID = 0;
+
+ModulePass *llvm::createGenericToNVVMPass() { return new GenericToNVVM(); }
+
+INITIALIZE_PASS(
+    GenericToNVVM, "generic-to-nvvm",
+    "Ensure that the global variables are in the global address space", false,
+    false)
 
 bool GenericToNVVM::runOnModule(Module &M) {
   // Create a clone of each global variable that has the default address space.
@@ -205,7 +220,7 @@ Value *GenericToNVVM::remapConstantVectorOrConstantAggregate(
   } else {
     for (unsigned i = 0; i < NumOperands; ++i) {
       NewValue =
-          Builder.CreateInsertValue(NewValue, NewOperands[i], ArrayRef(i));
+          Builder.CreateInsertValue(NewValue, NewOperands[i], makeArrayRef(i));
     }
   }
 
@@ -259,7 +274,7 @@ Value *GenericToNVVM::remapConstantExpr(Module *M, Function *F, ConstantExpr *C,
     // GetElementPtrConstantExpr
     return Builder.CreateGEP(cast<GEPOperator>(C)->getSourceElementType(),
                              NewOperands[0],
-                             ArrayRef(&NewOperands[1], NumOperands - 1), "",
+                             makeArrayRef(&NewOperands[1], NumOperands - 1), "",
                              cast<GEPOperator>(C)->isInBounds());
   case Instruction::Select:
     // SelectConstantExpr
@@ -277,35 +292,4 @@ Value *GenericToNVVM::remapConstantExpr(Module *M, Function *F, ConstantExpr *C,
     }
     llvm_unreachable("GenericToNVVM encountered an unsupported ConstantExpr");
   }
-}
-
-namespace {
-class GenericToNVVMLegacyPass : public ModulePass {
-public:
-  static char ID;
-
-  GenericToNVVMLegacyPass() : ModulePass(ID) {}
-
-  bool runOnModule(Module &M) override;
-};
-} // namespace
-
-char GenericToNVVMLegacyPass::ID = 0;
-
-ModulePass *llvm::createGenericToNVVMLegacyPass() {
-  return new GenericToNVVMLegacyPass();
-}
-
-INITIALIZE_PASS(
-    GenericToNVVMLegacyPass, "generic-to-nvvm",
-    "Ensure that the global variables are in the global address space", false,
-    false)
-
-bool GenericToNVVMLegacyPass::runOnModule(Module &M) {
-  return GenericToNVVM().runOnModule(M);
-}
-
-PreservedAnalyses GenericToNVVMPass::run(Module &M, ModuleAnalysisManager &AM) {
-  return GenericToNVVM().runOnModule(M) ? PreservedAnalyses::none()
-                                        : PreservedAnalyses::all();
 }

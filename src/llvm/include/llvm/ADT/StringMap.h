@@ -107,9 +107,8 @@ public:
 /// funky memory allocation and hashing things to make it extremely efficient,
 /// storing the string data *after* the value in the map.
 template <typename ValueTy, typename AllocatorTy = MallocAllocator>
-class LLVM_ALLOCATORHOLDER_EMPTYBASE StringMap
-    : public StringMapImpl,
-      private detail::AllocatorHolder<AllocatorTy> {
+class StringMap : public StringMapImpl,
+                  private detail::AllocatorHolder<AllocatorTy> {
   using AllocTy = detail::AllocatorHolder<AllocatorTy>;
 
 public:
@@ -156,7 +155,7 @@ public:
         continue;
       }
 
-      TheTable[I] = MapEntryTy::create(
+      TheTable[I] = MapEntryTy::Create(
           static_cast<MapEntryTy *>(Bucket)->getKey(), getAllocator(),
           static_cast<MapEntryTy *>(Bucket)->getValue());
       HashTable[I] = RHSHashTable[I];
@@ -232,29 +231,18 @@ public:
   /// lookup - Return the entry for the specified key, or a default
   /// constructed value if no such entry exists.
   ValueTy lookup(StringRef Key) const {
-    const_iterator Iter = find(Key);
-    if (Iter != end())
-      return Iter->second;
+    const_iterator it = find(Key);
+    if (it != end())
+      return it->second;
     return ValueTy();
-  }
-
-  /// at - Return the entry for the specified key, or abort if no such
-  /// entry exists.
-  const ValueTy &at(StringRef Val) const {
-    auto Iter = this->find(std::move(Val));
-    assert(Iter != this->end() && "StringMap::at failed due to a missing key");
-    return Iter->second;
   }
 
   /// Lookup the ValueTy for the \p Key, or create a default constructed value
   /// if the key is not in the map.
   ValueTy &operator[](StringRef Key) { return try_emplace(Key).first->second; }
 
-  /// contains - Return true if the element is in the map, false otherwise.
-  bool contains(StringRef Key) const { return find(Key) != end(); }
-
   /// count - Return 1 if the element is in the map, 0 otherwise.
-  size_type count(StringRef Key) const { return contains(Key) ? 1 : 0; }
+  size_type count(StringRef Key) const { return find(Key) == end() ? 0 : 1; }
 
   template <typename InputTy>
   size_type count(const StringMapEntry<InputTy> &MapEntry) const {
@@ -348,7 +336,7 @@ public:
     if (Bucket == getTombstoneVal())
       --NumTombstones;
     Bucket =
-        MapEntryTy::create(Key, getAllocator(), std::forward<ArgsTy>(Args)...);
+        MapEntryTy::Create(Key, getAllocator(), std::forward<ArgsTy>(Args)...);
     ++NumItems;
     assert(NumItems + NumTombstones <= NumBuckets);
 

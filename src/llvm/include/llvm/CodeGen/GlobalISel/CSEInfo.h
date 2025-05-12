@@ -111,8 +111,6 @@ class GISelCSEInfo : public GISelChangeObserver {
   /// into the CSEMap. MI should return true for shouldCSE(MI->getOpcode())
   void insertInstr(MachineInstr *MI, void *InsertPos = nullptr);
 
-  bool HandlingRecordedInstrs = false;
-
 public:
   GISelCSEInfo() = default;
 

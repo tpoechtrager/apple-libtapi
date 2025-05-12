@@ -21,6 +21,7 @@
 
 namespace llvm {
   class CodeGenInstruction;
+  class Record;
 
   struct AsmWriterOperand {
     enum OpType {

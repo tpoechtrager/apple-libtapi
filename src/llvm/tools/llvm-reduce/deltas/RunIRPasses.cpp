@@ -14,17 +14,14 @@
 
 using namespace llvm;
 
-extern cl::OptionCategory LLVMReduceOptions;
-
 static cl::opt<std::string> PassPipeline(
     "ir-passes",
     cl::desc("A textual description of the pass pipeline, same as "
              "what's passed to `opt -passes`."),
-    cl::init("function(sroa,instcombine,gvn,simplifycfg,infer-address-spaces)"),
-    cl::cat(LLVMReduceOptions));
+    cl::init(
+        "function(sroa,instcombine,gvn,simplifycfg,infer-address-spaces)"));
 
-static void runPasses(Oracle &O, ReducerWorkItem &WorkItem) {
-  Module &Program = WorkItem.getModule();
+static void runPasses(Oracle &O, Module &Program) {
   LoopAnalysisManager LAM;
   FunctionAnalysisManager FAM;
   CGSCCAnalysisManager CGAM;
@@ -33,7 +30,7 @@ static void runPasses(Oracle &O, ReducerWorkItem &WorkItem) {
   PassInstrumentationCallbacks PIC;
   PIC.registerShouldRunOptionalPassCallback(
       [&](StringRef, Any) { return !O.shouldKeep(); });
-  PassBuilder PB(nullptr, PipelineTuningOptions(), std::nullopt, &PIC);
+  PassBuilder PB(nullptr, PipelineTuningOptions(), None, &PIC);
 
   PB.registerModuleAnalyses(MAM);
   PB.registerCGSCCAnalyses(CGAM);
@@ -50,5 +47,7 @@ static void runPasses(Oracle &O, ReducerWorkItem &WorkItem) {
 }
 
 void llvm::runIRPassesDeltaPass(TestRunner &Test) {
-  runDeltaPass(Test, runPasses, "Running passes");
+  errs() << "*** Running passes ...\n";
+  runDeltaPass(Test, runPasses);
+  errs() << "----------------------------\n";
 }

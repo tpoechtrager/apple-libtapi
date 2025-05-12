@@ -92,15 +92,16 @@ int StringRef::compare_numeric(StringRef RHS) const {
 unsigned StringRef::edit_distance(llvm::StringRef Other,
                                   bool AllowReplacements,
                                   unsigned MaxEditDistance) const {
-  return llvm::ComputeEditDistance(ArrayRef(data(), size()),
-                                   ArrayRef(Other.data(), Other.size()),
-                                   AllowReplacements, MaxEditDistance);
+  return llvm::ComputeEditDistance(
+      makeArrayRef(data(), size()),
+      makeArrayRef(Other.data(), Other.size()),
+      AllowReplacements, MaxEditDistance);
 }
 
 unsigned llvm::StringRef::edit_distance_insensitive(
     StringRef Other, bool AllowReplacements, unsigned MaxEditDistance) const {
   return llvm::ComputeMappedEditDistance(
-      ArrayRef(data(), size()), ArrayRef(Other.data(), Other.size()),
+      makeArrayRef(data(), size()), makeArrayRef(Other.data(), Other.size()),
       llvm::toLower, AllowReplacements, MaxEditDistance);
 }
 
@@ -191,7 +192,7 @@ size_t StringRef::find(StringRef Str, size_t From) const {
 size_t StringRef::find_insensitive(StringRef Str, size_t From) const {
   StringRef This = substr(From);
   while (This.size() >= Str.size()) {
-    if (This.starts_with_insensitive(Str))
+    if (This.startswith_insensitive(Str))
       return From;
     This = This.drop_front();
     ++From;
@@ -215,7 +216,15 @@ size_t StringRef::rfind_insensitive(char C, size_t From) const {
 /// \return - The index of the last occurrence of \arg Str, or npos if not
 /// found.
 size_t StringRef::rfind(StringRef Str) const {
-  return std::string_view(*this).rfind(Str);
+  size_t N = Str.size();
+  if (N > Length)
+    return npos;
+  for (size_t i = Length - N + 1, e = 0; i != e;) {
+    --i;
+    if (substr(i, N).equals(Str))
+      return i;
+  }
+  return npos;
 }
 
 size_t StringRef::rfind_insensitive(StringRef Str) const {
@@ -249,7 +258,10 @@ StringRef::size_type StringRef::find_first_of(StringRef Chars,
 /// find_first_not_of - Find the first character in the string that is not
 /// \arg C or npos if not found.
 StringRef::size_type StringRef::find_first_not_of(char C, size_t From) const {
-  return std::string_view(*this).find_first_not_of(C, From);
+  for (size_type i = std::min(From, Length), e = Length; i != e; ++i)
+    if (Data[i] != C)
+      return i;
+  return npos;
 }
 
 /// find_first_not_of - Find the first character in the string that is not
@@ -370,16 +382,16 @@ void StringRef::split(SmallVectorImpl<StringRef> &A, char Separator,
 /// the string.
 size_t StringRef::count(StringRef Str) const {
   size_t Count = 0;
-  size_t Pos = 0;
   size_t N = Str.size();
-  // TODO: For an empty `Str` we return 0 for legacy reasons. Consider changing
-  //       this to `Length + 1` which is more in-line with the function
-  //       description.
-  if (!N)
+  if (!N || N > Length)
     return 0;
-  while ((Pos = find(Str, Pos)) != npos) {
-    ++Count;
-    Pos += N;
+  for (size_t i = 0, e = Length - N + 1; i < e;) {
+    if (substr(i, N).equals(Str)) {
+      ++Count;
+      i += N;
+    }
+    else
+      ++i;
   }
   return Count;
 }
@@ -509,7 +521,7 @@ bool llvm::getAsSignedInteger(StringRef Str, unsigned Radix,
   return !Str.empty();
 }
 
-bool StringRef::consumeInteger(unsigned Radix, APInt &Result) {
+bool StringRef::getAsInteger(unsigned Radix, APInt &Result) const {
   StringRef Str = *this;
 
   // Autosense radix if not specified.
@@ -529,7 +541,6 @@ bool StringRef::consumeInteger(unsigned Radix, APInt &Result) {
   // If it was nothing but zeroes....
   if (Str.empty()) {
     Result = APInt(64, 0);
-    *this = Str;
     return false;
   }
 
@@ -562,12 +573,12 @@ bool StringRef::consumeInteger(unsigned Radix, APInt &Result) {
     else if (Str[0] >= 'A' && Str[0] <= 'Z')
       CharVal = Str[0]-'A'+10;
     else
-      break;
+      return true;
 
     // If the parsed value is larger than the integer radix, the string is
     // invalid.
     if (CharVal >= Radix)
-      break;
+      return true;
 
     // Add in this character.
     if (IsPowerOf2Radix) {
@@ -582,23 +593,7 @@ bool StringRef::consumeInteger(unsigned Radix, APInt &Result) {
     Str = Str.substr(1);
   }
 
-  // We consider the operation a failure if no characters were consumed
-  // successfully.
-  if (size() == Str.size())
-    return true;
-
-  *this = Str;
   return false;
-}
-
-bool StringRef::getAsInteger(unsigned Radix, APInt &Result) const {
-  StringRef Str = *this;
-  if (Str.consumeInteger(Radix, Result))
-    return true;
-
-  // For getAsInteger, we require the whole string to be consumed or else we
-  // consider it a failure.
-  return !Str.empty();
 }
 
 bool StringRef::getAsDouble(double &Result, bool AllowInexact) const {

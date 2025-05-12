@@ -28,12 +28,12 @@ namespace clang {
 namespace tooling {
 namespace rename {
 
-bool isNewNameValid(const SymbolName &NewName, bool IsSymbolObjCSelector,
+bool isNewNameValid(const OldSymbolName &NewName, bool IsSymbolObjCSelector,
                     IdentifierTable &IDs, const LangOptions &LangOpts) {
   Token Tok;
   if (IsSymbolObjCSelector) {
     // Check if the name is a valid selector.
-    for (const auto &Name : NewName.getNamePieces()) {
+    for (const auto &Name : NewName.strings()) {
       // Lex the name and verify that it was fully consumed. Then make sure that
       // it's a valid identifier.
       if (lexNameString(Name, Tok, LangOpts) || !Tok.isAnyIdentifier())
@@ -42,7 +42,7 @@ bool isNewNameValid(const SymbolName &NewName, bool IsSymbolObjCSelector,
     return true;
   }
 
-  for (const auto &Name : NewName.getNamePieces()) {
+  for (const auto &Name : NewName.strings()) {
     // Lex the name and verify that it was fully consumed. Then make sure that
     // it's a valid identifier that's also not a language keyword.
     if (lexNameString(Name, Tok, LangOpts) || !Tok.isAnyIdentifier() ||
@@ -52,31 +52,31 @@ bool isNewNameValid(const SymbolName &NewName, bool IsSymbolObjCSelector,
   return true;
 }
 
-bool isNewNameValid(const SymbolName &NewName, const SymbolOperation &Operation,
-                    IdentifierTable &IDs, const LangOptions &LangOpts) {
+bool isNewNameValid(const OldSymbolName &NewName,
+                    const SymbolOperation &Operation, IdentifierTable &IDs,
+                    const LangOptions &LangOpts) {
   assert(!Operation.symbols().empty());
   return isNewNameValid(NewName,
                         Operation.symbols().front().ObjCSelector.has_value(),
                         IDs, LangOpts);
 }
 
-void determineNewNames(SymbolName NewName, const SymbolOperation &Operation,
-                       SmallVectorImpl<SymbolName> &NewNames,
+void determineNewNames(OldSymbolName NewName, const SymbolOperation &Operation,
+                       SmallVectorImpl<OldSymbolName> &NewNames,
                        const LangOptions &LangOpts) {
   auto Symbols = Operation.symbols();
   assert(!Symbols.empty());
   NewNames.push_back(std::move(NewName));
   if (const auto *PropertyDecl =
           dyn_cast<ObjCPropertyDecl>(Symbols.front().FoundDecl)) {
-    assert(NewNames.front().getNamePieces().size() == 1 &&
+    assert(NewNames.front().size() == 1 &&
            "Property's name should have one string only");
-    StringRef PropertyName = NewNames.front().getNamePieces()[0];
+    StringRef PropertyName = NewNames.front()[0];
     Symbols = Symbols.drop_front();
 
     auto AddName = [&](const NamedDecl *D, StringRef Name) {
       assert(Symbols.front().FoundDecl == D && "decl is missing");
-      NewNames.push_back(
-          SymbolName(Name, /*IsObjectiveCSelector=*/LangOpts.ObjC));
+      NewNames.push_back(OldSymbolName(Name, LangOpts));
       Symbols = Symbols.drop_front();
     };
 

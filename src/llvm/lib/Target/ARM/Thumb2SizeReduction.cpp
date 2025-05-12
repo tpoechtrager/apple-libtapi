@@ -253,7 +253,10 @@ Thumb2SizeReduce::Thumb2SizeReduce(std::function<bool(const Function &)> Ftor)
 }
 
 static bool HasImplicitCPSRDef(const MCInstrDesc &MCID) {
-  return is_contained(MCID.implicit_defs(), ARM::CPSR);
+  for (const MCPhysReg *Regs = MCID.getImplicitDefs(); *Regs; ++Regs)
+    if (*Regs == ARM::CPSR)
+      return true;
+  return false;
 }
 
 // Check for a likely high-latency flag def.
@@ -836,9 +839,9 @@ Thumb2SizeReduce::ReduceTo2Addr(MachineBasicBlock &MBB, MachineInstr *MI,
   // Transfer the rest of operands.
   unsigned NumOps = MCID.getNumOperands();
   for (unsigned i = 1, e = MI->getNumOperands(); i != e; ++i) {
-    if (i < NumOps && MCID.operands()[i].isOptionalDef())
+    if (i < NumOps && MCID.OpInfo[i].isOptionalDef())
       continue;
-    if (SkipPred && MCID.operands()[i].isPredicate())
+    if (SkipPred && MCID.OpInfo[i].isPredicate())
       continue;
     MIB.add(MI->getOperand(i));
   }
@@ -872,7 +875,7 @@ Thumb2SizeReduce::ReduceToNarrow(MachineBasicBlock &MBB, MachineInstr *MI,
 
   const MCInstrDesc &MCID = MI->getDesc();
   for (unsigned i = 0, e = MCID.getNumOperands(); i != e; ++i) {
-    if (MCID.operands()[i].isPredicate())
+    if (MCID.OpInfo[i].isPredicate())
       continue;
     const MachineOperand &MO = MI->getOperand(i);
     if (MO.isReg()) {
@@ -881,7 +884,8 @@ Thumb2SizeReduce::ReduceToNarrow(MachineBasicBlock &MBB, MachineInstr *MI,
         continue;
       if (Entry.LowRegs1 && !isARMLowRegister(Reg))
         return false;
-    } else if (MO.isImm() && !MCID.operands()[i].isPredicate()) {
+    } else if (MO.isImm() &&
+               !MCID.OpInfo[i].isPredicate()) {
       if (((unsigned)MO.getImm()) > Limit)
         return false;
     }
@@ -942,7 +946,7 @@ Thumb2SizeReduce::ReduceToNarrow(MachineBasicBlock &MBB, MachineInstr *MI,
   // Transfer the rest of operands.
   unsigned NumOps = MCID.getNumOperands();
   for (unsigned i = 1, e = MI->getNumOperands(); i != e; ++i) {
-    if (i < NumOps && MCID.operands()[i].isOptionalDef())
+    if (i < NumOps && MCID.OpInfo[i].isOptionalDef())
       continue;
     if ((MCID.getOpcode() == ARM::t2RSBSri ||
          MCID.getOpcode() == ARM::t2RSBri ||
@@ -952,7 +956,7 @@ Thumb2SizeReduce::ReduceToNarrow(MachineBasicBlock &MBB, MachineInstr *MI,
          MCID.getOpcode() == ARM::t2UXTH) && i == 2)
       // Skip the zero immediate operand, it's now implicit.
       continue;
-    bool isPred = (i < NumOps && MCID.operands()[i].isPredicate());
+    bool isPred = (i < NumOps && MCID.OpInfo[i].isPredicate());
     if (SkipPred && isPred)
         continue;
     const MachineOperand &MO = MI->getOperand(i);

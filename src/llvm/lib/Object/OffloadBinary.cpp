@@ -17,7 +17,6 @@
 #include "llvm/Object/Archive.h"
 #include "llvm/Object/ArchiveWriter.h"
 #include "llvm/Object/Binary.h"
-#include "llvm/Object/COFF.h"
 #include "llvm/Object/ELFObjectFile.h"
 #include "llvm/Object/Error.h"
 #include "llvm/Object/IRObjectFile.h"
@@ -42,10 +41,6 @@ Error extractOffloadFiles(MemoryBufferRef Contents,
     std::unique_ptr<MemoryBuffer> Buffer =
         MemoryBuffer::getMemBuffer(Contents.getBuffer().drop_front(Offset), "",
                                    /*RequiresNullTerminator*/ false);
-    if (!isAddrAligned(Align(OffloadBinary::getAlignment()),
-                       Buffer->getBufferStart()))
-      Buffer = MemoryBuffer::getMemBufferCopy(Buffer->getBuffer(),
-                                              Buffer->getBufferIdentifier());
     auto BinaryOrErr = OffloadBinary::create(*Buffer);
     if (!BinaryOrErr)
       return BinaryOrErr.takeError();
@@ -67,25 +62,11 @@ Error extractOffloadFiles(MemoryBufferRef Contents,
 }
 
 // Extract offloading binaries from an Object file \p Obj.
-Error extractFromObject(const ObjectFile &Obj,
+Error extractFromBinary(const ObjectFile &Obj,
                         SmallVectorImpl<OffloadFile> &Binaries) {
-  assert((Obj.isELF() || Obj.isCOFF()) && "Invalid file type");
-
-  for (SectionRef Sec : Obj.sections()) {
-    // ELF files contain a section with the LLVM_OFFLOADING type.
-    if (Obj.isELF() &&
-        static_cast<ELFSectionRef>(Sec).getType() != ELF::SHT_LLVM_OFFLOADING)
+  for (ELFSectionRef Sec : Obj.sections()) {
+    if (Sec.getType() != ELF::SHT_LLVM_OFFLOADING)
       continue;
-
-    // COFF has no section types so we rely on the name of the section.
-    if (Obj.isCOFF()) {
-      Expected<StringRef> NameOrErr = Sec.getName();
-      if (!NameOrErr)
-        return NameOrErr.takeError();
-
-      if (!NameOrErr->equals(".llvm.offloading"))
-        continue;
-    }
 
     Expected<StringRef> Buffer = Sec.getContents();
     if (!Buffer)
@@ -209,8 +190,8 @@ OffloadBinary::write(const OffloadingImage &OffloadingData) {
   // Create a null-terminated string table with all the used strings.
   StringTableBuilder StrTab(StringTableBuilder::ELF);
   for (auto &KeyAndValue : OffloadingData.StringData) {
-    StrTab.add(KeyAndValue.first);
-    StrTab.add(KeyAndValue.second);
+    StrTab.add(KeyAndValue.getKey());
+    StrTab.add(KeyAndValue.getValue());
   }
   StrTab.finalize();
 
@@ -250,8 +231,8 @@ OffloadBinary::write(const OffloadingImage &OffloadingData) {
   OS << StringRef(reinterpret_cast<char *>(&TheEntry), sizeof(Entry));
   for (auto &KeyAndValue : OffloadingData.StringData) {
     uint64_t Offset = sizeof(Header) + sizeof(Entry) + StringEntrySize;
-    StringEntry Map{Offset + StrTab.getOffset(KeyAndValue.first),
-                    Offset + StrTab.getOffset(KeyAndValue.second)};
+    StringEntry Map{Offset + StrTab.getOffset(KeyAndValue.getKey()),
+                    Offset + StrTab.getOffset(KeyAndValue.getValue())};
     OS << StringRef(reinterpret_cast<char *>(&Map), sizeof(StringEntry));
   }
   StrTab.write(OS);
@@ -273,15 +254,12 @@ Error object::extractOffloadBinaries(MemoryBufferRef Buffer,
   switch (Type) {
   case file_magic::bitcode:
     return extractFromBitcode(Buffer, Binaries);
-  case file_magic::elf_relocatable:
-  case file_magic::elf_executable:
-  case file_magic::elf_shared_object:
-  case file_magic::coff_object: {
+  case file_magic::elf_relocatable: {
     Expected<std::unique_ptr<ObjectFile>> ObjFile =
         ObjectFile::createObjectFile(Buffer, Type);
     if (!ObjFile)
       return ObjFile.takeError();
-    return extractFromObject(*ObjFile->get(), Binaries);
+    return extractFromBinary(*ObjFile->get(), Binaries);
   }
   case file_magic::archive: {
     Expected<std::unique_ptr<llvm::object::Archive>> LibFile =

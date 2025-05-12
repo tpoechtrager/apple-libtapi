@@ -21,7 +21,6 @@
 #include "llvm/Target/CodeGenCWrappers.h"
 #include "llvm/Target/TargetOptions.h"
 #include <cstring>
-#include <optional>
 
 using namespace llvm;
 
@@ -200,7 +199,7 @@ LLVMBool LLVMCreateMCJITCompilerForModule(
          .setOptLevel((CodeGenOpt::Level)options.OptLevel)
          .setTargetOptions(targetOptions);
   bool JIT;
-  if (std::optional<CodeModel::Model> CM = unwrap(options.CodeModel, JIT))
+  if (Optional<CodeModel::Model> CM = unwrap(options.CodeModel, JIT))
     builder.setCodeModel(*CM);
   if (options.MCJMM)
     builder.setMCJITMemoryManager(

@@ -135,7 +135,7 @@ bool A15SDOptimizer::usesRegClass(MachineOperand &MO,
     return false;
   Register Reg = MO.getReg();
 
-  if (Reg.isVirtual())
+  if (Register::isVirtualRegister(Reg))
     return MRI->getRegClass(Reg)->hasSuperClassEq(TRC);
   else
     return TRC->contains(Reg);
@@ -190,7 +190,7 @@ void A15SDOptimizer::eraseInstrWithNoUses(MachineInstr *MI) {
       if ((!MO.isReg()) || (!MO.isUse()))
         continue;
       Register Reg = MO.getReg();
-      if (!Reg.isVirtual())
+      if (!Register::isVirtualRegister(Reg))
         continue;
       MachineOperand *Op = MI->findRegisterDefOperand(Reg);
 
@@ -212,7 +212,7 @@ void A15SDOptimizer::eraseInstrWithNoUses(MachineInstr *MI) {
         if ((!MODef.isReg()) || (!MODef.isDef()))
           continue;
         Register DefReg = MODef.getReg();
-        if (!DefReg.isVirtual()) {
+        if (!Register::isVirtualRegister(DefReg)) {
           IsDead = false;
           break;
         }
@@ -246,7 +246,7 @@ unsigned A15SDOptimizer::optimizeSDPattern(MachineInstr *MI) {
     Register DPRReg = MI->getOperand(1).getReg();
     Register SPRReg = MI->getOperand(2).getReg();
 
-    if (DPRReg.isVirtual() && SPRReg.isVirtual()) {
+    if (Register::isVirtualRegister(DPRReg) && Register::isVirtualRegister(SPRReg)) {
       MachineInstr *DPRMI = MRI->getVRegDef(MI->getOperand(1).getReg());
       MachineInstr *SPRMI = MRI->getVRegDef(MI->getOperand(2).getReg());
 
@@ -296,7 +296,7 @@ unsigned A15SDOptimizer::optimizeSDPattern(MachineInstr *MI) {
       ++NumTotal;
       Register OpReg = MO.getReg();
 
-      if (!OpReg.isVirtual())
+      if (!Register::isVirtualRegister(OpReg))
         break;
 
       MachineInstr *Def = MRI->getVRegDef(OpReg);
@@ -340,7 +340,7 @@ bool A15SDOptimizer::hasPartialWrite(MachineInstr *MI) {
 MachineInstr *A15SDOptimizer::elideCopies(MachineInstr *MI) {
   if (!MI->isFullCopy())
     return MI;
-  if (!MI->getOperand(1).getReg().isVirtual())
+  if (!Register::isVirtualRegister(MI->getOperand(1).getReg()))
     return nullptr;
   MachineInstr *Def = MRI->getVRegDef(MI->getOperand(1).getReg());
   if (!Def)
@@ -366,7 +366,7 @@ void A15SDOptimizer::elideCopiesAndPHIs(MachineInstr *MI,
      if (MI->isPHI()) {
        for (unsigned I = 1, E = MI->getNumOperands(); I != E; I += 2) {
          Register Reg = MI->getOperand(I).getReg();
-         if (!Reg.isVirtual()) {
+         if (!Register::isVirtualRegister(Reg)) {
            continue;
          }
          MachineInstr *NewMI = MRI->getVRegDef(Reg);
@@ -375,7 +375,7 @@ void A15SDOptimizer::elideCopiesAndPHIs(MachineInstr *MI,
          Front.push_back(NewMI);
        }
      } else if (MI->isFullCopy()) {
-       if (!MI->getOperand(1).getReg().isVirtual())
+       if (!Register::isVirtualRegister(MI->getOperand(1).getReg()))
          continue;
        MachineInstr *NewMI = MRI->getVRegDef(MI->getOperand(1).getReg());
        if (!NewMI)

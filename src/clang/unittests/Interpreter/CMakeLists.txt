@@ -3,7 +3,6 @@ set(LLVM_LINK_COMPONENTS
   Core
   OrcJIT
   Support
-  TargetParser
   )
 
 add_clang_unittest(ClangReplInterpreterTests
@@ -22,5 +21,3 @@ target_link_libraries(ClangReplInterpreterTests PUBLIC
 if(NOT WIN32)
   add_subdirectory(ExceptionTests)
 endif()
-
-export_executable_symbols(ClangReplInterpreterTests)

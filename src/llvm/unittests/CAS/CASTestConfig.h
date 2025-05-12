@@ -30,15 +30,13 @@ struct TestingAndDir {
   std::shared_ptr<llvm::cas::ObjectStore> CAS;
   std::unique_ptr<llvm::cas::ActionCache> Cache;
   std::unique_ptr<llvm::unittest::cas::MockEnv> Env;
-  std::optional<llvm::unittest::TempDir> Temp;
+  llvm::Optional<llvm::unittest::TempDir> Temp;
 };
-
-void setMaxOnDiskCASMappingSize();
 
 class CASTest
     : public testing::TestWithParam<std::function<TestingAndDir(int)>> {
 protected:
-  std::optional<int> NextCASIndex;
+  llvm::Optional<int> NextCASIndex;
 
   llvm::SmallVector<llvm::unittest::TempDir> Dirs;
 
@@ -60,12 +58,9 @@ protected:
       Envs.emplace_back(std::move(TD.Env));
     return std::move(TD.Cache);
   }
-  void SetUp() {
-    NextCASIndex = 0;
-    setMaxOnDiskCASMappingSize();
-  }
+  void SetUp() { NextCASIndex = 0; }
   void TearDown() {
-    NextCASIndex = std::nullopt;
+    NextCASIndex = llvm::None;
     Dirs.clear();
     Envs.clear();
   }

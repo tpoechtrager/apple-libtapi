@@ -644,9 +644,6 @@ public:
     return getModuleOwnershipKind() > ModuleOwnershipKind::VisibleWhenImported;
   }
 
-  /// Whether this declaration comes from another module unit.
-  bool isInAnotherModuleUnit() const;
-
   /// FIXME: Implement discarding declarations actually in global module
   /// fragment. See [module.global.frag]p3,4 for details.
   bool isDiscardedInGlobalModuleFragment() const { return false; }
@@ -813,7 +810,7 @@ public:
   }
 
   /// Get the module that owns this declaration for linkage purposes.
-  /// There only ever is such a standard C++ module.
+  /// There only ever is such a module under the C++ Modules TS.
   ///
   /// \param IgnoreLinkage Ignore the linkage of the entity; assume that
   /// all declarations in a global module fragment are unowned.
@@ -1175,12 +1172,6 @@ public:
     }
   }
 
-  /// Clears the namespace of this declaration.
-  ///
-  /// This is useful if we want this declaration to be available for
-  /// redeclaration lookup but otherwise hidden for ordinary name lookups.
-  void clearIdentifierNamespace() { IdentifierNamespace = 0; }
-
   enum FriendObjectKind {
     FOK_None,      ///< Not a friend object.
     FOK_Declared,  ///< A friend of a previously-declared entity.
@@ -1235,10 +1226,6 @@ public:
   /// when possible. Will return null if the type underlying the Decl does not
   /// have a FunctionType.
   const FunctionType *getFunctionType(bool BlocksToo = true) const;
-
-  // Looks through the Decl's underlying type to determine if it's a
-  // function pointer type.
-  bool isFunctionPointerType() const;
 
 private:
   void setAttrsImpl(const AttrVec& Attrs, ASTContext &Ctx);
@@ -1382,13 +1369,6 @@ public:
   }
 };
 
-/// Only used by CXXDeductionGuideDecl.
-enum class DeductionCandidate : unsigned char {
-  Normal,
-  Copy,
-  Aggregate,
-};
-
 /// DeclContext - This is used only as base class of specific decl types that
 /// can act as declaration contexts. These decls are (only the top classes
 /// that directly derive from DeclContext are mentioned, not their subclasses):
@@ -1409,8 +1389,6 @@ enum class DeductionCandidate : unsigned char {
 class DeclContext {
   /// For makeDeclVisibleInContextImpl
   friend class ASTDeclReader;
-  /// For checking the new bits in the Serialization part.
-  friend class ASTDeclWriter;
   /// For reconcileExternalVisibleStorage, CreateStoredDeclsMap,
   /// hasNeedToReconcileExternalVisibleStorage
   friend class ExternalASTSource;
@@ -1617,7 +1595,7 @@ class DeclContext {
     uint64_t : NumDeclContextBits;
 
     /// Kind of initializer,
-    /// function call or omp_priv<init_expr> initialization.
+    /// function call or omp_priv<init_expr> initializtion.
     uint64_t InitializerKind : 2;
   };
 
@@ -1627,10 +1605,10 @@ class DeclContext {
   /// Stores the bits used by FunctionDecl.
   /// If modified NumFunctionDeclBits and the accessor
   /// methods in FunctionDecl and CXXDeductionGuideDecl
-  /// (for DeductionCandidateKind) should be updated appropriately.
+  /// (for IsCopyDeductionCandidate) should be updated appropriately.
   class FunctionDeclBitfields {
     friend class FunctionDecl;
-    /// For DeductionCandidateKind
+    /// For IsCopyDeductionCandidate
     friend class CXXDeductionGuideDecl;
     /// For the bits in DeclContextBitfields.
     uint64_t : NumDeclContextBits;
@@ -1666,8 +1644,6 @@ class DeclContext {
 
     /// Kind of contexpr specifier as defined by ConstexprSpecKind.
     uint64_t ConstexprKind : 2;
-    uint64_t BodyContainsImmediateEscalatingExpression : 1;
-
     uint64_t InstantiationIsPending : 1;
 
     /// Indicates if the function uses __try.
@@ -1685,10 +1661,10 @@ class DeclContext {
     /// function using attribute 'target'.
     uint64_t IsMultiVersion : 1;
 
-    /// Only used by CXXDeductionGuideDecl. Indicates the kind
-    /// of the Deduction Guide that is implicitly generated
-    /// (used during overload resolution).
-    uint64_t DeductionCandidateKind : 2;
+    /// [C++17] Only used by CXXDeductionGuideDecl. Indicates that
+    /// the Deduction Guide is the implicitly generated 'copy
+    /// deduction candidate' (is used during overload resolution).
+    uint64_t IsCopyDeductionCandidate : 1;
 
     /// Store the ODRHash after first calculation.
     uint64_t HasODRHash : 1;
@@ -1702,7 +1678,7 @@ class DeclContext {
   };
 
   /// Number of non-inherited bits in FunctionDeclBitfields.
-  enum { NumFunctionDeclBits = 31 };
+  enum { NumFunctionDeclBits = 29 };
 
   /// Stores the bits used by CXXConstructorDecl. If modified
   /// NumCXXConstructorDeclBits and the accessor
@@ -1714,12 +1690,12 @@ class DeclContext {
     /// For the bits in FunctionDeclBitfields.
     uint64_t : NumFunctionDeclBits;
 
-    /// 20 bits to fit in the remaining available space.
+    /// 22 bits to fit in the remaining available space.
     /// Note that this makes CXXConstructorDeclBitfields take
     /// exactly 64 bits and thus the width of NumCtorInitializers
     /// will need to be shrunk if some bit is added to NumDeclContextBitfields,
     /// NumFunctionDeclBitfields or CXXConstructorDeclBitfields.
-    uint64_t NumCtorInitializers : 17;
+    uint64_t NumCtorInitializers : 19;
     uint64_t IsInheritingConstructor : 1;
 
     /// Whether this constructor has a trail-allocated explicit specifier.
@@ -2549,8 +2525,10 @@ public:
                  D == LastDecl);
   }
 
-  void setUseQualifiedLookup(bool use = true) const {
+  bool setUseQualifiedLookup(bool use = true) const {
+    bool old_value = DeclContextBits.UseQualifiedLookup;
     DeclContextBits.UseQualifiedLookup = use;
+    return old_value;
   }
 
   bool shouldUseQualifiedLookup() const {
@@ -2610,6 +2588,14 @@ private:
 
   void reconcileExternalVisibleStorage() const;
   bool LoadLexicalDeclsFromExternalStorage() const;
+
+  /// Makes a declaration visible within this context, but
+  /// suppresses searches for external declarations with the same
+  /// name.
+  ///
+  /// Analogous to makeDeclVisibleInContext, but for the exclusive
+  /// use of addDeclInternal().
+  void makeDeclVisibleInContextInternal(NamedDecl *D);
 
   StoredDeclsMap *CreateStoredDeclsMap(ASTContext &C) const;
 

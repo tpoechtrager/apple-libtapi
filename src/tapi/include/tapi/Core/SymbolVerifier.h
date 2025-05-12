@@ -15,11 +15,9 @@
 
 #include "tapi/Core/API.h"
 #include "tapi/Core/Demangler.h"
-#include "tapi/Core/LLVM.h"
 #include "tapi/Diagnostics/Diagnostics.h"
 #include "llvm/TextAPI/InterfaceFile.h"
 #include "llvm/TextAPI/Platform.h"
-#include "llvm/TextAPI/Symbol.h"
 #include "llvm/TextAPI/SymbolSet.h"
 
 TAPI_NAMESPACE_INTERNAL_BEGIN
@@ -87,12 +85,9 @@ private:
                         SymbolContext &symCtx);
   Result checkAvailability(APIRecord *dRecord, const APIRecord *record,
                            SymbolContext &symCtx);
-  bool checkObjCInterfaceSymbols(const ObjCInterfaceRecord *dRecord,
-                                 const APIRecord *record,
-                                 SymbolContext &symCtx);
   bool shouldIgnoreObsolete(const APIRecord *record, SymbolContext &symCtx,
                             APIRecord *dRecord);
-  bool shouldIgnoreReexport(StringRef name, EncodeKind kind) const;
+  bool shouldIgnoreReexport(StringRef name, SymbolKind kind) const;
   bool shouldIgnoreZipperedAvailability(const APIRecord *record,
                                         SymbolContext &symCtx);
   bool shouldIgnoreZipperedSymbol(const APIRecord *record,

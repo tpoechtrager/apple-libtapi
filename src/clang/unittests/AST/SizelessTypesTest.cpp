@@ -45,7 +45,6 @@ TEST_F(SizelessTypeTester, TestSizelessBuiltin) {
   ASSERT_TRUE(Ctx.SveBFloat16Ty->isSizelessBuiltinType());
 
   ASSERT_TRUE(Ctx.SveBoolTy->isSizelessBuiltinType());
-  ASSERT_TRUE(Ctx.SveCountTy->isSizelessBuiltinType());
 
   ASSERT_FALSE(Ctx.VoidTy->isSizelessBuiltinType());
   ASSERT_FALSE(Ctx.PseudoObjectTy->isSizelessBuiltinType());
@@ -56,12 +55,6 @@ TEST_F(SizelessTypeTester, TestSizelessBuiltin) {
       Ctx.getLValueReferenceType(Ctx.SveBoolTy)->isSizelessBuiltinType());
   ASSERT_FALSE(
       Ctx.getRValueReferenceType(Ctx.SveBoolTy)->isSizelessBuiltinType());
-
-  ASSERT_FALSE(Ctx.getPointerType(Ctx.SveCountTy)->isSizelessBuiltinType());
-  ASSERT_FALSE(
-      Ctx.getLValueReferenceType(Ctx.SveCountTy)->isSizelessBuiltinType());
-  ASSERT_FALSE(
-      Ctx.getRValueReferenceType(Ctx.SveCountTy)->isSizelessBuiltinType());
 }
 
 TEST_F(SizelessTypeTester, TestSizeless) {
@@ -82,7 +75,6 @@ TEST_F(SizelessTypeTester, TestSizeless) {
   ASSERT_TRUE(Ctx.SveBFloat16Ty->isSizelessType());
 
   ASSERT_TRUE(Ctx.SveBoolTy->isSizelessType());
-  ASSERT_TRUE(Ctx.SveCountTy->isSizelessType());
 
   ASSERT_FALSE(Ctx.VoidTy->isSizelessType());
   ASSERT_FALSE(Ctx.PseudoObjectTy->isSizelessType());
@@ -91,8 +83,4 @@ TEST_F(SizelessTypeTester, TestSizeless) {
   ASSERT_FALSE(Ctx.getPointerType(Ctx.SveBoolTy)->isSizelessType());
   ASSERT_FALSE(Ctx.getLValueReferenceType(Ctx.SveBoolTy)->isSizelessType());
   ASSERT_FALSE(Ctx.getRValueReferenceType(Ctx.SveBoolTy)->isSizelessType());
-
-  ASSERT_FALSE(Ctx.getPointerType(Ctx.SveCountTy)->isSizelessType());
-  ASSERT_FALSE(Ctx.getLValueReferenceType(Ctx.SveCountTy)->isSizelessType());
-  ASSERT_FALSE(Ctx.getRValueReferenceType(Ctx.SveCountTy)->isSizelessType());
 }

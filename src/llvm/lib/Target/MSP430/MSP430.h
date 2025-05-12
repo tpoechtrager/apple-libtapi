@@ -34,17 +34,14 @@ namespace MSP430CC {
 }
 
 namespace llvm {
-class FunctionPass;
-class MSP430TargetMachine;
-class PassRegistry;
+  class MSP430TargetMachine;
+  class FunctionPass;
 
-FunctionPass *createMSP430ISelDag(MSP430TargetMachine &TM,
-                                  CodeGenOpt::Level OptLevel);
+  FunctionPass *createMSP430ISelDag(MSP430TargetMachine &TM,
+                                    CodeGenOpt::Level OptLevel);
 
-FunctionPass *createMSP430BranchSelectionPass();
+  FunctionPass *createMSP430BranchSelectionPass();
 
-void initializeMSP430DAGToDAGISelPass(PassRegistry &);
-
-} // namespace llvm
+} // end namespace llvm;
 
 #endif

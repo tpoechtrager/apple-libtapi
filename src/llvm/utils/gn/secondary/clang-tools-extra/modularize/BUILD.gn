@@ -10,7 +10,6 @@ executable("modularize") {
     "//clang/lib/Tooling",
     "//llvm/lib/Option",
     "//llvm/lib/Support",
-    "//llvm/lib/TargetParser",
   ]
   sources = [
     "CoverageChecker.cpp",

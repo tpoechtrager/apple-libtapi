@@ -327,9 +327,7 @@ public:
                      SmallVectorImpl<MachineOperand> &Cond,
                      bool AllowModify) const override;
 
-  int getJumpTableIndex(const MachineInstr &MI) const override;
-
-  std::optional<ExtAddrMode>
+  Optional<ExtAddrMode>
   getAddrModeFromMemoryOp(const MachineInstr &MemI,
                           const TargetRegisterInfo *TRI) const override;
 
@@ -369,14 +367,12 @@ public:
                            MachineBasicBlock::iterator MI, Register SrcReg,
                            bool isKill, int FrameIndex,
                            const TargetRegisterClass *RC,
-                           const TargetRegisterInfo *TRI,
-                           Register VReg) const override;
+                           const TargetRegisterInfo *TRI) const override;
 
   void loadRegFromStackSlot(MachineBasicBlock &MBB,
                             MachineBasicBlock::iterator MI, Register DestReg,
                             int FrameIndex, const TargetRegisterClass *RC,
-                            const TargetRegisterInfo *TRI,
-                            Register VReg) const override;
+                            const TargetRegisterInfo *TRI) const override;
 
   void loadStoreTileReg(MachineBasicBlock &MBB, MachineBasicBlock::iterator MI,
                         unsigned Opc, Register Reg, int FrameIdx,
@@ -510,8 +506,7 @@ public:
 
   bool useMachineCombiner() const override { return true; }
 
-  bool isAssociativeAndCommutative(const MachineInstr &Inst,
-                                   bool Invert) const override;
+  bool isAssociativeAndCommutative(const MachineInstr &Inst) const override;
 
   bool hasReassociableOperands(const MachineInstr &Inst,
                                const MachineBasicBlock *MBB) const override;
@@ -553,14 +548,14 @@ public:
   ArrayRef<std::pair<unsigned, const char *>>
   getSerializableDirectMachineOperandTargetFlags() const override;
 
-  std::optional<outliner::OutlinedFunction> getOutliningCandidateInfo(
+  outliner::OutlinedFunction getOutliningCandidateInfo(
       std::vector<outliner::Candidate> &RepeatedSequenceLocs) const override;
 
   bool isFunctionSafeToOutlineFrom(MachineFunction &MF,
                                    bool OutlineFromLinkOnceODRs) const override;
 
   outliner::InstrType
-  getOutliningTypeImpl(MachineBasicBlock::iterator &MIT, unsigned Flags) const override;
+  getOutliningType(MachineBasicBlock::iterator &MIT, unsigned Flags) const override;
 
   void buildOutlinedFrame(MachineBasicBlock &MBB, MachineFunction &MF,
                           const outliner::OutlinedFunction &OF) const override;
@@ -579,8 +574,8 @@ public:
     return MI.getDesc().TSFlags & X86II::LOCK;
   }
 
-  std::optional<ParamLoadedValue>
-  describeLoadedValue(const MachineInstr &MI, Register Reg) const override;
+  Optional<ParamLoadedValue> describeLoadedValue(const MachineInstr &MI,
+                                                 Register Reg) const override;
 
 protected:
   /// Commutes the operands in the given instruction by changing the operands
@@ -601,36 +596,8 @@ protected:
   /// If the specific machine instruction is a instruction that moves/copies
   /// value from one register to another register return destination and source
   /// registers as machine operands.
-  std::optional<DestSourcePair>
+  Optional<DestSourcePair>
   isCopyInstrImpl(const MachineInstr &MI) const override;
-
-  /// Return true when there is potentially a faster code sequence for an
-  /// instruction chain ending in \p Root. All potential patterns are listed in
-  /// the \p Pattern vector. Pattern should be sorted in priority order since
-  /// the pattern evaluator stops checking as soon as it finds a faster
-  /// sequence.
-  bool
-  getMachineCombinerPatterns(MachineInstr &Root,
-                             SmallVectorImpl<MachineCombinerPattern> &Patterns,
-                             bool DoRegPressureReduce) const override;
-
-  /// When getMachineCombinerPatterns() finds potential patterns,
-  /// this function generates the instructions that could replace the
-  /// original code sequence.
-  void genAlternativeCodeSequence(
-      MachineInstr &Root, MachineCombinerPattern Pattern,
-      SmallVectorImpl<MachineInstr *> &InsInstrs,
-      SmallVectorImpl<MachineInstr *> &DelInstrs,
-      DenseMap<unsigned, unsigned> &InstrIdxForVirtReg) const override;
-
-  /// When calculate the latency of the root instruction, accumulate the
-  /// latency of the sequence to the root latency.
-  /// \param Root - Instruction that could be combined with one of its operands
-  /// For X86 instruction (vpmaddwd + vpmaddwd) -> vpdpwssd, the vpmaddwd
-  /// is not in the critical path, so the root latency only include vpmaddwd.
-  bool accumulateInstrSeqToRootLatency(MachineInstr &Root) const override {
-    return false;
-  }
 
 private:
   /// This is a helper for convertToThreeAddress for 8 and 16-bit instructions.

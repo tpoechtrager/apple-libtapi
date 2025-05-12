@@ -36,6 +36,7 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/PassTimingInfo.h"
 #include "llvm/IR/Verifier.h"
+#include "llvm/InitializePasses.h"
 #include "llvm/LTO/LTO.h"
 #include "llvm/LTO/LTOBackend.h"
 #include "llvm/LTO/legacy/LTOModule.h"
@@ -43,10 +44,12 @@
 #include "llvm/Linker/Linker.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCContext.h"
+#include "llvm/MC/SubtargetFeature.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Remarks/HotnessThresholdParser.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/FileSystem.h"
+#include "llvm/Support/Host.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Process.h"
 #include "llvm/Support/Signals.h"
@@ -55,14 +58,12 @@
 #include "llvm/Support/YAMLTraits.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetOptions.h"
-#include "llvm/TargetParser/Host.h"
-#include "llvm/TargetParser/SubtargetFeature.h"
 #include "llvm/Transforms/IPO.h"
 #include "llvm/Transforms/IPO/Internalize.h"
+#include "llvm/Transforms/IPO/PassManagerBuilder.h"
 #include "llvm/Transforms/IPO/WholeProgramDevirt.h"
 #include "llvm/Transforms/ObjCARC.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
-#include <optional>
 #include <system_error>
 using namespace llvm;
 
@@ -86,7 +87,7 @@ cl::opt<bool> RemarksWithHotness(
     cl::desc("With PGO, include profile count in optimization remarks"),
     cl::Hidden);
 
-cl::opt<std::optional<uint64_t>, false, remarks::HotnessThresholdParser>
+cl::opt<Optional<uint64_t>, false, remarks::HotnessThresholdParser>
     RemarksHotnessThreshold(
         "lto-pass-remarks-hotness-threshold",
         cl::desc("Minimum profile count required for an "
@@ -117,17 +118,9 @@ cl::opt<std::string> LTOStatsFile(
 
 cl::opt<std::string> AIXSystemAssemblerPath(
     "lto-aix-system-assembler",
-    cl::desc("Path to a system assembler, picked up on AIX only"),
+    cl::desc("Absolute path to the system assembler, picked up on AIX only"),
     cl::value_desc("path"));
-
-cl::opt<bool>
-    LTORunCSIRInstr("cs-profile-generate",
-                    cl::desc("Perform context sensitive PGO instrumentation"));
-
-cl::opt<std::string>
-    LTOCSIRProfile("cs-profile-path",
-                   cl::desc("Context sensitive profile file path"));
-} // namespace llvm
+}
 
 LTOCodeGenerator::LTOCodeGenerator(LLVMContext &Context)
     : Context(Context), MergedModule(new Module("ld-temp.o", Context)),
@@ -135,14 +128,11 @@ LTOCodeGenerator::LTOCodeGenerator(LLVMContext &Context)
   Context.setDiscardValueNames(LTODiscardValueNames);
   Context.enableDebugTypeODRUniquing();
 
-  Config.CodeModel = std::nullopt;
+  Config.CodeModel = None;
   Config.StatsFile = LTOStatsFile;
   Config.PreCodeGenPassesHook = [](legacy::PassManager &PM) {
     PM.add(createObjCARCContractPass());
   };
-
-  Config.RunCSIRInstr = LTORunCSIRInstr;
-  Config.CSIRProfile = LTOCSIRProfile;
 }
 
 LTOCodeGenerator::~LTOCodeGenerator() = default;
@@ -200,10 +190,21 @@ void LTOCodeGenerator::setOptLevel(unsigned Level) {
   Config.OptLevel = Level;
   Config.PTO.LoopVectorization = Config.OptLevel > 1;
   Config.PTO.SLPVectorization = Config.OptLevel > 1;
-  std::optional<CodeGenOpt::Level> CGOptLevelOrNone =
-      CodeGenOpt::getLevel(Config.OptLevel);
-  assert(CGOptLevelOrNone && "Unknown optimization level!");
-  Config.CGOptLevel = *CGOptLevelOrNone;
+  switch (Config.OptLevel) {
+  case 0:
+    Config.CGOptLevel = CodeGenOpt::None;
+    return;
+  case 1:
+    Config.CGOptLevel = CodeGenOpt::Less;
+    return;
+  case 2:
+    Config.CGOptLevel = CodeGenOpt::Default;
+    return;
+  case 3:
+    Config.CGOptLevel = CodeGenOpt::Aggressive;
+    return;
+  }
+  llvm_unreachable("Unknown optimization level!");
 }
 
 bool LTOCodeGenerator::writeMergedModules(StringRef Path) {
@@ -244,7 +245,7 @@ bool LTOCodeGenerator::writeMergedModules(StringRef Path) {
 
 bool LTOCodeGenerator::useAIXSystemAssembler() {
   const auto &Triple = TargetMach->getTargetTriple();
-  return Triple.isOSAIX() && Config.Options.DisableIntegratedAS;
+  return Triple.isOSAIX();
 }
 
 bool LTOCodeGenerator::runAIXSystemAssembler(SmallString<128> &AssemblyFile) {
@@ -252,20 +253,9 @@ bool LTOCodeGenerator::runAIXSystemAssembler(SmallString<128> &AssemblyFile) {
          "Runing AIX system assembler when integrated assembler is available!");
 
   // Set the system assembler path.
-  SmallString<256> AssemblerPath("/usr/bin/as");
-  if (!llvm::AIXSystemAssemblerPath.empty()) {
-    if (llvm::sys::fs::real_path(llvm::AIXSystemAssemblerPath, AssemblerPath,
-                                 /* expand_tilde */ true)) {
-      emitError(
-          "Cannot find the assembler specified by lto-aix-system-assembler");
-      return false;
-    }
-  }
-
-  // Setup the LDR_CNTRL variable
-  std::string LDR_CNTRL_var = "LDR_CNTRL=MAXDATA32=0xA0000000@DSA";
-  if (std::optional<std::string> V = sys::Process::GetEnv("LDR_CNTRL"))
-    LDR_CNTRL_var += ("@" + *V);
+  std::string AssemblerPath(llvm::AIXSystemAssemblerPath.empty()
+                                ? "/usr/bin/as"
+                                : llvm::AIXSystemAssemblerPath.c_str());
 
   // Prepare inputs for the assember.
   const auto &Triple = TargetMach->getTargetTriple();
@@ -273,7 +263,7 @@ bool LTOCodeGenerator::runAIXSystemAssembler(SmallString<128> &AssemblyFile) {
   std::string ObjectFileName(AssemblyFile);
   ObjectFileName[ObjectFileName.size() - 1] = 'o';
   SmallVector<StringRef, 8> Args = {
-      "/bin/env",     LDR_CNTRL_var,
+      "/bin/env",     "LDR_CNTRL=MAXDATA32=0x80000000@${LDR_CNTRL}",
       AssemblerPath,  Arch,
       "-many",        "-o",
       ObjectFileName, AssemblyFile};
@@ -311,9 +301,7 @@ bool LTOCodeGenerator::compileOptimizedToFile(const char **Name) {
   // make unique temp output file to put generated code
   SmallString<128> Filename;
 
-  auto AddStream =
-      [&](size_t Task,
-          const Twine &ModuleName) -> std::unique_ptr<CachedFileStream> {
+  auto AddStream = [&](size_t Task) -> std::unique_ptr<CachedFileStream> {
     StringRef Extension(Config.CGFileType == CGFT_AssemblyFile ? "s" : "o");
 
     int FD;
@@ -436,7 +424,7 @@ std::unique_ptr<TargetMachine> LTOCodeGenerator::createTargetMachine() {
   assert(MArch && "MArch is not set!");
   return std::unique_ptr<TargetMachine>(MArch->createTargetMachine(
       TripleStr, Config.CPU, FeatureStr, Config.Options, Config.RelocModel,
-      std::nullopt, Config.CGOptLevel));
+      None, Config.CGOptLevel));
 }
 
 // If a linkonce global is present in the MustPreserveSymbols, we need to make
@@ -616,6 +604,9 @@ bool LTOCodeGenerator::optimize() {
 
   // Mark which symbols can not be internalized
   this->applyScopeRestrictions();
+
+  // Write LTOPostLink flag for passes that require all the modules.
+  MergedModule->addModuleFlag(Module::Error, "LTOPostLink", 1);
 
   // Add an appropriate DataLayout instance for this module...
   MergedModule->setDataLayout(TargetMach->createDataLayout());

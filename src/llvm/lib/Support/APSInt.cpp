@@ -25,7 +25,7 @@ APSInt::APSInt(StringRef Str) {
   unsigned NumBits = ((Str.size() * 64) / 19) + 2;
   APInt Tmp(NumBits, Str, /*radix=*/10);
   if (Str[0] == '-') {
-    unsigned MinBits = Tmp.getSignificantBits();
+    unsigned MinBits = Tmp.getMinSignedBits();
     if (MinBits < NumBits)
       Tmp = Tmp.trunc(std::max<unsigned>(1, MinBits));
     *this = APSInt(Tmp, /*isUnsigned=*/false);

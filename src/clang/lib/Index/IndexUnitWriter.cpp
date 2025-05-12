@@ -234,9 +234,9 @@ void IndexUnitWriter::getUnitPathForOutputFile(StringRef FilePath,
   return getUnitNameForOutputFile(FilePath, Str);
 }
 
-std::optional<bool> IndexUnitWriter::isUnitUpToDateForOutputFile(
-    StringRef FilePath, std::optional<StringRef> TimeCompareFilePath,
-    std::string &Error) {
+Optional<bool> IndexUnitWriter::isUnitUpToDateForOutputFile(StringRef FilePath,
+                                                            Optional<StringRef> TimeCompareFilePath,
+                                                            std::string &Error) {
   SmallString<256> UnitPath;
   getUnitPathForOutputFile(FilePath, UnitPath);
 
@@ -246,7 +246,7 @@ std::optional<bool> IndexUnitWriter::isUnitUpToDateForOutputFile(
       llvm::raw_string_ostream Err(Error);
       Err << "could not access path '" << UnitPath
           << "': " << EC.message();
-      return std::nullopt;
+      return None;
     }
     return false;
   }
@@ -260,7 +260,7 @@ std::optional<bool> IndexUnitWriter::isUnitUpToDateForOutputFile(
       llvm::raw_string_ostream Err(Error);
       Err << "could not access path '" << *TimeCompareFilePath
           << "': " << EC.message();
-      return std::nullopt;
+      return None;
     }
     return true;
   }

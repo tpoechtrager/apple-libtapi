@@ -261,7 +261,7 @@ void UDTLayoutBase::initializeChildren(const PDBSymbol &Sym) {
     // physically lay it out if it's a topmost derived class.
     addChildToLayout(std::move(BL));
   }
-  VirtualBases = ArrayRef(AllBases).drop_front(NonVirtualBases.size());
+  VirtualBases = makeArrayRef(AllBases).drop_front(NonVirtualBases.size());
 
   if (Parent != nullptr)
     LayoutSize = UsedBytes.find_last() + 1;

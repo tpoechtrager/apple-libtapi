@@ -53,20 +53,13 @@ public:
   virtual void markFunctionEnd();
 
   /// Gather post-function debug information.
+  /// Please note that some AsmPrinter implementations may not call
+  /// beginFunction at all.
   virtual void endFunction(const MachineFunction *MF) = 0;
 
-  /// Process the beginning of a new basic-block-section within a
-  /// function. Always called immediately after beginFunction for the first
-  /// basic-block. When basic-block-sections are enabled, called before the
-  /// first block of each such section.
-  virtual void beginBasicBlockSection(const MachineBasicBlock &MBB) {}
-
-  /// Process the end of a basic-block-section within a function. When
-  /// basic-block-sections are enabled, called after the last block in each such
-  /// section (including the last section in the function). When
-  /// basic-block-sections are disabled, called at the end of a function,
-  /// immediately prior to markFunctionEnd.
-  virtual void endBasicBlockSection(const MachineBasicBlock &MBB) {}
+  virtual void beginFragment(const MachineBasicBlock *MBB,
+                             ExceptionSymbolProvider ESP) {}
+  virtual void endFragment() {}
 
   /// Emit target-specific EH funclet machinery.
   virtual void beginFunclet(const MachineBasicBlock &MBB,
@@ -78,6 +71,12 @@ public:
 
   /// Process end of an instruction.
   virtual void endInstruction() = 0;
+
+  /// Process beginning of a basic block during basic block sections.
+  virtual void beginBasicBlock(const MachineBasicBlock &MBB) {}
+
+  /// Process end of a basic block during basic block sections.
+  virtual void endBasicBlock(const MachineBasicBlock &MBB) {}
 };
 
 } // End of namespace llvm

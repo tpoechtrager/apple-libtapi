@@ -30,17 +30,16 @@ class DWARFObject;
 
 namespace {
 class DWARFLocationInterpreter {
-  std::optional<object::SectionedAddress> Base;
-  std::function<std::optional<object::SectionedAddress>(uint32_t)> LookupAddr;
+  Optional<object::SectionedAddress> Base;
+  std::function<Optional<object::SectionedAddress>(uint32_t)> LookupAddr;
 
 public:
   DWARFLocationInterpreter(
-      std::optional<object::SectionedAddress> Base,
-      std::function<std::optional<object::SectionedAddress>(uint32_t)>
-          LookupAddr)
+      Optional<object::SectionedAddress> Base,
+      std::function<Optional<object::SectionedAddress>(uint32_t)> LookupAddr)
       : Base(Base), LookupAddr(std::move(LookupAddr)) {}
 
-  Expected<std::optional<DWARFLocationExpression>>
+  Expected<Optional<DWARFLocationExpression>>
   Interpret(const DWARFLocationEntry &E);
 };
 } // namespace
@@ -49,22 +48,22 @@ static Error createResolverError(uint32_t Index, unsigned Kind) {
   return make_error<ResolverError>(Index, (dwarf::LoclistEntries)Kind);
 }
 
-Expected<std::optional<DWARFLocationExpression>>
+Expected<Optional<DWARFLocationExpression>>
 DWARFLocationInterpreter::Interpret(const DWARFLocationEntry &E) {
   switch (E.Kind) {
   case dwarf::DW_LLE_end_of_list:
-    return std::nullopt;
+    return None;
   case dwarf::DW_LLE_base_addressx: {
     Base = LookupAddr(E.Value0);
     if (!Base)
       return createResolverError(E.Value0, E.Kind);
-    return std::nullopt;
+    return None;
   }
   case dwarf::DW_LLE_startx_endx: {
-    std::optional<SectionedAddress> LowPC = LookupAddr(E.Value0);
+    Optional<SectionedAddress> LowPC = LookupAddr(E.Value0);
     if (!LowPC)
       return createResolverError(E.Value0, E.Kind);
-    std::optional<SectionedAddress> HighPC = LookupAddr(E.Value1);
+    Optional<SectionedAddress> HighPC = LookupAddr(E.Value1);
     if (!HighPC)
       return createResolverError(E.Value1, E.Kind);
     return DWARFLocationExpression{
@@ -72,7 +71,7 @@ DWARFLocationInterpreter::Interpret(const DWARFLocationEntry &E) {
         E.Loc};
   }
   case dwarf::DW_LLE_startx_length: {
-    std::optional<SectionedAddress> LowPC = LookupAddr(E.Value0);
+    Optional<SectionedAddress> LowPC = LookupAddr(E.Value0);
     if (!LowPC)
       return createResolverError(E.Value0, E.Kind);
     return DWARFLocationExpression{DWARFAddressRange{LowPC->Address,
@@ -93,10 +92,10 @@ DWARFLocationInterpreter::Interpret(const DWARFLocationEntry &E) {
     return DWARFLocationExpression{Range, E.Loc};
   }
   case dwarf::DW_LLE_default_location:
-    return DWARFLocationExpression{std::nullopt, E.Loc};
+    return DWARFLocationExpression{None, E.Loc};
   case dwarf::DW_LLE_base_address:
     Base = SectionedAddress{E.Value0, E.SectionIndex};
-    return std::nullopt;
+    return None;
   case dwarf::DW_LLE_start_end:
     return DWARFLocationExpression{
         DWARFAddressRange{E.Value0, E.Value1, E.SectionIndex}, E.Loc};
@@ -111,28 +110,31 @@ DWARFLocationInterpreter::Interpret(const DWARFLocationEntry &E) {
 
 static void dumpExpression(raw_ostream &OS, DIDumpOptions DumpOpts,
                            ArrayRef<uint8_t> Data, bool IsLittleEndian,
-                           unsigned AddressSize, DWARFUnit *U) {
+                           unsigned AddressSize, const MCRegisterInfo *MRI,
+                           DWARFUnit *U) {
   DWARFDataExtractor Extractor(Data, IsLittleEndian, AddressSize);
   // Note. We do not pass any format to DWARFExpression, even if the
   // corresponding unit is known. For now, there is only one operation,
   // DW_OP_call_ref, which depends on the format; it is rarely used, and
   // is unexpected in location tables.
-  DWARFExpression(Extractor, AddressSize).print(OS, DumpOpts, U);
+  DWARFExpression(Extractor, AddressSize).print(OS, DumpOpts, MRI, U);
 }
 
-bool DWARFLocationTable::dumpLocationList(
-    uint64_t *Offset, raw_ostream &OS, std::optional<SectionedAddress> BaseAddr,
-    const DWARFObject &Obj, DWARFUnit *U, DIDumpOptions DumpOpts,
-    unsigned Indent) const {
+bool DWARFLocationTable::dumpLocationList(uint64_t *Offset, raw_ostream &OS,
+                                          Optional<SectionedAddress> BaseAddr,
+                                          const MCRegisterInfo *MRI,
+                                          const DWARFObject &Obj, DWARFUnit *U,
+                                          DIDumpOptions DumpOpts,
+                                          unsigned Indent) const {
   DWARFLocationInterpreter Interp(
-      BaseAddr, [U](uint32_t Index) -> std::optional<SectionedAddress> {
+      BaseAddr, [U](uint32_t Index) -> Optional<SectionedAddress> {
         if (U)
           return U->getAddrOffsetSectionItem(Index);
-        return std::nullopt;
+        return None;
       });
   OS << format("0x%8.8" PRIx64 ": ", *Offset);
   Error E = visitLocationList(Offset, [&](const DWARFLocationEntry &E) {
-    Expected<std::optional<DWARFLocationExpression>> Loc = Interp.Interpret(E);
+    Expected<Optional<DWARFLocationExpression>> Loc = Interp.Interpret(E);
     if (!Loc || DumpOpts.DisplayRawContents)
       dumpRawEntry(E, OS, Indent, DumpOpts, Obj);
     if (Loc && *Loc) {
@@ -156,7 +158,7 @@ bool DWARFLocationTable::dumpLocationList(
         E.Kind != dwarf::DW_LLE_end_of_list) {
       OS << ": ";
       dumpExpression(OS, DumpOpts, E.Loc, Data.isLittleEndian(),
-                     Data.getAddressSize(), U);
+                     Data.getAddressSize(), MRI, U);
     }
     return true;
   });
@@ -168,12 +170,12 @@ bool DWARFLocationTable::dumpLocationList(
 }
 
 Error DWARFLocationTable::visitAbsoluteLocationList(
-    uint64_t Offset, std::optional<SectionedAddress> BaseAddr,
-    std::function<std::optional<SectionedAddress>(uint32_t)> LookupAddr,
+    uint64_t Offset, Optional<SectionedAddress> BaseAddr,
+    std::function<Optional<SectionedAddress>(uint32_t)> LookupAddr,
     function_ref<bool(Expected<DWARFLocationExpression>)> Callback) const {
   DWARFLocationInterpreter Interp(BaseAddr, std::move(LookupAddr));
   return visitLocationList(&Offset, [&](const DWARFLocationEntry &E) {
-    Expected<std::optional<DWARFLocationExpression>> Loc = Interp.Interpret(E);
+    Expected<Optional<DWARFLocationExpression>> Loc = Interp.Interpret(E);
     if (!Loc)
       return Callback(Loc.takeError());
     if (*Loc)
@@ -182,13 +184,13 @@ Error DWARFLocationTable::visitAbsoluteLocationList(
   });
 }
 
-void DWARFDebugLoc::dump(raw_ostream &OS, const DWARFObject &Obj,
-                         DIDumpOptions DumpOpts,
-                         std::optional<uint64_t> DumpOffset) const {
-  auto BaseAddr = std::nullopt;
+void DWARFDebugLoc::dump(raw_ostream &OS, const MCRegisterInfo *MRI,
+                         const DWARFObject &Obj, DIDumpOptions DumpOpts,
+                         Optional<uint64_t> DumpOffset) const {
+  auto BaseAddr = None;
   unsigned Indent = 12;
   if (DumpOffset) {
-    dumpLocationList(&*DumpOffset, OS, BaseAddr, Obj, nullptr, DumpOpts,
+    dumpLocationList(&*DumpOffset, OS, BaseAddr, MRI, Obj, nullptr, DumpOpts,
                      Indent);
   } else {
     uint64_t Offset = 0;
@@ -198,7 +200,7 @@ void DWARFDebugLoc::dump(raw_ostream &OS, const DWARFObject &Obj,
       OS << Separator;
       Separator = "\n";
 
-      CanContinue = dumpLocationList(&Offset, OS, BaseAddr, Obj, nullptr,
+      CanContinue = dumpLocationList(&Offset, OS, BaseAddr, MRI, Obj, nullptr,
                                      DumpOpts, Indent);
       OS << '\n';
     }
@@ -385,7 +387,8 @@ void DWARFDebugLoclists::dumpRawEntry(const DWARFLocationEntry &Entry,
 }
 
 void DWARFDebugLoclists::dumpRange(uint64_t StartOffset, uint64_t Size,
-                                   raw_ostream &OS, const DWARFObject &Obj,
+                                   raw_ostream &OS, const MCRegisterInfo *MRI,
+                                   const DWARFObject &Obj,
                                    DIDumpOptions DumpOpts) {
   if (!Data.isValidOffsetForDataOfSize(StartOffset, Size))  {
     OS << "Invalid dump range\n";
@@ -398,7 +401,7 @@ void DWARFDebugLoclists::dumpRange(uint64_t StartOffset, uint64_t Size,
     OS << Separator;
     Separator = "\n";
 
-    CanContinue = dumpLocationList(&Offset, OS, /*BaseAddr=*/std::nullopt, Obj,
+    CanContinue = dumpLocationList(&Offset, OS, /*BaseAddr=*/None, MRI, Obj,
                                    nullptr, DumpOpts, /*Indent=*/12);
     OS << '\n';
   }

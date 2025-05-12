@@ -22,6 +22,5 @@ add_llvm_component_library(LLVMLibDriver
   Object
   Option
   Support
-  TargetParser
   )
 add_dependencies(LLVMLibDriver LibOptionsTableGen)

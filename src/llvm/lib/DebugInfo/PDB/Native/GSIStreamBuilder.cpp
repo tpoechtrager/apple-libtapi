@@ -76,7 +76,7 @@ struct llvm::pdb::SymbolDenseMapInfo {
     return Tombstone;
   }
   static unsigned getHashValue(const CVSymbol &Val) {
-    return xxh3_64bits(Val.RecordData);
+    return xxHash64(Val.RecordData);
   }
   static bool isEqual(const CVSymbol &LHS, const CVSymbol &RHS) {
     return LHS.RecordData == RHS.RecordData;
@@ -117,7 +117,7 @@ static CVSymbol serializePublic(uint8_t *Mem, const BulkPublic &Pub) {
   memcpy(NameMem, Pub.Name, NameLen);
   // Zero the null terminator and remaining bytes.
   memset(&NameMem[NameLen], 0, Size - sizeof(PublicSym32Layout) - NameLen);
-  return CVSymbol(ArrayRef(reinterpret_cast<uint8_t *>(Mem), Size));
+  return CVSymbol(makeArrayRef(reinterpret_cast<uint8_t *>(Mem), Size));
 }
 
 uint32_t GSIHashStreamBuilder::calculateSerializedLength() const {
@@ -138,11 +138,11 @@ Error GSIHashStreamBuilder::commit(BinaryStreamWriter &Writer) {
   if (auto EC = Writer.writeObject(Header))
     return EC;
 
-  if (auto EC = Writer.writeArray(ArrayRef(HashRecords)))
+  if (auto EC = Writer.writeArray(makeArrayRef(HashRecords)))
     return EC;
-  if (auto EC = Writer.writeArray(ArrayRef(HashBitmap)))
+  if (auto EC = Writer.writeArray(makeArrayRef(HashBitmap)))
     return EC;
-  if (auto EC = Writer.writeArray(ArrayRef(HashBuckets)))
+  if (auto EC = Writer.writeArray(makeArrayRef(HashBuckets)))
     return EC;
   return Error::success();
 }
@@ -464,7 +464,7 @@ Error GSIStreamBuilder::commitPublicsHashStream(
 
   std::vector<support::ulittle32_t> PubAddrMap = computeAddrMap(Publics);
   assert(PubAddrMap.size() == Publics.size());
-  if (auto EC = Writer.writeArray(ArrayRef(PubAddrMap)))
+  if (auto EC = Writer.writeArray(makeArrayRef(PubAddrMap)))
     return EC;
 
   return Error::success();

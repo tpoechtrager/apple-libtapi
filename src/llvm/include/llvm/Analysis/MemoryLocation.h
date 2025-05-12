@@ -16,10 +16,9 @@
 #define LLVM_ANALYSIS_MEMORYLOCATION_H
 
 #include "llvm/ADT/DenseMapInfo.h"
+#include "llvm/ADT/Optional.h"
 #include "llvm/IR/Metadata.h"
 #include "llvm/Support/TypeSize.h"
-
-#include <optional>
 
 namespace llvm {
 
@@ -40,9 +39,9 @@ class VAArgInst;
 class Value;
 
 // Represents the size of a MemoryLocation. Logically, it's an
-// std::optional<uint63_t> that also carries a bit to represent whether the
-// integer it contains, N, is 'precise'. Precise, in this context, means that we
-// know that the area of storage referenced by the given MemoryLocation must be
+// Optional<uint63_t> that also carries a bit to represent whether the integer
+// it contains, N, is 'precise'. Precise, in this context, means that we know
+// that the area of storage referenced by the given MemoryLocation must be
 // precisely N bytes. An imprecise value is formed as the union of two or more
 // precise values, and can conservatively represent all of the values unioned
 // into it. Importantly, imprecise values are an *upper-bound* on the size of a
@@ -63,7 +62,7 @@ class Value;
 // we'll ever actually do so.
 //
 // If asked to represent a pathologically large value, this will degrade to
-// std::nullopt.
+// None.
 class LocationSize {
   enum : uint64_t {
     BeforeOrAfterPointer = ~uint64_t(0),
@@ -103,7 +102,7 @@ public:
   static LocationSize precise(TypeSize Value) {
     if (Value.isScalable())
       return afterPointer();
-    return precise(Value.getFixedValue());
+    return precise(Value.getFixedSize());
   }
 
   static LocationSize upperBound(uint64_t Value) {
@@ -117,7 +116,7 @@ public:
   static LocationSize upperBound(TypeSize Value) {
     if (Value.isScalable())
       return afterPointer();
-    return upperBound(Value.getFixedValue());
+    return upperBound(Value.getFixedSize());
   }
 
   /// Any location after the base pointer (but still within the underlying
@@ -243,7 +242,7 @@ public:
   static MemoryLocation get(const Instruction *Inst) {
     return *MemoryLocation::getOrNone(Inst);
   }
-  static std::optional<MemoryLocation> getOrNone(const Instruction *Inst);
+  static Optional<MemoryLocation> getOrNone(const Instruction *Inst);
 
   /// Return a location representing the source of a memory transfer.
   static MemoryLocation getForSource(const MemTransferInst *MTI);
@@ -255,8 +254,8 @@ public:
   static MemoryLocation getForDest(const MemIntrinsic *MI);
   static MemoryLocation getForDest(const AtomicMemIntrinsic *MI);
   static MemoryLocation getForDest(const AnyMemIntrinsic *MI);
-  static std::optional<MemoryLocation> getForDest(const CallBase *CI,
-                                                  const TargetLibraryInfo &TLI);
+  static Optional<MemoryLocation> getForDest(const CallBase *CI,
+                                             const TargetLibraryInfo &TLI);
 
   /// Return a location representing a particular argument of a call.
   static MemoryLocation getForArgument(const CallBase *Call, unsigned ArgIdx,
@@ -283,7 +282,7 @@ public:
   // Return the exact size if the exact size is known at compiletime,
   // otherwise return MemoryLocation::UnknownSize.
   static uint64_t getSizeOrUnknown(const TypeSize &T) {
-    return T.isScalable() ? UnknownSize : T.getFixedValue();
+    return T.isScalable() ? UnknownSize : T.getFixedSize();
   }
 
   MemoryLocation() : Ptr(nullptr), Size(LocationSize::beforeOrAfterPointer()) {}

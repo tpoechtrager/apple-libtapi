@@ -11,10 +11,10 @@
 
 #include "clang/Driver/ToolChain.h"
 #include "llvm/ADT/StringRef.h"
-#include "llvm/Option/ArgList.h"
+#include "llvm/ADT/Triple.h"
 #include "llvm/Option/Option.h"
-#include "llvm/TargetParser/ARMTargetParser.h"
-#include "llvm/TargetParser/Triple.h"
+#include "llvm/Support/ARMTargetParser.h"
+#include "llvm/Support/TargetParser.h"
 #include <string>
 #include <vector>
 
@@ -38,9 +38,7 @@ void appendBE8LinkFlag(const llvm::opt::ArgList &Args,
 enum class ReadTPMode {
   Invalid,
   Soft,
-  TPIDRURW,
-  TPIDRURO,
-  TPIDRPRW,
+  Cp15,
 };
 
 enum class FloatABI {
@@ -66,15 +64,12 @@ bool useAAPCSForMachO(const llvm::Triple &T);
 void getARMArchCPUFromArgs(const llvm::opt::ArgList &Args,
                            llvm::StringRef &Arch, llvm::StringRef &CPU,
                            bool FromAs = false);
-llvm::ARM::FPUKind getARMTargetFeatures(const Driver &D,
-                                        const llvm::Triple &Triple,
-                                        const llvm::opt::ArgList &Args,
-                                        std::vector<llvm::StringRef> &Features,
-                                        bool ForAS, bool ForMultilib = false);
+void getARMTargetFeatures(const Driver &D, const llvm::Triple &Triple,
+                          const llvm::opt::ArgList &Args,
+                          std::vector<llvm::StringRef> &Features, bool ForAS);
 int getARMSubArchVersionNumber(const llvm::Triple &Triple);
 bool isARMMProfile(const llvm::Triple &Triple);
 bool isARMAProfile(const llvm::Triple &Triple);
-bool isARMBigEndian(const llvm::Triple &Triple, const llvm::opt::ArgList &Args);
 
 } // end namespace arm
 } // end namespace tools

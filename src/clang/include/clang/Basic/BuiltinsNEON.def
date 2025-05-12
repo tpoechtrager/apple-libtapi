@@ -19,4 +19,3 @@
 #undef GET_NEON_BUILTINS
 
 #undef BUILTIN
-#undef TARGET_BUILTIN

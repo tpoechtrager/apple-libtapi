@@ -17,5 +17,4 @@ add_llvm_component_library(LLVMRuntimeDyld
   MC
   Object
   Support
-  TargetParser
   )

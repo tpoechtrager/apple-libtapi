@@ -13,7 +13,6 @@
 
 #include "ReduceRegisterDefs.h"
 #include "llvm/CodeGen/MachineFunction.h"
-#include "llvm/CodeGen/MachineModuleInfo.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/TargetInstrInfo.h"
 
@@ -40,8 +39,8 @@ static void removeDefsFromFunction(Oracle &O, MachineFunction &MF) {
 
       int NumOperands = MI.getNumOperands();
       int NumRequiredOps = MI.getNumExplicitOperands() +
-                           MI.getDesc().implicit_defs().size() +
-                           MI.getDesc().implicit_uses().size();
+                           MI.getDesc().getNumImplicitDefs() +
+                           MI.getDesc().getNumImplicitUses();
 
       bool HaveDelete = false;
       // Do an initial scan in case the instruction defines the same register
@@ -118,5 +117,6 @@ static void removeDefsFromModule(Oracle &O, ReducerWorkItem &WorkItem) {
 }
 
 void llvm::reduceRegisterDefsMIRDeltaPass(TestRunner &Test) {
-  runDeltaPass(Test, removeDefsFromModule, "Reducing register defs");
+  outs() << "*** Reducing register defs...\n";
+  runDeltaPass(Test, removeDefsFromModule);
 }

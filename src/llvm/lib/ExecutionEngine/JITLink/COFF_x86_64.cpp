@@ -181,10 +181,8 @@ private:
   }
 
 public:
-  COFFLinkGraphBuilder_x86_64(const object::COFFObjectFile &Obj, const Triple T,
-                              const SubtargetFeatures Features)
-      : COFFLinkGraphBuilder(Obj, std::move(T), std::move(Features),
-                             getCOFFX86RelocationKindName) {}
+  COFFLinkGraphBuilder_x86_64(const object::COFFObjectFile &Obj, const Triple T)
+      : COFFLinkGraphBuilder(Obj, std::move(T), getCOFFX86RelocationKindName) {}
 };
 
 class COFFLinkGraphLowering_x86_64 {
@@ -198,7 +196,7 @@ public:
           auto ImageBase = getImageBaseAddress(G, Ctx);
           if (!ImageBase)
             return ImageBase.takeError();
-          E.setAddend(E.getAddend() - ImageBase->getValue());
+          E.setAddend(E.getAddend() - *ImageBase);
           E.setKind(x86_64::Pointer32);
           break;
         }
@@ -240,19 +238,19 @@ private:
     return SectionStartCache[&Sec];
   }
 
-  Expected<orc::ExecutorAddr> getImageBaseAddress(LinkGraph &G,
-                                                  JITLinkContext &Ctx) {
+  Expected<JITTargetAddress> getImageBaseAddress(LinkGraph &G,
+                                                 JITLinkContext &Ctx) {
     if (this->ImageBase)
       return this->ImageBase;
     for (auto *S : G.defined_symbols())
       if (S->getName() == getImageBaseSymbolName()) {
-        this->ImageBase = S->getAddress();
+        this->ImageBase = S->getAddress().getValue();
         return this->ImageBase;
       }
 
     JITLinkContext::LookupMap Symbols;
     Symbols[getImageBaseSymbolName()] = SymbolLookupFlags::RequiredSymbol;
-    orc::ExecutorAddr ImageBase;
+    JITTargetAddress ImageBase;
     Error Err = Error::success();
     Ctx.lookup(Symbols,
                createLookupContinuation([&](Expected<AsyncLookupResult> LR) {
@@ -261,7 +259,8 @@ private:
                    Err = LR.takeError();
                    return;
                  }
-                 ImageBase = LR->begin()->second.getAddress();
+                 auto &ImageBaseSymbol = LR->begin()->second;
+                 ImageBase = ImageBaseSymbol.getAddress();
                }));
     if (Err)
       return std::move(Err);
@@ -270,7 +269,7 @@ private:
   }
 
   DenseMap<Section *, orc::ExecutorAddr> SectionStartCache;
-  orc::ExecutorAddr ImageBase;
+  JITTargetAddress ImageBase = 0;
 };
 
 Error lowerEdges_COFF_x86_64(LinkGraph &G, JITLinkContext *Ctx) {
@@ -316,12 +315,7 @@ createLinkGraphFromCOFFObject_x86_64(MemoryBufferRef ObjectBuffer) {
   if (!COFFObj)
     return COFFObj.takeError();
 
-  auto Features = (*COFFObj)->getFeatures();
-  if (!Features)
-    return Features.takeError();
-
-  return COFFLinkGraphBuilder_x86_64(**COFFObj, (*COFFObj)->makeTriple(),
-                                     std::move(*Features))
+  return COFFLinkGraphBuilder_x86_64(**COFFObj, (*COFFObj)->makeTriple())
       .buildGraph();
 }
 

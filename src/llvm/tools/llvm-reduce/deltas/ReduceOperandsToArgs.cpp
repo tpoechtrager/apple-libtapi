@@ -173,9 +173,7 @@ static void substituteOperandWithArgument(Function *OldF,
   NewF->setName(FName);
 }
 
-static void reduceOperandsToArgs(Oracle &O, ReducerWorkItem &WorkItem) {
-  Module &Program = WorkItem.getModule();
-
+static void reduceOperandsToArgs(Oracle &O, Module &Program) {
   SmallVector<Use *> OperandsToReduce;
   for (Function &F : make_early_inc_range(Program.functions())) {
     if (!canReplaceFunction(&F))
@@ -197,6 +195,6 @@ static void reduceOperandsToArgs(Oracle &O, ReducerWorkItem &WorkItem) {
 }
 
 void llvm::reduceOperandsToArgsDeltaPass(TestRunner &Test) {
-  runDeltaPass(Test, reduceOperandsToArgs,
-               "Converting operands to function arguments");
+  outs() << "*** Converting operands to function arguments ...\n";
+  return runDeltaPass(Test, reduceOperandsToArgs);
 }

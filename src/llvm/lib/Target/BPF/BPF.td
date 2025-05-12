@@ -17,6 +17,12 @@ def BPFInstrInfo : InstrInfo;
 class Proc<string Name, list<SubtargetFeature> Features>
  : Processor<Name, NoItineraries, Features>;
 
+def : Proc<"generic", []>;
+def : Proc<"v1", []>;
+def : Proc<"v2", []>;
+def : Proc<"v3", []>;
+def : Proc<"probe", []>;
+
 def DummyFeature : SubtargetFeature<"dummy", "isDummyMode",
                                     "true", "unused feature">;
 
@@ -25,12 +31,6 @@ def ALU32 : SubtargetFeature<"alu32", "HasAlu32", "true",
 
 def DwarfRIS: SubtargetFeature<"dwarfris", "UseDwarfRIS", "true",
                                "Disable MCAsmInfo DwarfUsesRelocationsAcrossSections">;
-
-def : Proc<"generic", []>;
-def : Proc<"v1", []>;
-def : Proc<"v2", []>;
-def : Proc<"v3", [ALU32]>;
-def : Proc<"probe", []>;
 
 def BPFInstPrinter : AsmWriter {
   string AsmWriterClassName  = "InstPrinter";

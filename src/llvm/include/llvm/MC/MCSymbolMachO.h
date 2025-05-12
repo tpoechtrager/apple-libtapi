@@ -115,13 +115,12 @@ public:
 
     // Common alignment is packed into the 'desc' bits.
     if (isCommon()) {
-      if (MaybeAlign MaybeAlignment = getCommonAlignment()) {
-        Align Alignment = *MaybeAlignment;
-        unsigned Log2Size = Log2(Alignment);
+      if (unsigned Align = getCommonAlignment()) {
+        unsigned Log2Size = Log2_32(Align);
+        assert((1U << Log2Size) == Align && "Invalid 'common' alignment!");
         if (Log2Size > 15)
           report_fatal_error("invalid 'common' alignment '" +
-                                 Twine(Alignment.value()) + "' for '" +
-                                 getName() + "'",
+                             Twine(Align) + "' for '" + getName() + "'",
                              false);
         Flags = (Flags & SF_CommonAlignmentMask) |
                 (Log2Size << SF_CommonAlignmentShift);

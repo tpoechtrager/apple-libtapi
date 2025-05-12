@@ -154,6 +154,7 @@ static bool isProfitableToInterleave(SmallSetVector<Instruction *, 4> &Exts,
 static bool tryInterleave(Instruction *Start,
                           SmallPtrSetImpl<Instruction *> &Visited) {
   LLVM_DEBUG(dbgs() << "tryInterleave from " << *Start << "\n");
+  auto *VT = cast<FixedVectorType>(Start->getType());
 
   if (!isa<Instruction>(Start->getOperand(0)))
     return false;
@@ -164,7 +165,6 @@ static bool tryInterleave(Instruction *Start,
   Worklist.push_back(cast<Instruction>(Start->getOperand(0)));
 
   SmallSetVector<Instruction *, 4> Truncs;
-  SmallSetVector<Instruction *, 4> Reducts;
   SmallSetVector<Instruction *, 4> Exts;
   SmallSetVector<Use *, 4> OtherLeafs;
   SmallSetVector<Instruction *, 4> Ops;
@@ -197,13 +197,6 @@ static bool tryInterleave(Instruction *Start,
       IntrinsicInst *II = dyn_cast<IntrinsicInst>(I);
       if (!II)
         return false;
-
-      if (II->getIntrinsicID() == Intrinsic::vector_reduce_add) {
-        if (!Reducts.insert(I))
-          continue;
-        Visited.insert(I);
-        break;
-      }
 
       switch (II->getIntrinsicID()) {
       case Intrinsic::abs:
@@ -274,32 +267,21 @@ static bool tryInterleave(Instruction *Start,
     return false;
 
   LLVM_DEBUG({
-    dbgs() << "Found group:\n  Exts:\n";
+    dbgs() << "Found group:\n  Exts:";
     for (auto *I : Exts)
       dbgs() << "  " << *I << "\n";
-    dbgs() << "  Ops:\n";
+    dbgs() << "  Ops:";
     for (auto *I : Ops)
       dbgs() << "  " << *I << "\n";
-    dbgs() << "  OtherLeafs:\n";
+    dbgs() << "  OtherLeafs:";
     for (auto *I : OtherLeafs)
       dbgs() << "  " << *I->get() << " of " << *I->getUser() << "\n";
-    dbgs() << "  Truncs:\n";
+    dbgs() << "Truncs:";
     for (auto *I : Truncs)
-      dbgs() << "  " << *I << "\n";
-    dbgs() << "  Reducts:\n";
-    for (auto *I : Reducts)
       dbgs() << "  " << *I << "\n";
   });
 
-  assert((!Truncs.empty() || !Reducts.empty()) &&
-         "Expected some truncs or reductions");
-  if (Truncs.empty() && Exts.empty())
-    return false;
-
-  auto *VT = !Truncs.empty()
-                 ? cast<FixedVectorType>(Truncs[0]->getType())
-                 : cast<FixedVectorType>(Exts[0]->getOperand(0)->getType());
-  LLVM_DEBUG(dbgs() << "Using VT:" << *VT << "\n");
+  assert(!Truncs.empty() && "Expected some truncs");
 
   // Check types
   unsigned NumElts = VT->getNumElements();
@@ -329,14 +311,6 @@ static bool tryInterleave(Instruction *Start,
   // Check that it looks beneficial
   if (!isProfitableToInterleave(Exts, Truncs))
     return false;
-  if (!Reducts.empty() && (Ops.empty() || all_of(Ops, [](Instruction *I) {
-                             return I->getOpcode() == Instruction::Mul ||
-                                    I->getOpcode() == Instruction::Select ||
-                                    I->getOpcode() == Instruction::ICmp;
-                           }))) {
-    LLVM_DEBUG(dbgs() << "Reduction does not look profitable\n");
-    return false;
-  }
 
   // Create new shuffles around the extends / truncs / other leaves.
   IRBuilder<> Builder(Start);
@@ -393,14 +367,6 @@ static bool tryInterleave(Instruction *Start,
   return true;
 }
 
-// Add reductions are fairly common and associative, meaning we can start the
-// interleaving from them and don't need to emit a shuffle.
-static bool isAddReduction(Instruction &I) {
-  if (auto *II = dyn_cast<IntrinsicInst>(&I))
-    return II->getIntrinsicID() == Intrinsic::vector_reduce_add;
-  return false;
-}
-
 bool MVELaneInterleaving::runOnFunction(Function &F) {
   if (!EnableInterleave)
     return false;
@@ -414,10 +380,8 @@ bool MVELaneInterleaving::runOnFunction(Function &F) {
 
   SmallPtrSet<Instruction *, 16> Visited;
   for (Instruction &I : reverse(instructions(F))) {
-    if (((I.getType()->isVectorTy() &&
-          (isa<TruncInst>(I) || isa<FPTruncInst>(I))) ||
-         isAddReduction(I)) &&
-        !Visited.count(&I))
+    if (I.getType()->isVectorTy() &&
+        (isa<TruncInst>(I) || isa<FPTruncInst>(I)) && !Visited.count(&I))
       Changed |= tryInterleave(&I, Visited);
   }
 

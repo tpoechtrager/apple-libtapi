@@ -444,27 +444,31 @@ MCRegister RAGreedy::tryAssign(const LiveInterval &VirtReg,
 //                         Interference eviction
 //===----------------------------------------------------------------------===//
 
-bool RegAllocEvictionAdvisor::canReassign(const LiveInterval &VirtReg,
-                                          MCRegister FromReg) const {
-  auto HasRegUnitInterference = [&](MCRegUnit Unit) {
-    // Instantiate a "subquery", not to be confused with the Queries array.
-    LiveIntervalUnion::Query SubQ(VirtReg, Matrix->getLiveUnions()[Unit]);
-    return SubQ.checkInterference();
-  };
-
-  for (MCRegister Reg :
-       AllocationOrder::create(VirtReg.reg(), *VRM, RegClassInfo, Matrix)) {
-    if (Reg == FromReg)
+Register RegAllocEvictionAdvisor::canReassign(const LiveInterval &VirtReg,
+                                              Register PrevReg) const {
+  auto Order =
+      AllocationOrder::create(VirtReg.reg(), *VRM, RegClassInfo, Matrix);
+  MCRegister PhysReg;
+  for (auto I = Order.begin(), E = Order.end(); I != E && !PhysReg; ++I) {
+    if ((*I).id() == PrevReg.id())
       continue;
-    // If no units have interference, reassignment is possible.
-    if (none_of(TRI->regunits(Reg), HasRegUnitInterference)) {
-      LLVM_DEBUG(dbgs() << "can reassign: " << VirtReg << " from "
-                        << printReg(FromReg, TRI) << " to "
-                        << printReg(Reg, TRI) << '\n');
-      return true;
+
+    MCRegUnitIterator Units(*I, TRI);
+    for (; Units.isValid(); ++Units) {
+      // Instantiate a "subquery", not to be confused with the Queries array.
+      LiveIntervalUnion::Query subQ(VirtReg, Matrix->getLiveUnions()[*Units]);
+      if (subQ.checkInterference())
+        break;
     }
+    // If no units have interference, break out with the current PhysReg.
+    if (!Units.isValid())
+      PhysReg = *I;
   }
-  return false;
+  if (PhysReg)
+    LLVM_DEBUG(dbgs() << "can reassign: " << VirtReg << " from "
+                      << printReg(PrevReg, TRI) << " to "
+                      << printReg(PhysReg, TRI) << '\n');
+  return PhysReg;
 }
 
 /// evictInterference - Evict any interferring registers that prevent VirtReg
@@ -483,8 +487,8 @@ void RAGreedy::evictInterference(const LiveInterval &VirtReg,
 
   // Collect all interfering virtregs first.
   SmallVector<const LiveInterval *, 8> Intfs;
-  for (MCRegUnit Unit : TRI->regunits(PhysReg)) {
-    LiveIntervalUnion::Query &Q = Matrix->query(VirtReg, Unit);
+  for (MCRegUnitIterator Units(PhysReg, TRI); Units.isValid(); ++Units) {
+    LiveIntervalUnion::Query &Q = Matrix->query(VirtReg, *Units);
     // We usually have the interfering VRegs cached so collectInterferingVRegs()
     // should be fast, we may need to recalculate if when different physregs
     // overlap the same register unit so we had different SubRanges queried
@@ -519,7 +523,7 @@ bool RegAllocEvictionAdvisor::isUnusedCalleeSavedReg(MCRegister PhysReg) const {
   return !Matrix->isPhysRegUsed(PhysReg);
 }
 
-std::optional<unsigned>
+Optional<unsigned>
 RegAllocEvictionAdvisor::getOrderLimit(const LiveInterval &VirtReg,
                                        const AllocationOrder &Order,
                                        unsigned CostPerUseLimit) const {
@@ -532,7 +536,7 @@ RegAllocEvictionAdvisor::getOrderLimit(const LiveInterval &VirtReg,
     if (MinCost >= CostPerUseLimit) {
       LLVM_DEBUG(dbgs() << TRI->getRegClassName(RC) << " minimum cost = "
                         << MinCost << ", no cheaper registers to be found.\n");
-      return std::nullopt;
+      return None;
     }
 
     // It is normal for register classes to have a long tail of registers with
@@ -677,7 +681,7 @@ bool RAGreedy::addThroughConstraints(InterferenceCache::Cursor Intf,
       assert(T < GroupSize && "Array overflow");
       TBS[T] = Number;
       if (++T == GroupSize) {
-        SpillPlacer->addLinks(ArrayRef(TBS, T));
+        SpillPlacer->addLinks(makeArrayRef(TBS, T));
         T = 0;
       }
       continue;
@@ -706,13 +710,13 @@ bool RAGreedy::addThroughConstraints(InterferenceCache::Cursor Intf,
       BCS[B].Exit = SpillPlacement::PrefSpill;
 
     if (++B == GroupSize) {
-      SpillPlacer->addConstraints(ArrayRef(BCS, B));
+      SpillPlacer->addConstraints(makeArrayRef(BCS, B));
       B = 0;
     }
   }
 
-  SpillPlacer->addConstraints(ArrayRef(BCS, B));
-  SpillPlacer->addLinks(ArrayRef(TBS, T));
+  SpillPlacer->addConstraints(makeArrayRef(BCS, B));
+  SpillPlacer->addLinks(makeArrayRef(TBS, T));
   return true;
 }
 
@@ -753,7 +757,7 @@ bool RAGreedy::growRegion(GlobalSplitCandidate &Cand) {
 
     // Compute through constraints from the interference, or assume that all
     // through blocks prefer spilling when forming compact regions.
-    auto NewBlocks = ArrayRef(ActiveBlocks).slice(AddedTo);
+    auto NewBlocks = makeArrayRef(ActiveBlocks).slice(AddedTo);
     if (Cand.PhysReg) {
       if (!addThroughConstraints(Cand.Intf, NewBlocks))
         return false;
@@ -1400,9 +1404,9 @@ void RAGreedy::calcGapWeights(MCRegister PhysReg,
   GapWeight.assign(NumGaps, 0.0f);
 
   // Add interference from each overlapping register.
-  for (MCRegUnit Unit : TRI->regunits(PhysReg)) {
-    if (!Matrix->query(const_cast<LiveInterval &>(SA->getParent()), Unit)
-             .checkInterference())
+  for (MCRegUnitIterator Units(PhysReg, TRI); Units.isValid(); ++Units) {
+    if (!Matrix->query(const_cast<LiveInterval&>(SA->getParent()), *Units)
+          .checkInterference())
       continue;
 
     // We know that VirtReg is a continuous interval from FirstInstr to
@@ -1413,7 +1417,7 @@ void RAGreedy::calcGapWeights(MCRegister PhysReg,
     // StartIdx and after StopIdx.
     //
     LiveIntervalUnion::SegmentIter IntI =
-        Matrix->getLiveUnions()[Unit].find(StartIdx);
+      Matrix->getLiveUnions()[*Units] .find(StartIdx);
     for (unsigned Gap = 0; IntI.valid() && IntI.start() < StopIdx; ++IntI) {
       // Skip the gaps before IntI.
       while (Uses[Gap+1].getBoundaryIndex() < IntI.start())
@@ -1435,8 +1439,8 @@ void RAGreedy::calcGapWeights(MCRegister PhysReg,
   }
 
   // Add fixed interference.
-  for (MCRegUnit Unit : TRI->regunits(PhysReg)) {
-    const LiveRange &LR = LIS->getRegUnit(Unit);
+  for (MCRegUnitIterator Units(PhysReg, TRI); Units.isValid(); ++Units) {
+    const LiveRange &LR = LIS->getRegUnit(*Units);
     LiveRange::const_iterator I = LR.find(StartIdx);
     LiveRange::const_iterator E = LR.end();
 
@@ -1767,8 +1771,8 @@ bool RAGreedy::mayRecolorAllInterferences(
     SmallLISet &RecoloringCandidates, const SmallVirtRegSet &FixedRegisters) {
   const TargetRegisterClass *CurRC = MRI->getRegClass(VirtReg.reg());
 
-  for (MCRegUnit Unit : TRI->regunits(PhysReg)) {
-    LiveIntervalUnion::Query &Q = Matrix->query(VirtReg, Unit);
+  for (MCRegUnitIterator Units(PhysReg, TRI); Units.isValid(); ++Units) {
+    LiveIntervalUnion::Query &Q = Matrix->query(VirtReg, *Units);
     // If there is LastChanceRecoloringMaxInterference or more interferences,
     // chances are one would not be recolorable.
     if (Q.interferingVRegs(LastChanceRecoloringMaxInterference).size() >=
@@ -1956,7 +1960,7 @@ unsigned RAGreedy::tryLastChanceRecoloring(const LiveInterval &VirtReg,
     // don't add it to NewVRegs because its physical register will be restored
     // below. Other vregs in CurrentNewVRegs are created by calling
     // selectOrSplit and should be added into NewVRegs.
-    for (Register R : CurrentNewVRegs) {
+    for (Register &R : CurrentNewVRegs) {
       if (RecoloringCandidates.count(&LIS->getInterval(R)))
         continue;
       NewVRegs.push_back(R);
@@ -2198,7 +2202,7 @@ void RAGreedy::tryHintRecoloring(const LiveInterval &VirtReg) {
     Reg = RecoloringCandidates.pop_back_val();
 
     // We cannot recolor physical register.
-    if (Reg.isPhysical())
+    if (Register::isPhysicalRegister(Reg))
       continue;
 
     // This may be a skipped class
@@ -2292,7 +2296,7 @@ void RAGreedy::tryHintRecoloring(const LiveInterval &VirtReg) {
 /// getting rid of 2 copies.
 void RAGreedy::tryHintsRecoloring() {
   for (const LiveInterval *LI : SetOfBrokenHints) {
-    assert(LI->reg().isVirtual() &&
+    assert(Register::isVirtualRegister(LI->reg()) &&
            "Recoloring is possible only for virtual registers");
     // Some dead defs may be around (e.g., because of debug uses).
     // Ignore those.
@@ -2462,12 +2466,12 @@ RAGreedy::RAGreedyStats RAGreedy::computeStats(MachineBasicBlock &MBB) {
       if (SrcReg.isVirtual() || DestReg.isVirtual()) {
         if (SrcReg.isVirtual()) {
           SrcReg = VRM->getPhys(SrcReg);
-          if (SrcReg && Src.getSubReg())
+          if (Src.getSubReg())
             SrcReg = TRI->getSubReg(SrcReg, Src.getSubReg());
         }
         if (DestReg.isVirtual()) {
           DestReg = VRM->getPhys(DestReg);
-          if (DestReg && Dest.getSubReg())
+          if (Dest.getSubReg())
             DestReg = TRI->getSubReg(DestReg, Dest.getSubReg());
         }
         if (SrcReg != DestReg)

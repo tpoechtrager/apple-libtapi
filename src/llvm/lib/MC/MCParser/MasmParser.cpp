@@ -14,6 +14,8 @@
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/BitVector.h"
+#include "llvm/ADT/None.h"
+#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
@@ -65,7 +67,6 @@
 #include <ctime>
 #include <deque>
 #include <memory>
-#include <optional>
 #include <sstream>
 #include <string>
 #include <tuple>
@@ -73,6 +74,8 @@
 #include <vector>
 
 using namespace llvm;
+
+extern cl::opt<unsigned> AsmMacroMaxNestingDepth;
 
 namespace {
 
@@ -106,7 +109,7 @@ struct ParseStatementInfo {
   bool ParseError = false;
 
   /// The value associated with a macro exit.
-  std::optional<std::string> ExitValue;
+  Optional<std::string> ExitValue;
 
   SmallVectorImpl<AsmRewrite> *AsmRewrites = nullptr;
 
@@ -151,14 +154,14 @@ struct IntFieldInfo {
 
   IntFieldInfo() = default;
   IntFieldInfo(const SmallVector<const MCExpr *, 1> &V) { Values = V; }
-  IntFieldInfo(SmallVector<const MCExpr *, 1> &&V) { Values = std::move(V); }
+  IntFieldInfo(SmallVector<const MCExpr *, 1> &&V) { Values = V; }
 };
 struct RealFieldInfo {
   SmallVector<APInt, 1> AsIntValues;
 
   RealFieldInfo() = default;
   RealFieldInfo(const SmallVector<APInt, 1> &V) { AsIntValues = V; }
-  RealFieldInfo(SmallVector<APInt, 1> &&V) { AsIntValues = std::move(V); }
+  RealFieldInfo(SmallVector<APInt, 1> &&V) { AsIntValues = V; }
 };
 struct StructFieldInfo {
   std::vector<StructInitializer> Initializers;
@@ -269,12 +272,12 @@ FieldInitializer::FieldInitializer(FieldType FT) : FT(FT) {
 
 FieldInitializer::FieldInitializer(SmallVector<const MCExpr *, 1> &&Values)
     : FT(FT_INTEGRAL) {
-  new (&IntInfo) IntFieldInfo(std::move(Values));
+  new (&IntInfo) IntFieldInfo(Values);
 }
 
 FieldInitializer::FieldInitializer(SmallVector<APInt, 1> &&AsIntValues)
     : FT(FT_REAL) {
-  new (&RealInfo) RealFieldInfo(std::move(AsIntValues));
+  new (&RealInfo) RealFieldInfo(AsIntValues);
 }
 
 FieldInitializer::FieldInitializer(
@@ -479,7 +482,7 @@ public:
   void addDirectiveHandler(StringRef Directive,
                            ExtensionDirectiveHandler Handler) override {
     ExtensionDirectiveMap[Directive] = Handler;
-    if (!DirectiveKindMap.contains(Directive)) {
+    if (DirectiveKindMap.find(Directive) == DirectiveKindMap.end()) {
       DirectiveKindMap[Directive] = DK_HANDLER_DIRECTIVE;
     }
   }
@@ -508,11 +511,9 @@ public:
     AssemblerDialect = i;
   }
 
-  void Note(SMLoc L, const Twine &Msg, SMRange Range = std::nullopt) override;
-  bool Warning(SMLoc L, const Twine &Msg,
-               SMRange Range = std::nullopt) override;
-  bool printError(SMLoc L, const Twine &Msg,
-                  SMRange Range = std::nullopt) override;
+  void Note(SMLoc L, const Twine &Msg, SMRange Range = None) override;
+  bool Warning(SMLoc L, const Twine &Msg, SMRange Range = None) override;
+  bool printError(SMLoc L, const Twine &Msg, SMRange Range = None) override;
 
   enum ExpandKind { ExpandMacros, DoNotExpandMacros };
   const AsmToken &Lex(ExpandKind ExpandNextToken);
@@ -619,7 +620,7 @@ private:
   bool expandStatement(SMLoc Loc);
 
   void printMessage(SMLoc Loc, SourceMgr::DiagKind Kind, const Twine &Msg,
-                    SMRange Range = std::nullopt) const {
+                    SMRange Range = None) const {
     ArrayRef<SMRange> Ranges(Range);
     SrcMgr.PrintMessage(Loc, Kind, Msg, Ranges);
   }
@@ -846,8 +847,8 @@ private:
 
   const MCExpr *evaluateBuiltinValue(BuiltinSymbol Symbol, SMLoc StartLoc);
 
-  std::optional<std::string> evaluateBuiltinTextMacro(BuiltinSymbol Symbol,
-                                                      SMLoc StartLoc);
+  llvm::Optional<std::string> evaluateBuiltinTextMacro(BuiltinSymbol Symbol,
+                                                       SMLoc StartLoc);
 
   // ".ascii", ".asciz", ".string"
   bool parseDirectiveAscii(StringRef IDVal, bool ZeroTerminated);
@@ -962,22 +963,22 @@ private:
 
   // .cfi directives
   bool parseDirectiveCFIRegister(SMLoc DirectiveLoc);
-  bool parseDirectiveCFIWindowSave(SMLoc DirectiveLoc);
+  bool parseDirectiveCFIWindowSave();
   bool parseDirectiveCFISections();
   bool parseDirectiveCFIStartProc();
   bool parseDirectiveCFIEndProc();
-  bool parseDirectiveCFIDefCfaOffset(SMLoc DirectiveLoc);
+  bool parseDirectiveCFIDefCfaOffset();
   bool parseDirectiveCFIDefCfa(SMLoc DirectiveLoc);
-  bool parseDirectiveCFIAdjustCfaOffset(SMLoc DirectiveLoc);
+  bool parseDirectiveCFIAdjustCfaOffset();
   bool parseDirectiveCFIDefCfaRegister(SMLoc DirectiveLoc);
   bool parseDirectiveCFIOffset(SMLoc DirectiveLoc);
   bool parseDirectiveCFIRelOffset(SMLoc DirectiveLoc);
   bool parseDirectiveCFIPersonalityOrLsda(bool IsPersonality);
-  bool parseDirectiveCFIRememberState(SMLoc DirectiveLoc);
-  bool parseDirectiveCFIRestoreState(SMLoc DirectiveLoc);
+  bool parseDirectiveCFIRememberState();
+  bool parseDirectiveCFIRestoreState();
   bool parseDirectiveCFISameValue(SMLoc DirectiveLoc);
   bool parseDirectiveCFIRestore(SMLoc DirectiveLoc);
-  bool parseDirectiveCFIEscape(SMLoc DirectiveLoc);
+  bool parseDirectiveCFIEscape();
   bool parseDirectiveCFIReturnColumn(SMLoc DirectiveLoc);
   bool parseDirectiveCFISignalFrame();
   bool parseDirectiveCFIUndefined(SMLoc DirectiveLoc);
@@ -1080,8 +1081,6 @@ private:
 } // end anonymous namespace
 
 namespace llvm {
-
-extern cl::opt<unsigned> AsmMacroMaxNestingDepth;
 
 extern MCAsmParserExtension *createCOFFMasmParser();
 
@@ -1199,7 +1198,7 @@ bool MasmParser::expandMacros() {
     return false;
   }
 
-  std::optional<std::string> ExpandedValue;
+  llvm::Optional<std::string> ExpandedValue;
   auto BuiltinIt = BuiltinSymbolMap.find(IDLower);
   if (BuiltinIt != BuiltinSymbolMap.end()) {
     ExpandedValue =
@@ -1323,9 +1322,10 @@ bool MasmParser::enabledGenDwarfForAssembly() {
     // Use the first #line directive for this, if any. It's preprocessed, so
     // there is no checksum, and of course no source directive.
     if (!FirstCppHashFilename.empty())
-      getContext().setMCLineTableRootFile(
-          /*CUID=*/0, getContext().getCompilationDir(), FirstCppHashFilename,
-          /*Cksum=*/std::nullopt, /*Source=*/std::nullopt);
+      getContext().setMCLineTableRootFile(/*CUID=*/0,
+                                          getContext().getCompilationDir(),
+                                          FirstCppHashFilename,
+                                          /*Cksum=*/None, /*Source=*/None);
     const MCDwarfFile &RootFile =
         getContext().getMCDwarfLineTable(/*CUID=*/0).getRootFile();
     getContext().setGenDwarfFileNumber(getStreamer().emitDwarfFileDirective(
@@ -1618,7 +1618,19 @@ bool MasmParser::parsePrimaryExpr(const MCExpr *&Res, SMLoc &EndLoc,
     // Parse symbol variant.
     std::pair<StringRef, StringRef> Split;
     if (!MAI.useParensForSymbolVariant()) {
-      Split = Identifier.split('@');
+      if (FirstTokenKind == AsmToken::String) {
+        if (Lexer.is(AsmToken::At)) {
+          Lex(); // eat @
+          SMLoc AtLoc = getLexer().getLoc();
+          StringRef VName;
+          if (parseIdentifier(VName))
+            return Error(AtLoc, "expected symbol variant after '@'");
+
+          Split = std::make_pair(Identifier, VName);
+        }
+      } else {
+        Split = Identifier.split('@');
+      }
     } else if (Lexer.is(AsmToken::LParen)) {
       Lex(); // eat '('.
       StringRef VName;
@@ -2113,6 +2125,20 @@ bool MasmParser::parseStatement(ParseStatementInfo &Info,
     // Treat '.' as a valid identifier in this context.
     Lex();
     IDVal = ".";
+  } else if (Lexer.is(AsmToken::LCurly)) {
+    // Treat '{' as a valid identifier in this context.
+    Lex();
+    IDVal = "{";
+
+  } else if (Lexer.is(AsmToken::RCurly)) {
+    // Treat '}' as a valid identifier in this context.
+    Lex();
+    IDVal = "}";
+  } else if (Lexer.is(AsmToken::Star) &&
+             getTargetParser().starIsStartOfStatement()) {
+    // Accept '*' as a valid start of statement.
+    Lex();
+    IDVal = "*";
   } else if (Lexer.is(AsmToken::Real)) {
     // Treat ".<number>" as a valid identifier in this context.
     IDVal = getTok().getString();
@@ -2199,10 +2225,11 @@ bool MasmParser::parseStatement(ParseStatementInfo &Info,
 
   // FIXME: Recurse on local labels?
 
-  // Check for a label.
-  //   ::= identifier ':'
-  //   ::= number ':'
-  if (Lexer.is(AsmToken::Colon) && getTargetParser().isLabel(ID)) {
+  // See what kind of statement we have.
+  switch (Lexer.getKind()) {
+  case AsmToken::Colon: {
+    if (!getTargetParser().isLabel(ID))
+      break;
     if (checkForValidSection())
       return true;
 
@@ -2268,6 +2295,10 @@ bool MasmParser::parseStatement(ParseStatementInfo &Info,
     return false;
   }
 
+  default: // Normal instruction or directive.
+    break;
+  }
+
   // If macros are enabled, check to see if this is a macro instantiation.
   if (const MCAsmMacro *M = getContext().lookupMacro(IDVal.lower())) {
     return handleMacroEntry(M, IDLoc);
@@ -2304,15 +2335,21 @@ bool MasmParser::parseStatement(ParseStatementInfo &Info,
       return (*Handler.second)(Handler.first, IDVal, IDLoc);
 
     // Next, let the target-specific assembly parser try.
-    if (ID.isNot(AsmToken::Identifier))
-      return false;
+    SMLoc StartTokLoc = getTok().getLoc();
+    bool TPDirectiveReturn =
+        ID.is(AsmToken::Identifier) && getTargetParser().ParseDirective(ID);
 
-    ParseStatus TPDirectiveReturn = getTargetParser().parseDirective(ID);
-    assert(TPDirectiveReturn.isFailure() == hasPendingError() &&
-           "Should only return Failure iff there was an error");
-    if (TPDirectiveReturn.isFailure())
+    if (hasPendingError())
       return true;
-    if (TPDirectiveReturn.isSuccess())
+    // Currently the return value should be true if we are
+    // uninterested but as this is at odds with the standard parsing
+    // convention (return true = error) we have instances of a parsed
+    // directive that fails returning true as an error. Catch these
+    // cases as best as possible errors here.
+    if (TPDirectiveReturn && StartTokLoc != getTok().getLoc())
+      return true;
+    // Return if we did some parsing or believe we succeeded.
+    if (!TPDirectiveReturn || StartTokLoc != getTok().getLoc())
       return false;
 
     // Finally, if no one else is interested in this directive, it must be
@@ -2420,9 +2457,9 @@ bool MasmParser::parseStatement(ParseStatementInfo &Info,
     case DK_CFI_DEF_CFA:
       return parseDirectiveCFIDefCfa(IDLoc);
     case DK_CFI_DEF_CFA_OFFSET:
-      return parseDirectiveCFIDefCfaOffset(IDLoc);
+      return parseDirectiveCFIDefCfaOffset();
     case DK_CFI_ADJUST_CFA_OFFSET:
-      return parseDirectiveCFIAdjustCfaOffset(IDLoc);
+      return parseDirectiveCFIAdjustCfaOffset();
     case DK_CFI_DEF_CFA_REGISTER:
       return parseDirectiveCFIDefCfaRegister(IDLoc);
     case DK_CFI_OFFSET:
@@ -2434,15 +2471,15 @@ bool MasmParser::parseStatement(ParseStatementInfo &Info,
     case DK_CFI_LSDA:
       return parseDirectiveCFIPersonalityOrLsda(false);
     case DK_CFI_REMEMBER_STATE:
-      return parseDirectiveCFIRememberState(IDLoc);
+      return parseDirectiveCFIRememberState();
     case DK_CFI_RESTORE_STATE:
-      return parseDirectiveCFIRestoreState(IDLoc);
+      return parseDirectiveCFIRestoreState();
     case DK_CFI_SAME_VALUE:
       return parseDirectiveCFISameValue(IDLoc);
     case DK_CFI_RESTORE:
       return parseDirectiveCFIRestore(IDLoc);
     case DK_CFI_ESCAPE:
-      return parseDirectiveCFIEscape(IDLoc);
+      return parseDirectiveCFIEscape();
     case DK_CFI_RETURN_COLUMN:
       return parseDirectiveCFIReturnColumn(IDLoc);
     case DK_CFI_SIGNAL_FRAME:
@@ -2452,7 +2489,7 @@ bool MasmParser::parseStatement(ParseStatementInfo &Info,
     case DK_CFI_REGISTER:
       return parseDirectiveCFIRegister(IDLoc);
     case DK_CFI_WINDOW_SAVE:
-      return parseDirectiveCFIWindowSave(IDLoc);
+      return parseDirectiveCFIWindowSave();
     case DK_EXITM:
       Info.ExitValue = "";
       return parseDirectiveExitMacro(IDLoc, IDVal, *Info.ExitValue);
@@ -2846,7 +2883,7 @@ bool MasmParser::expandMacro(raw_svector_ostream &OS, StringRef Body,
     Name.clear();
   }
 
-  std::optional<char> CurrentQuote;
+  Optional<char> CurrentQuote;
   while (!Body.empty()) {
     // Scan for the next substitution.
     std::size_t End = Body.size(), Pos = 0;
@@ -3578,7 +3615,7 @@ bool MasmParser::parseTextItem(std::string &Data) {
       // Try to resolve as a built-in text macro
       auto BuiltinIt = BuiltinSymbolMap.find(ID.lower());
       if (BuiltinIt != BuiltinSymbolMap.end()) {
-        std::optional<std::string> BuiltinText =
+        llvm::Optional<std::string> BuiltinText =
             evaluateBuiltinTextMacro(BuiltinIt->getValue(), StartLoc);
         if (!BuiltinText) {
           // Not a text macro; break without substituting
@@ -4177,7 +4214,7 @@ bool MasmParser::parseStructInitializer(const StructInfo &Structure,
                                         StructInitializer &Initializer) {
   const AsmToken FirstToken = getTok();
 
-  std::optional<AsmToken::TokenKind> EndToken;
+  Optional<AsmToken::TokenKind> EndToken;
   if (parseOptionalToken(AsmToken::LCurly)) {
     EndToken = AsmToken::RCurly;
   } else if (parseOptionalAngleBracketOpen()) {
@@ -4196,7 +4233,8 @@ bool MasmParser::parseStructInitializer(const StructInfo &Structure,
   size_t FieldIndex = 0;
   if (EndToken) {
     // Initialize all fields with given initializers.
-    while (getTok().isNot(*EndToken) && FieldIndex < Structure.Fields.size()) {
+    while (getTok().isNot(EndToken.value()) &&
+           FieldIndex < Structure.Fields.size()) {
       const FieldInfo &Field = Structure.Fields[FieldIndex++];
       if (parseOptionalToken(AsmToken::Comma)) {
         // Empty initializer; use the default and continue. (Also, allow line
@@ -4224,10 +4262,10 @@ bool MasmParser::parseStructInitializer(const StructInfo &Structure,
     FieldInitializers.push_back(Field.Contents);
 
   if (EndToken) {
-    if (*EndToken == AsmToken::Greater)
+    if (EndToken.value() == AsmToken::Greater)
       return parseAngleBracketClose();
 
-    return parseToken(*EndToken);
+    return parseToken(EndToken.value());
   }
 
   return false;
@@ -4531,7 +4569,7 @@ bool MasmParser::parseDirectiveStruct(StringRef Directive,
                                      "' directive; expected none or NONUNIQUE");
   }
 
-  if (parseEOL())
+  if (parseToken(AsmToken::EndOfStatement))
     return addErrorSuffix(" in '" + Twine(Directive) + "' directive");
 
   StructInProgress.emplace_back(Name, DirKind == DK_UNION, AlignmentValue);
@@ -4553,7 +4591,7 @@ bool MasmParser::parseDirectiveNestedStruct(StringRef Directive,
     Name = getTok().getIdentifier();
     parseToken(AsmToken::Identifier);
   }
-  if (parseEOL())
+  if (parseToken(AsmToken::EndOfStatement))
     return addErrorSuffix(" in '" + Twine(Directive) + "' directive");
 
   // Reserve space to ensure Alignment doesn't get invalidated when
@@ -4579,7 +4617,7 @@ bool MasmParser::parseDirectiveEnds(StringRef Name, SMLoc NameLoc) {
       Structure.Size, std::min(Structure.Alignment, Structure.AlignmentSize));
   Structs[Name.lower()] = Structure;
 
-  if (parseEOL())
+  if (parseToken(AsmToken::EndOfStatement))
     return addErrorSuffix(" in ENDS directive");
 
   return false;
@@ -4591,7 +4629,7 @@ bool MasmParser::parseDirectiveNestedEnds() {
   if (StructInProgress.size() == 1)
     return TokError("missing name in top-level ENDS directive");
 
-  if (parseEOL())
+  if (parseToken(AsmToken::EndOfStatement))
     return addErrorSuffix(" in nested ENDS directive");
 
   StructInfo Structure = StructInProgress.pop_back_val();
@@ -4663,7 +4701,7 @@ bool MasmParser::parseDirectiveOrg() {
   SMLoc OffsetLoc = Lexer.getLoc();
   if (checkForValidSection() || parseExpression(Offset))
     return true;
-  if (parseEOL())
+  if (parseToken(AsmToken::EndOfStatement))
     return addErrorSuffix(" in 'org' directive");
 
   if (StructInProgress.empty()) {
@@ -4704,12 +4742,11 @@ bool MasmParser::emitAlignTo(int64_t Alignment) {
     const MCSection *Section = getStreamer().getCurrentSectionOnly();
     assert(Section && "must have section to emit alignment");
     if (Section->useCodeAlign()) {
-      getStreamer().emitCodeAlignment(Align(Alignment),
-                                      &getTargetParser().getSTI(),
+      getStreamer().emitCodeAlignment(Alignment, &getTargetParser().getSTI(),
                                       /*MaxBytesToEmit=*/0);
     } else {
       // FIXME: Target specific behavior about how the "extra" bytes are filled.
-      getStreamer().emitValueToAlignment(Align(Alignment), /*Value=*/0,
+      getStreamer().emitValueToAlignment(Alignment, /*Value=*/0,
                                          /*ValueSize=*/1,
                                          /*MaxBytesToEmit=*/0);
     }
@@ -4732,9 +4769,10 @@ bool MasmParser::parseDirectiveAlign() {
   if (getTok().is(AsmToken::EndOfStatement)) {
     return Warning(AlignmentLoc,
                    "align directive with no operand is ignored") &&
-           parseEOL();
+           parseToken(AsmToken::EndOfStatement);
   }
-  if (parseAbsoluteExpression(Alignment) || parseEOL())
+  if (parseAbsoluteExpression(Alignment) ||
+      parseToken(AsmToken::EndOfStatement))
     return addErrorSuffix(" in align directive");
 
   // Always emit an alignment here even if we throw an error.
@@ -4757,7 +4795,7 @@ bool MasmParser::parseDirectiveAlign() {
 /// parseDirectiveEven
 ///  ::= even
 bool MasmParser::parseDirectiveEven() {
-  if (parseEOL() || emitAlignTo(2))
+  if (parseToken(AsmToken::EndOfStatement) || emitAlignTo(2))
     return addErrorSuffix(" in even directive");
 
   return false;
@@ -4803,7 +4841,7 @@ bool MasmParser::parseDirectiveFile(SMLoc DirectiveLoc) {
   uint64_t MD5Hi, MD5Lo;
   bool HasMD5 = false;
 
-  std::optional<StringRef> Source;
+  Optional<StringRef> Source;
   bool HasSource = false;
   std::string SourceString;
 
@@ -4847,7 +4885,7 @@ bool MasmParser::parseDirectiveFile(SMLoc DirectiveLoc) {
       Ctx.setGenDwarfForAssembly(false);
     }
 
-    std::optional<MD5::MD5Result> CKMem;
+    Optional<MD5::MD5Result> CKMem;
     if (HasMD5) {
       MD5::MD5Result Sum;
       for (unsigned i = 0; i != 8; ++i) {
@@ -5475,7 +5513,7 @@ bool MasmParser::parseDirectiveCFIStartProc() {
   if (!parseOptionalToken(AsmToken::EndOfStatement)) {
     if (check(parseIdentifier(Simple) || Simple != "simple",
               "unexpected token") ||
-        parseEOL())
+        parseToken(AsmToken::EndOfStatement))
       return addErrorSuffix(" in '.cfi_startproc' directive");
   }
 
@@ -5498,10 +5536,10 @@ bool MasmParser::parseDirectiveCFIEndProc() {
 /// parse register name or number.
 bool MasmParser::parseRegisterOrRegisterNumber(int64_t &Register,
                                                SMLoc DirectiveLoc) {
-  MCRegister RegNo;
+  unsigned RegNo;
 
   if (getLexer().isNot(AsmToken::Integer)) {
-    if (getTargetParser().parseRegister(RegNo, DirectiveLoc, DirectiveLoc))
+    if (getTargetParser().ParseRegister(RegNo, DirectiveLoc, DirectiveLoc))
       return true;
     Register = getContext().getRegisterInfo()->getDwarfRegNum(RegNo, true);
   } else
@@ -5525,12 +5563,12 @@ bool MasmParser::parseDirectiveCFIDefCfa(SMLoc DirectiveLoc) {
 
 /// parseDirectiveCFIDefCfaOffset
 /// ::= .cfi_def_cfa_offset offset
-bool MasmParser::parseDirectiveCFIDefCfaOffset(SMLoc DirectiveLoc) {
+bool MasmParser::parseDirectiveCFIDefCfaOffset() {
   int64_t Offset = 0;
   if (parseAbsoluteExpression(Offset))
     return true;
 
-  getStreamer().emitCFIDefCfaOffset(Offset, DirectiveLoc);
+  getStreamer().emitCFIDefCfaOffset(Offset);
   return false;
 }
 
@@ -5543,25 +5581,25 @@ bool MasmParser::parseDirectiveCFIRegister(SMLoc DirectiveLoc) {
       parseRegisterOrRegisterNumber(Register2, DirectiveLoc))
     return true;
 
-  getStreamer().emitCFIRegister(Register1, Register2, DirectiveLoc);
+  getStreamer().emitCFIRegister(Register1, Register2);
   return false;
 }
 
 /// parseDirectiveCFIWindowSave
 /// ::= .cfi_window_save
-bool MasmParser::parseDirectiveCFIWindowSave(SMLoc DirectiveLoc) {
-  getStreamer().emitCFIWindowSave(DirectiveLoc);
+bool MasmParser::parseDirectiveCFIWindowSave() {
+  getStreamer().emitCFIWindowSave();
   return false;
 }
 
 /// parseDirectiveCFIAdjustCfaOffset
 /// ::= .cfi_adjust_cfa_offset adjustment
-bool MasmParser::parseDirectiveCFIAdjustCfaOffset(SMLoc DirectiveLoc) {
+bool MasmParser::parseDirectiveCFIAdjustCfaOffset() {
   int64_t Adjustment = 0;
   if (parseAbsoluteExpression(Adjustment))
     return true;
 
-  getStreamer().emitCFIAdjustCfaOffset(Adjustment, DirectiveLoc);
+  getStreamer().emitCFIAdjustCfaOffset(Adjustment);
   return false;
 }
 
@@ -5601,7 +5639,7 @@ bool MasmParser::parseDirectiveCFIRelOffset(SMLoc DirectiveLoc) {
       parseAbsoluteExpression(Offset))
     return true;
 
-  getStreamer().emitCFIRelOffset(Register, Offset, DirectiveLoc);
+  getStreamer().emitCFIRelOffset(Register, Offset);
   return false;
 }
 
@@ -5655,15 +5693,15 @@ bool MasmParser::parseDirectiveCFIPersonalityOrLsda(bool IsPersonality) {
 
 /// parseDirectiveCFIRememberState
 /// ::= .cfi_remember_state
-bool MasmParser::parseDirectiveCFIRememberState(SMLoc DirectiveLoc) {
-  getStreamer().emitCFIRememberState(DirectiveLoc);
+bool MasmParser::parseDirectiveCFIRememberState() {
+  getStreamer().emitCFIRememberState();
   return false;
 }
 
 /// parseDirectiveCFIRestoreState
 /// ::= .cfi_remember_state
-bool MasmParser::parseDirectiveCFIRestoreState(SMLoc DirectiveLoc) {
-  getStreamer().emitCFIRestoreState(DirectiveLoc);
+bool MasmParser::parseDirectiveCFIRestoreState() {
+  getStreamer().emitCFIRestoreState();
   return false;
 }
 
@@ -5675,7 +5713,7 @@ bool MasmParser::parseDirectiveCFISameValue(SMLoc DirectiveLoc) {
   if (parseRegisterOrRegisterNumber(Register, DirectiveLoc))
     return true;
 
-  getStreamer().emitCFISameValue(Register, DirectiveLoc);
+  getStreamer().emitCFISameValue(Register);
   return false;
 }
 
@@ -5692,7 +5730,7 @@ bool MasmParser::parseDirectiveCFIRestore(SMLoc DirectiveLoc) {
 
 /// parseDirectiveCFIEscape
 /// ::= .cfi_escape expression[,...]
-bool MasmParser::parseDirectiveCFIEscape(SMLoc DirectiveLoc) {
+bool MasmParser::parseDirectiveCFIEscape() {
   std::string Values;
   int64_t CurrValue;
   if (parseAbsoluteExpression(CurrValue))
@@ -5709,7 +5747,7 @@ bool MasmParser::parseDirectiveCFIEscape(SMLoc DirectiveLoc) {
     Values.push_back((uint8_t)CurrValue);
   }
 
-  getStreamer().emitCFIEscape(Values, DirectiveLoc);
+  getStreamer().emitCFIEscape(Values);
   return false;
 }
 
@@ -6080,12 +6118,11 @@ bool MasmParser::parseDirectiveComm(bool IsLocal) {
 
   // Create the Symbol as a common or local common with Size and Pow2Alignment.
   if (IsLocal) {
-    getStreamer().emitLocalCommonSymbol(Sym, Size,
-                                        Align(1ULL << Pow2Alignment));
+    getStreamer().emitLocalCommonSymbol(Sym, Size, 1 << Pow2Alignment);
     return false;
   }
 
-  getStreamer().emitCommonSymbol(Sym, Size, Align(1ULL << Pow2Alignment));
+  getStreamer().emitCommonSymbol(Sym, Size, 1 << Pow2Alignment);
   return false;
 }
 
@@ -6096,7 +6133,6 @@ bool MasmParser::parseDirectiveComm(bool IsLocal) {
 bool MasmParser::parseDirectiveComment(SMLoc DirectiveLoc) {
   std::string FirstLine = parseStringTo(AsmToken::EndOfStatement);
   size_t DelimiterEnd = FirstLine.find_first_of("\b\t\v\f\r\x1A ");
-  assert(DelimiterEnd != std::string::npos);
   StringRef Delimiter = StringRef(FirstLine).take_front(DelimiterEnd);
   if (Delimiter.empty())
     return Error(DirectiveLoc, "no delimiter in 'comment' directive");
@@ -6232,19 +6268,19 @@ bool MasmParser::parseDirectiveIfdef(SMLoc DirectiveLoc, bool expect_defined) {
     eatToEndOfStatement();
   } else {
     bool is_defined = false;
-    MCRegister Reg;
+    unsigned RegNo;
     SMLoc StartLoc, EndLoc;
-    is_defined = (getTargetParser().tryParseRegister(Reg, StartLoc, EndLoc) ==
-                  MatchOperand_Success);
+    is_defined = (getTargetParser().tryParseRegister(
+                      RegNo, StartLoc, EndLoc) == MatchOperand_Success);
     if (!is_defined) {
       StringRef Name;
       if (check(parseIdentifier(Name), "expected identifier after 'ifdef'") ||
           parseEOL())
         return true;
 
-      if (BuiltinSymbolMap.contains(Name.lower())) {
+      if (BuiltinSymbolMap.find(Name.lower()) != BuiltinSymbolMap.end()) {
         is_defined = true;
-      } else if (Variables.contains(Name.lower())) {
+      } else if (Variables.find(Name.lower()) != Variables.end()) {
         is_defined = true;
       } else {
         MCSymbol *Sym = getContext().lookupSymbol(Name.lower());
@@ -6352,9 +6388,9 @@ bool MasmParser::parseDirectiveElseIfdef(SMLoc DirectiveLoc,
     eatToEndOfStatement();
   } else {
     bool is_defined = false;
-    MCRegister Reg;
+    unsigned RegNo;
     SMLoc StartLoc, EndLoc;
-    is_defined = (getTargetParser().tryParseRegister(Reg, StartLoc, EndLoc) ==
+    is_defined = (getTargetParser().tryParseRegister(RegNo, StartLoc, EndLoc) ==
                   MatchOperand_Success);
     if (!is_defined) {
       StringRef Name;
@@ -6363,9 +6399,9 @@ bool MasmParser::parseDirectiveElseIfdef(SMLoc DirectiveLoc,
           parseEOL())
         return true;
 
-      if (BuiltinSymbolMap.contains(Name.lower())) {
+      if (BuiltinSymbolMap.find(Name.lower()) != BuiltinSymbolMap.end()) {
         is_defined = true;
-      } else if (Variables.contains(Name.lower())) {
+      } else if (Variables.find(Name.lower()) != Variables.end()) {
         is_defined = true;
       } else {
         MCSymbol *Sym = getContext().lookupSymbol(Name);
@@ -6524,18 +6560,18 @@ bool MasmParser::parseDirectiveErrorIfdef(SMLoc DirectiveLoc,
   }
 
   bool IsDefined = false;
-  MCRegister Reg;
+  unsigned RegNo;
   SMLoc StartLoc, EndLoc;
-  IsDefined = (getTargetParser().tryParseRegister(Reg, StartLoc, EndLoc) ==
+  IsDefined = (getTargetParser().tryParseRegister(RegNo, StartLoc, EndLoc) ==
                MatchOperand_Success);
   if (!IsDefined) {
     StringRef Name;
     if (check(parseIdentifier(Name), "expected identifier after '.errdef'"))
       return true;
 
-    if (BuiltinSymbolMap.contains(Name.lower())) {
+    if (BuiltinSymbolMap.find(Name.lower()) != BuiltinSymbolMap.end()) {
       IsDefined = true;
-    } else if (Variables.contains(Name.lower())) {
+    } else if (Variables.find(Name.lower()) != Variables.end()) {
       IsDefined = true;
     } else {
       MCSymbol *Sym = getContext().lookupSymbol(Name);
@@ -6683,7 +6719,6 @@ void MasmParser::initializeDirectiveKindMap() {
   DirectiveKindMap["even"] = DK_EVEN;
   DirectiveKindMap["org"] = DK_ORG;
   DirectiveKindMap["extern"] = DK_EXTERN;
-  DirectiveKindMap["extrn"] = DK_EXTERN;
   DirectiveKindMap["public"] = DK_PUBLIC;
   // DirectiveKindMap[".comm"] = DK_COMM;
   DirectiveKindMap["comment"] = DK_COMMENT;
@@ -6854,7 +6889,7 @@ bool MasmParser::expandStatement(SMLoc Loc) {
   StringMap<std::string> BuiltinValues;
   for (const auto &S : BuiltinSymbolMap) {
     const BuiltinSymbol &Sym = S.getValue();
-    if (std::optional<std::string> Text = evaluateBuiltinTextMacro(Sym, Loc)) {
+    if (llvm::Optional<std::string> Text = evaluateBuiltinTextMacro(Sym, Loc)) {
       BuiltinValues[S.getKey().lower()] = std::move(*Text);
     }
   }
@@ -6954,8 +6989,7 @@ bool MasmParser::parseDirectiveRepeat(SMLoc DirectiveLoc, StringRef Dir) {
   SmallString<256> Buf;
   raw_svector_ostream OS(Buf);
   while (Count--) {
-    if (expandMacro(OS, M->Body, std::nullopt, std::nullopt, M->Locals,
-                    getTok().getLoc()))
+    if (expandMacro(OS, M->Body, None, None, M->Locals, getTok().getLoc()))
       return true;
   }
   instantiateMacroLikeBody(M, DirectiveLoc, OS);
@@ -6988,8 +7022,7 @@ bool MasmParser::parseDirectiveWhile(SMLoc DirectiveLoc) {
   if (Condition) {
     // Instantiate the macro, then resume at this directive to recheck the
     // condition.
-    if (expandMacro(OS, M->Body, std::nullopt, std::nullopt, M->Locals,
-                    getTok().getLoc()))
+    if (expandMacro(OS, M->Body, None, None, M->Locals, getTok().getLoc()))
       return true;
     instantiateMacroLikeBody(M, DirectiveLoc, /*ExitLoc=*/DirectiveLoc, OS);
   }
@@ -7426,7 +7459,7 @@ bool MasmParser::parseMSInlineAsm(
         InputDecls.push_back(OpDecl);
         InputDeclsAddressOf.push_back(Operand.needAddressOf());
         InputConstraints.push_back(Constraint.str());
-        if (Desc.operands()[i - 1].isBranchTarget())
+        if (Desc.OpInfo[i - 1].isBranchTarget())
           AsmStrRewrites.emplace_back(AOK_CallInput, Start, SymName.size());
         else
           AsmStrRewrites.emplace_back(AOK_Input, Start, SymName.size());
@@ -7434,7 +7467,9 @@ bool MasmParser::parseMSInlineAsm(
     }
 
     // Consider implicit defs to be clobbers.  Think of cpuid and push.
-    llvm::append_range(ClobberRegs, Desc.implicit_defs());
+    ArrayRef<MCPhysReg> ImpDefs(Desc.getImplicitDefs(),
+                                Desc.getNumImplicitDefs());
+    llvm::append_range(ClobberRegs, ImpDefs);
   }
 
   // Set the number of Outputs and Inputs.
@@ -7652,7 +7687,7 @@ const MCExpr *MasmParser::evaluateBuiltinValue(BuiltinSymbol Symbol,
   llvm_unreachable("unhandled built-in symbol");
 }
 
-std::optional<std::string>
+llvm::Optional<std::string>
 MasmParser::evaluateBuiltinTextMacro(BuiltinSymbol Symbol, SMLoc StartLoc) {
   switch (Symbol) {
   default:

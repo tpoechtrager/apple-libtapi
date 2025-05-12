@@ -20,13 +20,13 @@
 using namespace clang;
 using namespace clang::targets;
 
-static constexpr Builtin::Info BuiltinInfo[] = {
+const Builtin::Info WebAssemblyTargetInfo::BuiltinInfo[] = {
 #define BUILTIN(ID, TYPE, ATTRS)                                               \
-  {#ID, TYPE, ATTRS, nullptr, HeaderDesc::NO_HEADER, ALL_LANGUAGES},
+  {#ID, TYPE, ATTRS, nullptr, ALL_LANGUAGES, nullptr},
 #define TARGET_BUILTIN(ID, TYPE, ATTRS, FEATURE)                               \
-  {#ID, TYPE, ATTRS, FEATURE, HeaderDesc::NO_HEADER, ALL_LANGUAGES},
+  {#ID, TYPE, ATTRS, nullptr, ALL_LANGUAGES, FEATURE},
 #define LIBBUILTIN(ID, TYPE, ATTRS, HEADER)                                    \
-  {#ID, TYPE, ATTRS, nullptr, HeaderDesc::HEADER, ALL_LANGUAGES},
+  {#ID, TYPE, ATTRS, HEADER, ALL_LANGUAGES, nullptr},
 #include "clang/Basic/BuiltinsWebAssembly.def"
 };
 
@@ -96,11 +96,6 @@ void WebAssemblyTargetInfo::getTargetDefines(const LangOptions &Opts,
     Builder.defineMacro("__wasm_reference_types__");
   if (HasExtendedConst)
     Builder.defineMacro("__wasm_extended_const__");
-
-  Builder.defineMacro("__GCC_HAVE_SYNC_COMPARE_AND_SWAP_1");
-  Builder.defineMacro("__GCC_HAVE_SYNC_COMPARE_AND_SWAP_2");
-  Builder.defineMacro("__GCC_HAVE_SYNC_COMPARE_AND_SWAP_4");
-  Builder.defineMacro("__GCC_HAVE_SYNC_COMPARE_AND_SWAP_8");
 }
 
 void WebAssemblyTargetInfo::setSIMDLevel(llvm::StringMap<bool> &Features,
@@ -151,11 +146,7 @@ bool WebAssemblyTargetInfo::initFeatureMap(
     Features["atomics"] = true;
     Features["mutable-globals"] = true;
     Features["tail-call"] = true;
-    Features["reference-types"] = true;
     setSIMDLevel(Features, SIMD128, true);
-  } else if (CPU == "generic") {
-    Features["sign-ext"] = true;
-    Features["mutable-globals"] = true;
   }
 
   return TargetInfo::initFeatureMap(Features, Diags, CPU, FeaturesVec);
@@ -269,8 +260,8 @@ bool WebAssemblyTargetInfo::handleTargetFeatures(
 }
 
 ArrayRef<Builtin::Info> WebAssemblyTargetInfo::getTargetBuiltins() const {
-  return llvm::ArrayRef(BuiltinInfo, clang::WebAssembly::LastTSBuiltin -
-                                         Builtin::FirstTSBuiltin);
+  return llvm::makeArrayRef(BuiltinInfo, clang::WebAssembly::LastTSBuiltin -
+                                             Builtin::FirstTSBuiltin);
 }
 
 void WebAssemblyTargetInfo::adjust(DiagnosticsEngine &Diags,

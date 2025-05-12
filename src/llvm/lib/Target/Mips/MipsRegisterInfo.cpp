@@ -239,10 +239,15 @@ getReservedRegs(const MachineFunction &MF) const {
   return Reserved;
 }
 
+bool
+MipsRegisterInfo::requiresRegisterScavenging(const MachineFunction &MF) const {
+  return true;
+}
+
 // FrameIndex represent objects inside a abstract stack.
 // We must replace FrameIndex with an stack/frame pointer
 // direct reference.
-bool MipsRegisterInfo::
+void MipsRegisterInfo::
 eliminateFrameIndex(MachineBasicBlock::iterator II, int SPAdj,
                     unsigned FIOperandNum, RegScavenger *RS) const {
   MachineInstr &MI = *II;
@@ -264,7 +269,6 @@ eliminateFrameIndex(MachineBasicBlock::iterator II, int SPAdj,
                     << "\n");
 
   eliminateFI(MI, FIOperandNum, FrameIndex, stackSize, spOffset);
-  return false;
 }
 
 Register MipsRegisterInfo::

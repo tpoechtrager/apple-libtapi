@@ -32,6 +32,8 @@
 #include "clang/Basic/SourceManager.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/FoldingSet.h"
+#include "llvm/ADT/None.h"
+#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
@@ -43,7 +45,6 @@
 #include <cassert>
 #include <cstring>
 #include <memory>
-#include <optional>
 #include <utility>
 #include <vector>
 
@@ -225,10 +226,9 @@ void PathDiagnosticConsumer::HandlePathDiagnostic(
   Diags.InsertNode(D.release());
 }
 
-static std::optional<bool> comparePath(const PathPieces &X,
-                                       const PathPieces &Y);
+static Optional<bool> comparePath(const PathPieces &X, const PathPieces &Y);
 
-static std::optional<bool>
+static Optional<bool>
 compareControlFlow(const PathDiagnosticControlFlowPiece &X,
                    const PathDiagnosticControlFlowPiece &Y) {
   FullSourceLoc XSL = X.getStartLocation().asLocation();
@@ -242,13 +242,13 @@ compareControlFlow(const PathDiagnosticControlFlowPiece &X,
   return std::nullopt;
 }
 
-static std::optional<bool> compareMacro(const PathDiagnosticMacroPiece &X,
-                                        const PathDiagnosticMacroPiece &Y) {
+static Optional<bool> compareMacro(const PathDiagnosticMacroPiece &X,
+                                   const PathDiagnosticMacroPiece &Y) {
   return comparePath(X.subPieces, Y.subPieces);
 }
 
-static std::optional<bool> compareCall(const PathDiagnosticCallPiece &X,
-                                       const PathDiagnosticCallPiece &Y) {
+static Optional<bool> compareCall(const PathDiagnosticCallPiece &X,
+                                  const PathDiagnosticCallPiece &Y) {
   FullSourceLoc X_CEL = X.callEnter.asLocation();
   FullSourceLoc Y_CEL = Y.callEnter.asLocation();
   if (X_CEL != Y_CEL)
@@ -264,8 +264,8 @@ static std::optional<bool> compareCall(const PathDiagnosticCallPiece &X,
   return comparePath(X.path, Y.path);
 }
 
-static std::optional<bool> comparePiece(const PathDiagnosticPiece &X,
-                                        const PathDiagnosticPiece &Y) {
+static Optional<bool> comparePiece(const PathDiagnosticPiece &X,
+                                   const PathDiagnosticPiece &Y) {
   if (X.getKind() != Y.getKind())
     return X.getKind() < Y.getKind();
 
@@ -310,17 +310,18 @@ static std::optional<bool> comparePiece(const PathDiagnosticPiece &X,
   llvm_unreachable("all cases handled");
 }
 
-static std::optional<bool> comparePath(const PathPieces &X,
-                                       const PathPieces &Y) {
+static Optional<bool> comparePath(const PathPieces &X, const PathPieces &Y) {
   if (X.size() != Y.size())
     return X.size() < Y.size();
 
   PathPieces::const_iterator X_I = X.begin(), X_end = X.end();
   PathPieces::const_iterator Y_I = Y.begin(), Y_end = Y.end();
 
-  for (; X_I != X_end && Y_I != Y_end; ++X_I, ++Y_I)
-    if (std::optional<bool> b = comparePiece(**X_I, **Y_I))
-      return *b;
+  for ( ; X_I != X_end && Y_I != Y_end; ++X_I, ++Y_I) {
+    Optional<bool> b = comparePiece(**X_I, **Y_I);
+    if (b)
+      return b.value();
+  }
 
   return std::nullopt;
 }
@@ -342,7 +343,7 @@ static bool compareCrossTUSourceLocs(FullSourceLoc XL, FullSourceLoc YL) {
     return XFE && !YFE;
   int NameCmp = XFE->getName().compare(YFE->getName());
   if (NameCmp != 0)
-    return NameCmp < 0;
+    return NameCmp == -1;
   // Last resort: Compare raw file IDs that are possibly expansions.
   return XL.getFileID() < YL.getFileID();
 }
@@ -364,8 +365,7 @@ static bool compare(const PathDiagnostic &X, const PathDiagnostic &Y) {
     return X.getVerboseDescription() < Y.getVerboseDescription();
   if (X.getShortDescription() != Y.getShortDescription())
     return X.getShortDescription() < Y.getShortDescription();
-  auto CompareDecls = [&XL](const Decl *D1,
-                            const Decl *D2) -> std::optional<bool> {
+  auto CompareDecls = [&XL](const Decl *D1, const Decl *D2) -> Optional<bool> {
     if (D1 == D2)
       return std::nullopt;
     if (!D1)
@@ -395,7 +395,9 @@ static bool compare(const PathDiagnostic &X, const PathDiagnostic &Y) {
     if (*XI != *YI)
       return (*XI) < (*YI);
   }
-  return *comparePath(X.path, Y.path);
+  Optional<bool> b = comparePath(X.path, Y.path);
+  assert(b);
+  return b.value();
 }
 
 void PathDiagnosticConsumer::FlushDiagnostics(
@@ -663,7 +665,7 @@ PathDiagnosticLocation
 PathDiagnosticLocation::create(const ProgramPoint& P,
                                const SourceManager &SMng) {
   const Stmt* S = nullptr;
-  if (std::optional<BlockEdge> BE = P.getAs<BlockEdge>()) {
+  if (Optional<BlockEdge> BE = P.getAs<BlockEdge>()) {
     const CFGBlock *BSrc = BE->getSrc();
     if (BSrc->getTerminator().isVirtualBaseBranch()) {
       // TODO: VirtualBaseBranches should also appear for destructors.
@@ -683,23 +685,22 @@ PathDiagnosticLocation::create(const ProgramPoint& P,
             P.getLocationContext()->getDecl(), SMng);
       }
     }
-  } else if (std::optional<StmtPoint> SP = P.getAs<StmtPoint>()) {
+  } else if (Optional<StmtPoint> SP = P.getAs<StmtPoint>()) {
     S = SP->getStmt();
     if (P.getAs<PostStmtPurgeDeadSymbols>())
       return PathDiagnosticLocation::createEnd(S, SMng, P.getLocationContext());
-  } else if (std::optional<PostInitializer> PIP = P.getAs<PostInitializer>()) {
+  } else if (Optional<PostInitializer> PIP = P.getAs<PostInitializer>()) {
     return PathDiagnosticLocation(PIP->getInitializer()->getSourceLocation(),
                                   SMng);
-  } else if (std::optional<PreImplicitCall> PIC = P.getAs<PreImplicitCall>()) {
+  } else if (Optional<PreImplicitCall> PIC = P.getAs<PreImplicitCall>()) {
     return PathDiagnosticLocation(PIC->getLocation(), SMng);
-  } else if (std::optional<PostImplicitCall> PIE =
-                 P.getAs<PostImplicitCall>()) {
+  } else if (Optional<PostImplicitCall> PIE = P.getAs<PostImplicitCall>()) {
     return PathDiagnosticLocation(PIE->getLocation(), SMng);
-  } else if (std::optional<CallEnter> CE = P.getAs<CallEnter>()) {
+  } else if (Optional<CallEnter> CE = P.getAs<CallEnter>()) {
     return getLocationForCaller(CE->getCalleeContext(),
                                 CE->getLocationContext(),
                                 SMng);
-  } else if (std::optional<CallExitEnd> CEE = P.getAs<CallExitEnd>()) {
+  } else if (Optional<CallExitEnd> CEE = P.getAs<CallExitEnd>()) {
     return getLocationForCaller(CEE->getCalleeContext(),
                                 CEE->getLocationContext(),
                                 SMng);
@@ -709,8 +710,8 @@ PathDiagnosticLocation::create(const ProgramPoint& P,
                                                  CEB->getLocationContext());
     return PathDiagnosticLocation(
         CEB->getLocationContext()->getDecl()->getSourceRange().getEnd(), SMng);
-  } else if (std::optional<BlockEntrance> BE = P.getAs<BlockEntrance>()) {
-    if (std::optional<CFGElement> BlockFront = BE->getFirstElement()) {
+  } else if (Optional<BlockEntrance> BE = P.getAs<BlockEntrance>()) {
+    if (Optional<CFGElement> BlockFront = BE->getFirstElement()) {
       if (auto StmtElt = BlockFront->getAs<CFGStmt>()) {
         return PathDiagnosticLocation(StmtElt->getStmt()->getBeginLoc(), SMng);
       } else if (auto NewAllocElt = BlockFront->getAs<CFGNewAllocator>()) {
@@ -722,8 +723,7 @@ PathDiagnosticLocation::create(const ProgramPoint& P,
 
     return PathDiagnosticLocation(
         BE->getBlock()->getTerminatorStmt()->getBeginLoc(), SMng);
-  } else if (std::optional<FunctionExitPoint> FE =
-                 P.getAs<FunctionExitPoint>()) {
+  } else if (Optional<FunctionExitPoint> FE = P.getAs<FunctionExitPoint>()) {
     return PathDiagnosticLocation(FE->getStmt(), SMng,
                                   FE->getLocationContext());
   } else {

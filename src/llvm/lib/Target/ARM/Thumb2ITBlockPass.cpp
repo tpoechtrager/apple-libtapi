@@ -98,8 +98,9 @@ static void TrackDefUses(MachineInstr *MI, RegisterSet &Defs, RegisterSet &Uses,
 
   auto InsertUsesDefs = [&](RegList &Regs, RegisterSet &UsesDefs) {
     for (unsigned Reg : Regs)
-      for (MCPhysReg Subreg : TRI->subregs_inclusive(Reg))
-        UsesDefs.insert(Subreg);
+      for (MCSubRegIterator Subreg(Reg, TRI, /*IncludeSelf=*/true);
+           Subreg.isValid(); ++Subreg)
+        UsesDefs.insert(*Subreg);
   };
 
   InsertUsesDefs(LocalDefs, Defs);

@@ -64,6 +64,7 @@ getTargetNodeName(unsigned Opcode) const
     case XCoreISD::BR_JT32           : return "XCoreISD::BR_JT32";
     case XCoreISD::FRAME_TO_ARGS_OFFSET : return "XCoreISD::FRAME_TO_ARGS_OFFSET";
     case XCoreISD::EH_RETURN         : return "XCoreISD::EH_RETURN";
+    case XCoreISD::MEMBARRIER        : return "XCoreISD::MEMBARRIER";
   }
   return nullptr;
 }
@@ -927,7 +928,7 @@ LowerINTRINSIC_WO_CHAIN(SDValue Op, SelectionDAG &DAG) const {
 SDValue XCoreTargetLowering::
 LowerATOMIC_FENCE(SDValue Op, SelectionDAG &DAG) const {
   SDLoc DL(Op);
-  return DAG.getNode(ISD::MEMBARRIER, DL, MVT::Other, Op.getOperand(0));
+  return DAG.getNode(XCoreISD::MEMBARRIER, DL, MVT::Other, Op.getOperand(0));
 }
 
 SDValue XCoreTargetLowering::
@@ -1054,7 +1055,7 @@ XCoreTargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
 
 /// LowerCallResult - Lower the result values of a call into the
 /// appropriate copies out of appropriate physical registers / memory locations.
-static SDValue LowerCallResult(SDValue Chain, SDValue InGlue,
+static SDValue LowerCallResult(SDValue Chain, SDValue InFlag,
                                const SmallVectorImpl<CCValAssign> &RVLocs,
                                const SDLoc &dl, SelectionDAG &DAG,
                                SmallVectorImpl<SDValue> &InVals) {
@@ -1064,8 +1065,8 @@ static SDValue LowerCallResult(SDValue Chain, SDValue InGlue,
     const CCValAssign &VA = RVLocs[i];
     if (VA.isRegLoc()) {
       Chain = DAG.getCopyFromReg(Chain, dl, VA.getLocReg(), VA.getValVT(),
-                                 InGlue).getValue(1);
-      InGlue = Chain.getValue(2);
+                                 InFlag).getValue(1);
+      InFlag = Chain.getValue(2);
       InVals.push_back(Chain.getValue(0));
     } else {
       assert(VA.isMemLoc());
@@ -1122,11 +1123,11 @@ SDValue XCoreTargetLowering::LowerCCCCallTo(
   // Analyze return values to determine the number of bytes of stack required.
   CCState RetCCInfo(CallConv, isVarArg, DAG.getMachineFunction(), RVLocs,
                     *DAG.getContext());
-  RetCCInfo.AllocateStack(CCInfo.getStackSize(), Align(4));
+  RetCCInfo.AllocateStack(CCInfo.getNextStackOffset(), Align(4));
   RetCCInfo.AnalyzeCallResult(Ins, RetCC_XCore);
 
   // Get a count of how many bytes are to be pushed on the stack.
-  unsigned NumBytes = RetCCInfo.getStackSize();
+  unsigned NumBytes = RetCCInfo.getNextStackOffset();
 
   Chain = DAG.getCALLSEQ_START(Chain, NumBytes, 0, dl);
 
@@ -1176,13 +1177,13 @@ SDValue XCoreTargetLowering::LowerCCCCallTo(
 
   // Build a sequence of copy-to-reg nodes chained together with token
   // chain and flag operands which copy the outgoing args into registers.
-  // The InGlue in necessary since all emitted instructions must be
+  // The InFlag in necessary since all emitted instructions must be
   // stuck together.
-  SDValue InGlue;
+  SDValue InFlag;
   for (unsigned i = 0, e = RegsToPass.size(); i != e; ++i) {
     Chain = DAG.getCopyToReg(Chain, dl, RegsToPass[i].first,
-                             RegsToPass[i].second, InGlue);
-    InGlue = Chain.getValue(1);
+                             RegsToPass[i].second, InFlag);
+    InFlag = Chain.getValue(1);
   }
 
   // If the callee is a GlobalAddress node (quite common, every direct call is)
@@ -1208,19 +1209,19 @@ SDValue XCoreTargetLowering::LowerCCCCallTo(
     Ops.push_back(DAG.getRegister(RegsToPass[i].first,
                                   RegsToPass[i].second.getValueType()));
 
-  if (InGlue.getNode())
-    Ops.push_back(InGlue);
+  if (InFlag.getNode())
+    Ops.push_back(InFlag);
 
   Chain  = DAG.getNode(XCoreISD::BL, dl, NodeTys, Ops);
-  InGlue = Chain.getValue(1);
+  InFlag = Chain.getValue(1);
 
   // Create the CALLSEQ_END node.
-  Chain = DAG.getCALLSEQ_END(Chain, NumBytes, 0, InGlue, dl);
-  InGlue = Chain.getValue(1);
+  Chain = DAG.getCALLSEQ_END(Chain, NumBytes, 0, InFlag, dl);
+  InFlag = Chain.getValue(1);
 
   // Handle result values, copying them out of physregs into vregs that we
   // return.
-  return LowerCallResult(Chain, InGlue, RVLocs, dl, DAG, InVals);
+  return LowerCallResult(Chain, InFlag, RVLocs, dl, DAG, InVals);
 }
 
 //===----------------------------------------------------------------------===//
@@ -1272,7 +1273,7 @@ SDValue XCoreTargetLowering::LowerCCCArguments(
   unsigned LRSaveSize = StackSlotSize;
 
   if (!isVarArg)
-    XFI->setReturnStackOffset(CCInfo.getStackSize() + LRSaveSize);
+    XFI->setReturnStackOffset(CCInfo.getNextStackOffset() + LRSaveSize);
 
   // All getCopyFromReg ops must precede any getMemcpys to prevent the
   // scheduler clobbering a register before it has been copied.
@@ -1299,7 +1300,7 @@ SDValue XCoreTargetLowering::LowerCCCArguments(
         {
 #ifndef NDEBUG
           errs() << "LowerFormalArguments Unhandled argument type: "
-                 << RegVT << "\n";
+                 << RegVT.getEVTString() << "\n";
 #endif
           llvm_unreachable(nullptr);
         }
@@ -1316,7 +1317,8 @@ SDValue XCoreTargetLowering::LowerCCCArguments(
       unsigned ObjSize = VA.getLocVT().getSizeInBits()/8;
       if (ObjSize > StackSlotSize) {
         errs() << "LowerFormalArguments Unhandled argument type: "
-               << VA.getLocVT() << "\n";
+               << EVT(VA.getLocVT()).getEVTString()
+               << "\n";
       }
       // Create the frame index object for this incoming parameter...
       int FI = MFI.CreateFixedObject(ObjSize,
@@ -1366,7 +1368,8 @@ SDValue XCoreTargetLowering::LowerCCCArguments(
     } else {
       // This will point to the next argument passed via stack.
       XFI->setVarArgsFrameIndex(
-          MFI.CreateFixedObject(4, LRSaveSize + CCInfo.getStackSize(), true));
+        MFI.CreateFixedObject(4, LRSaveSize + CCInfo.getNextStackOffset(),
+                              true));
     }
   }
 
@@ -1418,7 +1421,7 @@ CanLowerReturn(CallingConv::ID CallConv, MachineFunction &MF,
   CCState CCInfo(CallConv, isVarArg, MF, RVLocs, Context);
   if (!CCInfo.CheckReturn(Outs, RetCC_XCore))
     return false;
-  if (CCInfo.getStackSize() != 0 && isVarArg)
+  if (CCInfo.getNextStackOffset() != 0 && isVarArg)
     return false;
   return true;
 }
@@ -1448,7 +1451,7 @@ XCoreTargetLowering::LowerReturn(SDValue Chain, CallingConv::ID CallConv,
 
   CCInfo.AnalyzeReturn(Outs, RetCC_XCore);
 
-  SDValue Glue;
+  SDValue Flag;
   SmallVector<SDValue, 4> RetOps(1, Chain);
 
   // Return on XCore is always a "retsp 0"
@@ -1489,19 +1492,19 @@ XCoreTargetLowering::LowerReturn(SDValue Chain, CallingConv::ID CallConv,
     if (!VA.isRegLoc())
       continue;
     // Copy the result values into the output registers.
-    Chain = DAG.getCopyToReg(Chain, dl, VA.getLocReg(), OutVals[i], Glue);
+    Chain = DAG.getCopyToReg(Chain, dl, VA.getLocReg(), OutVals[i], Flag);
 
     // guarantee that all emitted copies are
     // stuck together, avoiding something bad
-    Glue = Chain.getValue(1);
+    Flag = Chain.getValue(1);
     RetOps.push_back(DAG.getRegister(VA.getLocReg(), VA.getLocVT()));
   }
 
   RetOps[0] = Chain;  // Update chain.
 
-  // Add the glue if we have it.
-  if (Glue.getNode())
-    RetOps.push_back(Glue);
+  // Add the flag if we have it.
+  if (Flag.getNode())
+    RetOps.push_back(Flag);
 
   return DAG.getNode(XCoreISD::RETSP, dl, MVT::Other, RetOps);
 }

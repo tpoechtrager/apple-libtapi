@@ -110,10 +110,12 @@ X86DynAllocaExpander::getLowering(int64_t CurrentOffset,
 
 static bool isPushPop(const MachineInstr &MI) {
   switch (MI.getOpcode()) {
+  case X86::PUSH32i8:
   case X86::PUSH32r:
   case X86::PUSH32rmm:
   case X86::PUSH32rmr:
-  case X86::PUSH32i:
+  case X86::PUSHi32:
+  case X86::PUSH64i8:
   case X86::PUSH64r:
   case X86::PUSH64rmm:
   case X86::PUSH64rmr:
@@ -187,10 +189,10 @@ void X86DynAllocaExpander::computeLowerings(MachineFunction &MF,
   }
 }
 
-static unsigned getSubOpcode(bool Is64Bit) {
+static unsigned getSubOpcode(bool Is64Bit, int64_t Amount) {
   if (Is64Bit)
-    return X86::SUB64ri32;
-  return X86::SUB32ri;
+    return isInt<8>(Amount) ? X86::SUB64ri8 : X86::SUB64ri32;
+  return isInt<8>(Amount) ? X86::SUB32ri8 : X86::SUB32ri;
 }
 
 void X86DynAllocaExpander::lower(MachineInstr *MI, Lowering L) {
@@ -210,7 +212,7 @@ void X86DynAllocaExpander::lower(MachineInstr *MI, Lowering L) {
   bool Is64BitAlloca = MI->getOpcode() == X86::DYN_ALLOCA_64;
   assert(SlotSize == 4 || SlotSize == 8);
 
-  std::optional<MachineFunction::DebugInstrOperandPair> InstrNum;
+  Optional<MachineFunction::DebugInstrOperandPair> InstrNum;
   if (unsigned Num = MI->peekDebugInstrNum()) {
     // Operand 2 of DYN_ALLOCAs contains the stack def.
     InstrNum = {Num, 2};
@@ -240,7 +242,8 @@ void X86DynAllocaExpander::lower(MachineInstr *MI, Lowering L) {
           .addReg(RegA, RegState::Undef);
     } else {
       // Sub.
-      BuildMI(*MBB, I, DL, TII->get(getSubOpcode(Is64BitAlloca)), StackPtr)
+      BuildMI(*MBB, I, DL,
+              TII->get(getSubOpcode(Is64BitAlloca, Amount)), StackPtr)
           .addReg(StackPtr)
           .addImm(Amount);
     }
@@ -284,7 +287,14 @@ bool X86DynAllocaExpander::runOnMachineFunction(MachineFunction &MF) {
   TRI = STI->getRegisterInfo();
   StackPtr = TRI->getStackRegister();
   SlotSize = TRI->getSlotSize();
-  StackProbeSize = STI->getTargetLowering()->getStackProbeSize(MF);
+
+  StackProbeSize = 4096;
+  if (MF.getFunction().hasFnAttribute("stack-probe-size")) {
+    MF.getFunction()
+        .getFnAttribute("stack-probe-size")
+        .getValueAsString()
+        .getAsInteger(0, StackProbeSize);
+  }
   NoStackArgProbe = MF.getFunction().hasFnAttribute("no-stack-arg-probe");
   if (NoStackArgProbe)
     StackProbeSize = INT64_MAX;

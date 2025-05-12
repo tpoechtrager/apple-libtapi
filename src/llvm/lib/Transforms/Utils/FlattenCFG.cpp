@@ -284,8 +284,9 @@ bool FlattenCFGOpt::FlattenParallelAndOr(BasicBlock *BB, IRBuilder<> &Builder) {
   do {
     CB = PBI->getSuccessor(1 - Idx);
     // Delete the conditional branch.
-    FirstCondBlock->back().eraseFromParent();
-    FirstCondBlock->splice(FirstCondBlock->end(), CB);
+    FirstCondBlock->getInstList().pop_back();
+    FirstCondBlock->getInstList()
+        .splice(FirstCondBlock->end(), CB->getInstList());
     PBI = cast<BranchInst>(FirstCondBlock->getTerminator());
     Value *CC = PBI->getCondition();
     // Merge conditions.
@@ -479,18 +480,26 @@ bool FlattenCFGOpt::MergeIfRegion(BasicBlock *BB, IRBuilder<> &Builder) {
   }
 
   // Merge \param SecondEntryBlock into \param FirstEntryBlock.
-  FirstEntryBlock->back().eraseFromParent();
-  FirstEntryBlock->splice(FirstEntryBlock->end(), SecondEntryBlock);
+  FirstEntryBlock->getInstList().pop_back();
+  FirstEntryBlock->getInstList()
+      .splice(FirstEntryBlock->end(), SecondEntryBlock->getInstList());
   BranchInst *PBI = cast<BranchInst>(FirstEntryBlock->getTerminator());
   assert(PBI->getCondition() == CInst2);
   BasicBlock *SaveInsertBB = Builder.GetInsertBlock();
   BasicBlock::iterator SaveInsertPt = Builder.GetInsertPoint();
   Builder.SetInsertPoint(PBI);
   if (InvertCond2) {
-    InvertBranch(PBI, Builder);
+    // If this is a "cmp" instruction, only used for branching (and nowhere
+    // else), then we can simply invert the predicate.
+    auto Cmp2 = dyn_cast<CmpInst>(CInst2);
+    if (Cmp2 && Cmp2->hasOneUse())
+      Cmp2->setPredicate(Cmp2->getInversePredicate());
+    else
+      CInst2 = cast<Instruction>(Builder.CreateNot(CInst2));
+    PBI->swapSuccessors();
   }
-  Value *NC = Builder.CreateBinOp(CombineOp, CInst1, PBI->getCondition());
-  PBI->replaceUsesOfWith(PBI->getCondition(), NC);
+  Value *NC = Builder.CreateBinOp(CombineOp, CInst1, CInst2);
+  PBI->replaceUsesOfWith(CInst2, NC);
   Builder.SetInsertPoint(SaveInsertBB, SaveInsertPt);
 
   // Handle PHI node to replace its predecessors to FirstEntryBlock.

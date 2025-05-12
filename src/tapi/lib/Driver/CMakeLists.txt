@@ -23,9 +23,9 @@ add_tapi_library(tapiDriver
   LINK_LIBS
   clangBasic
   tapiAPIVerifier
-  tapiConfig
   tapiCore
   tapiDiagnostics
   tapiFrontend
+  tapiConfig
   tapiSDKDB
   )

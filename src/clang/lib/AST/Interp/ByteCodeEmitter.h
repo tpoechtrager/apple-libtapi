@@ -37,7 +37,7 @@ protected:
 
 public:
   /// Compiles the function into the module.
-  llvm::Expected<Function *> compileFunc(const FunctionDecl *FuncDecl);
+  llvm::Expected<Function *> compileFunc(const FunctionDecl *F);
 
 protected:
   ByteCodeEmitter(Context &Ctx, Program &P) : Ctx(Ctx), P(P) {}
@@ -70,10 +70,6 @@ protected:
 
   /// Parameter indices.
   llvm::DenseMap<const ParmVarDecl *, unsigned> Params;
-  /// Lambda captures.
-  /// Map from Decl* to [Offset, IsReference] pair.
-  llvm::DenseMap<const ValueDecl *, std::pair<unsigned, bool>> LambdaCaptures;
-  unsigned LambdaThisCapture;
   /// Local descriptors.
   llvm::SmallVector<SmallVector<Local, 8>, 2> Descriptors;
 
@@ -87,13 +83,13 @@ private:
   /// Offset of the next local variable.
   unsigned NextLocalOffset = 0;
   /// Location of a failure.
-  std::optional<SourceLocation> BailLocation;
+  llvm::Optional<SourceLocation> BailLocation;
   /// Label information for linker.
   llvm::DenseMap<LabelTy, unsigned> LabelOffsets;
   /// Location of label relocations.
   llvm::DenseMap<LabelTy, llvm::SmallVector<unsigned, 5>> LabelRelocs;
   /// Program code.
-  std::vector<std::byte> Code;
+  std::vector<char> Code;
   /// Opcode to expression mapping.
   SourceMap SrcMap;
 

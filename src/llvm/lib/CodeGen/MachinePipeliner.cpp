@@ -496,7 +496,7 @@ void SwingSchedulerDAG::schedule() {
   updatePhiDependences();
   Topo.InitDAGTopologicalSorting();
   changeDependences();
-  postProcessDAG();
+  postprocessDAG();
   LLVM_DEBUG(dump());
 
   NodeSetType NodeSets;
@@ -865,11 +865,13 @@ void SwingSchedulerDAG::updatePhiDependences() {
     unsigned HasPhiDef = 0;
     MachineInstr *MI = I.getInstr();
     // Iterate over each operand, and we process the definitions.
-    for (const MachineOperand &MO : MI->operands()) {
-      if (!MO.isReg())
+    for (MachineInstr::mop_iterator MOI = MI->operands_begin(),
+                                    MOE = MI->operands_end();
+         MOI != MOE; ++MOI) {
+      if (!MOI->isReg())
         continue;
-      Register Reg = MO.getReg();
-      if (MO.isDef()) {
+      Register Reg = MOI->getReg();
+      if (MOI->isDef()) {
         // If the register is used by a Phi, then create an anti dependence.
         for (MachineRegisterInfo::use_instr_iterator
                  UI = MRI.use_instr_begin(Reg),
@@ -891,7 +893,7 @@ void SwingSchedulerDAG::updatePhiDependences() {
             }
           }
         }
-      } else if (MO.isUse()) {
+      } else if (MOI->isUse()) {
         // If the register is defined by a Phi, then create a true dependence.
         MachineInstr *DefMI = MRI.getUniqueVRegDef(Reg);
         if (DefMI == nullptr)
@@ -901,7 +903,7 @@ void SwingSchedulerDAG::updatePhiDependences() {
           if (!MI->isPHI()) {
             SDep Dep(SU, SDep::Data, Reg);
             Dep.setLatency(0);
-            ST.adjustSchedDependency(SU, 0, &I, MO.getOperandNo(), Dep);
+            ST.adjustSchedDependency(SU, 0, &I, MI->getOperandNo(MOI), Dep);
             I.addPred(Dep);
           } else {
             HasPhiUse = Reg;
@@ -1020,7 +1022,7 @@ struct FuncUnitSorter {
            make_range(InstrItins->beginStage(SchedClass),
                       InstrItins->endStage(SchedClass))) {
         InstrStage::FuncUnits funcUnits = IS.getUnits();
-        unsigned numAlternatives = llvm::popcount(funcUnits);
+        unsigned numAlternatives = countPopulation(funcUnits);
         if (numAlternatives < min) {
           min = numAlternatives;
           F = funcUnits;
@@ -1066,7 +1068,7 @@ struct FuncUnitSorter {
            make_range(InstrItins->beginStage(SchedClass),
                       InstrItins->endStage(SchedClass))) {
         InstrStage::FuncUnits FuncUnits = IS.getUnits();
-        if (llvm::popcount(FuncUnits) == 1)
+        if (countPopulation(FuncUnits) == 1)
           Resources[FuncUnits]++;
       }
       return;
@@ -1557,28 +1559,31 @@ static void computeLiveOuts(MachineFunction &MF, RegPressureTracker &RPTracker,
     const MachineInstr *MI = SU->getInstr();
     if (MI->isPHI())
       continue;
-    for (const MachineOperand &MO : MI->all_uses()) {
-      Register Reg = MO.getReg();
-      if (Reg.isVirtual())
-        Uses.insert(Reg);
-      else if (MRI.isAllocatable(Reg))
-        for (MCRegUnit Unit : TRI->regunits(Reg.asMCReg()))
-          Uses.insert(Unit);
-    }
+    for (const MachineOperand &MO : MI->operands())
+      if (MO.isReg() && MO.isUse()) {
+        Register Reg = MO.getReg();
+        if (Register::isVirtualRegister(Reg))
+          Uses.insert(Reg);
+        else if (MRI.isAllocatable(Reg))
+          for (MCRegUnitIterator Units(Reg.asMCReg(), TRI); Units.isValid();
+               ++Units)
+            Uses.insert(*Units);
+      }
   }
   for (SUnit *SU : NS)
-    for (const MachineOperand &MO : SU->getInstr()->all_defs())
-      if (!MO.isDead()) {
+    for (const MachineOperand &MO : SU->getInstr()->operands())
+      if (MO.isReg() && MO.isDef() && !MO.isDead()) {
         Register Reg = MO.getReg();
-        if (Reg.isVirtual()) {
+        if (Register::isVirtualRegister(Reg)) {
           if (!Uses.count(Reg))
             LiveOutRegs.push_back(RegisterMaskPair(Reg,
                                                    LaneBitmask::getNone()));
         } else if (MRI.isAllocatable(Reg)) {
-          for (MCRegUnit Unit : TRI->regunits(Reg.asMCReg()))
-            if (!Uses.count(Unit))
-              LiveOutRegs.push_back(
-                  RegisterMaskPair(Unit, LaneBitmask::getNone()));
+          for (MCRegUnitIterator Units(Reg.asMCReg(), TRI); Units.isValid();
+               ++Units)
+            if (!Uses.count(*Units))
+              LiveOutRegs.push_back(RegisterMaskPair(*Units,
+                                                     LaneBitmask::getNone()));
         }
       }
   RPTracker.addLiveRegs(LiveOutRegs);
@@ -2272,28 +2277,20 @@ bool SwingSchedulerDAG::isLoopCarriedDep(SUnit *Source, const SDep &Dep,
   assert(!OffsetSIsScalable && !OffsetDIsScalable &&
          "Expected offsets to be byte offsets");
 
-  MachineInstr *DefS = MRI.getVRegDef(BaseOpS->getReg());
-  MachineInstr *DefD = MRI.getVRegDef(BaseOpD->getReg());
-  if (!DefS || !DefD || !DefS->isPHI() || !DefD->isPHI())
-    return true;
-
-  unsigned InitValS = 0;
-  unsigned LoopValS = 0;
-  unsigned InitValD = 0;
-  unsigned LoopValD = 0;
-  getPhiRegs(*DefS, BB, InitValS, LoopValS);
-  getPhiRegs(*DefD, BB, InitValD, LoopValD);
-  MachineInstr *InitDefS = MRI.getVRegDef(InitValS);
-  MachineInstr *InitDefD = MRI.getVRegDef(InitValD);
-
-  if (!InitDefS->isIdenticalTo(*InitDefD))
+  if (!BaseOpS->isIdenticalTo(*BaseOpD))
     return true;
 
   // Check that the base register is incremented by a constant value for each
   // iteration.
-  MachineInstr *LoopDefS = MRI.getVRegDef(LoopValS);
+  MachineInstr *Def = MRI.getVRegDef(BaseOpS->getReg());
+  if (!Def || !Def->isPHI())
+    return true;
+  unsigned InitVal = 0;
+  unsigned LoopVal = 0;
+  getPhiRegs(*Def, BB, InitVal, LoopVal);
+  MachineInstr *LoopDef = MRI.getVRegDef(LoopVal);
   int D = 0;
-  if (!LoopDefS || !TII->getIncrementValue(*LoopDefS, D))
+  if (!LoopDef || !TII->getIncrementValue(*LoopDef, D))
     return true;
 
   uint64_t AccessSizeS = (*SI->memoperands_begin())->getSize();
@@ -2311,7 +2308,7 @@ bool SwingSchedulerDAG::isLoopCarriedDep(SUnit *Source, const SDep &Dep,
   return (OffsetS + (int64_t)AccessSizeS < OffsetD + (int64_t)AccessSizeD);
 }
 
-void SwingSchedulerDAG::postProcessDAG() {
+void SwingSchedulerDAG::postprocessDAG() {
   for (auto &M : Mutations)
     M->apply(this);
 }
@@ -2495,7 +2492,7 @@ void SMSchedule::orderDependence(SwingSchedulerDAG *SSD, SUnit *SU,
   for (std::deque<SUnit *>::iterator I = Insts.begin(), E = Insts.end(); I != E;
        ++I, ++Pos) {
     for (MachineOperand &MO : MI->operands()) {
-      if (!MO.isReg() || !MO.getReg().isVirtual())
+      if (!MO.isReg() || !Register::isVirtualRegister(MO.getReg()))
         continue;
 
       Register Reg = MO.getReg();
@@ -2649,7 +2646,10 @@ bool SMSchedule::isLoopCarriedDefOfUse(SwingSchedulerDAG *SSD,
   if (!isLoopCarried(SSD, *Phi))
     return false;
   unsigned LoopReg = getLoopPhiReg(*Phi, Phi->getParent());
-  for (MachineOperand &DMO : Def->all_defs()) {
+  for (unsigned i = 0, e = Def->getNumOperands(); i != e; ++i) {
+    MachineOperand &DMO = Def->getOperand(i);
+    if (!DMO.isReg() || !DMO.isDef())
+      continue;
     if (DMO.getReg() == LoopReg)
       return true;
   }

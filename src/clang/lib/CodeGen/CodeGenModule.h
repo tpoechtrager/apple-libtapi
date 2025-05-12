@@ -30,14 +30,12 @@
 #include "clang/Basic/XRayLists.h"
 #include "clang/Lex/PreprocessorOptions.h"
 #include "llvm/ADT/DenseMap.h"
-#include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/ValueHandle.h"
 #include "llvm/Transforms/Utils/SanitizerStats.h"
-#include <optional>
 
 namespace llvm {
 class Module;
@@ -362,19 +360,10 @@ private:
   llvm::DenseMap<llvm::StringRef, GlobalDecl> EmittedDeferredDecls;
 
   void addEmittedDeferredDecl(GlobalDecl GD) {
-    // Reemission is only needed in incremental mode.
-    if (!Context.getLangOpts().IncrementalExtensions)
+    if (!llvm::isa<FunctionDecl>(GD.getDecl()))
       return;
-
-    // Assume a linkage by default that does not need reemission.
-    auto L = llvm::GlobalValue::ExternalLinkage;
-    if (llvm::isa<FunctionDecl>(GD.getDecl()))
-      L = getFunctionLinkage(GD);
-    else if (auto *VD = llvm::dyn_cast<VarDecl>(GD.getDecl()))
-      L = getLLVMLinkageVarDefinition(VD);
-
-    if (llvm::GlobalValue::isInternalLinkage(L) ||
-        llvm::GlobalValue::isLinkOnceLinkage(L) ||
+    llvm::GlobalVariable::LinkageTypes L = getFunctionLinkage(GD);
+    if (llvm::GlobalValue::isLinkOnceLinkage(L) ||
         llvm::GlobalValue::isWeakLinkage(L)) {
       EmittedDeferredDecls[getMangledName(GD)] = GD;
     }
@@ -389,7 +378,8 @@ private:
   /// multiversion function resolvers and ifuncs are defined and emitted.
   std::vector<GlobalDecl> MultiVersionFuncs;
 
-  llvm::MapVector<StringRef, llvm::TrackingVH<llvm::Constant>> Replacements;
+  typedef llvm::StringMap<llvm::TrackingVH<llvm::Constant> > ReplacementsTy;
+  ReplacementsTy Replacements;
 
   /// List of global values to be replaced with something else. Used when we
   /// want to replace a GlobalValue but can't identify it by its mangled name
@@ -607,10 +597,7 @@ private:
 
   llvm::DenseMap<GlobalDecl, uint16_t> PtrAuthDiscriminatorHashes;
 
-  // Helps squashing blocks of TopLevelStmtDecl into a single llvm::Function
-  // when used with -fincremental-extensions.
-  std::pair<std::unique_ptr<CodeGenFunction>, const TopLevelStmtDecl *>
-      GlobalTopLevelStmtBlockInFlight;
+  llvm::DenseMap<const llvm::Constant *, llvm::GlobalVariable *> RTTIProxyMap;
 
 public:
   CodeGenModule(ASTContext &C, IntrusiveRefCntPtr<llvm::vfs::FileSystem> FS,
@@ -736,8 +723,7 @@ public:
 
   llvm::MDNode *getNoObjCARCExceptionsMetadata() {
     if (!NoObjCARCExceptionsMetadata)
-      NoObjCARCExceptionsMetadata =
-          llvm::MDNode::get(getLLVMContext(), std::nullopt);
+      NoObjCARCExceptionsMetadata = llvm::MDNode::get(getLLVMContext(), None);
     return NoObjCARCExceptionsMetadata;
   }
 
@@ -773,10 +759,6 @@ public:
   CodeGenVTables &getVTables() { return VTables; }
 
   ItaniumVTableContext &getItaniumVTableContext() {
-    return VTables.getItaniumVTableContext();
-  }
-
-  const ItaniumVTableContext &getItaniumVTableContext() const {
     return VTables.getItaniumVTableContext();
   }
 
@@ -831,7 +813,7 @@ public:
     return getTBAAAccessInfo(AccessType);
   }
 
-  bool isTypeConstant(QualType QTy, bool ExcludeCtor, bool ExcludeDtor);
+  bool isTypeConstant(QualType QTy, bool ExcludeCtorDtor);
 
   bool isPaddedAtomicType(QualType type);
   bool isPaddedAtomicType(const AtomicType *type);
@@ -896,7 +878,7 @@ public:
   llvm::GlobalVariable *
   CreateOrReplaceCXXRuntimeVariable(StringRef Name, llvm::Type *Ty,
                                     llvm::GlobalValue::LinkageTypes Linkage,
-                                    llvm::Align Alignment);
+                                    unsigned Alignment);
 
   llvm::Function *CreateGlobalInitOrCleanUpFunction(
       llvm::FunctionType *ty, const Twine &name, const CGFunctionInfo &FI,
@@ -987,13 +969,6 @@ public:
 
   // Return the function body address of the given function.
   llvm::Constant *GetFunctionStart(const ValueDecl *Decl);
-
-  // Return whether RTTI information should be emitted for this target.
-  bool shouldEmitRTTI(bool ForEH = false) {
-    return (ForEH || getLangOpts().RTTI) && !getLangOpts().CUDAIsDevice &&
-           !(getLangOpts().OpenMP && getLangOpts().OpenMPIsTargetDevice &&
-             getTriple().isNVPTX());
-  }
 
   /// Get the address of the RTTI descriptor for the given type.
   llvm::Constant *GetAddrOfRTTIDescriptor(QualType Ty, bool ForEH = false);
@@ -1157,8 +1132,7 @@ public:
   llvm::Constant *getBuiltinLibFunction(const FunctionDecl *FD,
                                         unsigned BuiltinID);
 
-  llvm::Function *getIntrinsic(unsigned IID,
-                               ArrayRef<llvm::Type *> Tys = std::nullopt);
+  llvm::Function *getIntrinsic(unsigned IID, ArrayRef<llvm::Type*> Tys = None);
 
   /// Emit code for a single top level declaration.
   void EmitTopLevelDecl(Decl *D);
@@ -1339,8 +1313,6 @@ public:
   /// function which relies on particular fast-math attributes for correctness.
   /// It's up to you to ensure that this is safe.
   void addDefaultFunctionDefinitionAttributes(llvm::Function &F);
-  void mergeDefaultFunctionDefinitionAttributes(llvm::Function &F,
-                                                bool WillInternalize);
 
   /// Like the overload taking a `Function &`, but intended specifically
   /// for frontends that want to build on Clang's target-configuration logic.
@@ -1383,11 +1355,12 @@ public:
 
   /// Returns LLVM linkage for a declarator.
   llvm::GlobalValue::LinkageTypes
-  getLLVMLinkageForDeclarator(const DeclaratorDecl *D, GVALinkage Linkage);
+  getLLVMLinkageForDeclarator(const DeclaratorDecl *D, GVALinkage Linkage,
+                              bool IsConstantVariable);
 
   /// Returns LLVM linkage for a declarator.
   llvm::GlobalValue::LinkageTypes
-  getLLVMLinkageVarDefinition(const VarDecl *VD);
+  getLLVMLinkageVarDefinition(const VarDecl *VD, bool IsConstant);
 
   /// Emit all the global annotations.
   void EmitGlobalAnnotations();
@@ -1490,7 +1463,7 @@ public:
   void EmitOMPAllocateDecl(const OMPAllocateDecl *D);
 
   /// Return the alignment specified in an allocate directive, if present.
-  std::optional<CharUnits> getOMPAllocateAlignment(const VarDecl *VD);
+  llvm::Optional<CharUnits> getOMPAllocateAlignment(const VarDecl *VD);
 
   /// Returns whether the given record has hidden LTO visibility and therefore
   /// may participate in (single-module) CFI and whole-program vtable
@@ -1516,8 +1489,6 @@ public:
   void EmitVTableTypeMetadata(const CXXRecordDecl *RD,
                               llvm::GlobalVariable *VTable,
                               const VTableLayout &VTLayout);
-
-  llvm::Type *getVTableComponentType() const;
 
   /// Generate a cross-DSO type identifier for MD.
   llvm::ConstantInt *CreateCrossDsoCfiTypeId(llvm::Metadata *MD);
@@ -1551,8 +1522,7 @@ public:
 
   /// Whether this function's return type has no side effects, and thus may
   /// be trivially discarded if it is unused.
-  bool MayDropFunctionReturn(const ASTContext &Context,
-                             QualType ReturnType) const;
+  bool MayDropFunctionReturn(const ASTContext &Context, QualType ReturnType);
 
   /// Returns whether this module needs the "all-vtables" type identifier.
   bool NeedAllVtablesTypeId() const;
@@ -1568,6 +1538,9 @@ public:
   /// including C itself, that does not have any bases.
   std::vector<const CXXRecordDecl *>
   getMostBaseClasses(const CXXRecordDecl *RD);
+
+  llvm::GlobalVariable *
+  GetOrCreateRTTIProxyGlobalVariable(llvm::Constant *Addr);
 
   /// Get the declaration of std::terminate for the platform.
   llvm::FunctionCallee getTerminateFn();
@@ -1646,8 +1619,7 @@ private:
                         ForDefinition_t IsForDefinition = NotForDefinition);
 
   bool GetCPUAndFeaturesAttributes(GlobalDecl GD,
-                                   llvm::AttrBuilder &AttrBuilder,
-                                   bool SetTargetFeatures = true);
+                                   llvm::AttrBuilder &AttrBuilder);
   void setNonAliasAttributes(GlobalDecl GD, llvm::GlobalObject *GO);
 
   /// Set function attributes for a function declaration.
@@ -1671,7 +1643,6 @@ private:
 
   void EmitDeclContext(const DeclContext *DC);
   void EmitLinkageSpec(const LinkageSpecDecl *D);
-  void EmitTopLevelStmt(const TopLevelStmtDecl *D);
 
   /// Emit the function that initializes C++ thread_local variables.
   void EmitCXXThreadLocalInitFunc();
@@ -1777,7 +1748,7 @@ private:
 
   /// Emit the module flag metadata used to pass options controlling the
   /// the backend to LLVM.
-  void EmitBackendOptionsMetadata(const CodeGenOptions &CodeGenOpts);
+  void EmitBackendOptionsMetadata(const CodeGenOptions CodeGenOpts);
 
   /// Emits OpenCL specific Metadata e.g. OpenCL version.
   void EmitOpenCLMetadata();
@@ -1801,12 +1772,6 @@ private:
   void SimplifyPersonality();
 
   void destroyConstantSignedPointerCaches();
-
-  /// Helper function for getDefaultFunctionAttributes. Builds a set of function
-  /// attributes which can be simply added to a function.
-  void getTrivialDefaultFunctionAttributes(StringRef Name, bool HasOptnone,
-                                           bool AttrOnCallSite,
-                                           llvm::AttrBuilder &FuncAttrs);
 
   /// Helper function for ConstructAttributeList and
   /// addDefaultFunctionDefinitionAttributes.  Builds a set of function

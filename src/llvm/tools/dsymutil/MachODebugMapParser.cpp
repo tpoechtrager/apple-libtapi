@@ -9,7 +9,6 @@
 #include "BinaryHolder.h"
 #include "DebugMap.h"
 #include "MachOUtils.h"
-#include "RelocationMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/Object/MachO.h"
@@ -17,7 +16,6 @@
 #include "llvm/Support/Path.h"
 #include "llvm/Support/WithColor.h"
 #include "llvm/Support/raw_ostream.h"
-#include <optional>
 #include <vector>
 
 namespace {
@@ -29,13 +27,11 @@ class MachODebugMapParser {
 public:
   MachODebugMapParser(llvm::IntrusiveRefCntPtr<llvm::vfs::FileSystem> VFS,
                       StringRef BinaryPath, ArrayRef<std::string> Archs,
-                      ArrayRef<std::string> DSYMSearchPaths,
-                      StringRef PathPrefix = "", StringRef VariantSuffix = "",
-                      bool Verbose = false)
+                      StringRef PathPrefix = "",
+                      bool PaperTrailWarnings = false, bool Verbose = false)
       : BinaryPath(std::string(BinaryPath)), Archs(Archs.begin(), Archs.end()),
-        DSYMSearchPaths(DSYMSearchPaths.begin(), DSYMSearchPaths.end()),
         PathPrefix(std::string(PathPrefix)),
-        VariantSuffix(std::string(VariantSuffix)), BinHolder(VFS, Verbose),
+        PaperTrailWarnings(PaperTrailWarnings), BinHolder(VFS, Verbose),
         CurrentDebugMapObject(nullptr), SkipDebugMapObject(false) {}
 
   /// Parses and returns the DebugMaps of the input binary. The binary contains
@@ -52,9 +48,8 @@ public:
 private:
   std::string BinaryPath;
   SmallVector<StringRef, 1> Archs;
-  SmallVector<StringRef, 1> DSYMSearchPaths;
   std::string PathPrefix;
-  std::string VariantSuffix;
+  bool PaperTrailWarnings;
 
   /// Owns the MemoryBuffer for the main binary.
   BinaryHolder BinHolder;
@@ -67,10 +62,10 @@ private:
   std::vector<std::string> CommonSymbols;
 
   /// Map of the currently processed object file symbol addresses.
-  StringMap<std::optional<uint64_t>> CurrentObjectAddresses;
+  StringMap<Optional<uint64_t>> CurrentObjectAddresses;
 
   /// Lazily computed map of symbols aliased to the processed object file.
-  StringMap<std::optional<uint64_t>> CurrentObjectAliasMap;
+  StringMap<Optional<uint64_t>> CurrentObjectAliasMap;
 
   /// If CurrentObjectAliasMap has been computed for a given address.
   SmallSet<uint64_t, 4> SeenAliasValues;
@@ -94,9 +89,6 @@ private:
   void
   switchToNewDebugMapObject(StringRef Filename,
                             sys::TimePoint<std::chrono::seconds> Timestamp);
-  void
-  switchToNewLibDebugMapObject(StringRef Filename,
-                               sys::TimePoint<std::chrono::seconds> Timestamp);
   void resetParserState();
   uint64_t getMainBinarySymbolAddress(StringRef Name);
   std::vector<StringRef> getMainBinarySymbolNames(uint64_t Value);
@@ -144,6 +136,13 @@ private:
                          << MachOUtils::getArchName(
                                 Result->getTriple().getArchName())
                          << ") " << File << " " << Msg << "\n";
+
+    if (PaperTrailWarnings) {
+      if (!File.empty())
+        Result->addDebugMapObject(File, sys::TimePoint<std::chrono::seconds>());
+      if (Result->end() != Result->begin())
+        (*--Result->end())->addWarning(Msg.str());
+    }
   }
 };
 
@@ -172,8 +171,7 @@ void MachODebugMapParser::addCommonSymbols() {
       // The main binary doesn't have an address for the given symbol.
       continue;
     }
-    if (!CurrentDebugMapObject->addSymbol(CommonSymbol,
-                                          std::nullopt /*ObjectAddress*/,
+    if (!CurrentDebugMapObject->addSymbol(CommonSymbol, None /*ObjectAddress*/,
                                           CommonAddr, 0 /*size*/)) {
       // The symbol is already present.
       continue;
@@ -210,131 +208,7 @@ void MachODebugMapParser::switchToNewDebugMapObject(
 
   CurrentDebugMapObject =
       &Result->addDebugMapObject(Path, Timestamp, MachO::N_OSO);
-
   loadCurrentObjectFileSymbols(*Object);
-}
-
-/// Create a new DebugMapObject of type MachO::N_LIB.
-/// This function resets the state of the parser that was
-/// referring to the last object file and sets everything
-/// up to add symbols to the new one.
-void MachODebugMapParser::switchToNewLibDebugMapObject(
-    StringRef Filename, sys::TimePoint<std::chrono::seconds> Timestamp) {
-
-  if (DSYMSearchPaths.empty()) {
-    Warning("no dSYM search path was specified");
-    return;
-  }
-
-  StringRef LeafName = sys::path::filename(Filename);
-  SmallString<128> VariantLeafName;
-  SmallString<128> ProductName(LeafName);
-
-  // For Framework.framework/Framework and -build-variant-suffix=_debug,
-  // look in the following order:
-  // 1) Framework.framework.dSYM/Contents/Resources/DWARF/Framework_debug
-  // 2) Framework.framework.dSYM/Contents/Resources/DWARF/Framework
-  //
-  // For libName.dylib and -build-variant-suffix=_debug,
-  // look in the following order:
-  // 1) libName.dylib.dSYM/Contents/Resources/DWARF/libName_debug.dylib
-  // 2) libName.dylib.dSYM/Contents/Resources/DWARF/libName.dylib
-
-  size_t libExt = LeafName.rfind(".dylib");
-  if (libExt != StringRef::npos) {
-    if (!VariantSuffix.empty()) {
-      VariantLeafName.append(LeafName.substr(0, libExt));
-      VariantLeafName.append(VariantSuffix);
-      VariantLeafName.append(".dylib");
-    }
-  } else {
-    // Expected to be a framework
-    ProductName.append(".framework");
-    if (!VariantSuffix.empty()) {
-      VariantLeafName.append(LeafName);
-      VariantLeafName.append(VariantSuffix);
-    }
-  }
-
-  for (auto DSYMSearchPath : DSYMSearchPaths) {
-    SmallString<256> Path(DSYMSearchPath);
-    SmallString<256> FallbackPath(Path);
-
-    SmallString<256> DSYMPath(ProductName);
-    DSYMPath.append(".dSYM");
-    sys::path::append(DSYMPath, "Contents", "Resources", "DWARF");
-
-    if (!VariantSuffix.empty()) {
-      sys::path::append(Path, DSYMPath, VariantLeafName);
-      sys::path::append(FallbackPath, DSYMPath, LeafName);
-    } else {
-      sys::path::append(Path, DSYMPath, LeafName);
-    }
-
-    auto ObjectEntry = BinHolder.getObjectEntry(Path, Timestamp);
-    if (!ObjectEntry) {
-      auto Err = ObjectEntry.takeError();
-      Warning("unable to open object file: " + toString(std::move(Err)),
-              Path.str());
-      if (!VariantSuffix.empty()) {
-        ObjectEntry = BinHolder.getObjectEntry(FallbackPath, Timestamp);
-        if (!ObjectEntry) {
-          auto Err = ObjectEntry.takeError();
-          Warning("unable to open object file: " + toString(std::move(Err)),
-                  FallbackPath.str());
-          continue;
-        }
-        Path.assign(FallbackPath);
-      } else {
-        continue;
-      }
-    }
-
-    auto Object =
-        ObjectEntry->getObjectAs<MachOObjectFile>(Result->getTriple());
-    if (!Object) {
-      auto Err = Object.takeError();
-      Warning("unable to open object file: " + toString(std::move(Err)),
-              Path.str());
-      continue;
-    }
-
-    if (CurrentDebugMapObject &&
-        CurrentDebugMapObject->getType() == MachO::N_LIB &&
-        CurrentDebugMapObject->getObjectFilename().compare(Path.str()) == 0) {
-      return;
-    }
-
-    addCommonSymbols();
-    resetParserState();
-
-    CurrentDebugMapObject =
-        &Result->addDebugMapObject(Path, Timestamp, MachO::N_LIB);
-
-    CurrentDebugMapObject->setInstallName(Filename);
-
-    SmallString<256> RMPath(DSYMSearchPath);
-    sys::path::append(RMPath, ProductName);
-    RMPath.append(".dSYM");
-    StringRef ArchName = Triple::getArchName(Result->getTriple().getArch(),
-                                             Result->getTriple().getSubArch());
-    sys::path::append(RMPath, "Contents", "Resources", "Relocations", ArchName);
-    sys::path::append(RMPath, LeafName);
-    RMPath.append(".yml");
-    const auto &RelocMapPtrOrErr =
-        RelocationMap::parseYAMLRelocationMap(RMPath, PathPrefix);
-    if (auto EC = RelocMapPtrOrErr.getError()) {
-      Warning("cannot parse relocation map file: " + EC.message(),
-              RMPath.str());
-      return;
-    }
-    CurrentDebugMapObject->setRelocationMap(*RelocMapPtrOrErr->get());
-
-    loadCurrentObjectFileSymbols(*Object);
-
-    // Found and loaded new dSYM file
-    return;
-  }
 }
 
 static std::string getArchName(const object::MachOObjectFile &Obj) {
@@ -409,39 +283,23 @@ struct DarwinStabName {
   const char *Name;
 };
 
-const struct DarwinStabName DarwinStabNames[] = {{MachO::N_GSYM, "N_GSYM"},
-                                                 {MachO::N_FNAME, "N_FNAME"},
-                                                 {MachO::N_FUN, "N_FUN"},
-                                                 {MachO::N_STSYM, "N_STSYM"},
-                                                 {MachO::N_LCSYM, "N_LCSYM"},
-                                                 {MachO::N_BNSYM, "N_BNSYM"},
-                                                 {MachO::N_PC, "N_PC"},
-                                                 {MachO::N_AST, "N_AST"},
-                                                 {MachO::N_OPT, "N_OPT"},
-                                                 {MachO::N_RSYM, "N_RSYM"},
-                                                 {MachO::N_SLINE, "N_SLINE"},
-                                                 {MachO::N_ENSYM, "N_ENSYM"},
-                                                 {MachO::N_SSYM, "N_SSYM"},
-                                                 {MachO::N_SO, "N_SO"},
-                                                 {MachO::N_OSO, "N_OSO"},
-                                                 {MachO::N_LIB, "N_LIB"},
-                                                 {MachO::N_LSYM, "N_LSYM"},
-                                                 {MachO::N_BINCL, "N_BINCL"},
-                                                 {MachO::N_SOL, "N_SOL"},
-                                                 {MachO::N_PARAMS, "N_PARAM"},
-                                                 {MachO::N_VERSION, "N_VERS"},
-                                                 {MachO::N_OLEVEL, "N_OLEV"},
-                                                 {MachO::N_PSYM, "N_PSYM"},
-                                                 {MachO::N_EINCL, "N_EINCL"},
-                                                 {MachO::N_ENTRY, "N_ENTRY"},
-                                                 {MachO::N_LBRAC, "N_LBRAC"},
-                                                 {MachO::N_EXCL, "N_EXCL"},
-                                                 {MachO::N_RBRAC, "N_RBRAC"},
-                                                 {MachO::N_BCOMM, "N_BCOMM"},
-                                                 {MachO::N_ECOMM, "N_ECOMM"},
-                                                 {MachO::N_ECOML, "N_ECOML"},
-                                                 {MachO::N_LENG, "N_LENG"},
-                                                 {0, nullptr}};
+const struct DarwinStabName DarwinStabNames[] = {
+    {MachO::N_GSYM, "N_GSYM"},    {MachO::N_FNAME, "N_FNAME"},
+    {MachO::N_FUN, "N_FUN"},      {MachO::N_STSYM, "N_STSYM"},
+    {MachO::N_LCSYM, "N_LCSYM"},  {MachO::N_BNSYM, "N_BNSYM"},
+    {MachO::N_PC, "N_PC"},        {MachO::N_AST, "N_AST"},
+    {MachO::N_OPT, "N_OPT"},      {MachO::N_RSYM, "N_RSYM"},
+    {MachO::N_SLINE, "N_SLINE"},  {MachO::N_ENSYM, "N_ENSYM"},
+    {MachO::N_SSYM, "N_SSYM"},    {MachO::N_SO, "N_SO"},
+    {MachO::N_OSO, "N_OSO"},      {MachO::N_LSYM, "N_LSYM"},
+    {MachO::N_BINCL, "N_BINCL"},  {MachO::N_SOL, "N_SOL"},
+    {MachO::N_PARAMS, "N_PARAM"}, {MachO::N_VERSION, "N_VERS"},
+    {MachO::N_OLEVEL, "N_OLEV"},  {MachO::N_PSYM, "N_PSYM"},
+    {MachO::N_EINCL, "N_EINCL"},  {MachO::N_ENTRY, "N_ENTRY"},
+    {MachO::N_LBRAC, "N_LBRAC"},  {MachO::N_EXCL, "N_EXCL"},
+    {MachO::N_RBRAC, "N_RBRAC"},  {MachO::N_BCOMM, "N_BCOMM"},
+    {MachO::N_ECOMM, "N_ECOMM"},  {MachO::N_ECOML, "N_ECOML"},
+    {MachO::N_LENG, "N_LENG"},    {0, nullptr}};
 
 static const char *getDarwinStabString(uint8_t NType) {
   for (unsigned i = 0; DarwinStabNames[i].Name; i++) {
@@ -627,25 +485,13 @@ void MachODebugMapParser::handleStabSymbolTableEntry(
 
   const char *Name = &MainBinaryStrings.data()[StringIndex];
 
-  // An N_LIB entry represents the start of a new library file description.
-  if (Type == MachO::N_LIB) {
-    switchToNewLibDebugMapObject(Name, sys::toTimePoint(Value));
-    return;
-  }
-
   // An N_OSO entry represents the start of a new object file description.
-  // If an N_LIB entry was present, this is parsed only if the library
-  // dSYM file could not be found.
   if (Type == MachO::N_OSO) {
-    if (!CurrentDebugMapObject ||
-        CurrentDebugMapObject->getType() != MachO::N_LIB) {
-      if (Duplicates.count(OSO(Name, Value))) {
-        SkipDebugMapObject = true;
-        return;
-      }
-      switchToNewDebugMapObject(Name, sys::toTimePoint(Value));
+    if (Duplicates.count(OSO(Name, Value))) {
+      SkipDebugMapObject = true;
+      return;
     }
-    return;
+    return switchToNewDebugMapObject(Name, sys::toTimePoint(Value));
   }
 
   if (SkipDebugMapObject)
@@ -728,8 +574,7 @@ void MachODebugMapParser::handleStabSymbolTableEntry(
   }
 
   if (ObjectSymIt == CurrentObjectAddresses.end()) {
-    Warning("could not find symbol '" + Twine(Name) + "' in object file '" +
-            CurrentDebugMapObject->getObjectFilename() + "'");
+    Warning("could not find object file symbol for symbol " + Twine(Name));
     return;
   }
 
@@ -764,9 +609,9 @@ void MachODebugMapParser::loadCurrentObjectFileSymbols(
     // in the DebugMap, leave it unassigned for these symbols.
     uint32_t Flags = cantFail(Sym.getFlags());
     if (Flags & SymbolRef::SF_Absolute) {
-      CurrentObjectAddresses[*Name] = std::nullopt;
+      CurrentObjectAddresses[*Name] = None;
     } else if (Flags & SymbolRef::SF_Common) {
-      CurrentObjectAddresses[*Name] = std::nullopt;
+      CurrentObjectAddresses[*Name] = None;
       CommonSymbols.push_back(std::string(*Name));
     } else {
       CurrentObjectAddresses[*Name] = Addr;
@@ -857,23 +702,20 @@ namespace dsymutil {
 llvm::ErrorOr<std::vector<std::unique_ptr<DebugMap>>>
 parseDebugMap(llvm::IntrusiveRefCntPtr<llvm::vfs::FileSystem> VFS,
               StringRef InputFile, ArrayRef<std::string> Archs,
-              ArrayRef<std::string> DSYMSearchPaths, StringRef PrependPath,
-              StringRef VariantSuffix, bool Verbose, bool InputIsYAML) {
+              StringRef PrependPath, bool PaperTrailWarnings, bool Verbose,
+              bool InputIsYAML) {
   if (InputIsYAML)
     return DebugMap::parseYAMLDebugMap(InputFile, PrependPath, Verbose);
 
-  MachODebugMapParser Parser(VFS, InputFile, Archs, DSYMSearchPaths,
-                             PrependPath, VariantSuffix, Verbose);
-
+  MachODebugMapParser Parser(VFS, InputFile, Archs, PrependPath,
+                             PaperTrailWarnings, Verbose);
   return Parser.parse();
 }
 
 bool dumpStab(llvm::IntrusiveRefCntPtr<llvm::vfs::FileSystem> VFS,
               StringRef InputFile, ArrayRef<std::string> Archs,
-              ArrayRef<std::string> DSYMSearchPaths, StringRef PrependPath,
-              StringRef VariantSuffix) {
-  MachODebugMapParser Parser(VFS, InputFile, Archs, DSYMSearchPaths,
-                             PrependPath, VariantSuffix, false);
+              StringRef PrependPath) {
+  MachODebugMapParser Parser(VFS, InputFile, Archs, PrependPath, false);
   return Parser.dumpStab();
 }
 } // namespace dsymutil

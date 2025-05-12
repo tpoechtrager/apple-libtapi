@@ -30,7 +30,7 @@ using testing::UnorderedElementsAre;
 #include "AutomataAutomata.inc"
 
 TEST(Automata, SimpleAutomatonAcceptsFromInitialState) {
-  Automaton<SymKind> A{ArrayRef(SimpleAutomatonTransitions)};
+  Automaton<SymKind> A(makeArrayRef(SimpleAutomatonTransitions));
   EXPECT_TRUE(A.add(SK_a));
   A.reset();
   EXPECT_TRUE(A.add(SK_b));
@@ -41,7 +41,7 @@ TEST(Automata, SimpleAutomatonAcceptsFromInitialState) {
 }
 
 TEST(Automata, SimpleAutomatonAcceptsSequences) {
-  Automaton<SymKind> A{ArrayRef(SimpleAutomatonTransitions)};
+  Automaton<SymKind> A(makeArrayRef(SimpleAutomatonTransitions));
   // Test sequence <a b>
   A.reset();
   EXPECT_TRUE(A.add(SK_a));
@@ -59,7 +59,7 @@ TEST(Automata, SimpleAutomatonAcceptsSequences) {
 }
 
 TEST(Automata, TupleAutomatonAccepts) {
-  Automaton<TupleAutomatonAction> A{ArrayRef(TupleAutomatonTransitions)};
+  Automaton<TupleAutomatonAction> A(makeArrayRef(TupleAutomatonTransitions));
   A.reset();
   EXPECT_TRUE(
       A.add(TupleAutomatonAction{SK_a, SK_b, "yeet"}));
@@ -75,7 +75,7 @@ TEST(Automata, TupleAutomatonAccepts) {
 }
 
 TEST(Automata, NfaAutomatonAccepts) {
-  Automaton<SymKind> A{ArrayRef(NfaAutomatonTransitions)};
+  Automaton<SymKind> A(makeArrayRef(NfaAutomatonTransitions));
 
   // Test sequences <a a>, <a b>, <b a>, <b b>. All should be accepted.
   A.reset();
@@ -99,8 +99,7 @@ TEST(Automata, NfaAutomatonAccepts) {
 }
 
 TEST(Automata, BinPackerAutomatonAccepts) {
-  Automaton<BinPackerAutomatonAction> A{
-      ArrayRef(BinPackerAutomatonTransitions)};
+  Automaton<BinPackerAutomatonAction> A(makeArrayRef(BinPackerAutomatonTransitions));
 
   // Expect that we can pack two double-bins in 0-4, then no more in 0-4.
   A.reset();
@@ -130,9 +129,8 @@ TEST(Automata, BinPackerAutomatonAccepts) {
   ((a << 5) | (b << 4) | (c << 3) | (d << 2) | (e << 1) | (f << 0))
 
 TEST(Automata, BinPackerAutomatonExplains) {
-  Automaton<BinPackerAutomatonAction> A{
-      ArrayRef(BinPackerAutomatonTransitions),
-      ArrayRef(BinPackerAutomatonTransitionInfo)};
+  Automaton<BinPackerAutomatonAction> A(makeArrayRef(BinPackerAutomatonTransitions),
+                                        makeArrayRef(BinPackerAutomatonTransitionInfo));
   // Pack two double-bins in 0-4, then a single bin in 0-6.
   EXPECT_TRUE(A.add(BRK_0_to_4_dbl));
   EXPECT_TRUE(A.add(BRK_0_to_4_dbl));

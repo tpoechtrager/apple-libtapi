@@ -36,6 +36,7 @@
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/PointerIntPair.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
@@ -48,7 +49,6 @@
 #include "llvm/Support/raw_ostream.h"
 #include <cassert>
 #include <iterator>
-#include <optional>
 #include <string>
 #include <utility>
 
@@ -255,7 +255,7 @@ public:
     iterator end() { return iterator(Edges.end(), Edges.end()); }
 
     Edge &operator[](Node &N) {
-      assert(EdgeIndexMap.contains(&N) && "No such edge!");
+      assert(EdgeIndexMap.find(&N) != EdgeIndexMap.end() && "No such edge!");
       auto &E = Edges[EdgeIndexMap.find(&N)->second];
       assert(E && "Dead or null edge!");
       return E;
@@ -311,7 +311,7 @@ public:
   /// The node works much like an optional in order to lazily populate the
   /// edges of each node. Until populated, there are no edges. Once populated,
   /// you can access the edges by dereferencing the node or using the `->`
-  /// operator as if the node was an `std::optional<EdgeSequence>`.
+  /// operator as if the node was an `Optional<EdgeSequence>`.
   class Node {
     friend class LazyCallGraph;
     friend class LazyCallGraph::RefSCC;
@@ -378,7 +378,7 @@ public:
     int DFSNumber = 0;
     int LowLink = 0;
 
-    std::optional<EdgeSequence> Edges;
+    Optional<EdgeSequence> Edges;
 
     /// Basic constructor implements the scanning of F into Edges and
     /// EdgeIndexMap.

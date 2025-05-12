@@ -32,14 +32,13 @@ add_llvm_target(VECodeGen
   Analysis
   AsmPrinter
   CodeGen
-  CodeGenTypes
   Core
   MC
   SelectionDAG
-  Support
-  Target
   VEDesc
   VEInfo
+  Support
+  Target
 
   ADD_TO_COMPONENT
   VE

@@ -28,9 +28,6 @@
 #ifndef LLVM_PASS_H
 #define LLVM_PASS_H
 
-#ifdef EXPENSIVE_CHECKS
-#include <cstdint>
-#endif
 #include <string>
 
 namespace llvm {

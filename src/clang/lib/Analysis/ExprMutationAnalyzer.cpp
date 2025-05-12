@@ -102,8 +102,6 @@ AST_MATCHER(CXXTypeidExpr, isPotentiallyEvaluated) {
 
 AST_MATCHER_P(GenericSelectionExpr, hasControllingExpr,
               ast_matchers::internal::Matcher<Expr>, InnerMatcher) {
-  if (Node.isTypePredicate())
-    return false;
   return InnerMatcher.matches(*Node.getControllingExpr(), Finder, Builder);
 }
 
@@ -607,7 +605,7 @@ FunctionParmMutationAnalyzer::FunctionParmMutationAnalyzer(
     for (const CXXCtorInitializer *Init : Ctor->inits()) {
       ExprMutationAnalyzer InitAnalyzer(*Init->getInit(), Context);
       for (const ParmVarDecl *Parm : Ctor->parameters()) {
-        if (Results.contains(Parm))
+        if (Results.find(Parm) != Results.end())
           continue;
         if (const Stmt *S = InitAnalyzer.findMutation(Parm))
           Results[Parm] = S;

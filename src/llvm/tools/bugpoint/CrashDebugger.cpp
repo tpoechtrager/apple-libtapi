@@ -70,18 +70,6 @@ cl::opt<bool> VerboseErrors("verbose-errors",
                             cl::init(false));
 }
 
-static bool isValidModule(std::unique_ptr<Module> &M,
-                          bool ExitOnFailure = true) {
-  if (!llvm::verifyModule(*M.get(), &llvm::errs()))
-    return true;
-
-  if (ExitOnFailure) {
-    llvm::errs() << "verify failed!\n";
-    exit(1);
-  }
-  return false;
-}
-
 namespace llvm {
 class ReducePassList : public ListReducer<std::string> {
   BugDriver &BD;
@@ -380,10 +368,6 @@ bool ReduceCrashingFunctionAttributes::TestFuncAttrs(
   if (F->hasFnAttribute(Attribute::OptimizeNone))
     F->addFnAttr(Attribute::NoInline);
 
-  // If modifying the attribute list leads to invalid IR, revert the change
-  if (!isValidModule(M, /*ExitOnFailure=*/false))
-    return false;
-
   // Try running on the hacked up program...
   if (TestFn(BD, M.get())) {
     BD.setNewProgram(std::move(M)); // It crashed, keep the trimmed version...
@@ -500,7 +484,7 @@ bool ReduceCrashingBlocks::TestBlocks(std::vector<const BasicBlock *> &BBs) {
           BBTerm->replaceAllUsesWith(Constant::getNullValue(BBTerm->getType()));
 
         // Replace the old terminator instruction.
-        BB.back().eraseFromParent();
+        BB.getInstList().pop_back();
         new UnreachableInst(BB.getContext(), &BB);
       }
     }
@@ -526,7 +510,14 @@ bool ReduceCrashingBlocks::TestBlocks(std::vector<const BasicBlock *> &BBs) {
     ToProcess.clear();
   }
   // Verify we didn't break anything
-  isValidModule(M);
+  std::vector<std::string> Passes;
+  Passes.push_back("verify");
+  std::unique_ptr<Module> New = BD.runPassesOn(M.get(), Passes);
+  if (!New) {
+    errs() << "verify failed!\n";
+    exit(1);
+  }
+  M = std::move(New);
 
   // Try running on the hacked up program...
   if (TestFn(BD, M.get())) {
@@ -627,7 +618,14 @@ bool ReduceCrashingConditionals::TestBlocks(
     ToProcess.clear();
   }
   // Verify we didn't break anything
-  isValidModule(M);
+  std::vector<std::string> Passes;
+  Passes.push_back("verify");
+  std::unique_ptr<Module> New = BD.runPassesOn(M.get(), Passes);
+  if (!New) {
+    errs() << "verify failed!\n";
+    exit(1);
+  }
+  M = std::move(New);
 
   // Try running on the hacked up program...
   if (TestFn(BD, M.get())) {
@@ -713,7 +711,14 @@ bool ReduceSimplifyCFG::TestBlocks(std::vector<const BasicBlock *> &BBs) {
       simplifyCFG(&*BBIt++, TTI);
     }
   // Verify we didn't break anything
-  isValidModule(M);
+  std::vector<std::string> Passes;
+  Passes.push_back("verify");
+  std::unique_ptr<Module> New = BD.runPassesOn(M.get(), Passes);
+  if (!New) {
+    errs() << "verify failed!\n";
+    exit(1);
+  }
+  M = std::move(New);
 
   // Try running on the hacked up program...
   if (TestFn(BD, M.get())) {
@@ -792,7 +797,9 @@ bool ReduceCrashingInstructions::TestInsts(
       }
 
   // Verify that this is still valid.
-  isValidModule(M, /*ExitOnFailure=*/false);
+  legacy::PassManager Passes;
+  Passes.add(createVerifierPass(/*FatalErrors=*/false));
+  Passes.run(*M);
 
   // Try running on the hacked up program...
   if (TestFn(BD, M.get())) {
@@ -862,7 +869,9 @@ bool ReduceCrashingMetadata::TestInsts(std::vector<Instruction *> &Insts) {
     }
 
   // Verify that this is still valid.
-  isValidModule(M, /*ExitOnFailure=*/false);
+  legacy::PassManager Passes;
+  Passes.add(createVerifierPass(/*FatalErrors=*/false));
+  Passes.run(*M);
 
   // Try running on the hacked up program...
   if (TestFn(BD, M.get())) {
@@ -935,7 +944,9 @@ bool ReduceCrashingNamedMD::TestNamedMDs(std::vector<std::string> &NamedMDs) {
     NamedMD->eraseFromParent();
 
   // Verify that this is still valid.
-  isValidModule(M, /*ExitOnFailure=*/false);
+  legacy::PassManager Passes;
+  Passes.add(createVerifierPass(/*FatalErrors=*/false));
+  Passes.run(*M);
 
   // Try running on the hacked up program...
   if (TestFn(BD, M.get())) {
@@ -998,7 +1009,9 @@ bool ReduceCrashingNamedMDOps::TestNamedMDOps(
   }
 
   // Verify that this is still valid.
-  isValidModule(M, /*ExitOnFailure=*/false);
+  legacy::PassManager Passes;
+  Passes.add(createVerifierPass(/*FatalErrors=*/false));
+  Passes.run(*M);
 
   // Try running on the hacked up program...
   if (TestFn(BD, M.get())) {

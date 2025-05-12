@@ -152,7 +152,7 @@ bool SpeculativeExecutionLegacyPass::runOnFunction(Function &F) {
 namespace llvm {
 
 bool SpeculativeExecutionPass::runImpl(Function &F, TargetTransformInfo *TTI) {
-  if (OnlyIfDivergentTarget && !TTI->hasBranchDivergence(&F)) {
+  if (OnlyIfDivergentTarget && !TTI->hasBranchDivergence()) {
     LLVM_DEBUG(dbgs() << "Not running SpeculativeExecution because "
                          "TTI->hasBranchDivergence() is false.\n");
     return false;

@@ -1,4 +1,4 @@
-//===- GIMatchDag.h - Represent a DAG to be matched -------------*- C++ -*-===//
+//===- GIMatchDag.h - Represent a DAG to be matched -----------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.

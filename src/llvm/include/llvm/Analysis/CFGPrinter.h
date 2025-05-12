@@ -26,7 +26,6 @@
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/PassManager.h"
-#include "llvm/IR/ProfDataUtils.h"
 #include "llvm/Support/DOTGraphTraits.h"
 #include "llvm/Support/FormatVariadic.h"
 
@@ -35,25 +34,21 @@ template <class GraphType> struct GraphTraits;
 class CFGViewerPass : public PassInfoMixin<CFGViewerPass> {
 public:
   PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
-  static bool isRequired() { return true; }
 };
 
 class CFGOnlyViewerPass : public PassInfoMixin<CFGOnlyViewerPass> {
 public:
   PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
-  static bool isRequired() { return true; }
 };
 
 class CFGPrinterPass : public PassInfoMixin<CFGPrinterPass> {
 public:
   PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
-  static bool isRequired() { return true; }
 };
 
 class CFGOnlyPrinterPass : public PassInfoMixin<CFGOnlyPrinterPass> {
 public:
   PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
-  static bool isRequired() { return true; }
 };
 
 class DOTFuncInfo {
@@ -281,8 +276,12 @@ struct DOTGraphTraits<DOTFuncInfo *> : public DefaultDOTGraphTraits {
     if (Attrs.size())
       return Attrs;
 
-    MDNode *WeightsNode = getBranchWeightMDNode(*TI);
+    MDNode *WeightsNode = TI->getMetadata(LLVMContext::MD_prof);
     if (!WeightsNode)
+      return "";
+
+    MDString *MDName = cast<MDString>(WeightsNode->getOperand(0));
+    if (MDName->getString() != "branch_weights")
       return "";
 
     OpNo = I.getSuccessorIndex() + 1;

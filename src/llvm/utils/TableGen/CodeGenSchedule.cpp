@@ -100,7 +100,7 @@ struct InstRegexOp : public SetTheory::Operator {
       if (removeParens(Original).find_first_of("|?") != std::string::npos)
         FirstMeta = 0;
 
-      std::optional<Regex> Regexpr;
+      Optional<Regex> Regexpr;
       StringRef Prefix = Original.substr(0, FirstMeta);
       StringRef PatStr = Original.substr(FirstMeta);
       if (!PatStr.empty()) {
@@ -298,12 +298,12 @@ processSTIPredicate(STIPredicateFunction &Fn,
     RecVec Classes = Def->getValueAsListOfDefs("Classes");
     for (const Record *EC : Classes) {
       const Record *Pred = EC->getValueAsDef("Predicate");
-      if (!Predicate2Index.contains(Pred))
+      if (Predicate2Index.find(Pred) == Predicate2Index.end())
         Predicate2Index[Pred] = NumUniquePredicates++;
 
       RecVec Opcodes = EC->getValueAsListOfDefs("Opcodes");
       for (const Record *Opcode : Opcodes) {
-        if (!Opcode2Index.contains(Opcode)) {
+        if (Opcode2Index.find(Opcode) == Opcode2Index.end()) {
           Opcode2Index[Opcode] = OpcodeMappings.size();
           OpcodeMappings.emplace_back(Opcode, OpcodeInfo());
         }
@@ -370,11 +370,11 @@ processSTIPredicate(STIPredicateFunction &Fn,
                const std::pair<APInt, APInt> &RhsMasks = OpcodeMasks[RhsIdx];
 
                auto LessThan = [](const APInt &Lhs, const APInt &Rhs) {
-                 unsigned LhsCountPopulation = Lhs.popcount();
-                 unsigned RhsCountPopulation = Rhs.popcount();
+                 unsigned LhsCountPopulation = Lhs.countPopulation();
+                 unsigned RhsCountPopulation = Rhs.countPopulation();
                  return ((LhsCountPopulation < RhsCountPopulation) ||
                          ((LhsCountPopulation == RhsCountPopulation) &&
-                          (Lhs.countl_zero() > Rhs.countl_zero())));
+                          (Lhs.countLeadingZeros() > Rhs.countLeadingZeros())));
                };
 
                if (LhsMasks.first != RhsMasks.first)
@@ -838,7 +838,7 @@ unsigned CodeGenSchedModels::findRWForSequence(ArrayRef<unsigned> Seq,
   std::vector<CodeGenSchedRW> &RWVec = IsRead ? SchedReads : SchedWrites;
 
   auto I = find_if(RWVec, [Seq](CodeGenSchedRW &RW) {
-    return ArrayRef(RW.Sequence) == Seq;
+    return makeArrayRef(RW.Sequence) == Seq;
   });
   // Index zero reserved for invalid RW.
   return I == RWVec.end() ? 0 : std::distance(RWVec.begin(), I);

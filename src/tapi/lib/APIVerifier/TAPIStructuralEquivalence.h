@@ -14,14 +14,14 @@
 #ifndef TAPI_APIVERIFIER_TAPISTRUCTURALEQUIVALENCE_H
 #define TAPI_APIVERIFIER_TAPISTRUCTURALEQUIVALENCE_H
 
-#include "tapi/APIVerifier/APIVerifier.h"
 #include "tapi/Defines.h"
+#include "tapi/APIVerifier/APIVerifier.h"
 #include "tapi/Diagnostics/Diagnostics.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringSet.h"
-#include <optional>
 
 namespace clang {
 
@@ -270,7 +270,7 @@ public:
   ///
   /// FIXME: This is needed by ASTImporter and ASTStructureEquivalence. It
   /// probably makes more sense in some other common place then here.
-  static std::optional<unsigned>
+  static llvm::Optional<unsigned>
   findUntaggedStructOrUnionIndex(const RecordDecl *Anon);
 
   /// Check to see if the decl should be compared.

@@ -40,6 +40,10 @@ bool isSDKDylib(StringRef installName);
 /// To determine whether a library's binary is public, use `isPublicDylib`
 /// instead.
 ///
+/// Known private SDK locations:
+///   - /usr/local/*
+///   - /System/Library/PrivateFrameworks/*
+///   - */PrivateHeaders/* inside /System/Library/Frameworks
 bool isWithinPublicLocation(StringRef path);
 
 /// Return true if the path has extension of a header.
@@ -61,6 +65,18 @@ inline bool inBnIEnvironment() {
 
 using APIs = llvm::SmallVector<std::shared_ptr<API>, 4>;
 std::unique_ptr<InterfaceFile> convertToInterfaceFile(const APIs &apis);
+
+/// Use simple struct for passing around symbol information.
+struct SimpleSymbol {
+  StringRef name;
+  llvm::MachO::SymbolKind kind;
+
+  bool operator<(const SimpleSymbol &o) const {
+    return std::tie(name, kind) < std::tie(o.name, o.kind);
+  }
+};
+
+SimpleSymbol parseSymbol(StringRef symbolName);
 
 TAPI_NAMESPACE_INTERNAL_END
 

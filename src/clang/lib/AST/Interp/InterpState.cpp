@@ -7,17 +7,24 @@
 //===----------------------------------------------------------------------===//
 
 #include "InterpState.h"
+#include <limits>
+#include "Function.h"
 #include "InterpFrame.h"
 #include "InterpStack.h"
+#include "Opcode.h"
+#include "PrimType.h"
 #include "Program.h"
 #include "State.h"
 
 using namespace clang;
 using namespace clang::interp;
 
+using APSInt = llvm::APSInt;
+
 InterpState::InterpState(State &Parent, Program &P, InterpStack &Stk,
                          Context &Ctx, SourceMapper *M)
-    : Parent(Parent), M(M), P(P), Stk(Stk), Ctx(Ctx), Current(nullptr) {}
+    : Parent(Parent), M(M), P(P), Stk(Stk), Ctx(Ctx), Current(nullptr),
+      CallStackDepth(Parent.getCallStackDepth() + 1) {}
 
 InterpState::~InterpState() {
   while (Current) {
@@ -28,15 +35,17 @@ InterpState::~InterpState() {
 
   while (DeadBlocks) {
     DeadBlock *Next = DeadBlocks->Next;
-    std::free(DeadBlocks);
+    free(DeadBlocks);
     DeadBlocks = Next;
   }
 }
 
 Frame *InterpState::getCurrentFrame() {
-  if (Current && Current->Caller)
+  if (Current && Current->Caller) {
     return Current;
-  return Parent.getCurrentFrame();
+  } else {
+    return Parent.getCurrentFrame();
+  }
 }
 
 bool InterpState::reportOverflow(const Expr *E, const llvm::APSInt &Value) {
@@ -46,16 +55,12 @@ bool InterpState::reportOverflow(const Expr *E, const llvm::APSInt &Value) {
 }
 
 void InterpState::deallocate(Block *B) {
-  assert(B);
-  const Descriptor *Desc = B->getDescriptor();
-  assert(Desc);
-
+  Descriptor *Desc = B->getDescriptor();
   if (B->hasPointers()) {
     size_t Size = B->getSize();
 
     // Allocate a new block, transferring over pointers.
-    char *Memory =
-        reinterpret_cast<char *>(std::malloc(sizeof(DeadBlock) + Size));
+    char *Memory = reinterpret_cast<char *>(malloc(sizeof(DeadBlock) + Size));
     auto *D = new (Memory) DeadBlock(DeadBlocks, B);
 
     // Move data from one block to another.

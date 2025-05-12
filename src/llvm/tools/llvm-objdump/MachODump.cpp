@@ -17,6 +17,7 @@
 #include "llvm-c/Disassembler.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/ADT/Triple.h"
 #include "llvm/BinaryFormat/MachO.h"
 #include "llvm/Config/config.h"
 #include "llvm/DebugInfo/DIContext.h"
@@ -48,7 +49,6 @@
 #include "llvm/Support/ToolOutputFile.h"
 #include "llvm/Support/WithColor.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/TargetParser/Triple.h"
 #include <algorithm>
 #include <cstring>
 #include <system_error>
@@ -78,8 +78,7 @@ bool objdump::UniversalHeaders;
 static bool ArchiveMemberOffsets;
 bool objdump::IndirectSymbols;
 bool objdump::DataInCode;
-FunctionStartsMode objdump::FunctionStartsType =
-    objdump::FunctionStartsMode::None;
+bool objdump::FunctionStarts;
 bool objdump::LinkOptHints;
 bool objdump::InfoPlist;
 bool objdump::ChainedFixups;
@@ -113,15 +112,7 @@ void objdump::parseMachOOptions(const llvm::opt::InputArgList &InputArgs) {
   ArchiveMemberOffsets = InputArgs.hasArg(OBJDUMP_archive_member_offsets);
   IndirectSymbols = InputArgs.hasArg(OBJDUMP_indirect_symbols);
   DataInCode = InputArgs.hasArg(OBJDUMP_data_in_code);
-  if (const opt::Arg *A = InputArgs.getLastArg(OBJDUMP_function_starts_EQ)) {
-    FunctionStartsType = StringSwitch<FunctionStartsMode>(A->getValue())
-                             .Case("addrs", FunctionStartsMode::Addrs)
-                             .Case("names", FunctionStartsMode::Names)
-                             .Case("both", FunctionStartsMode::Both)
-                             .Default(FunctionStartsMode::None);
-    if (FunctionStartsType == FunctionStartsMode::None)
-      invalidArgValue(A);
-  }
+  FunctionStarts = InputArgs.hasArg(OBJDUMP_function_starts);
   LinkOptHints = InputArgs.hasArg(OBJDUMP_link_opt_hints);
   InfoPlist = InputArgs.hasArg(OBJDUMP_info_plist);
   ChainedFixups = InputArgs.hasArg(OBJDUMP_chained_fixups);
@@ -191,20 +182,7 @@ struct SymbolSorter {
     return AAddr < BAddr;
   }
 };
-
-class MachODumper : public Dumper {
-  const object::MachOObjectFile &Obj;
-
-public:
-  MachODumper(const object::MachOObjectFile &O) : Dumper(O), Obj(O) {}
-  void printPrivateHeaders(bool OnlyFirst) override;
-};
 } // namespace
-
-std::unique_ptr<Dumper>
-objdump::createMachODumper(const object::MachOObjectFile &Obj) {
-  return std::make_unique<MachODumper>(Obj);
-}
 
 // Types for the storted data in code table that is built before disassembly
 // and the predicate function to sort them.
@@ -268,19 +246,19 @@ static uint64_t DumpDataInCode(const uint8_t *bytes, uint64_t Length,
   case MachO::DICE_KIND_DATA:
     if (Length >= 4) {
       if (ShowRawInsn)
-        dumpBytes(ArrayRef(bytes, 4), outs());
+        dumpBytes(makeArrayRef(bytes, 4), outs());
       Value = bytes[3] << 24 | bytes[2] << 16 | bytes[1] << 8 | bytes[0];
       outs() << "\t.long " << Value;
       Size = 4;
     } else if (Length >= 2) {
       if (ShowRawInsn)
-        dumpBytes(ArrayRef(bytes, 2), outs());
+        dumpBytes(makeArrayRef(bytes, 2), outs());
       Value = bytes[1] << 8 | bytes[0];
       outs() << "\t.short " << Value;
       Size = 2;
     } else {
       if (ShowRawInsn)
-        dumpBytes(ArrayRef(bytes, 2), outs());
+        dumpBytes(makeArrayRef(bytes, 2), outs());
       Value = bytes[0];
       outs() << "\t.byte " << Value;
       Size = 1;
@@ -292,14 +270,14 @@ static uint64_t DumpDataInCode(const uint8_t *bytes, uint64_t Length,
     break;
   case MachO::DICE_KIND_JUMP_TABLE8:
     if (ShowRawInsn)
-      dumpBytes(ArrayRef(bytes, 1), outs());
+      dumpBytes(makeArrayRef(bytes, 1), outs());
     Value = bytes[0];
     outs() << "\t.byte " << format("%3u", Value) << "\t@ KIND_JUMP_TABLE8\n";
     Size = 1;
     break;
   case MachO::DICE_KIND_JUMP_TABLE16:
     if (ShowRawInsn)
-      dumpBytes(ArrayRef(bytes, 2), outs());
+      dumpBytes(makeArrayRef(bytes, 2), outs());
     Value = bytes[1] << 8 | bytes[0];
     outs() << "\t.short " << format("%5u", Value & 0xffff)
            << "\t@ KIND_JUMP_TABLE16\n";
@@ -308,7 +286,7 @@ static uint64_t DumpDataInCode(const uint8_t *bytes, uint64_t Length,
   case MachO::DICE_KIND_JUMP_TABLE32:
   case MachO::DICE_KIND_ABS_JUMP_TABLE32:
     if (ShowRawInsn)
-      dumpBytes(ArrayRef(bytes, 4), outs());
+      dumpBytes(makeArrayRef(bytes, 4), outs());
     Value = bytes[3] << 24 | bytes[2] << 16 | bytes[1] << 8 | bytes[0];
     outs() << "\t.long " << Value;
     if (Kind == MachO::DICE_KIND_JUMP_TABLE32)
@@ -1102,39 +1080,12 @@ static void PrintFunctionStarts(MachOObjectFile *O) {
     }
   }
 
-  DenseMap<uint64_t, StringRef> SymbolNames;
-  if (FunctionStartsType == FunctionStartsMode::Names ||
-      FunctionStartsType == FunctionStartsMode::Both) {
-    for (SymbolRef Sym : O->symbols()) {
-      if (Expected<uint64_t> Addr = Sym.getAddress()) {
-        if (Expected<StringRef> Name = Sym.getName()) {
-          SymbolNames[*Addr] = *Name;
-        }
-      }
-    }
-  }
-
   for (uint64_t S : FunctionStarts) {
     uint64_t Addr = BaseSegmentAddress + S;
-    if (FunctionStartsType == FunctionStartsMode::Names) {
-      auto It = SymbolNames.find(Addr);
-      if (It != SymbolNames.end())
-        outs() << It->second << "\n";
-    } else {
-      if (O->is64Bit())
-        outs() << format("%016" PRIx64, Addr);
-      else
-        outs() << format("%08" PRIx32, static_cast<uint32_t>(Addr));
-
-      if (FunctionStartsType == FunctionStartsMode::Both) {
-        auto It = SymbolNames.find(Addr);
-        if (It != SymbolNames.end())
-          outs() << " " << It->second;
-        else
-          outs() << " ?";
-      }
-      outs() << "\n";
-    }
+    if (O->is64Bit())
+      outs() << format("%016" PRIx64, Addr) << "\n";
+    else
+      outs() << format("%08" PRIx32, static_cast<uint32_t>(Addr)) << "\n";
   }
 }
 
@@ -2155,16 +2106,14 @@ static void printObjcMetaData(MachOObjectFile *O, bool verbose);
 static void ProcessMachO(StringRef Name, MachOObjectFile *MachOOF,
                          StringRef ArchiveMemberName = StringRef(),
                          StringRef ArchitectureName = StringRef()) {
-  std::unique_ptr<Dumper> D = createMachODumper(*MachOOF);
-
   // If we are doing some processing here on the Mach-O file print the header
   // info.  And don't print it otherwise like in the case of printing the
   // UniversalHeaders or ArchiveHeaders.
   if (Disassemble || Relocations || PrivateHeaders || ExportsTrie || Rebase ||
       Bind || SymbolTable || LazyBind || WeakBind || IndirectSymbols ||
-      DataInCode || FunctionStartsType != FunctionStartsMode::None ||
-      LinkOptHints || ChainedFixups || DyldInfo || DylibsUsed || DylibId ||
-      Rpaths || ObjcMetaData || (!FilterSections.empty())) {
+      DataInCode || FunctionStarts || LinkOptHints || ChainedFixups ||
+      DyldInfo || DylibsUsed || DylibId || Rpaths || ObjcMetaData ||
+      (!FilterSections.empty())) {
     if (LeadingHeaders) {
       outs() << Name;
       if (!ArchiveMemberName.empty())
@@ -2219,7 +2168,7 @@ static void ProcessMachO(StringRef Name, MachOObjectFile *MachOOF,
     PrintIndirectSymbols(MachOOF, Verbose);
   if (DataInCode)
     PrintDataInCodeTable(MachOOF, Verbose);
-  if (FunctionStartsType != FunctionStartsMode::None)
+  if (FunctionStarts)
     PrintFunctionStarts(MachOOF);
   if (LinkOptHints)
     PrintLinkOptHints(MachOOF);
@@ -2242,7 +2191,7 @@ static void ProcessMachO(StringRef Name, MachOObjectFile *MachOOF,
   if (DylibId)
     PrintDylibs(MachOOF, true);
   if (SymbolTable)
-    D->printSymbolTable(ArchiveName, ArchitectureName);
+    printSymbolTable(*MachOOF, ArchiveName, ArchitectureName);
   if (UnwindInfo)
     printMachOUnwindInfo(MachOOF);
   if (PrivateHeaders) {
@@ -7303,7 +7252,9 @@ static const char *SymbolizerSymbolLookUp(void *DisInfo,
     } else if (SymbolName != nullptr && strncmp(SymbolName, "__Z", 3) == 0) {
       if (info->demangled_name != nullptr)
         free(info->demangled_name);
-      info->demangled_name = itaniumDemangle(SymbolName + 1);
+      int status;
+      info->demangled_name =
+          itaniumDemangle(SymbolName + 1, nullptr, nullptr, &status);
       if (info->demangled_name != nullptr) {
         *ReferenceName = info->demangled_name;
         *ReferenceType = LLVMDisassembler_ReferenceType_DeMangled_Name;
@@ -7401,7 +7352,9 @@ static const char *SymbolizerSymbolLookUp(void *DisInfo,
   } else if (SymbolName != nullptr && strncmp(SymbolName, "__Z", 3) == 0) {
     if (info->demangled_name != nullptr)
       free(info->demangled_name);
-    info->demangled_name = itaniumDemangle(SymbolName + 1);
+    int status;
+    info->demangled_name =
+        itaniumDemangle(SymbolName + 1, nullptr, nullptr, &status);
     if (info->demangled_name != nullptr) {
       *ReferenceName = info->demangled_name;
       *ReferenceType = LLVMDisassembler_ReferenceType_DeMangled_Name;
@@ -7935,7 +7888,7 @@ static void DisassembleMachO(StringRef Filename, MachOObjectFile *MachOOF,
                                            Annotations);
         if (gotInst) {
           if (ShowRawInsn || Arch == Triple::arm) {
-            dumpBytes(ArrayRef(Bytes.data() + Index, Size), outs());
+            dumpBytes(makeArrayRef(Bytes.data() + Index, Size), outs());
           }
           formatted_raw_ostream FormattedOS(outs());
           StringRef AnnotationsStr = Annotations.str();
@@ -8016,7 +7969,7 @@ static void DisassembleMachO(StringRef Filename, MachOObjectFile *MachOOF,
           }
           if (ShowRawInsn || Arch == Triple::arm) {
             outs() << "\t";
-            dumpBytes(ArrayRef(Bytes.data() + Index, InstSize), outs());
+            dumpBytes(makeArrayRef(Bytes.data() + Index, InstSize), outs());
           }
           StringRef AnnotationsStr = Annotations.str();
           IP->printInst(&Inst, PC, AnnotationsStr, *STI, outs());
@@ -10391,8 +10344,6 @@ static void PrintLinkEditDataCommand(MachO::linkedit_data_command ld,
     outs() << "      cmd LC_DYLD_EXPORTS_TRIE\n";
   else if (ld.cmd == MachO::LC_DYLD_CHAINED_FIXUPS)
     outs() << "      cmd LC_DYLD_CHAINED_FIXUPS\n";
-  else if (ld.cmd == MachO::LC_ATOM_INFO)
-    outs() << "      cmd LC_ATOM_INFO\n";
   else
     outs() << "      cmd " << ld.cmd << " (?)\n";
   outs() << "  cmdsize " << ld.cmdsize;
@@ -10538,8 +10489,7 @@ static void PrintLoadCommands(const MachOObjectFile *Obj, uint32_t filetype,
                Command.C.cmd == MachO::LC_DYLIB_CODE_SIGN_DRS ||
                Command.C.cmd == MachO::LC_LINKER_OPTIMIZATION_HINT ||
                Command.C.cmd == MachO::LC_DYLD_EXPORTS_TRIE ||
-               Command.C.cmd == MachO::LC_DYLD_CHAINED_FIXUPS ||
-               Command.C.cmd == MachO::LC_ATOM_INFO) {
+               Command.C.cmd == MachO::LC_DYLD_CHAINED_FIXUPS) {
       MachO::linkedit_data_command Ld =
           Obj->getLinkeditDataLoadCommand(Command);
       PrintLinkEditDataCommand(Ld, Buf.size());
@@ -10570,12 +10520,6 @@ static void PrintMachHeader(const MachOObjectFile *Obj, bool verbose) {
 void objdump::printMachOFileHeader(const object::ObjectFile *Obj) {
   const MachOObjectFile *file = cast<const MachOObjectFile>(Obj);
   PrintMachHeader(file, Verbose);
-}
-
-void MachODumper::printPrivateHeaders(bool OnlyFirst) {
-  printMachOFileHeader(&Obj);
-  if (!OnlyFirst)
-    printMachOLoadCommands(&Obj);
 }
 
 void objdump::printMachOLoadCommands(const object::ObjectFile *Obj) {

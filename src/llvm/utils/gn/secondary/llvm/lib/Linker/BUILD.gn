@@ -4,7 +4,6 @@ static_library("Linker") {
     "//llvm/lib/IR",
     "//llvm/lib/Object",
     "//llvm/lib/Support",
-    "//llvm/lib/TargetParser",
     "//llvm/lib/Transforms/Utils",
   ]
   sources = [

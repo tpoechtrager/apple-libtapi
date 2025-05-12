@@ -13,7 +13,6 @@ add_clang_library(clangToolingRefactoring
   Rename/USRFinder.cpp
   Rename/USRFindingAction.cpp
   Rename/USRLocFinder.cpp
-  SymbolName.cpp
 
   LINK_LIBS
   clangAST
@@ -24,7 +23,6 @@ add_clang_library(clangToolingRefactoring
   clangLex
   clangRewrite
   clangToolingCore
-  clangToolingSyntax
 
   DEPENDS
   omp_gen

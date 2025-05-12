@@ -10,7 +10,6 @@
 #include "clang/AST/LexicallyOrderedRecursiveASTVisitor.h"
 #include "clang/Lex/Lexer.h"
 #include "llvm/Support/SaveAndRestore.h"
-#include <optional>
 
 using namespace clang;
 using namespace tooling;
@@ -51,12 +50,12 @@ public:
                         SourceSelectionKind::None));
   }
 
-  std::optional<SelectedASTNode> getSelectedASTNode() {
+  Optional<SelectedASTNode> getSelectedASTNode() {
     assert(SelectionStack.size() == 1 && "stack was not popped");
     SelectedASTNode Result = std::move(SelectionStack.back());
     SelectionStack.pop_back();
     if (Result.Children.empty())
-      return std::nullopt;
+      return None;
     return std::move(Result);
   }
 
@@ -64,14 +63,14 @@ public:
     // Avoid traversing the semantic expressions. They should be handled by
     // looking through the appropriate opaque expressions in order to build
     // a meaningful selection tree.
-    llvm::SaveAndRestore LookThrough(LookThroughOpaqueValueExprs, true);
+    llvm::SaveAndRestore<bool> LookThrough(LookThroughOpaqueValueExprs, true);
     return TraverseStmt(E->getSyntacticForm());
   }
 
   bool TraverseOpaqueValueExpr(OpaqueValueExpr *E) {
     if (!LookThroughOpaqueValueExprs)
       return true;
-    llvm::SaveAndRestore LookThrough(LookThroughOpaqueValueExprs, false);
+    llvm::SaveAndRestore<bool> LookThrough(LookThroughOpaqueValueExprs, false);
     return TraverseStmt(E->getSourceExpr());
   }
 
@@ -179,7 +178,7 @@ private:
 
 } // end anonymous namespace
 
-std::optional<SelectedASTNode>
+Optional<SelectedASTNode>
 clang::tooling::findSelectedASTNodes(const ASTContext &Context,
                                      SourceRange SelectionRange) {
   assert(SelectionRange.isValid() &&
@@ -376,22 +375,22 @@ static void findDeepestWithKind(
   findDeepestWithKind(ASTSelection, MatchingNodes, Kind, ParentStack);
 }
 
-std::optional<CodeRangeASTSelection>
+Optional<CodeRangeASTSelection>
 CodeRangeASTSelection::create(SourceRange SelectionRange,
                               const SelectedASTNode &ASTSelection) {
   // Code range is selected when the selection range is not empty.
   if (SelectionRange.getBegin() == SelectionRange.getEnd())
-    return std::nullopt;
+    return None;
   llvm::SmallVector<SelectedNodeWithParents, 4> ContainSelection;
   findDeepestWithKind(ASTSelection, ContainSelection,
                       SourceSelectionKind::ContainsSelection);
   // We are looking for a selection in one body of code, so let's focus on
   // one matching result.
   if (ContainSelection.size() != 1)
-    return std::nullopt;
+    return None;
   SelectedNodeWithParents &Selected = ContainSelection[0];
   if (!Selected.Node.get().Node.get<Stmt>())
-    return std::nullopt;
+    return None;
   const Stmt *CodeRangeStmt = Selected.Node.get().Node.get<Stmt>();
   if (!isa<CompoundStmt>(CodeRangeStmt)) {
     Selected.canonicalize();

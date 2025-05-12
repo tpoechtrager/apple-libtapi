@@ -48,7 +48,6 @@ MachineRegisterInfo::MachineRegisterInfo(MachineFunction *MF)
   RegAllocHints.reserve(256);
   UsedPhysRegMask.resize(NumRegs);
   PhysRegUseDefLists.reset(new MachineOperand*[NumRegs]());
-  TheDelegates.clear();
 }
 
 /// setRegClass - Set the register class of the specified virtual register.
@@ -101,13 +100,13 @@ MachineRegisterInfo::constrainRegAttrs(Register Reg,
     const auto RegCB = getRegClassOrRegBank(Reg);
     if (RegCB.isNull())
       setRegClassOrRegBank(Reg, ConstrainingRegCB);
-    else if (isa<const TargetRegisterClass *>(RegCB) !=
-             isa<const TargetRegisterClass *>(ConstrainingRegCB))
+    else if (RegCB.is<const TargetRegisterClass *>() !=
+             ConstrainingRegCB.is<const TargetRegisterClass *>())
       return false;
-    else if (isa<const TargetRegisterClass *>(RegCB)) {
+    else if (RegCB.is<const TargetRegisterClass *>()) {
       if (!::constrainRegClass(
-              *this, Reg, cast<const TargetRegisterClass *>(RegCB),
-              cast<const TargetRegisterClass *>(ConstrainingRegCB), MinNumRegs))
+              *this, Reg, RegCB.get<const TargetRegisterClass *>(),
+              ConstrainingRegCB.get<const TargetRegisterClass *>(), MinNumRegs))
         return false;
     } else if (RegCB != ConstrainingRegCB)
       return false;
@@ -163,7 +162,8 @@ MachineRegisterInfo::createVirtualRegister(const TargetRegisterClass *RegClass,
   // New virtual register number.
   Register Reg = createIncompleteVirtualRegister(Name);
   VRegInfo[Reg].first = RegClass;
-  noteNewVirtualRegister(Reg);
+  if (TheDelegate)
+    TheDelegate->MRI_NoteNewVirtualRegister(Reg);
   return Reg;
 }
 
@@ -172,7 +172,8 @@ Register MachineRegisterInfo::cloneVirtualRegister(Register VReg,
   Register Reg = createIncompleteVirtualRegister(Name);
   VRegInfo[Reg].first = VRegInfo[VReg].first;
   setType(Reg, getType(VReg));
-  noteCloneVirtualRegister(Reg, VReg);
+  if (TheDelegate)
+    TheDelegate->MRI_NoteNewVirtualRegister(Reg);
   return Reg;
 }
 
@@ -188,7 +189,8 @@ MachineRegisterInfo::createGenericVirtualRegister(LLT Ty, StringRef Name) {
   // FIXME: Should we use a dummy register class?
   VRegInfo[Reg].first = static_cast<RegisterBank *>(nullptr);
   setType(Reg, Ty);
-  noteNewVirtualRegister(Reg);
+  if (TheDelegate)
+    TheDelegate->MRI_NoteNewVirtualRegister(Reg);
   return Reg;
 }
 
@@ -202,11 +204,7 @@ void MachineRegisterInfo::clearVirtRegs() {
     if (!VRegInfo[Reg].second)
       continue;
     verifyUseList(Reg);
-    errs() << "Remaining virtual register "
-           << printReg(Reg, getTargetRegisterInfo()) << "...\n";
-    for (MachineInstr &MI : reg_instructions(Reg))
-      errs() << "...in instruction: " << MI << "\n";
-    std::abort();
+    llvm_unreachable("Remaining virtual register operands");
   }
 #endif
   VRegInfo.clear();
@@ -384,7 +382,7 @@ void MachineRegisterInfo::replaceRegWith(Register FromReg, Register ToReg) {
 
   // TODO: This could be more efficient by bulk changing the operands.
   for (MachineOperand &O : llvm::make_early_inc_range(reg_operands(FromReg))) {
-    if (ToReg.isPhysical()) {
+    if (Register::isPhysicalRegister(ToReg)) {
       O.substPhysReg(ToReg, *TRI);
     } else {
       O.setReg(ToReg);
@@ -496,7 +494,7 @@ MachineRegisterInfo::EmitLiveInCopies(MachineBasicBlock *EntryMBB,
 
 LaneBitmask MachineRegisterInfo::getMaxLaneMaskForVReg(Register Reg) const {
   // Lane masks are only defined for vregs.
-  assert(Reg.isVirtual());
+  assert(Register::isVirtualRegister(Reg));
   const TargetRegisterClass &TRC = *getRegClass(Reg);
   return TRC.getLaneMask();
 }
@@ -644,8 +642,16 @@ void MachineRegisterInfo::setCalleeSavedRegs(ArrayRef<MCPhysReg> CSRs) {
 bool MachineRegisterInfo::isReservedRegUnit(unsigned Unit) const {
   const TargetRegisterInfo *TRI = getTargetRegisterInfo();
   for (MCRegUnitRootIterator Root(Unit, TRI); Root.isValid(); ++Root) {
-    if (all_of(TRI->superregs_inclusive(*Root),
-               [&](MCPhysReg Super) { return isReserved(Super); }))
+    bool IsRootReserved = true;
+    for (MCSuperRegIterator Super(*Root, TRI, /*IncludeSelf=*/true);
+         Super.isValid(); ++Super) {
+      MCRegister Reg = *Super;
+      if (!isReserved(Reg)) {
+        IsRootReserved = false;
+        break;
+      }
+    }
+    if (IsRootReserved)
       return true;
   }
   return false;

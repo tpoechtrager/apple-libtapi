@@ -55,8 +55,7 @@ private:
 // overly conservative (i.e. return "true" for all instructions), but it
 // is not safe to return "false" for an instruction that should not be
 // considered removable.
-bool DeadCodeElimination::isLiveInstr(NodeAddr<StmtNode *> S) const {
-  const MachineInstr *MI = S.Addr->getCode();
+bool DeadCodeElimination::isLiveInstr(const MachineInstr *MI) const {
   if (MI->mayStore() || MI->isBranch() || MI->isCall() || MI->isReturn())
     return true;
   if (MI->hasOrderedMemoryRef() || MI->hasUnmodeledSideEffects() ||
@@ -84,7 +83,7 @@ void DeadCodeElimination::scanInstr(NodeAddr<InstrNode*> IA,
       SetQueue<NodeId> &WorkQ) {
   if (!DFG.IsCode<NodeAttrs::Stmt>(IA))
     return;
-  if (!isLiveInstr(IA))
+  if (!isLiveInstr(NodeAddr<StmtNode*>(IA).Addr->getCode()))
     return;
   for (NodeAddr<RefNode*> RA : IA.Addr->members(DFG)) {
     if (!LiveNodes.count(RA.Id))
@@ -161,7 +160,7 @@ bool DeadCodeElimination::collect() {
         if (!LiveNodes.count(RA.Id))
           DeadNodes.insert(RA.Id);
       if (DFG.IsCode<NodeAttrs::Stmt>(IA))
-        if (isLiveInstr(IA) || DFG.hasUntrackedRef(IA))
+        if (isLiveInstr(NodeAddr<StmtNode*>(IA).Addr->getCode()))
           continue;
       if (IsDead(IA)) {
         DeadInstrs.insert(IA.Id);

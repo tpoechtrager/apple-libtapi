@@ -29,6 +29,7 @@
 #include "clang/Basic/SourceLocation.h"
 #include "llvm/ADT/APSInt.h"
 #include "llvm/ADT/FoldingSet.h"
+#include "llvm/ADT/None.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
@@ -40,7 +41,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <optional>
 
 using namespace clang;
 
@@ -272,12 +272,12 @@ bool TemplateArgument::containsUnexpandedParameterPack() const {
   return getDependence() & TemplateArgumentDependence::UnexpandedPack;
 }
 
-std::optional<unsigned> TemplateArgument::getNumTemplateExpansions() const {
+Optional<unsigned> TemplateArgument::getNumTemplateExpansions() const {
   assert(getKind() == TemplateExpansion);
   if (TemplateArg.NumExpansions)
     return TemplateArg.NumExpansions - 1;
 
-  return std::nullopt;
+  return None;
 }
 
 QualType TemplateArgument::getNonTypeTemplateArgumentType() const {
@@ -327,9 +327,9 @@ void TemplateArgument::Profile(llvm::FoldingSetNodeID &ID,
 
   case TemplateExpansion:
     ID.AddInteger(TemplateArg.NumExpansions);
-    [[fallthrough]];
+    LLVM_FALLTHROUGH;
   case Template:
-    ID.AddPointer(TemplateArg.Name);
+    getAsTemplateOrTemplatePattern().Profile(ID);
     break;
 
   case Integral:
@@ -364,8 +364,7 @@ bool TemplateArgument::structurallyEquals(const TemplateArgument &Other) const {
            TemplateArg.NumExpansions == Other.TemplateArg.NumExpansions;
 
   case Declaration:
-    return getAsDecl() == Other.getAsDecl() &&
-           getParamTypeForDecl() == Other.getParamTypeForDecl();
+    return getAsDecl() == Other.getAsDecl();
 
   case Integral:
     return getIntegralType() == Other.getIntegralType() &&
@@ -423,10 +422,10 @@ void TemplateArgument::print(const PrintingPolicy &Policy, raw_ostream &Out,
   }
 
   case Declaration: {
+    // FIXME: Include the type if it's not obvious from the context.
     NamedDecl *ND = getAsDecl();
     if (getParamTypeForDecl()->isRecordType()) {
       if (auto *TPO = dyn_cast<TemplateParamObjectDecl>(ND)) {
-        TPO->getType().getUnqualifiedType().print(Out, Policy);
         TPO->printAsInit(Out, Policy);
         break;
       }

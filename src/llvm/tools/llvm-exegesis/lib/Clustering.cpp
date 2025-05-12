@@ -39,7 +39,7 @@ namespace exegesis {
 
 // Finds the points at distance less than sqrt(EpsilonSquared) of Q (not
 // including Q).
-void BenchmarkClustering::rangeQuery(
+void InstructionBenchmarkClustering::rangeQuery(
     const size_t Q, std::vector<size_t> &Neighbors) const {
   Neighbors.clear();
   Neighbors.reserve(Points_.size() - 1); // The Q itself isn't a neighbor.
@@ -59,7 +59,7 @@ void BenchmarkClustering::rangeQuery(
 
 // Given a set of points, checks that all the points are neighbours
 // up to AnalysisClusteringEpsilon. This is O(2*N).
-bool BenchmarkClustering::areAllNeighbours(
+bool InstructionBenchmarkClustering::areAllNeighbours(
     ArrayRef<size_t> Pts) const {
   // First, get the centroid of this group of points. This is O(N).
   SchedClassClusterCentroid G;
@@ -88,14 +88,14 @@ bool BenchmarkClustering::areAllNeighbours(
       });
 }
 
-BenchmarkClustering::BenchmarkClustering(
-    const std::vector<Benchmark> &Points,
+InstructionBenchmarkClustering::InstructionBenchmarkClustering(
+    const std::vector<InstructionBenchmark> &Points,
     const double AnalysisClusteringEpsilonSquared)
     : Points_(Points),
       AnalysisClusteringEpsilonSquared_(AnalysisClusteringEpsilonSquared),
       NoiseCluster_(ClusterId::noise()), ErrorCluster_(ClusterId::error()) {}
 
-Error BenchmarkClustering::validateAndSetup() {
+Error InstructionBenchmarkClustering::validateAndSetup() {
   ClusterIdForPoint_.resize(Points_.size());
   // Mark erroneous measurements out.
   // All points must have the same number of dimensions, in the same order.
@@ -128,7 +128,7 @@ Error BenchmarkClustering::validateAndSetup() {
   return Error::success();
 }
 
-void BenchmarkClustering::clusterizeDbScan(const size_t MinPts) {
+void InstructionBenchmarkClustering::clusterizeDbScan(const size_t MinPts) {
   std::vector<size_t> Neighbors; // Persistent buffer to avoid allocs.
   for (size_t P = 0, NumPoints = Points_.size(); P < NumPoints; ++P) {
     if (!ClusterIdForPoint_[P].isUndef())
@@ -185,7 +185,7 @@ void BenchmarkClustering::clusterizeDbScan(const size_t MinPts) {
   }
 }
 
-void BenchmarkClustering::clusterizeNaive(
+void InstructionBenchmarkClustering::clusterizeNaive(
     const MCSubtargetInfo &SubtargetInfo, const MCInstrInfo &InstrInfo) {
   // Given an instruction Opcode, which sched class id's are represented,
   // and which are the benchmarks for each sched class?
@@ -195,7 +195,7 @@ void BenchmarkClustering::clusterizeNaive(
   OpcodeToSchedClassesToPoints.resize(NumOpcodes);
   size_t NumClusters = 0;
   for (size_t P = 0, NumPoints = Points_.size(); P < NumPoints; ++P) {
-    const Benchmark &Point = Points_[P];
+    const InstructionBenchmark &Point = Points_[P];
     const MCInst &MCI = Point.keyInstruction();
     unsigned SchedClassId;
     std::tie(SchedClassId, std::ignore) =
@@ -249,11 +249,11 @@ void BenchmarkClustering::clusterizeNaive(
 // clustered into *different* clusters. This is not great for further analysis.
 // We shall find every opcode with benchmarks not in just one cluster, and move
 // *all* the benchmarks of said Opcode into one new unstable cluster per Opcode.
-void BenchmarkClustering::stabilize(unsigned NumOpcodes) {
+void InstructionBenchmarkClustering::stabilize(unsigned NumOpcodes) {
   // Given an instruction Opcode and Config, in which clusters do benchmarks of
   // this instruction lie? Normally, they all should be in the same cluster.
   struct OpcodeAndConfig {
-    explicit OpcodeAndConfig(const Benchmark &IB)
+    explicit OpcodeAndConfig(const InstructionBenchmark &IB)
         : Opcode(IB.keyInstruction().getOpcode()), Config(&IB.Key.Config) {}
     unsigned Opcode;
     const std::string *Config;
@@ -314,7 +314,7 @@ void BenchmarkClustering::stabilize(unsigned NumOpcodes) {
       // Actually append to-be-moved points to the new cluster.
       UnstableCluster.PointIndices.insert(UnstableCluster.PointIndices.end(),
                                           it, OldCluster.PointIndices.end());
-      // And finally, remove "to-be-moved" points from the old cluster.
+      // And finally, remove "to-be-moved" points form the old cluster.
       OldCluster.PointIndices.erase(it, OldCluster.PointIndices.end());
       // Now, the old cluster may end up being empty, but let's just keep it
       // in whatever state it ended up. Purging empty clusters isn't worth it.
@@ -327,11 +327,11 @@ void BenchmarkClustering::stabilize(unsigned NumOpcodes) {
   }
 }
 
-Expected<BenchmarkClustering> BenchmarkClustering::create(
-    const std::vector<Benchmark> &Points, const ModeE Mode,
+Expected<InstructionBenchmarkClustering> InstructionBenchmarkClustering::create(
+    const std::vector<InstructionBenchmark> &Points, const ModeE Mode,
     const size_t DbscanMinPts, const double AnalysisClusteringEpsilon,
     const MCSubtargetInfo *SubtargetInfo, const MCInstrInfo *InstrInfo) {
-  BenchmarkClustering Clustering(
+  InstructionBenchmarkClustering Clustering(
       Points, AnalysisClusteringEpsilon * AnalysisClusteringEpsilon);
   if (auto Error = Clustering.validateAndSetup()) {
     return std::move(Error);
@@ -373,10 +373,10 @@ std::vector<BenchmarkMeasure> SchedClassClusterCentroid::getAsPoint() const {
 }
 
 bool SchedClassClusterCentroid::validate(
-    Benchmark::ModeE Mode) const {
+    InstructionBenchmark::ModeE Mode) const {
   size_t NumMeasurements = Representative.size();
   switch (Mode) {
-  case Benchmark::Latency:
+  case InstructionBenchmark::Latency:
     if (NumMeasurements != 1) {
       errs()
           << "invalid number of measurements in latency mode: expected 1, got "
@@ -384,10 +384,10 @@ bool SchedClassClusterCentroid::validate(
       return false;
     }
     break;
-  case Benchmark::Uops:
+  case InstructionBenchmark::Uops:
     // Can have many measurements.
     break;
-  case Benchmark::InverseThroughput:
+  case InstructionBenchmark::InverseThroughput:
     if (NumMeasurements != 1) {
       errs() << "invalid number of measurements in inverse throughput "
                 "mode: expected 1, got "

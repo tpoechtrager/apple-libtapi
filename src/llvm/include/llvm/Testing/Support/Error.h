@@ -9,6 +9,7 @@
 #ifndef LLVM_TESTING_SUPPORT_ERROR_H
 #define LLVM_TESTING_SUPPORT_ERROR_H
 
+#include "llvm/ADT/Optional.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Testing/Support/SupportHelpers.h"
 
@@ -83,7 +84,7 @@ private:
 template <typename InfoT>
 class ErrorMatchesMono : public testing::MatcherInterface<const ErrorHolder &> {
 public:
-  explicit ErrorMatchesMono(std::optional<testing::Matcher<InfoT &>> Matcher)
+  explicit ErrorMatchesMono(Optional<testing::Matcher<InfoT &>> Matcher)
       : Matcher(std::move(Matcher)) {}
 
   bool MatchAndExplain(const ErrorHolder &Holder,
@@ -125,7 +126,7 @@ public:
   }
 
 private:
-  std::optional<testing::Matcher<InfoT &>> Matcher;
+  Optional<testing::Matcher<InfoT &>> Matcher;
 };
 
 class ErrorMessageMatches
@@ -138,8 +139,7 @@ public:
   bool MatchAndExplain(const ErrorHolder &Holder,
                        testing::MatchResultListener *listener) const override {
     std::vector<std::string> Messages;
-    Messages.reserve(Holder.Infos.size());
-    for (const std::shared_ptr<ErrorInfoBase> &Info : Holder.Infos)
+    for (const std::shared_ptr<ErrorInfoBase> &Info: Holder.Infos)
       Messages.push_back(Info->message());
 
     return Matcher.MatchAndExplain(Messages, listener);
@@ -196,7 +196,7 @@ MATCHER(Failed, "") { return !arg.Success(); }
 
 template <typename InfoT>
 testing::Matcher<const detail::ErrorHolder &> Failed() {
-  return MakeMatcher(new detail::ErrorMatchesMono<InfoT>(std::nullopt));
+  return MakeMatcher(new detail::ErrorMatchesMono<InfoT>(None));
 }
 
 template <typename InfoT, typename M>

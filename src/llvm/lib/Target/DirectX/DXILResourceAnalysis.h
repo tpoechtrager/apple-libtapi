@@ -10,9 +10,6 @@
 ///
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_TARGET_DIRECTX_DXILRESOURCEANALYSIS_H
-#define LLVM_TARGET_DIRECTX_DXILRESOURCEANALYSIS_H
-
 #include "DXILResource.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/Pass.h"
@@ -57,5 +54,3 @@ public:
   void print(raw_ostream &O, const Module *M = nullptr) const override;
 };
 } // namespace llvm
-
-#endif // LLVM_TARGET_DIRECTX_DXILRESOURCEANALYSIS_H

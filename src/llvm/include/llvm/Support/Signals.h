@@ -102,16 +102,13 @@ namespace sys {
   /// functions.  A null handler pointer disables the current installed
   /// function.  Note also that the handler may be executed on a
   /// different thread on some platforms.
+  ///
+  /// This is a no-op on Windows.
   void SetOneShotPipeSignalFunction(void (*Handler)());
 
-  /// On Unix systems and Windows, this function exits with an "IO error" exit
-  /// code.
+  /// On Unix systems, this function exits with an "IO error" exit code.
+  /// This is a no-op on Windows.
   void DefaultOneShotPipeSignalHandler();
-
-#ifdef _WIN32
-  /// Windows does not support signals and this handler must be called manually.
-  void CallOneShotPipeSignalHandler();
-#endif
 
   /// This function does the following:
   /// - clean up any temporary files registered with RemoveFileOnSignal()

@@ -24,7 +24,8 @@
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineScheduler.h"
 #include "llvm/IR/GlobalValue.h"
-#include "llvm/TargetParser/AArch64TargetParser.h"
+#include "llvm/Support/AArch64TargetParser.h"
+#include "llvm/Support/TargetParser.h"
 
 using namespace llvm;
 
@@ -64,12 +65,6 @@ ReservedRegsForRA("reserve-regs-for-regalloc", cl::desc("Reserve physical "
                   "Should only be used for testing register allocator."),
                   cl::CommaSeparated, cl::Hidden);
 
-static cl::opt<bool> ForceStreamingCompatibleSVE(
-    "force-streaming-compatible-sve",
-    cl::desc(
-        "Force the use of streaming-compatible SVE code for all functions"),
-    cl::Hidden);
-
 unsigned AArch64Subtarget::getVectorInsertExtractBaseCost() const {
   if (OverrideVectorInsertExtractBaseCost.getNumOccurrences() > 0)
     return OverrideVectorInsertExtractBaseCost;
@@ -105,24 +100,24 @@ void AArch64Subtarget::initializeProperties() {
   case CortexA35:
   case CortexA53:
   case CortexA55:
-    PrefFunctionAlignment = Align(16);
-    PrefLoopAlignment = Align(16);
+    PrefFunctionLogAlignment = 4;
+    PrefLoopLogAlignment = 4;
     MaxBytesForLoopAlignment = 8;
     break;
   case CortexA57:
     MaxInterleaveFactor = 4;
-    PrefFunctionAlignment = Align(16);
-    PrefLoopAlignment = Align(16);
+    PrefFunctionLogAlignment = 4;
+    PrefLoopLogAlignment = 4;
     MaxBytesForLoopAlignment = 8;
     break;
   case CortexA65:
-    PrefFunctionAlignment = Align(8);
+    PrefFunctionLogAlignment = 3;
     break;
   case CortexA72:
   case CortexA73:
   case CortexA75:
-    PrefFunctionAlignment = Align(16);
-    PrefLoopAlignment = Align(16);
+    PrefFunctionLogAlignment = 4;
+    PrefLoopLogAlignment = 4;
     MaxBytesForLoopAlignment = 8;
     break;
   case CortexA76:
@@ -132,29 +127,27 @@ void AArch64Subtarget::initializeProperties() {
   case CortexR82:
   case CortexX1:
   case CortexX1C:
-    PrefFunctionAlignment = Align(16);
-    PrefLoopAlignment = Align(32);
+    PrefFunctionLogAlignment = 4;
+    PrefLoopLogAlignment = 5;
     MaxBytesForLoopAlignment = 16;
     break;
   case CortexA510:
-    PrefFunctionAlignment = Align(16);
+    PrefFunctionLogAlignment = 4;
     VScaleForTuning = 1;
-    PrefLoopAlignment = Align(16);
+    PrefLoopLogAlignment = 4;
     MaxBytesForLoopAlignment = 8;
     break;
   case CortexA710:
-  case CortexA715:
   case CortexX2:
-  case CortexX3:
-    PrefFunctionAlignment = Align(16);
+    PrefFunctionLogAlignment = 4;
     VScaleForTuning = 1;
-    PrefLoopAlignment = Align(32);
+    PrefLoopLogAlignment = 5;
     MaxBytesForLoopAlignment = 16;
     break;
   case A64FX:
     CacheLineSize = 256;
-    PrefFunctionAlignment = Align(8);
-    PrefLoopAlignment = Align(4);
+    PrefFunctionLogAlignment = 3;
+    PrefLoopLogAlignment = 2;
     MaxInterleaveFactor = 4;
     PrefetchDistance = 128;
     MinPrefetchStride = 1024;
@@ -173,21 +166,12 @@ void AArch64Subtarget::initializeProperties() {
     PrefetchDistance = 280;
     MinPrefetchStride = 2048;
     MaxPrefetchIterationsAhead = 3;
-    switch (ARMProcFamily) {
-    case AppleA14:
-    case AppleA15:
-    case AppleA16:
-      MaxInterleaveFactor = 4;
-      break;
-    default:
-      break;
-    }
     break;
   case ExynosM3:
     MaxInterleaveFactor = 4;
     MaxJumpTableSize = 20;
-    PrefFunctionAlignment = Align(32);
-    PrefLoopAlignment = Align(16);
+    PrefFunctionLogAlignment = 5;
+    PrefLoopLogAlignment = 4;
     break;
   case Falkor:
     MaxInterleaveFactor = 4;
@@ -209,29 +193,28 @@ void AArch64Subtarget::initializeProperties() {
     MinVectorRegisterBitWidth = 128;
     break;
   case NeoverseE1:
-    PrefFunctionAlignment = Align(8);
+    PrefFunctionLogAlignment = 3;
     break;
   case NeoverseN1:
-    PrefFunctionAlignment = Align(16);
-    PrefLoopAlignment = Align(32);
+    PrefFunctionLogAlignment = 4;
+    PrefLoopLogAlignment = 5;
     MaxBytesForLoopAlignment = 16;
     break;
   case NeoverseN2:
   case NeoverseV2:
-    PrefFunctionAlignment = Align(16);
-    PrefLoopAlignment = Align(32);
+    PrefFunctionLogAlignment = 4;
+    PrefLoopLogAlignment = 5;
     MaxBytesForLoopAlignment = 16;
     VScaleForTuning = 1;
     break;
   case NeoverseV1:
-    PrefFunctionAlignment = Align(16);
-    PrefLoopAlignment = Align(32);
+    PrefFunctionLogAlignment = 4;
+    PrefLoopLogAlignment = 5;
     MaxBytesForLoopAlignment = 16;
     VScaleForTuning = 2;
-    DefaultSVETFOpts = TailFoldingOpts::Simple;
     break;
   case Neoverse512TVB:
-    PrefFunctionAlignment = Align(16);
+    PrefFunctionLogAlignment = 4;
     VScaleForTuning = 1;
     MaxInterleaveFactor = 4;
     break;
@@ -242,8 +225,8 @@ void AArch64Subtarget::initializeProperties() {
     break;
   case ThunderX2T99:
     CacheLineSize = 64;
-    PrefFunctionAlignment = Align(8);
-    PrefLoopAlignment = Align(4);
+    PrefFunctionLogAlignment = 3;
+    PrefLoopLogAlignment = 2;
     MaxInterleaveFactor = 4;
     PrefetchDistance = 128;
     MinPrefetchStride = 1024;
@@ -256,20 +239,20 @@ void AArch64Subtarget::initializeProperties() {
   case ThunderXT81:
   case ThunderXT83:
     CacheLineSize = 128;
-    PrefFunctionAlignment = Align(8);
-    PrefLoopAlignment = Align(4);
+    PrefFunctionLogAlignment = 3;
+    PrefLoopLogAlignment = 2;
     // FIXME: remove this to enable 64-bit SLP if performance looks good.
     MinVectorRegisterBitWidth = 128;
     break;
   case TSV110:
     CacheLineSize = 64;
-    PrefFunctionAlignment = Align(16);
-    PrefLoopAlignment = Align(4);
+    PrefFunctionLogAlignment = 4;
+    PrefLoopLogAlignment = 2;
     break;
   case ThunderX3T110:
     CacheLineSize = 64;
-    PrefFunctionAlignment = Align(16);
-    PrefLoopAlignment = Align(4);
+    PrefFunctionLogAlignment = 4;
+    PrefLoopLogAlignment = 2;
     MaxInterleaveFactor = 4;
     PrefetchDistance = 128;
     MinPrefetchStride = 1024;
@@ -278,29 +261,25 @@ void AArch64Subtarget::initializeProperties() {
     MinVectorRegisterBitWidth = 128;
     break;
   case Ampere1:
-  case Ampere1A:
     CacheLineSize = 64;
-    PrefFunctionAlignment = Align(64);
-    PrefLoopAlignment = Align(64);
+    PrefFunctionLogAlignment = 6;
+    PrefLoopLogAlignment = 6;
     MaxInterleaveFactor = 4;
     break;
   }
 }
 
-AArch64Subtarget::AArch64Subtarget(const Triple &TT, StringRef CPU,
-                                   StringRef TuneCPU, StringRef FS,
+AArch64Subtarget::AArch64Subtarget(const Triple &TT, const std::string &CPU,
+                                   const std::string &TuneCPU,
+                                   const std::string &FS,
                                    const TargetMachine &TM, bool LittleEndian,
                                    unsigned MinSVEVectorSizeInBitsOverride,
-                                   unsigned MaxSVEVectorSizeInBitsOverride,
-                                   bool StreamingSVEMode,
-                                   bool StreamingCompatibleSVEMode)
+                                   unsigned MaxSVEVectorSizeInBitsOverride)
     : AArch64GenSubtargetInfo(TT, CPU, TuneCPU, FS),
       ReserveXRegister(AArch64::GPR64commonRegClass.getNumRegs()),
       ReserveXRegisterForRA(AArch64::GPR64commonRegClass.getNumRegs()),
       CustomCallSavedXRegs(AArch64::GPR64commonRegClass.getNumRegs()),
       IsLittle(LittleEndian),
-      StreamingSVEMode(StreamingSVEMode),
-      StreamingCompatibleSVEMode(StreamingCompatibleSVEMode),
       MinSVEVectorSizeInBits(MinSVEVectorSizeInBitsOverride),
       MaxSVEVectorSizeInBits(MaxSVEVectorSizeInBitsOverride), TargetTriple(TT),
       InstrInfo(initializeSubtargetDependencies(FS, CPU, TuneCPU)),
@@ -325,16 +304,10 @@ AArch64Subtarget::AArch64Subtarget(const Triple &TT, StringRef CPU,
   auto TRI = getRegisterInfo();
   StringSet<> ReservedRegNames;
   ReservedRegNames.insert(ReservedRegsForRA.begin(), ReservedRegsForRA.end());
-  for (unsigned i = 0; i < 29; ++i) {
+  for (unsigned i = 0; i < 31; ++i) {
     if (ReservedRegNames.count(TRI->getName(AArch64::X0 + i)))
       ReserveXRegisterForRA.set(i);
   }
-  // X30 is named LR, so we can't use TRI->getName to check X30.
-  if (ReservedRegNames.count("X30") || ReservedRegNames.count("LR"))
-    ReserveXRegisterForRA.set(30);
-  // X29 is named FP, so we can't use TRI->getName to check X29.
-  if (ReservedRegNames.count("X29") || ReservedRegNames.count("FP"))
-    ReserveXRegisterForRA.set(29);
 }
 
 const CallLowering *AArch64Subtarget::getCallLowering() const {
@@ -367,19 +340,9 @@ AArch64Subtarget::ClassifyGlobalReference(const GlobalValue *GV,
   if (TM.getCodeModel() == CodeModel::Large && isTargetMachO())
     return AArch64II::MO_GOT;
 
-  // All globals dynamically protected by MTE must have their address tags
-  // synthesized. This is done by having the loader stash the tag in the GOT
-  // entry. Force all tagged globals (even ones with internal linkage) through
-  // the GOT.
-  if (GV->isTagged())
-    return AArch64II::MO_GOT;
-
   if (!TM.shouldAssumeDSOLocal(*GV->getParent(), GV)) {
-    if (GV->hasDLLImportStorageClass()) {
-      if (isWindowsArm64EC() && GV->getValueType()->isFunctionTy())
-        return AArch64II::MO_GOT | AArch64II::MO_DLLIMPORTAUX;
+    if (GV->hasDLLImportStorageClass())
       return AArch64II::MO_GOT | AArch64II::MO_DLLIMPORT;
-    }
     if (getTargetTriple().isOSWindows())
       return AArch64II::MO_GOT | AArch64II::MO_COFFSTUB;
     return AArch64II::MO_GOT;
@@ -416,17 +379,9 @@ unsigned AArch64Subtarget::classifyGlobalFunctionReference(
       !TM.shouldAssumeDSOLocal(*GV->getParent(), GV))
     return AArch64II::MO_GOT;
 
-  if (getTargetTriple().isOSWindows()) {
-    if (isWindowsArm64EC() && GV->getValueType()->isFunctionTy() &&
-        GV->hasDLLImportStorageClass()) {
-      // On Arm64EC, if we're calling a function directly, use MO_DLLIMPORT,
-      // not MO_DLLIMPORTAUX.
-      return AArch64II::MO_GOT | AArch64II::MO_DLLIMPORT;
-    }
-
-    // Use ClassifyGlobalReference for setting MO_DLLIMPORT/MO_COFFSTUB.
+  // Use ClassifyGlobalReference for setting MO_DLLIMPORT/MO_COFFSTUB.
+  if (getTargetTriple().isOSWindows())
     return ClassifyGlobalReference(GV, TM);
-  }
 
   return AArch64II::MO_NO_FLAG;
 }
@@ -476,15 +431,3 @@ void AArch64Subtarget::mirFileLoaded(MachineFunction &MF) const {
 }
 
 bool AArch64Subtarget::useAA() const { return UseAA; }
-
-bool AArch64Subtarget::isNeonAvailable() const {
-  if (!hasNEON())
-    return false;
-
-  // The 'force-streaming-comaptible-sve' flag overrides the streaming
-  // function attributes.
-  if (ForceStreamingCompatibleSVE.getNumOccurrences() > 0)
-    return !ForceStreamingCompatibleSVE;
-
-  return !isStreaming() && !isStreamingCompatible();
-}

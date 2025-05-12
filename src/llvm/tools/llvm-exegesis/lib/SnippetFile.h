@@ -17,7 +17,6 @@
 #define LLVM_TOOLS_LLVM_EXEGESIS_SNIPPETFILE_H
 
 #include "BenchmarkCode.h"
-#include "BenchmarkRunner.h"
 #include "LlvmState.h"
 #include "llvm/Support/Error.h"
 

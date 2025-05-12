@@ -15,7 +15,6 @@
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/Twine.h"
@@ -69,19 +68,16 @@ SourceMgr::OpenIncludeFile(const std::string &Filename,
   auto getFile = [this](StringRef Path) {
     return FS ? FS->getBufferForFile(Path) : MemoryBuffer::getFile(Path);
   };
-  ErrorOr<std::unique_ptr<MemoryBuffer>> NewBufOrErr = getFile(Filename);
+  IncludedFile = Filename;
+  ErrorOr<std::unique_ptr<MemoryBuffer>> NewBufOrErr = getFile(IncludedFile);
 
-  SmallString<64> Buffer(Filename);
   // If the file didn't exist directly, see if it's in an include path.
   for (unsigned i = 0, e = IncludeDirectories.size(); i != e && !NewBufOrErr;
        ++i) {
-    Buffer = IncludeDirectories[i];
-    sys::path::append(Buffer, Filename);
-    NewBufOrErr = getFile(Buffer);
+    IncludedFile =
+        IncludeDirectories[i] + sys::path::get_separator().data() + Filename;
+    NewBufOrErr = getFile(IncludedFile);
   }
-
-  if (NewBufOrErr)
-    IncludedFile = static_cast<std::string>(Buffer);
 
   return NewBufOrErr;
 }
@@ -498,7 +494,7 @@ static void printSourceLine(raw_ostream &S, StringRef LineContents) {
 static bool isNonASCII(char c) { return c & 0x80; }
 
 void SMDiagnostic::print(const char *ProgName, raw_ostream &OS, bool ShowColors,
-                         bool ShowKindLabel, bool ShowLocation) const {
+                         bool ShowKindLabel) const {
   ColorMode Mode = ShowColors ? ColorMode::Auto : ColorMode::Disable;
 
   {
@@ -507,7 +503,7 @@ void SMDiagnostic::print(const char *ProgName, raw_ostream &OS, bool ShowColors,
     if (ProgName && ProgName[0])
       S << ProgName << ": ";
 
-    if (ShowLocation && !Filename.empty()) {
+    if (!Filename.empty()) {
       if (Filename == "-")
         S << "<stdin>";
       else
@@ -566,8 +562,9 @@ void SMDiagnostic::print(const char *ProgName, raw_ostream &OS, bool ShowColors,
   // Add any fix-its.
   // FIXME: Find the beginning of the line properly for multibyte characters.
   std::string FixItInsertionLine;
-  buildFixItLine(CaretLine, FixItInsertionLine, FixIts,
-                 ArrayRef(Loc.getPointer() - ColumnNo, LineContents.size()));
+  buildFixItLine(
+      CaretLine, FixItInsertionLine, FixIts,
+      makeArrayRef(Loc.getPointer() - ColumnNo, LineContents.size()));
 
   // Finally, plop on the caret.
   if (unsigned(ColumnNo) <= NumColumns)

@@ -90,7 +90,7 @@ TEST(RTDyldObjectLinkingLayerTest, TestSetProcessAllSections) {
   std::unique_ptr<TargetMachine> TM(EngineBuilder().selectTarget(
       Triple(M->getTargetTriple()), "", "", SmallVector<std::string, 1>()));
   if (!TM)
-    GTEST_SKIP();
+    return;
 
   auto Obj = cantFail(SimpleCompiler(*TM)(*M));
 
@@ -110,7 +110,7 @@ TEST(RTDyldObjectLinkingLayerTest, TestOverrideObjectFlags) {
                                    SmallVector<std::string, 1>()));
 
   if (!TM)
-    GTEST_SKIP();
+    return;
 
   // Our compiler is going to modify symbol visibility settings without telling
   // ORC. This will test our ability to override the flags later.
@@ -183,7 +183,7 @@ TEST(RTDyldObjectLinkingLayerTest, TestAutoClaimResponsibilityForSymbols) {
                                    SmallVector<std::string, 1>()));
 
   if (!TM)
-    GTEST_SKIP();
+    return;
 
   // Our compiler is going to add a new symbol without telling ORC.
   // This will test our ability to auto-claim responsibility later.

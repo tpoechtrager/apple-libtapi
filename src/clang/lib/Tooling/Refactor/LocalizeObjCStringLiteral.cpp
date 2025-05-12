@@ -44,14 +44,14 @@ clang::tooling::initiateLocalizeObjCStringLiteralOperation(
   if (SelectionRange.isValid()) {
     auto SelectedSet = Slice.getSelectedStmtSet();
     if (!SelectedSet)
-      return std::nullopt;
+      return None;
     E = dyn_cast_or_null<ObjCStringLiteral>(
         SelectedSet->containsSelectionRange);
   } else
     E = cast_or_null<ObjCStringLiteral>(
         Slice.nearestStmt(Stmt::ObjCStringLiteralClass));
   if (!E)
-    return std::nullopt;
+    return None;
 
   RefactoringOperationResult Result;
   Result.Initiated = true;

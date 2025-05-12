@@ -171,9 +171,8 @@ namespace llvm {
       return Length == RHS.Length && compare_insensitive(RHS) == 0;
     }
 
-    /// compare - Compare two strings; the result is negative, zero, or positive
-    /// if this string is lexicographically less than, equal to, or greater than
-    /// the \p RHS.
+    /// compare - Compare two strings; the result is -1, 0, or 1 if this string
+    /// is lexicographically less than, equal to, or greater than the \p RHS.
     [[nodiscard]] int compare(StringRef RHS) const {
       // Check the prefix for a mismatch.
       if (int Res = compareMemory(Data, RHS.Data, std::min(Length, RHS.Length)))
@@ -264,10 +263,7 @@ namespace llvm {
 
     /// Check if this string starts with the given \p Prefix, ignoring case.
     [[nodiscard]] bool starts_with_insensitive(StringRef Prefix) const;
-    [[nodiscard]] LLVM_DEPRECATED(
-        "Use starts_with_insensitive instead",
-        "starts_with_insensitive") bool startswith_insensitive(StringRef Prefix)
-        const {
+    [[nodiscard]] bool startswith_insensitive(StringRef Prefix) const {
       return starts_with_insensitive(Prefix);
     }
 
@@ -283,10 +279,7 @@ namespace llvm {
 
     /// Check if this string ends with the given \p Suffix, ignoring case.
     [[nodiscard]] bool ends_with_insensitive(StringRef Suffix) const;
-    [[nodiscard]] LLVM_DEPRECATED(
-        "Use ends_with_insensitive instead",
-        "ends_with_insensitive") bool endswith_insensitive(StringRef Suffix)
-        const {
+    [[nodiscard]] bool endswith_insensitive(StringRef Suffix) const {
       return ends_with_insensitive(Suffix);
     }
 
@@ -299,7 +292,13 @@ namespace llvm {
     /// \returns The index of the first occurrence of \p C, or npos if not
     /// found.
     [[nodiscard]] size_t find(char C, size_t From = 0) const {
-      return std::string_view(*this).find(C, From);
+      size_t FindBegin = std::min(From, Length);
+      if (FindBegin < Length) { // Avoid calling memchr with nullptr.
+        // Just forward to memchr, which is faster than a hand-rolled loop.
+        if (const void *P = ::memchr(Data + FindBegin, C, Length - FindBegin))
+          return static_cast<const char *>(P) - Data;
+      }
+      return npos;
     }
 
     /// Search for the first character \p C in the string, ignoring case.
@@ -349,11 +348,12 @@ namespace llvm {
     /// \returns The index of the last occurrence of \p C, or npos if not
     /// found.
     [[nodiscard]] size_t rfind(char C, size_t From = npos) const {
-      size_t I = std::min(From, Length);
-      while (I) {
-        --I;
-        if (Data[I] == C)
-          return I;
+      From = std::min(From, Length);
+      size_t i = From;
+      while (i != 0) {
+        --i;
+        if (Data[i] == C)
+          return i;
       }
       return npos;
     }
@@ -454,8 +454,8 @@ namespace llvm {
     /// Return the number of occurrences of \p C in the string.
     [[nodiscard]] size_t count(char C) const {
       size_t Count = 0;
-      for (size_t I = 0; I != Length; ++I)
-        if (Data[I] == C)
+      for (size_t i = 0, e = Length; i != e; ++i)
+        if (Data[i] == C)
           ++Count;
       return Count;
     }
@@ -471,23 +471,28 @@ namespace llvm {
     /// If the string is invalid or if only a subset of the string is valid,
     /// this returns true to signify the error.  The string is considered
     /// erroneous if empty or if it overflows T.
-    template <typename T> bool getAsInteger(unsigned Radix, T &Result) const {
-      if constexpr (std::numeric_limits<T>::is_signed) {
-        long long LLVal;
-        if (getAsSignedInteger(*this, Radix, LLVal) ||
+    template <typename T>
+    std::enable_if_t<std::numeric_limits<T>::is_signed, bool>
+    getAsInteger(unsigned Radix, T &Result) const {
+      long long LLVal;
+      if (getAsSignedInteger(*this, Radix, LLVal) ||
             static_cast<T>(LLVal) != LLVal)
-          return true;
-        Result = LLVal;
-      } else {
-        unsigned long long ULLVal;
-        // The additional cast to unsigned long long is required to avoid the
-        // Visual C++ warning C4805: '!=' : unsafe mix of type 'bool' and type
-        // 'unsigned __int64' when instantiating getAsInteger with T = bool.
-        if (getAsUnsignedInteger(*this, Radix, ULLVal) ||
-            static_cast<unsigned long long>(static_cast<T>(ULLVal)) != ULLVal)
-          return true;
-        Result = ULLVal;
-      }
+        return true;
+      Result = LLVal;
+      return false;
+    }
+
+    template <typename T>
+    std::enable_if_t<!std::numeric_limits<T>::is_signed, bool>
+    getAsInteger(unsigned Radix, T &Result) const {
+      unsigned long long ULLVal;
+      // The additional cast to unsigned long long is required to avoid the
+      // Visual C++ warning C4805: '!=' : unsafe mix of type 'bool' and type
+      // 'unsigned __int64' when instantiating getAsInteger with T = bool.
+      if (getAsUnsignedInteger(*this, Radix, ULLVal) ||
+          static_cast<unsigned long long>(static_cast<T>(ULLVal)) != ULLVal)
+        return true;
+      Result = ULLVal;
       return false;
     }
 
@@ -500,20 +505,25 @@ namespace llvm {
     /// erroneous if empty or if it overflows T.
     /// The portion of the string representing the discovered numeric value
     /// is removed from the beginning of the string.
-    template <typename T> bool consumeInteger(unsigned Radix, T &Result) {
-      if constexpr (std::numeric_limits<T>::is_signed) {
-        long long LLVal;
-        if (consumeSignedInteger(*this, Radix, LLVal) ||
-            static_cast<long long>(static_cast<T>(LLVal)) != LLVal)
-          return true;
-        Result = LLVal;
-      } else {
-        unsigned long long ULLVal;
-        if (consumeUnsignedInteger(*this, Radix, ULLVal) ||
-            static_cast<unsigned long long>(static_cast<T>(ULLVal)) != ULLVal)
-          return true;
-        Result = ULLVal;
-      }
+    template <typename T>
+    std::enable_if_t<std::numeric_limits<T>::is_signed, bool>
+    consumeInteger(unsigned Radix, T &Result) {
+      long long LLVal;
+      if (consumeSignedInteger(*this, Radix, LLVal) ||
+          static_cast<long long>(static_cast<T>(LLVal)) != LLVal)
+        return true;
+      Result = LLVal;
+      return false;
+    }
+
+    template <typename T>
+    std::enable_if_t<!std::numeric_limits<T>::is_signed, bool>
+    consumeInteger(unsigned Radix, T &Result) {
+      unsigned long long ULLVal;
+      if (consumeUnsignedInteger(*this, Radix, ULLVal) ||
+          static_cast<unsigned long long>(static_cast<T>(ULLVal)) != ULLVal)
+        return true;
+      Result = ULLVal;
       return false;
     }
 
@@ -528,17 +538,6 @@ namespace llvm {
     /// APInt::fromString is superficially similar but assumes the
     /// string is well-formed in the given radix.
     bool getAsInteger(unsigned Radix, APInt &Result) const;
-
-    /// Parse the current string as an integer of the specified \p Radix.  If
-    /// \p Radix is specified as zero, this does radix autosensing using
-    /// extended C rules: 0 is octal, 0x is hex, 0b is binary.
-    ///
-    /// If the string does not begin with a number of the specified radix,
-    /// this returns true to signify the error. The string is considered
-    /// erroneous if empty.
-    /// The portion of the string representing the discovered numeric value
-    /// is removed from the beginning of the string.
-    bool consumeInteger(unsigned Radix, APInt &Result);
 
     /// Parse the current string as an IEEE double-precision floating
     /// point value.  The string must be a well-formed double.
@@ -572,8 +571,7 @@ namespace llvm {
     /// \param N The number of characters to included in the substring. If N
     /// exceeds the number of characters remaining in the string, the string
     /// suffix (starting with \p Start) will be returned.
-    [[nodiscard]] constexpr StringRef substr(size_t Start,
-                                             size_t N = npos) const {
+    [[nodiscard]] StringRef substr(size_t Start, size_t N = npos) const {
       Start = std::min(Start, Length);
       return StringRef(Data + Start, std::min(N, Length - Start));
     }
@@ -640,17 +638,17 @@ namespace llvm {
       if (!starts_with(Prefix))
         return false;
 
-      *this = substr(Prefix.size());
+      *this = drop_front(Prefix.size());
       return true;
     }
 
     /// Returns true if this StringRef has the given prefix, ignoring case,
     /// and removes that prefix.
     bool consume_front_insensitive(StringRef Prefix) {
-      if (!starts_with_insensitive(Prefix))
+      if (!startswith_insensitive(Prefix))
         return false;
 
-      *this = substr(Prefix.size());
+      *this = drop_front(Prefix.size());
       return true;
     }
 
@@ -660,17 +658,17 @@ namespace llvm {
       if (!ends_with(Suffix))
         return false;
 
-      *this = substr(0, size() - Suffix.size());
+      *this = drop_back(Suffix.size());
       return true;
     }
 
     /// Returns true if this StringRef has the given suffix, ignoring case,
     /// and removes that suffix.
     bool consume_back_insensitive(StringRef Suffix) {
-      if (!ends_with_insensitive(Suffix))
+      if (!endswith_insensitive(Suffix))
         return false;
 
-      *this = substr(0, size() - Suffix.size());
+      *this = drop_back(Suffix.size());
       return true;
     }
 
@@ -687,7 +685,7 @@ namespace llvm {
     /// be returned.
     [[nodiscard]] StringRef slice(size_t Start, size_t End) const {
       Start = std::min(Start, Length);
-      End = std::clamp(End, Start, Length);
+      End = std::min(std::max(Start, End), Length);
       return StringRef(Data + Start, End - Start);
     }
 
@@ -889,19 +887,19 @@ namespace llvm {
   inline bool operator!=(StringRef LHS, StringRef RHS) { return !(LHS == RHS); }
 
   inline bool operator<(StringRef LHS, StringRef RHS) {
-    return LHS.compare(RHS) < 0;
+    return LHS.compare(RHS) == -1;
   }
 
   inline bool operator<=(StringRef LHS, StringRef RHS) {
-    return LHS.compare(RHS) <= 0;
+    return LHS.compare(RHS) != 1;
   }
 
   inline bool operator>(StringRef LHS, StringRef RHS) {
-    return LHS.compare(RHS) > 0;
+    return LHS.compare(RHS) == 1;
   }
 
   inline bool operator>=(StringRef LHS, StringRef RHS) {
-    return LHS.compare(RHS) >= 0;
+    return LHS.compare(RHS) != -1;
   }
 
   inline std::string &operator+=(std::string &buffer, StringRef string) {

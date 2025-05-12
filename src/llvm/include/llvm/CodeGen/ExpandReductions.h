@@ -1,4 +1,4 @@
-//===- ExpandReductions.h - Expand reduction intrinsics ---------*- C++ -*-===//
+//===----- ExpandReductions.h - Expand experimental reduction intrinsics --===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.

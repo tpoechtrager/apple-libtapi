@@ -76,11 +76,11 @@ protected:
   ///
   /// If this is a fragment, then it gives the fragment this symbol's value is
   /// relative to, if any.
-  mutable MCFragment *Fragment = nullptr;
-
-  /// True if this symbol is named.  A named symbol will have a pointer to the
-  /// name allocated in the bytes immediately prior to the MCSymbol.
-  unsigned HasName : 1;
+  ///
+  /// For the 'HasName' integer, this is true if this symbol is named.
+  /// A named symbol will have a pointer to the name allocated in the bytes
+  /// immediately prior to the MCSymbol.
+  mutable PointerIntPair<MCFragment *, 1> FragmentAndHasName;
 
   /// IsTemporary - True if this is an assembler temporary label, which
   /// typically does not survive in the .o file's symbol table.  Usually
@@ -102,9 +102,6 @@ protected:
   /// This symbol is private extern.
   mutable unsigned IsPrivateExtern : 1;
 
-  /// This symbol is weak external.
-  mutable unsigned IsWeakExternal : 1;
-
   /// LLVM RTTI discriminator. This is actually a SymbolKind enumerator, but is
   /// unsigned to avoid sign extension and achieve better bitpacking with MSVC.
   unsigned Kind : 3;
@@ -116,16 +113,11 @@ protected:
   /// extension and achieve better bitpacking with MSVC.
   unsigned SymbolContents : 3;
 
-  /// The alignment of the symbol if it is 'common'.
+  /// The alignment of the symbol, if it is 'common', or -1.
   ///
-  /// Internally, this is stored as log2(align) + 1.
-  /// We reserve 5 bits to encode this value which allows the following values
-  /// 0b00000 -> unset
-  /// 0b00001 -> 1ULL <<  0 = 1
-  /// 0b00010 -> 1ULL <<  1 = 2
-  /// 0b00011 -> 1ULL <<  2 = 4
-  /// ...
-  /// 0b11111 -> 1ULL << 30 = 1 GiB
+  /// The alignment is stored as log2(align) + 1.  This allows all values from
+  /// 0 to 2^31 to be stored which is every power of 2 representable by an
+  /// unsigned.
   enum : unsigned { NumCommonAlignmentBits = 5 };
   unsigned CommonAlignLog2 : NumCommonAlignmentBits;
 
@@ -164,10 +156,10 @@ protected:
   MCSymbol(SymbolKind Kind, const StringMapEntry<bool> *Name, bool isTemporary)
       : IsTemporary(isTemporary), IsRedefinable(false), IsUsed(false),
         IsRegistered(false), IsExternal(false), IsPrivateExtern(false),
-        IsWeakExternal(false), Kind(Kind), IsUsedInReloc(false),
-        SymbolContents(SymContentsUnset), CommonAlignLog2(0), Flags(0) {
+        Kind(Kind), IsUsedInReloc(false), SymbolContents(SymContentsUnset),
+        CommonAlignLog2(0), Flags(0) {
     Offset = 0;
-    HasName = !!Name;
+    FragmentAndHasName.setInt(!!Name);
     if (Name)
       getNameEntryPtr() = Name;
   }
@@ -190,7 +182,7 @@ private:
 
   /// Get a reference to the name field.  Requires that we have a name
   const StringMapEntry<bool> *&getNameEntryPtr() {
-    assert(HasName && "Name is required");
+    assert(FragmentAndHasName.getInt() && "Name is required");
     NameEntryStorageTy *Name = reinterpret_cast<NameEntryStorageTy *>(this);
     return (*(Name - 1)).NameEntry;
   }
@@ -204,7 +196,7 @@ public:
 
   /// getName - Get the symbol name.
   StringRef getName() const {
-    if (!HasName)
+    if (!FragmentAndHasName.getInt())
       return StringRef();
 
     return getNameEntryPtr()->first();
@@ -275,11 +267,11 @@ public:
   /// Mark the symbol as defined in the fragment \p F.
   void setFragment(MCFragment *F) const {
     assert(!isVariable() && "Cannot set fragment of variable");
-    Fragment = F;
+    FragmentAndHasName.setPointer(F);
   }
 
   /// Mark the symbol as undefined.
-  void setUndefined() { Fragment = nullptr; }
+  void setUndefined() { FragmentAndHasName.setPointer(nullptr); }
 
   bool isELF() const { return Kind == SymbolKindELF; }
 
@@ -348,39 +340,41 @@ public:
   /// Mark this symbol as being 'common'.
   ///
   /// \param Size - The size of the symbol.
-  /// \param Alignment - The alignment of the symbol.
+  /// \param Align - The alignment of the symbol.
   /// \param Target - Is the symbol a target-specific common-like symbol.
-  void setCommon(uint64_t Size, Align Alignment, bool Target = false) {
+  void setCommon(uint64_t Size, unsigned Align, bool Target = false) {
     assert(getOffset() == 0);
     CommonSize = Size;
     SymbolContents = Target ? SymContentsTargetCommon : SymContentsCommon;
 
-    unsigned Log2Align = encode(Alignment);
+    assert((!Align || isPowerOf2_32(Align)) &&
+           "Alignment must be a power of 2");
+    unsigned Log2Align = Log2_32(Align) + 1;
     assert(Log2Align < (1U << NumCommonAlignmentBits) &&
            "Out of range alignment");
     CommonAlignLog2 = Log2Align;
   }
 
   ///  Return the alignment of a 'common' symbol.
-  MaybeAlign getCommonAlignment() const {
+  unsigned getCommonAlignment() const {
     assert(isCommon() && "Not a 'common' symbol!");
-    return decodeMaybeAlign(CommonAlignLog2);
+    return CommonAlignLog2 ? (1U << (CommonAlignLog2 - 1)) : 0;
   }
 
   /// Declare this symbol as being 'common'.
   ///
   /// \param Size - The size of the symbol.
-  /// \param Alignment - The alignment of the symbol.
+  /// \param Align - The alignment of the symbol.
   /// \param Target - Is the symbol a target-specific common-like symbol.
   /// \return True if symbol was already declared as a different type
-  bool declareCommon(uint64_t Size, Align Alignment, bool Target = false) {
+  bool declareCommon(uint64_t Size, unsigned Align, bool Target = false) {
     assert(isCommon() || getOffset() == 0);
     if(isCommon()) {
-      if (CommonSize != Size || getCommonAlignment() != Alignment ||
+      if (CommonSize != Size || getCommonAlignment() != Align ||
           isTargetCommon() != Target)
         return true;
     } else
-      setCommon(Size, Alignment, Target);
+      setCommon(Size, Align, Target);
     return false;
   }
 
@@ -396,11 +390,11 @@ public:
   }
 
   MCFragment *getFragment(bool SetUsed = true) const {
-    if (Fragment || !isVariable() || isWeakExternal())
+    MCFragment *Fragment = FragmentAndHasName.getPointer();
+    if (Fragment || !isVariable())
       return Fragment;
-    // If the symbol is a non-weak alias, get information about
-    // the aliasee. (Don't try to resolve weak aliases.)
     Fragment = getVariableValue(SetUsed)->findAssociatedFragment();
+    FragmentAndHasName.setPointer(Fragment);
     return Fragment;
   }
 
@@ -409,8 +403,6 @@ public:
 
   bool isPrivateExtern() const { return IsPrivateExtern; }
   void setPrivateExtern(bool Value) { IsPrivateExtern = Value; }
-
-  bool isWeakExternal() const { return IsWeakExternal; }
 
   /// print - Print the value to the stream \p OS.
   void print(raw_ostream &OS, const MCAsmInfo *MAI) const;

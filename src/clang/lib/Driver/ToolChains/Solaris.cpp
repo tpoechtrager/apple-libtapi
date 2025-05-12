@@ -47,25 +47,11 @@ void solaris::Assembler::ConstructJob(Compilation &C, const JobAction &JA,
                                          Exec, CmdArgs, Inputs, Output));
 }
 
-static bool getPIE(const ArgList &Args, const ToolChain &TC) {
-  if (Args.hasArg(options::OPT_shared) || Args.hasArg(options::OPT_static) ||
-      Args.hasArg(options::OPT_r))
-    return false;
-
-  Arg *A = Args.getLastArg(options::OPT_pie, options::OPT_no_pie,
-                           options::OPT_nopie);
-  if (!A)
-    return TC.isPIEDefault(Args);
-  return A->getOption().matches(options::OPT_pie);
-}
-
 void solaris::Linker::ConstructJob(Compilation &C, const JobAction &JA,
                                    const InputInfo &Output,
                                    const InputInfoList &Inputs,
                                    const ArgList &Args,
                                    const char *LinkingOutput) const {
-  const Driver &D = getToolChain().getDriver();
-  const bool IsPIE = getPIE(Args, getToolChain());
   ArgStringList CmdArgs;
 
   // Demangle C++ names in errors
@@ -74,11 +60,6 @@ void solaris::Linker::ConstructJob(Compilation &C, const JobAction &JA,
   if (!Args.hasArg(options::OPT_nostdlib, options::OPT_shared)) {
     CmdArgs.push_back("-e");
     CmdArgs.push_back("_start");
-  }
-
-  if (IsPIE) {
-    CmdArgs.push_back("-z");
-    CmdArgs.push_back("type=pie");
   }
 
   if (Args.hasArg(options::OPT_static)) {
@@ -132,32 +113,22 @@ void solaris::Linker::ConstructJob(Compilation &C, const JobAction &JA,
       values_xpg = "values-xpg4.o";
     CmdArgs.push_back(
         Args.MakeArgString(getToolChain().GetFilePath(values_xpg)));
-
-    const char *crtbegin = nullptr;
-    if (Args.hasArg(options::OPT_shared) || IsPIE)
-      crtbegin = "crtbeginS.o";
-    else
-      crtbegin = "crtbegin.o";
-    CmdArgs.push_back(Args.MakeArgString(getToolChain().GetFilePath(crtbegin)));
-    // Add crtfastmath.o if available and fast math is enabled.
-    getToolChain().addFastMathRuntimeIfAvailable(Args, CmdArgs);
+    CmdArgs.push_back(
+        Args.MakeArgString(getToolChain().GetFilePath("crtbegin.o")));
   }
 
   getToolChain().AddFilePathLibArgs(Args, CmdArgs);
 
-  Args.AddAllArgs(CmdArgs,
-                  {options::OPT_L, options::OPT_T_Group, options::OPT_r});
+  Args.AddAllArgs(CmdArgs, {options::OPT_L, options::OPT_T_Group,
+                            options::OPT_e, options::OPT_r});
 
   bool NeedsSanitizerDeps = addSanitizerRuntimes(getToolChain(), Args, CmdArgs);
   AddLinkerInputs(getToolChain(), Inputs, Args, CmdArgs, JA);
 
   if (!Args.hasArg(options::OPT_nostdlib, options::OPT_nodefaultlibs,
                    options::OPT_r)) {
-    if (D.CCCIsCXX()) {
-      if (getToolChain().ShouldLinkCXXStdlib(Args))
-        getToolChain().AddCXXStdlibLibArgs(Args, CmdArgs);
-      CmdArgs.push_back("-lm");
-    }
+    if (getToolChain().ShouldLinkCXXStdlib(Args))
+      getToolChain().AddCXXStdlibLibArgs(Args, CmdArgs);
     if (Args.hasArg(options::OPT_fstack_protector) ||
         Args.hasArg(options::OPT_fstack_protector_strong) ||
         Args.hasArg(options::OPT_fstack_protector_all)) {
@@ -176,33 +147,26 @@ void solaris::Linker::ConstructJob(Compilation &C, const JobAction &JA,
     CmdArgs.push_back("-lc");
     if (!Args.hasArg(options::OPT_shared)) {
       CmdArgs.push_back("-lgcc");
+      CmdArgs.push_back("-lm");
     }
-    const SanitizerArgs &SA = getToolChain().getSanitizerArgs(Args);
     if (NeedsSanitizerDeps) {
       linkSanitizerRuntimeDeps(getToolChain(), CmdArgs);
 
       // Work around Solaris/amd64 ld bug when calling __tls_get_addr directly.
       // However, ld -z relax=transtls is available since Solaris 11.2, but not
       // in Illumos.
+      const SanitizerArgs &SA = getToolChain().getSanitizerArgs(Args);
       if (getToolChain().getTriple().getArch() == llvm::Triple::x86_64 &&
           (SA.needsAsanRt() || SA.needsStatsRt() ||
            (SA.needsUbsanRt() && !SA.requiresMinimalRuntime())))
         CmdArgs.push_back("-zrelax=transtls");
     }
-    // Avoid AsanInitInternal cycle, Issue #64126.
-    if (getToolChain().getTriple().isX86() && SA.needsSharedRt() &&
-        SA.needsAsanRt())
-      CmdArgs.push_back("-znow");
   }
 
   if (!Args.hasArg(options::OPT_nostdlib, options::OPT_nostartfiles,
                    options::OPT_r)) {
-    if (Args.hasArg(options::OPT_shared) || IsPIE)
-      CmdArgs.push_back(
-          Args.MakeArgString(getToolChain().GetFilePath("crtendS.o")));
-    else
-      CmdArgs.push_back(
-          Args.MakeArgString(getToolChain().GetFilePath("crtend.o")));
+    CmdArgs.push_back(
+        Args.MakeArgString(getToolChain().GetFilePath("crtend.o")));
     CmdArgs.push_back(
         Args.MakeArgString(getToolChain().GetFilePath("crtn.o")));
   }
@@ -259,6 +223,7 @@ Solaris::Solaris(const Driver &D, const llvm::Triple &Triple,
 
 SanitizerMask Solaris::getSupportedSanitizers() const {
   const bool IsX86 = getTriple().getArch() == llvm::Triple::x86;
+  const bool IsX86_64 = getTriple().getArch() == llvm::Triple::x86_64;
   SanitizerMask Res = ToolChain::getSupportedSanitizers();
   // FIXME: Omit X86_64 until 64-bit support is figured out.
   if (IsX86) {
@@ -266,6 +231,8 @@ SanitizerMask Solaris::getSupportedSanitizers() const {
     Res |= SanitizerKind::PointerCompare;
     Res |= SanitizerKind::PointerSubtract;
   }
+  if (IsX86 || IsX86_64)
+    Res |= SanitizerKind::Function;
   Res |= SanitizerKind::Vptr;
   return Res;
 }

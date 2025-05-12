@@ -52,8 +52,8 @@ public:
 /// in the machine code. It inserts labels at safe points and populates a
 /// GCMetadata record for each function.
 class GCMachineCodeAnalysis : public MachineFunctionPass {
-  GCFunctionInfo *FI = nullptr;
-  const TargetInstrInfo *TII = nullptr;
+  GCFunctionInfo *FI;
+  const TargetInstrInfo *TII;
 
   void FindSafePoints(MachineFunction &MF);
   void VisitCallPoint(MachineBasicBlock::iterator CI);

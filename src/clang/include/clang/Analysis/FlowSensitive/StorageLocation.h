@@ -17,10 +17,6 @@
 #include "clang/AST/Decl.h"
 #include "clang/AST/Type.h"
 #include "llvm/ADT/DenseMap.h"
-#include "llvm/Support/Debug.h"
-#include <cassert>
-
-#define DEBUG_TYPE "dataflow"
 
 namespace clang {
 namespace dataflow {
@@ -33,9 +29,7 @@ class StorageLocation {
 public:
   enum class Kind { Scalar, Aggregate };
 
-  StorageLocation(Kind LocKind, QualType Type) : LocKind(LocKind), Type(Type) {
-    assert(Type.isNull() || !Type->isReferenceType());
-  }
+  StorageLocation(Kind LocKind, QualType Type) : LocKind(LocKind), Type(Type) {}
 
   // Non-copyable because addresses of storage locations are used as their
   // identities throughout framework and user code. The framework is responsible
@@ -71,89 +65,33 @@ public:
 /// struct with public members. The child map is flat, so when used for a struct
 /// or class type, all accessible members of base struct and class types are
 /// directly accesible as children of this location.
-///
-/// The storage location for a field of reference type may be null. This
-/// typically occurs in one of two situations:
-/// - The record has not been fully initialized.
-/// - The maximum depth for modelling a self-referential data structure has been
-///   reached.
-/// Storage locations for fields of all other types must be non-null.
-///
-/// FIXME: Currently, the storage location of unions is modelled the same way as
-/// that of structs or classes. Eventually, we need to change this modelling so
-/// that all of the members of a given union have the same storage location.
 class AggregateStorageLocation final : public StorageLocation {
 public:
-  using FieldToLoc = llvm::DenseMap<const ValueDecl *, StorageLocation *>;
-
   explicit AggregateStorageLocation(QualType Type)
-      : AggregateStorageLocation(Type, FieldToLoc()) {}
+      : AggregateStorageLocation(
+            Type, llvm::DenseMap<const ValueDecl *, StorageLocation *>()) {}
 
-  AggregateStorageLocation(QualType Type, FieldToLoc TheChildren)
-      : StorageLocation(Kind::Aggregate, Type),
-        Children(std::move(TheChildren)) {
-    assert(!Type.isNull());
-    assert(Type->isRecordType());
-    assert([this] {
-      for (auto [Field, Loc] : Children) {
-        if (!Field->getType()->isReferenceType() && Loc == nullptr)
-          return false;
-      }
-      return true;
-    }());
-  }
+  AggregateStorageLocation(
+      QualType Type,
+      llvm::DenseMap<const ValueDecl *, StorageLocation *> Children)
+      : StorageLocation(Kind::Aggregate, Type), Children(std::move(Children)) {}
 
   static bool classof(const StorageLocation *Loc) {
     return Loc->getKind() == Kind::Aggregate;
   }
 
   /// Returns the child storage location for `D`.
-  ///
-  /// May return null if `D` has reference type; guaranteed to return non-null
-  /// in all other cases.
-  ///
-  /// Note that it is an error to call this with a field that does not exist.
-  /// The function does not return null in this case.
-  StorageLocation *getChild(const ValueDecl &D) const {
+  StorageLocation &getChild(const ValueDecl &D) const {
     auto It = Children.find(&D);
-    LLVM_DEBUG({
-      if (It == Children.end()) {
-        llvm::dbgs() << "Couldn't find child " << D.getNameAsString()
-                     << " on StorageLocation " << this << " of type "
-                     << getType() << "\n";
-        llvm::dbgs() << "Existing children:\n";
-        for ([[maybe_unused]] auto [Field, Loc] : Children) {
-          llvm::dbgs() << Field->getNameAsString() << "\n";
-        }
-      }
-    });
     assert(It != Children.end());
-    return It->second;
-  }
-
-  /// Changes the child storage location for a field `D` of reference type.
-  /// All other fields cannot change their storage location and always retain
-  /// the storage location passed to the `AggregateStorageLocation` constructor.
-  ///
-  /// Requirements:
-  ///
-  ///  `D` must have reference type.
-  void setChild(const ValueDecl &D, StorageLocation *Loc) {
-    assert(D.getType()->isReferenceType());
-    Children[&D] = Loc;
-  }
-
-  llvm::iterator_range<FieldToLoc::const_iterator> children() const {
-    return {Children.begin(), Children.end()};
+    return *It->second;
   }
 
 private:
-  FieldToLoc Children;
+  llvm::DenseMap<const ValueDecl *, StorageLocation *> Children;
 };
 
 } // namespace dataflow
 } // namespace clang
-
-#undef DEBUG_TYPE
 
 #endif // LLVM_CLANG_ANALYSIS_FLOWSENSITIVE_STORAGELOCATION_H

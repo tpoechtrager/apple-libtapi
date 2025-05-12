@@ -10,17 +10,18 @@ add_llvm_component_library(LLVMAMDGPUDesc
   R600InstPrinter.cpp
   R600MCCodeEmitter.cpp
   R600MCTargetDesc.cpp
+  SIMCCodeEmitter.cpp
 
   LINK_COMPONENTS
-  AMDGPUInfo
-  AMDGPUUtils
-  BinaryFormat
-  CodeGenTypes
   Core
   MC
+  AMDGPUInfo
+  AMDGPUUtils
   Support
-  TargetParser
+  BinaryFormat
 
   ADD_TO_COMPONENT
   AMDGPU
-  )
+)
+
+add_dependencies(LLVMAMDGPUDesc LLVMAMDGPUUtils)

@@ -6,8 +6,14 @@
 # //
 # //===----------------------------------------------------------------------===//
 
-set(LLVM_LINK_COMPONENTS Support)
+find_package(hsa-runtime64 QUIET 1.2.0 HINTS ${CMAKE_INSTALL_PREFIX} PATHS /opt/rocm)
+if (NOT ${hsa-runtime64_FOUND})
+  message(STATUS "Not building amdgpu-arch: hsa-runtime64 not found")
+  return()
+endif()
 
-add_clang_tool(amdgpu-arch AMDGPUArch.cpp AMDGPUArchByHSA.cpp AMDGPUArchByHIP.cpp)
+add_clang_tool(amdgpu-arch AMDGPUArch.cpp)
 
-target_link_libraries(amdgpu-arch PRIVATE clangBasic)
+set_target_properties(amdgpu-arch PROPERTIES INSTALL_RPATH_USE_LINK_PATH ON)
+
+clang_target_link_libraries(amdgpu-arch PRIVATE hsa-runtime64::hsa-runtime64)

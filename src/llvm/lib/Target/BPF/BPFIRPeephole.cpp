@@ -14,7 +14,6 @@
 #include "BPF.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/Instructions.h"
-#include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/IR/Type.h"
@@ -57,32 +56,37 @@ static bool BPFIRPeepholeImpl(Function &F) {
         ToErase = nullptr;
       }
 
-      if (auto *II = dyn_cast<IntrinsicInst>(&I)) {
-        if (II->getIntrinsicID() != Intrinsic::stacksave)
-          continue;
-        if (!II->hasOneUser())
-          continue;
-        auto *Inst = cast<Instruction>(*II->user_begin());
-        LLVM_DEBUG(dbgs() << "Remove:"; I.dump());
-        LLVM_DEBUG(dbgs() << "Remove:"; Inst->dump(); dbgs() << '\n');
-        Changed = true;
-        Inst->eraseFromParent();
-        ToErase = &I;
+      if (auto *Call = dyn_cast<CallInst>(&I)) {
+        if (auto *GV = dyn_cast<GlobalValue>(Call->getCalledOperand())) {
+          if (!GV->getName().equals("llvm.stacksave"))
+            continue;
+          if (!Call->hasOneUser())
+            continue;
+          auto *Inst = cast<Instruction>(*Call->user_begin());
+          LLVM_DEBUG(dbgs() << "Remove:"; I.dump());
+          LLVM_DEBUG(dbgs() << "Remove:"; Inst->dump(); dbgs() << '\n');
+          Changed = true;
+          Inst->eraseFromParent();
+          ToErase = &I;
+        }
         continue;
       }
 
       if (auto *LD = dyn_cast<LoadInst>(&I)) {
         if (!LD->hasOneUser())
           continue;
-        auto *II = dyn_cast<IntrinsicInst>(*LD->user_begin());
-        if (!II)
+        auto *Call = dyn_cast<CallInst>(*LD->user_begin());
+        if (!Call)
           continue;
-        if (II->getIntrinsicID() != Intrinsic::stackrestore)
+        auto *GV = dyn_cast<GlobalValue>(Call->getCalledOperand());
+        if (!GV)
+          continue;
+        if (!GV->getName().equals("llvm.stackrestore"))
           continue;
         LLVM_DEBUG(dbgs() << "Remove:"; I.dump());
-        LLVM_DEBUG(dbgs() << "Remove:"; II->dump(); dbgs() << '\n');
+        LLVM_DEBUG(dbgs() << "Remove:"; Call->dump(); dbgs() << '\n');
         Changed = true;
-        II->eraseFromParent();
+        Call->eraseFromParent();
         ToErase = &I;
       }
     }
@@ -90,7 +94,22 @@ static bool BPFIRPeepholeImpl(Function &F) {
 
   return Changed;
 }
+
+class BPFIRPeephole final : public FunctionPass {
+  bool runOnFunction(Function &F) override;
+
+public:
+  static char ID;
+  BPFIRPeephole() : FunctionPass(ID) {}
+};
 } // End anonymous namespace
+
+char BPFIRPeephole::ID = 0;
+INITIALIZE_PASS(BPFIRPeephole, DEBUG_TYPE, "BPF IR Peephole", false, false)
+
+FunctionPass *llvm::createBPFIRPeephole() { return new BPFIRPeephole(); }
+
+bool BPFIRPeephole::runOnFunction(Function &F) { return BPFIRPeepholeImpl(F); }
 
 PreservedAnalyses BPFIRPeepholePass::run(Function &F,
                                          FunctionAnalysisManager &AM) {

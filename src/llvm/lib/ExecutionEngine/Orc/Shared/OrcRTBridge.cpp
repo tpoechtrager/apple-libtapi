@@ -51,9 +51,9 @@ const char *MemoryWriteBuffersWrapperName =
     "__llvm_orc_bootstrap_mem_write_buffers_wrapper";
 
 const char *RegisterEHFrameSectionWrapperName =
-    "llvm_orc_registerEHFrameSectionWrapper";
+    "__llvm_orc_bootstrap_register_ehframe_section_wrapper";
 const char *DeregisterEHFrameSectionWrapperName =
-    "llvm_orc_deregisterEHFrameSectionWrapper";
+    "__llvm_orc_bootstrap_deregister_ehframe_section_wrapper";
 
 const char *RunAsMainWrapperName = "__llvm_orc_bootstrap_run_as_main_wrapper";
 const char *RunAsVoidFunctionWrapperName =

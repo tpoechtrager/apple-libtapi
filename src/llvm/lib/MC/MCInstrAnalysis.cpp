@@ -30,14 +30,14 @@ bool MCInstrAnalysis::evaluateBranch(const MCInst & /*Inst*/, uint64_t /*Addr*/,
   return false;
 }
 
-std::optional<uint64_t> MCInstrAnalysis::evaluateMemoryOperandAddress(
+Optional<uint64_t> MCInstrAnalysis::evaluateMemoryOperandAddress(
     const MCInst &Inst, const MCSubtargetInfo *STI, uint64_t Addr,
     uint64_t Size) const {
-  return std::nullopt;
+  return None;
 }
 
-std::optional<uint64_t>
+Optional<uint64_t>
 MCInstrAnalysis::getMemoryOperandRelocationOffset(const MCInst &Inst,
                                                   uint64_t Size) const {
-  return std::nullopt;
+  return None;
 }

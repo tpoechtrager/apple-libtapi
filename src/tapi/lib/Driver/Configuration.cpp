@@ -128,8 +128,6 @@ void Configuration::setConfiguration(ConfigurationFile &&configFile,
                        file.macros.end());
   }
 
-  isDriverKit = llvm::sys::Process::GetEnv("DRIVERKIT").value_or("") == "1";
-
   // Get the project name from environment.
   if (projectName.empty())
     return;
@@ -137,7 +135,7 @@ void Configuration::setConfiguration(ConfigurationFile &&configFile,
   StringRef projName(projectName);
   // If the project name ends with _iosmac, set the default to iosmac.
   isiOSMac = projName.endswith("_iosmac");
-  isDriverKit |= projName.endswith("_driverkit");
+  isDriverKit = projName.endswith("_driverkit");
 
   // Find the project setting from configuration file.
   // If there is setting for the project, update them as commandline options.
@@ -442,18 +440,6 @@ bool Configuration::isPromotedToPublicDylib(StringRef installName) const {
     return regex->match(installName);
   });
   return result != file.publicDylibs.end();
-}
-
-bool Configuration::scanPublicHeadersInSDKContentRoot() const {
-  if (projectConfig)
-    return projectConfig->scanPublicHeadersInSDKContentRoot;
-  return false;
-}
-
-bool Configuration::ignoreExistingPartialSDKDBs() const {
-  if (projectConfig)
-    return projectConfig->ignoreExistingPartialSDKDBs;
-  return false;
 }
 
 TAPI_NAMESPACE_INTERNAL_END

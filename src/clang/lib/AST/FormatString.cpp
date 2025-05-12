@@ -15,7 +15,6 @@
 #include "clang/Basic/LangOptions.h"
 #include "clang/Basic/TargetInfo.h"
 #include "llvm/Support/ConvertUTF.h"
-#include <optional>
 
 using clang::analyze_format_string::ArgType;
 using clang::analyze_format_string::FormatStringHandler;
@@ -533,7 +532,7 @@ ArgType::matchesType(ASTContext &C, QualType argTy) const {
       if (C.getCanonicalType(argTy).getUnqualifiedType() == WInt)
         return Match;
 
-      QualType PromoArg = C.isPromotableIntegerType(argTy)
+      QualType PromoArg = argTy->isPromotableIntegerType()
                               ? C.getPromotedIntegerType(argTy)
                               : argTy;
       PromoArg = C.getCanonicalType(PromoArg).getUnqualifiedType();
@@ -757,13 +756,13 @@ const char *ConversionSpecifier::toString() const {
   return nullptr;
 }
 
-std::optional<ConversionSpecifier>
+Optional<ConversionSpecifier>
 ConversionSpecifier::getStandardSpecifier() const {
   ConversionSpecifier::Kind NewKind;
 
   switch (getKind()) {
   default:
-    return std::nullopt;
+    return None;
   case DArg:
     NewKind = dArg;
     break;
@@ -870,8 +869,6 @@ bool FormatSpecifier::hasValidLengthModifier(const TargetInfo &Target,
       }
 
       switch (CS.getKind()) {
-        case ConversionSpecifier::bArg:
-        case ConversionSpecifier::BArg:
         case ConversionSpecifier::dArg:
         case ConversionSpecifier::DArg:
         case ConversionSpecifier::iArg:
@@ -1056,8 +1053,7 @@ bool FormatSpecifier::hasStandardLengthConversionCombination() const {
   return true;
 }
 
-std::optional<LengthModifier>
-FormatSpecifier::getCorrectedLengthModifier() const {
+Optional<LengthModifier> FormatSpecifier::getCorrectedLengthModifier() const {
   if (CS.isAnyIntArg() || CS.getKind() == ConversionSpecifier::nArg) {
     if (LM.getKind() == LengthModifier::AsLongDouble ||
         LM.getKind() == LengthModifier::AsQuad) {
@@ -1067,7 +1063,7 @@ FormatSpecifier::getCorrectedLengthModifier() const {
     }
   }
 
-  return std::nullopt;
+  return None;
 }
 
 bool FormatSpecifier::namedTypeToLengthModifier(QualType QT,

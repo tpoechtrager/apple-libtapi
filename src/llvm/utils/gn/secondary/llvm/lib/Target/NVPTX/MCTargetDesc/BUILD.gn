@@ -40,7 +40,6 @@ static_library("MCTargetDesc") {
     "//llvm/lib/MC",
     "//llvm/lib/Support",
     "//llvm/lib/Target/NVPTX/TargetInfo",
-    "//llvm/lib/TargetParser",
   ]
   include_dirs = [ ".." ]
   sources = [

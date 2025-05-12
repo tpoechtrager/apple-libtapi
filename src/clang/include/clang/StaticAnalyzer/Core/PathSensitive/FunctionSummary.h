@@ -17,10 +17,11 @@
 #include "clang/Basic/LLVM.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/None.h"
+#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/SmallBitVector.h"
 #include <cassert>
 #include <deque>
-#include <optional>
 #include <utility>
 
 namespace clang {
@@ -85,7 +86,7 @@ public:
     markShouldNotInline(D);
   }
 
-  std::optional<bool> mayInline(const Decl *D) {
+  Optional<bool> mayInline(const Decl *D) {
     MapTy::const_iterator I = Map.find(D);
     if (I != Map.end() && I->second.InlineChecked)
       return I->second.MayInline;

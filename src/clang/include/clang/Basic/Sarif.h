@@ -34,6 +34,7 @@
 #include "clang/Basic/SourceLocation.h"
 #include "clang/Basic/Version.h"
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
@@ -42,7 +43,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <initializer_list>
-#include <optional>
 #include <string>
 
 namespace clang {
@@ -72,7 +72,7 @@ class SarifArtifactLocation {
 private:
   friend class clang::SarifDocumentWriter;
 
-  std::optional<uint32_t> Index;
+  llvm::Optional<uint32_t> Index;
   std::string URI;
 
   SarifArtifactLocation() = delete;
@@ -105,8 +105,8 @@ class SarifArtifact {
 private:
   friend class clang::SarifDocumentWriter;
 
-  std::optional<uint32_t> Offset;
-  std::optional<size_t> Length;
+  llvm::Optional<uint32_t> Offset;
+  llvm::Optional<size_t> Length;
   std::string MimeType;
   SarifArtifactLocation Location;
   llvm::SmallVector<std::string, 4> Roles;
@@ -324,7 +324,7 @@ class SarifResult {
   std::string DiagnosticMessage;
   llvm::SmallVector<CharSourceRange, 8> Locations;
   llvm::SmallVector<ThreadFlow, 8> ThreadFlows;
-  std::optional<SarifResultLevel> LevelOverride;
+  llvm::Optional<SarifResultLevel> LevelOverride;
 
   SarifResult() = delete;
   explicit SarifResult(uint32_t RuleIdx) : RuleIdx(RuleIdx) {}
@@ -372,7 +372,7 @@ public:
 /// attributes. However, it requires an ordering among certain method calls:
 ///
 /// 1. Because every SARIF document must contain at least 1 \c run, callers
-///    must ensure that \ref SarifDocumentWriter::createRun is called before
+///    must ensure that \ref SarifDocumentWriter::createRun is is called before
 ///    any other methods.
 /// 2. If SarifDocumentWriter::endRun is called, callers MUST call
 ///    SarifDocumentWriter::createRun, before invoking any of the result

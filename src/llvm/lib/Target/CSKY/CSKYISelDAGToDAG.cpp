@@ -21,17 +21,17 @@
 using namespace llvm;
 
 #define DEBUG_TYPE "csky-isel"
-#define PASS_NAME "CSKY DAG->DAG Pattern Instruction Selection"
 
 namespace {
 class CSKYDAGToDAGISel : public SelectionDAGISel {
   const CSKYSubtarget *Subtarget;
 
 public:
-  static char ID;
+  explicit CSKYDAGToDAGISel(CSKYTargetMachine &TM) : SelectionDAGISel(TM) {}
 
-  explicit CSKYDAGToDAGISel(CSKYTargetMachine &TM, CodeGenOpt::Level OptLevel)
-      : SelectionDAGISel(ID, TM, OptLevel) {}
+  StringRef getPassName() const override {
+    return "CSKY DAG->DAG Pattern Instruction Selection";
+  }
 
   bool runOnMachineFunction(MachineFunction &MF) override {
     // Reset the subtarget each time through.
@@ -55,10 +55,6 @@ public:
 };
 } // namespace
 
-char CSKYDAGToDAGISel::ID = 0;
-
-INITIALIZE_PASS(CSKYDAGToDAGISel, DEBUG_TYPE, PASS_NAME, false, false)
-
 void CSKYDAGToDAGISel::Select(SDNode *N) {
   // If we have a custom node, we have already selected
   if (N->isMachineOpcode()) {
@@ -74,10 +70,10 @@ void CSKYDAGToDAGISel::Select(SDNode *N) {
   switch (Opcode) {
   default:
     break;
-  case ISD::UADDO_CARRY:
+  case ISD::ADDCARRY:
     IsSelected = selectAddCarry(N);
     break;
-  case ISD::USUBO_CARRY:
+  case ISD::SUBCARRY:
     IsSelected = selectSubCarry(N);
     break;
   case ISD::GLOBAL_OFFSET_TABLE: {
@@ -398,7 +394,6 @@ bool CSKYDAGToDAGISel::SelectInlineAsmMemoryOperand(
   return true;
 }
 
-FunctionPass *llvm::createCSKYISelDag(CSKYTargetMachine &TM,
-                                      CodeGenOpt::Level OptLevel) {
-  return new CSKYDAGToDAGISel(TM, OptLevel);
+FunctionPass *llvm::createCSKYISelDag(CSKYTargetMachine &TM) {
+  return new CSKYDAGToDAGISel(TM);
 }

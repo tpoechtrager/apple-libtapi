@@ -89,7 +89,7 @@ Error DebugCrossModuleImportsSubsection::commit(
     Imp.Count = Item->getValue().size();
     if (auto EC = Writer.writeObject(Imp))
       return EC;
-    if (auto EC = Writer.writeArray(ArrayRef(Item->getValue())))
+    if (auto EC = Writer.writeArray(makeArrayRef(Item->getValue())))
       return EC;
   }
   return Error::success();

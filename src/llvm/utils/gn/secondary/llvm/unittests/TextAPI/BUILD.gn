@@ -1,4 +1,4 @@
-import("//third-party/unittest/unittest.gni")
+import("//llvm/utils/unittest/unittest.gni")
 
 unittest("TextAPITests") {
   deps = [
@@ -10,6 +10,5 @@ unittest("TextAPITests") {
     "TextStubV2Tests.cpp",
     "TextStubV3Tests.cpp",
     "TextStubV4Tests.cpp",
-    "TextStubV5Tests.cpp",
   ]
 }

@@ -28,9 +28,8 @@ using namespace llvm::MachO;
 
 namespace {
 
-std::string getAnnotatedName(const APIRecord *record, EncodeKind kind,
-                             StringRef symbolName, bool validSourceLoc = true,
-                             ObjCIFSymbolKind objCIF = ObjCIFSymbolKind::None) {
+std::string getAnnotatedName(const APIRecord *record, SymbolKind kind,
+                             StringRef symbolName, bool validSourceLoc = true) {
   assert(!symbolName.empty());
 
   std::string name;
@@ -41,56 +40,44 @@ std::string getAnnotatedName(const APIRecord *record, EncodeKind kind,
   if (record->isThreadLocalValue())
     name += "(tlv) ";
 
-  const bool isAnnotatedObjCClass = ((objCIF != ObjCIFSymbolKind::None) &&
-                                     (objCIF <= ObjCIFSymbolKind::EHType));
-
-  if (isAnnotatedObjCClass) {
-    if (objCIF == ObjCIFSymbolKind::EHType)
-      name += "Exception Type of ";
-    if (objCIF == ObjCIFSymbolKind::MetaClass)
-      name += "Metaclass of ";
-    if (objCIF == ObjCIFSymbolKind::Class)
-      name += "Class of ";
-  }
-
   if (validSourceLoc) {
-    if ((kind == EncodeKind::GlobalSymbol) && symbolName.startswith("_"))
+    if ((kind == SymbolKind::GlobalSymbol) && symbolName.startswith("_"))
       return name + symbolName.drop_front(1).str();
     return name + symbolName.str();
   }
 
-  if (isAnnotatedObjCClass)
-    return name + symbolName.str();
-
   // Only print symbol type prefix if there is no source location tied to it.
   // This can only ever happen when the location has to come from debug info.
   switch (kind) {
-  case EncodeKind::GlobalSymbol:
+  case SymbolKind::GlobalSymbol:
     return name + symbolName.str();
-  case EncodeKind::ObjectiveCInstanceVariable:
+  case SymbolKind::ObjectiveCInstanceVariable:
     return name + "(ObjC IVar) " + symbolName.str();
-  case EncodeKind::ObjectiveCClass:
+  case SymbolKind::ObjectiveCClass:
     return name + "(ObjC Class) " + symbolName.str();
-  case EncodeKind::ObjectiveCClassEHType:
+  case SymbolKind::ObjectiveCClassEHType:
     return name + "(ObjC Class EH) " + symbolName.str();
   }
 
-  llvm_unreachable("unexpected case for EncodeKind");
+  llvm_unreachable("unexpected case for SymbolKind");
 }
 
-APIRecord *findRecordFromAPI(const API *api, StringRef name, EncodeKind kind) {
+APIRecord *findRecordFromAPI(const API *api, StringRef name, SymbolKind kind) {
   switch (kind) {
-  case EncodeKind::GlobalSymbol: {
+  case SymbolKind::GlobalSymbol: {
     auto *record = api->findGlobal(name);
     return record;
   }
-  case EncodeKind::ObjectiveCInstanceVariable: {
-    auto *record = api->findIVar(name, name.contains('.'));
+  case SymbolKind::ObjectiveCClass: {
+    auto *record = api->findObjCInterface(name);
     return record;
   }
-  case EncodeKind::ObjectiveCClass:
-  case EncodeKind::ObjectiveCClassEHType: {
+  case SymbolKind::ObjectiveCClassEHType: {
     auto *record = api->findObjCInterface(name);
+    return record;
+  }
+  case SymbolKind::ObjectiveCInstanceVariable: {
+    auto *record = api->findIVar(name, name.contains('.'));
     return record;
   }
   }
@@ -136,20 +123,6 @@ SymbolVerifier::Result updateResult(const SymbolVerifier::Result prev,
   return next;
 }
 
-ObjCIFSymbolKind assignObjCIFSymbolKind(const ObjCInterfaceRecord record) {
-  ObjCIFSymbolKind result = ObjCIFSymbolKind::None;
-  if (record.getLinkageForSymbol(ObjCIFSymbolKind::Class) !=
-      APILinkage::Unknown)
-    result |= ObjCIFSymbolKind::Class;
-  if (record.getLinkageForSymbol(ObjCIFSymbolKind::MetaClass) !=
-      APILinkage::Unknown)
-    result |= ObjCIFSymbolKind::MetaClass;
-  if (record.getLinkageForSymbol(ObjCIFSymbolKind::EHType) !=
-      APILinkage::Unknown)
-    result |= ObjCIFSymbolKind::EHType;
-  return result;
-}
-
 class DylibAPIVerifier : public APIVisitor {
 private:
   struct DSYMContext {
@@ -173,9 +146,8 @@ private:
     result = updateResult(result, state);
   }
 
-  void visitImpl(const APIRecord &record, const EncodeKind kind,
-                 const StringRef name,
-                 const ObjCIFSymbolKind objCIF = ObjCIFSymbolKind::None) {
+  void visitImpl(const APIRecord &record, const SymbolKind kind,
+                 const StringRef name) {
     if (record.isExternal()) {
       updateState(SymbolVerifier::Result::Valid);
       return;
@@ -189,7 +161,7 @@ private:
     // Handle zippered symbols with mismatching availability
     // between macOS and macCatalyst, if there exists an available
     // declaration, allow it.
-    if (auto *sym = verifiedSymbols->findSymbol(kind, name, objCIF)) {
+    if (auto *sym = verifiedSymbols->findSymbol(kind, name)) {
       for (auto &target : sym->targets()) {
         if (target.Arch != ctx.target.Arch)
           continue;
@@ -243,8 +215,8 @@ private:
         ctx.diag->report(diag::warn_target) << getTargetTripleName(target);
         ctx.diag->report(diagID, loc)
             << getAnnotatedName(&record, kind, displayName)
-            << !record.availability.isUnavailable()
-            << !record.availability.isUnavailable();
+            << record.availability.isUnavailable()
+            << record.availability.isUnavailable();
       }
 
       return;
@@ -255,12 +227,12 @@ private:
       return;
     }
 
-    if (swiftFile && swiftFile->getSymbol(kind, name, objCIF)) {
+    if (swiftFile && swiftFile->getSymbol(kind, name)) {
       updateState(SymbolVerifier::Result::Valid);
       return;
     }
 
-    if (aliases.count(SimpleSymbol{name.str(), kind, objCIF})) {
+    if (aliases.count(SimpleSymbol{name.str(), kind})) {
       updateState(SymbolVerifier::Result::Valid);
       return;
     }
@@ -289,14 +261,12 @@ private:
       if (demangledName.isSwift)
         ctx.emitDiag([&]() {
           ctx.diag->report(diag::err_swift_interface_symbol_missing, loc)
-              << getAnnotatedName(&record, kind, displayName, !loc.isInvalid(),
-                                  objCIF);
+              << displayName;
         });
       else
         ctx.emitDiag([&]() {
           ctx.diag->report(diag::err_header_symbol_missing, loc)
-              << getAnnotatedName(&record, kind, displayName, !loc.isInvalid(),
-                                  objCIF);
+              << getAnnotatedName(&record, kind, displayName, !loc.isInvalid());
         });
       updateState(SymbolVerifier::Result::Invalid);
       return;
@@ -306,14 +276,12 @@ private:
       if (demangledName.isSwift)
         ctx.emitDiag([&]() {
           ctx.diag->report(diag::warn_swift_interface_symbol_missing, loc)
-              << getAnnotatedName(&record, kind, displayName, !loc.isInvalid(),
-                                  objCIF);
+              << displayName;
         });
       else
         ctx.emitDiag([&]() {
           ctx.diag->report(diag::warn_header_symbol_missing, loc)
-              << getAnnotatedName(&record, kind, displayName, !loc.isInvalid(),
-                                  objCIF);
+              << getAnnotatedName(&record, kind, displayName, !loc.isInvalid());
         });
     }
 
@@ -350,27 +318,16 @@ public:
 
   void visitGlobal(const GlobalRecord &record) override {
     auto sym = parseSymbol(record.name);
-    visitImpl(record, sym.Kind, sym.Name);
+    visitImpl(record, sym.kind, sym.name);
   }
 
   void visitObjCInterface(const ObjCInterfaceRecord &record) override {
-    ObjCIFSymbolKind symType = assignObjCIFSymbolKind(record);
-    if (symType > ObjCIFSymbolKind::EHType) {
-      if (record.hasExceptionAttribute())
-        visitImpl(record, EncodeKind::ObjectiveCClassEHType, record.name,
-                  symType);
-      visitImpl(record, EncodeKind::ObjectiveCClass, record.name, symType);
-    } else {
-      visitImpl(record,
-                record.hasExceptionAttribute()
-                    ? EncodeKind::ObjectiveCClassEHType
-                    : EncodeKind::ObjectiveCClass,
-                record.name, symType);
-    }
-
+    if (record.hasExceptionAttribute)
+      visitImpl(record, SymbolKind::ObjectiveCClassEHType, record.name);
+    visitImpl(record, SymbolKind::ObjectiveCClass, record.name);
     for (auto *ivar : record.ivars) {
       visitImpl(
-          *ivar, EncodeKind::ObjectiveCInstanceVariable,
+          *ivar, SymbolKind::ObjectiveCInstanceVariable,
           ObjCInstanceVariableRecord::createName(record.name, ivar->name));
     }
   }
@@ -378,7 +335,7 @@ public:
   void visitObjCCategory(const ObjCCategoryRecord &record) override {
     for (auto *ivar : record.ivars)
       visitImpl(
-          *ivar, EncodeKind::ObjectiveCInstanceVariable,
+          *ivar, SymbolKind::ObjectiveCInstanceVariable,
           ObjCInstanceVariableRecord::createName(record.interface, ivar->name));
   }
 };
@@ -420,26 +377,19 @@ void SymbolVerifier::lookupAPIs(const Target &target) {
 
 struct SymbolVerifier::SymbolContext {
   // Kind to map symbol type against APIRecord.
-  EncodeKind kind = EncodeKind::GlobalSymbol;
+  SymbolKind kind = SymbolKind::GlobalSymbol;
   // Name to use for printing in diagnostics.
   std::string nameForPrinting{""};
   // Name to use for all querying and verification
   // purposes.
   std::string materializedName{""};
-  // The ObjCInterface symbol type, if applicable.
-  ObjCIFSymbolKind objCIF = ObjCIFSymbolKind::None;
   // Tracking inlined decls.
   bool inlined = false;
 };
 
 // Declarations mapped from reexported libraries should be ignored.
 bool SymbolVerifier::shouldIgnoreReexport(StringRef name,
-                                          EncodeKind kind) const {
-
-  // Linker directive symbols can never be ignored.
-  if (name.starts_with("$ld$"))
-    return false;
-
+                                          SymbolKind kind) const {
   for (auto &lib : reexportsToIgnore) {
     for (auto &api : lib) {
       if (api->getTarget() != ctx.target)
@@ -555,8 +505,7 @@ bool SymbolVerifier::shouldIgnoreZipperedSymbol(
   if (!isZippered)
     return false;
 
-  return exports->findSymbol(symCtx.kind, symCtx.materializedName,
-                             symCtx.objCIF) != nullptr;
+  return exports->findSymbol(symCtx.kind, symCtx.materializedName) != nullptr;
 }
 
 // Availability verification will be differed until all targets
@@ -608,77 +557,6 @@ SymbolVerifier::checkAvailability(APIRecord *dRecord, const APIRecord *record,
   }
 
   llvm_unreachable("Unexpected verification mode symbol verification");
-}
-
-// An ObjCInterfaceRecord can represent up to three symbols. When verifying,
-// account for this granularity.
-bool SymbolVerifier::checkObjCInterfaceSymbols(
-    const ObjCInterfaceRecord *dRecord, const APIRecord *record,
-    SymbolContext &symCtx) {
-  const bool isDeclVersionComplete =
-      ((symCtx.objCIF & ObjCIFSymbolKind::Class) == ObjCIFSymbolKind::Class) &&
-      ((symCtx.objCIF & ObjCIFSymbolKind::MetaClass) ==
-       ObjCIFSymbolKind::MetaClass);
-
-  const bool isDylibVersionComplete = dRecord->isCompleteInterface();
-
-  auto printDiagnostic = [&](auto symLinkage, auto *record, StringRef symName,
-                             bool printAsWarning = false) {
-    if (symLinkage == APILinkage::Unknown)
-      ctx.emitDiag([&]() {
-        ctx.diag->report(printAsWarning ? diag::warn_library_missing_symbol
-                                        : diag::err_library_missing_symbol,
-                         record->loc.getSourceLocation())
-            << symName;
-      });
-    else
-      ctx.emitDiag([&]() {
-        ctx.diag->report(printAsWarning ? diag::warn_library_hidden_symbol
-                                        : diag::err_library_hidden_symbol,
-                         record->decl->getLocation())
-            << symName;
-      });
-  };
-
-  if (isDeclVersionComplete) {
-    // The common case, a complete ObjCInterface.
-    if (isDylibVersionComplete)
-      return true;
-
-    // The decl represents a complete ObjCInterface, but the symbols in the
-    // dylib do not. Determine which symbol is missing. To keep older projects
-    // building, treat this as a warning.
-    if (!dRecord->isExportedSymbol(ObjCIFSymbolKind::Class))
-      printDiagnostic(
-          dRecord->getLinkageForSymbol(ObjCIFSymbolKind::Class), record,
-          getAnnotatedName(record, symCtx.kind, symCtx.nameForPrinting,
-                           /*validSourceLoc=*/true, ObjCIFSymbolKind::Class),
-          /*printAsWarning=*/true);
-
-    if (!dRecord->isExportedSymbol(ObjCIFSymbolKind::MetaClass))
-      printDiagnostic(
-          dRecord->getLinkageForSymbol(ObjCIFSymbolKind::MetaClass), record,
-          getAnnotatedName(record, symCtx.kind, symCtx.nameForPrinting,
-                           /*validSourceLoc=*/true,
-                           ObjCIFSymbolKind::MetaClass),
-          /*printAsWarning=*/true);
-    return true;
-  }
-
-  if (dRecord->isExportedSymbol(symCtx.objCIF)) {
-    if (!isDylibVersionComplete) {
-      // Both the declaration and dylib have a non-complete interface.
-      symCtx.kind = EncodeKind::GlobalSymbol;
-      symCtx.materializedName = record->name;
-    }
-    return true;
-  }
-
-  // At this point that means there was not a matching class symbol
-  // to represent the one discovered as a declaration.
-  printDiagnostic(dRecord->getLinkageForSymbol(symCtx.objCIF), record,
-                  symCtx.nameForPrinting);
-  return false;
 }
 
 bool SymbolVerifier::checkSymbolFlags(APIRecord *dRecord,
@@ -786,15 +664,6 @@ SymbolVerifier::Result SymbolVerifier::verifyImpl(const APIRecord *record,
     return ctx.frontendState;
   }
 
-  // Check for mismatching ObjC Interfaces.
-  if (symCtx.objCIF != ObjCIFSymbolKind::None) {
-    if (!checkObjCInterfaceSymbols(
-            ctx.dylibAPI->findObjCInterface(dRecord->name), record, symCtx)) {
-      updateFrontendState(Result::Invalid);
-      return ctx.frontendState;
-    }
-  }
-
   Result availabilityCheck = checkAvailability(dRecord, record, symCtx);
   if (availabilityCheck != Result::Valid) {
     updateFrontendState(availabilityCheck);
@@ -815,13 +684,11 @@ SymbolVerifier::Result SymbolVerifier::verify(const GlobalRecord *record) {
   // Global Symbol classifications could be obfusciated with `asm`
   auto sym = parseSymbol(record->name);
   SymbolContext symCtx;
-  symCtx.kind = sym.Kind;
-  symCtx.materializedName = sym.Name;
-  symCtx.objCIF = sym.ObjCInterfaceType;
+  symCtx.kind = sym.kind;
+  symCtx.materializedName = sym.name;
   symCtx.nameForPrinting =
       getAnnotatedName(record, symCtx.kind,
-                       demangle ? demangler.demangle(sym.Name).str : sym.Name,
-                       /*validSourceLoc=*/true, symCtx.objCIF);
+                       demangle ? demangler.demangle(sym.name).str : sym.name);
   symCtx.inlined = record->inlined;
 
   return verifyImpl(record, symCtx);
@@ -831,15 +698,14 @@ SymbolVerifier::Result
 SymbolVerifier::verify(const ObjCInterfaceRecord *record) {
   SymbolContext symCtx;
   symCtx.materializedName = record->name;
-  symCtx.objCIF = assignObjCIFSymbolKind(*record);
 
   std::string displayName =
       demangle ? demangler.demangle(record->name).str : record->name.str();
-  if (record->hasExceptionAttribute()) {
-    symCtx.kind = EncodeKind::ObjectiveCClassEHType;
+  if (record->hasExceptionAttribute) {
+    symCtx.kind = SymbolKind::ObjectiveCClassEHType;
     symCtx.nameForPrinting = getAnnotatedName(record, symCtx.kind, displayName);
   } else {
-    symCtx.kind = EncodeKind::ObjectiveCClass;
+    symCtx.kind = SymbolKind::ObjectiveCClass;
     symCtx.nameForPrinting = getAnnotatedName(record, symCtx.kind, displayName);
   }
 
@@ -857,9 +723,9 @@ SymbolVerifier::verify(const ObjCInstanceVariableRecord *record,
       ObjCInstanceVariableRecord::createName(superClass, record->name);
   std::string displayName =
       demangle ? demangler.demangle(fullName).str : fullName;
-  SymbolContext symCtx{EncodeKind::ObjectiveCInstanceVariable,
+  SymbolContext symCtx{SymbolKind::ObjectiveCInstanceVariable,
                        getAnnotatedName(record,
-                                        EncodeKind::ObjectiveCInstanceVariable,
+                                        SymbolKind::ObjectiveCInstanceVariable,
                                         displayName),
                        fullName};
 
@@ -873,11 +739,12 @@ std::unique_ptr<SymbolSet> SymbolVerifier::getExports() {
     visitor.visit(converter);
   }
 
+  // TODO: Handle alias list with -Xarch.
   for (const auto &[alias, base] : aliases) {
     APIRecord record;
-    record.name = alias.Name;
+    record.name = alias.name;
     TargetList targets;
-    if (auto *sym = exports->findSymbol(base.Kind, base.Name)) {
+    if (auto *sym = exports->findSymbol(base.kind, base.name)) {
       record.flags = sym->getFlags();
       targets = {sym->targets().begin(), sym->targets().end()};
     } else {
@@ -889,8 +756,8 @@ std::unique_ptr<SymbolSet> SymbolVerifier::getExports() {
     }
 
     SymbolContext symCtx;
-    symCtx.materializedName = alias.Name;
-    symCtx.kind = alias.Kind;
+    symCtx.materializedName = alias.name;
+    symCtx.kind = alias.kind;
     addSymbol(&record, symCtx, targets);
   }
 

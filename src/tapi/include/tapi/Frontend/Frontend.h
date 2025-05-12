@@ -21,7 +21,7 @@
 #include "tapi/Defines.h"
 #include "tapi/Frontend/FrontendContext.h"
 #include "clang/Frontend/FrontendOptions.h"
-#include "llvm/TargetParser/Triple.h"
+#include "llvm/ADT/Triple.h"
 
 TAPI_NAMESPACE_INTERNAL_BEGIN
 
@@ -46,21 +46,18 @@ struct FrontendJob {
   std::string productName;
   std::string clangResourcePath;
   std::string clangReproducerPath;
-  std::string label;
   std::vector<std::pair<std::string, bool /*isUndef*/>> macros;
   HeaderSeq headerFiles;
   PathSeq quotedIncludePaths;
   PathSeq systemFrameworkPaths;
   PathSeq systemIncludePaths;
-  PathSeq afterIncludePaths;
   PathSeq frameworkPaths;
   PathSeq includePaths;
   std::vector<std::string> clangExtraArgs;
-  std::vector<std::string> prefixHeaders;
   HeaderType type;
-  std::optional<std::string> clangExecutablePath;
-  std::shared_ptr<SymbolVerifier> verifier =
-      std::make_shared<SymbolVerifier>(SymbolVerifier());
+  llvm::Optional<std::string> clangExecutablePath;
+  std::unique_ptr<SymbolVerifier> verifier =
+      std::make_unique<SymbolVerifier>(SymbolVerifier());
 };
 
 extern llvm::Expected<FrontendContext>

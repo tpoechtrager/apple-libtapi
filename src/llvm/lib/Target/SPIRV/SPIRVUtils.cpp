@@ -77,19 +77,24 @@ std::string getStringImm(const MachineInstr &MI, unsigned StartIndex) {
 
 void addNumImm(const APInt &Imm, MachineInstrBuilder &MIB) {
   const auto Bitwidth = Imm.getBitWidth();
-  if (Bitwidth == 1)
-    return; // Already handled
-  else if (Bitwidth <= 32) {
+  switch (Bitwidth) {
+  case 1:
+    break; // Already handled.
+  case 8:
+  case 16:
+  case 32:
     MIB.addImm(Imm.getZExtValue());
-    return;
-  } else if (Bitwidth <= 64) {
+    break;
+  case 64: {
     uint64_t FullImm = Imm.getZExtValue();
     uint32_t LowBits = FullImm & 0xffffffff;
     uint32_t HighBits = (FullImm >> 32) & 0xffffffff;
     MIB.addImm(LowBits).addImm(HighBits);
-    return;
+    break;
   }
-  report_fatal_error("Unsupported constant bitwidth");
+  default:
+    report_fatal_error("Unsupported constant bitwidth");
+  }
 }
 
 void buildOpName(Register Target, const StringRef &Name,
@@ -201,9 +206,9 @@ SPIRV::MemorySemantics::MemorySemantics getMemSemantics(AtomicOrdering Ord) {
   case AtomicOrdering::Unordered:
   case AtomicOrdering::Monotonic:
   case AtomicOrdering::NotAtomic:
+  default:
     return SPIRV::MemorySemantics::None;
   }
-  llvm_unreachable(nullptr);
 }
 
 MachineInstr *getDefInstrMaybeConstant(Register &ConstReg,
@@ -293,11 +298,16 @@ std::string getOclOrSpirvBuiltinDemangledName(StringRef Name) {
     return std::string();
 
   // Try to use the itanium demangler.
-  if (char *DemangledName = itaniumDemangle(Name.data())) {
+  size_t n;
+  int Status;
+  char *DemangledName = itaniumDemangle(Name.data(), nullptr, &n, &Status);
+
+  if (Status == demangle_success) {
     std::string Result = DemangledName;
     free(DemangledName);
     return Result;
   }
+  free(DemangledName);
   // Otherwise use simple demangling to return the function name.
   if (IsNonMangledOCL || IsNonMangledSPIRV)
     return Name.str();
@@ -322,28 +332,30 @@ std::string getOclOrSpirvBuiltinDemangledName(StringRef Name) {
   return Name.substr(Start, Len).str();
 }
 
-const Type *getTypedPtrEltType(const Type *Ty) {
-  auto PType = dyn_cast<PointerType>(Ty);
-  if (!PType || PType->isOpaque())
-    return Ty;
-  return PType->getNonOpaquePointerElementType();
+static bool isOpenCLBuiltinType(const StructType *SType) {
+  return SType->isOpaque() && SType->hasName() &&
+         SType->getName().startswith("opencl.");
 }
 
-static bool hasBuiltinTypePrefix(StringRef Name) {
-  if (Name.starts_with("opencl.") || Name.starts_with("spirv."))
-    return true;
-  return false;
+static bool isSPIRVBuiltinType(const StructType *SType) {
+  return SType->isOpaque() && SType->hasName() &&
+         SType->getName().startswith("spirv.");
 }
 
 bool isSpecialOpaqueType(const Type *Ty) {
-  const StructType *SType = dyn_cast<StructType>(getTypedPtrEltType(Ty));
-  if (SType && SType->hasName())
-    return hasBuiltinTypePrefix(SType->getName());
-
-  if (const TargetExtType *EType =
-          dyn_cast<TargetExtType>(getTypedPtrEltType(Ty)))
-    return hasBuiltinTypePrefix(EType->getName());
-
+  if (auto PType = dyn_cast<PointerType>(Ty)) {
+    if (!PType->isOpaque())
+      Ty = PType->getNonOpaquePointerElementType();
+  }
+  if (auto SType = dyn_cast<StructType>(Ty))
+    return isOpenCLBuiltinType(SType) || isSPIRVBuiltinType(SType);
   return false;
+}
+
+std::string getFunctionGlobalIdentifier(const Function *F) {
+  StringRef Name = F->hasName() ? F->getName() : ".anonymous";
+  GlobalValue::LinkageTypes Linkage = F->getLinkage();
+  StringRef ModuleFileName = F->getParent()->getSourceFileName();
+  return GlobalValue::getGlobalIdentifier(Name, Linkage, ModuleFileName);
 }
 } // namespace llvm

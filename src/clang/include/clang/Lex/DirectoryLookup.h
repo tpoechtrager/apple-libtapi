@@ -50,7 +50,7 @@ private:
 
   /// DirCharacteristic - The type of directory this is: this is an instance of
   /// SrcMgr::CharacteristicKind.
-  unsigned DirCharacteristic : 3;
+  unsigned DirCharacteristic : 2;
 
   /// LookupType - This indicates whether this DirectoryLookup object is a
   /// normal directory, a framework, or a headermap.
@@ -91,8 +91,8 @@ public:
     return isNormalDir() ? &u.Dir.getDirEntry() : nullptr;
   }
 
-  OptionalDirectoryEntryRef getDirRef() const {
-    return isNormalDir() ? OptionalDirectoryEntryRef(u.Dir) : std::nullopt;
+  Optional<DirectoryEntryRef> getDirRef() const {
+    return isNormalDir() ? Optional<DirectoryEntryRef>(u.Dir) : None;
   }
 
   /// getFrameworkDir - Return the directory that this framework refers to.
@@ -101,8 +101,8 @@ public:
     return isFramework() ? &u.Dir.getDirEntry() : nullptr;
   }
 
-  OptionalDirectoryEntryRef getFrameworkDirRef() const {
-    return isFramework() ? OptionalDirectoryEntryRef(u.Dir) : std::nullopt;
+  Optional<DirectoryEntryRef> getFrameworkDirRef() const {
+    return isFramework() ? Optional<DirectoryEntryRef>(u.Dir) : None;
   }
 
   /// getHeaderMap - Return the directory that this entry refers to.
@@ -180,7 +180,7 @@ public:
   /// \param [out] MappedName if this is a headermap which maps the filename to
   /// a framework include ("Foo.h" -> "Foo/Foo.h"), set the new name to this
   /// vector and point Filename to it.
-  OptionalFileEntryRef
+  Optional<FileEntryRef>
   LookupFile(StringRef &Filename, HeaderSearch &HS, SourceLocation IncludeLoc,
              SmallVectorImpl<char> *SearchPath,
              SmallVectorImpl<char> *RelativePath, Module *RequestingModule,
@@ -190,7 +190,7 @@ public:
              bool OpenFile = true) const;
 
 private:
-  OptionalFileEntryRef DoFrameworkLookup(
+  Optional<FileEntryRef> DoFrameworkLookup(
       StringRef Filename, HeaderSearch &HS, SmallVectorImpl<char> *SearchPath,
       SmallVectorImpl<char> *RelativePath, Module *RequestingModule,
       ModuleMap::KnownHeader *SuggestedModule,

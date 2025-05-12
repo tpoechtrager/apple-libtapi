@@ -17,14 +17,14 @@
 #include "clang/Frontend/FrontendAction.h"
 #include "clang/Frontend/FrontendActions.h"
 #include "clang/Frontend/TextDiagnosticBuffer.h"
-#include "clang/Testing/CommandLineArgs.h"
 #include "clang/Tooling/ArgumentsAdjusters.h"
 #include "clang/Tooling/CompilationDatabase.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/MC/TargetRegistry.h"
+#include "llvm/Support/Host.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/TargetSelect.h"
-#include "llvm/TargetParser/Host.h"
 #include "gtest/gtest.h"
 #include <algorithm>
 #include <string>
@@ -395,7 +395,7 @@ public:
   const llvm::opt::ArgStringList *
   extractCC1Arguments(llvm::ArrayRef<const char *> Argv) {
     const std::unique_ptr<driver::Compilation> Compilation(
-        Driver.BuildCompilation(llvm::ArrayRef(Argv)));
+        Driver.BuildCompilation(llvm::makeArrayRef(Argv)));
 
     return getCC1Arguments(Diags.get(), Compilation.get());
   }
@@ -871,10 +871,28 @@ TEST(ClangToolTest, StripPluginsAdjuster) {
   EXPECT_FALSE(HasFlag("-random-plugin"));
 }
 
-TEST(addTargetAndModeForProgramName, AddsTargetAndMode) {
+namespace {
+/// Find a target name such that looking for it in TargetRegistry by that name
+/// returns the same target. We expect that there is at least one target
+/// configured with this property.
+std::string getAnyTarget() {
   llvm::InitializeAllTargets();
+  for (const auto &Target : llvm::TargetRegistry::targets()) {
+    std::string Error;
+    StringRef TargetName(Target.getName());
+    if (TargetName == "x86-64")
+      TargetName = "x86_64";
+    if (llvm::TargetRegistry::lookupTarget(std::string(TargetName), Error) ==
+        &Target) {
+      return std::string(TargetName);
+    }
+  }
+  return "";
+}
+}
 
-  std::string Target = getAnyTargetForTesting();
+TEST(addTargetAndModeForProgramName, AddsTargetAndMode) {
+  std::string Target = getAnyTarget();
   ASSERT_FALSE(Target.empty());
 
   std::vector<std::string> Args = {"clang", "-foo"};
@@ -887,8 +905,7 @@ TEST(addTargetAndModeForProgramName, AddsTargetAndMode) {
 }
 
 TEST(addTargetAndModeForProgramName, PathIgnored) {
-  llvm::InitializeAllTargets();
-  std::string Target = getAnyTargetForTesting();
+  std::string Target = getAnyTarget();
   ASSERT_FALSE(Target.empty());
 
   SmallString<32> ToolPath;
@@ -902,8 +919,7 @@ TEST(addTargetAndModeForProgramName, PathIgnored) {
 }
 
 TEST(addTargetAndModeForProgramName, IgnoresExistingTarget) {
-  llvm::InitializeAllTargets();
-  std::string Target = getAnyTargetForTesting();
+  std::string Target = getAnyTarget();
   ASSERT_FALSE(Target.empty());
 
   std::vector<std::string> Args = {"clang", "-foo", "-target", "something"};
@@ -920,8 +936,7 @@ TEST(addTargetAndModeForProgramName, IgnoresExistingTarget) {
 }
 
 TEST(addTargetAndModeForProgramName, IgnoresExistingMode) {
-  llvm::InitializeAllTargets();
-  std::string Target = getAnyTargetForTesting();
+  std::string Target = getAnyTarget();
   ASSERT_FALSE(Target.empty());
 
   std::vector<std::string> Args = {"clang", "-foo", "--driver-mode=abc"};

@@ -28,12 +28,6 @@
 
 using namespace llvm;
 
-char HTTPServerError::ID = 0;
-
-HTTPServerError::HTTPServerError(const Twine &Msg) : Msg(Msg.str()) {}
-
-void HTTPServerError::log(raw_ostream &OS) const { OS << Msg; }
-
 bool llvm::streamFile(HTTPServerRequest &Request, StringRef FilePath) {
   Expected<sys::fs::file_t> FDOrErr = sys::fs::openNativeFileForRead(FilePath);
   if (Error Err = FDOrErr.takeError()) {
@@ -165,34 +159,31 @@ HTTPServer::HTTPServer() = default;
 HTTPServer::~HTTPServer() = default;
 
 void HTTPServerRequest::setResponse(HTTPResponse Response) {
-  llvm_unreachable("no httplib");
+  llvm_unreachable("No HTTP server implementation available");
 }
 
 void HTTPServerRequest::setResponse(StreamingHTTPResponse Response) {
-  llvm_unreachable("no httplib");
+  llvm_unreachable("No HTTP server implementation available");
 }
 
 Error HTTPServer::get(StringRef UrlPathPattern, HTTPRequestHandler Handler) {
-  // TODO(https://github.com/llvm/llvm-project/issues/63873) We would ideally
-  // return an error as well but that's going to require refactoring of error
-  // handling in DebuginfodServer.
-  return Error::success();
+  llvm_unreachable("No HTTP server implementation available");
 }
 
 Error HTTPServer::bind(unsigned ListenPort, const char *HostInterface) {
-  return make_error<HTTPServerError>("no httplib");
+  llvm_unreachable("No HTTP server implementation available");
 }
 
 Expected<unsigned> HTTPServer::bind(const char *HostInterface) {
-  return make_error<HTTPServerError>("no httplib");
+  llvm_unreachable("No HTTP server implementation available");
 }
 
 Error HTTPServer::listen() {
-  return make_error<HTTPServerError>("no httplib");
+  llvm_unreachable("No HTTP server implementation available");
 }
 
 void HTTPServer::stop() {
-  llvm_unreachable("no httplib");
+  llvm_unreachable("No HTTP server implementation available");
 }
 
 #endif // LLVM_ENABLE_HTTPLIB

@@ -14,7 +14,6 @@
 #ifndef LLVM_UTILS_TABLEGEN_CODEGENREGISTERS_H
 #define LLVM_UTILS_TABLEGEN_CODEGENREGISTERS_H
 
-#include "CodeGenHwModes.h"
 #include "InfoByHwMode.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/BitVector.h"
@@ -33,11 +32,8 @@
 #include <cassert>
 #include <cstdint>
 #include <deque>
-#include <functional>
 #include <list>
 #include <map>
-#include <memory>
-#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -45,6 +41,7 @@
 namespace llvm {
 
   class CodeGenRegBank;
+  template <typename T, typename Vector, typename Set> class SetVector;
 
   /// Used to encode a step in a register lane mask transformation.
   /// Mask the bits specified in Mask, then rotate them Rol bits to the left
@@ -150,15 +147,14 @@ namespace llvm {
   };
 
   /// CodeGenRegister - Represents a register definition.
-  class CodeGenRegister {
-  public:
+  struct CodeGenRegister {
     Record *TheDef;
     unsigned EnumValue;
     std::vector<int64_t> CostPerUse;
-    bool CoveredBySubRegs = true;
-    bool HasDisjunctSubRegs = false;
-    bool Artificial = true;
-    bool Constant = false;
+    bool CoveredBySubRegs;
+    bool HasDisjunctSubRegs;
+    bool Artificial;
+    bool Constant;
 
     // Map SubRegIndex -> Register.
     typedef std::map<CodeGenSubRegIndex *, CodeGenRegister *,
@@ -238,7 +234,7 @@ namespace llvm {
     const RegUnitList &getRegUnits() const { return RegUnits; }
 
     ArrayRef<LaneBitmask> getRegUnitLaneMasks() const {
-      return ArrayRef(RegUnitLaneMasks).slice(0, NativeRegUnits.count());
+      return makeArrayRef(RegUnitLaneMasks).slice(0, NativeRegUnits.count());
     }
 
     // Get the native register units. This is a prefix of getRegUnits().
@@ -396,7 +392,7 @@ namespace llvm {
     /// \return std::pair<SubClass, SubRegClass> where SubClass is a SubClass is
     /// a class where every register has SubIdx and SubRegClass is a class where
     /// every register is covered by the SubIdx subregister of SubClass.
-    std::optional<std::pair<CodeGenRegisterClass *, CodeGenRegisterClass *>>
+    Optional<std::pair<CodeGenRegisterClass *, CodeGenRegisterClass *>>
     getMatchingSubClassWithSubRegs(CodeGenRegBank &RegBank,
                                    const CodeGenSubRegIndex *SubIdx) const;
 
@@ -476,13 +472,6 @@ namespace llvm {
 
     // Called by CodeGenRegBank::CodeGenRegBank().
     static void computeSubClasses(CodeGenRegBank&);
-
-    // Get ordering value among register base classes.
-    std::optional<int> getBaseClassOrder() const {
-      if (TheDef && !TheDef->isValueUnset("BaseClassOrder"))
-        return TheDef->getValueAsInt("BaseClassOrder");
-      return {};
-    }
   };
 
   // Register categories are used when we need to deterine the category a
@@ -535,7 +524,7 @@ namespace llvm {
 
     ArrayRef<const CodeGenRegister*> getRoots() const {
       assert(!(Roots[1] && !Roots[0]) && "Invalid roots array");
-      return ArrayRef(Roots, !!Roots[0] + !!Roots[1]);
+      return makeArrayRef(Roots, !!Roots[0] + !!Roots[1]);
     }
   };
 

@@ -14,7 +14,6 @@
 #include "clang/Tooling/Refactoring/RefactoringOption.h"
 #include "clang/Tooling/Refactoring/RefactoringOptionVisitor.h"
 #include "llvm/Support/Error.h"
-#include <optional>
 #include <type_traits>
 
 namespace clang {
@@ -31,12 +30,12 @@ public:
 
   bool isRequired() const override { return false; }
 
-  using ValueType = std::optional<T>;
+  using ValueType = Optional<T>;
 
   const ValueType &getValue() const { return Value; }
 
 protected:
-  std::optional<T> Value;
+  Optional<T> Value;
 };
 
 /// A required refactoring option that stores a value of type \c T.

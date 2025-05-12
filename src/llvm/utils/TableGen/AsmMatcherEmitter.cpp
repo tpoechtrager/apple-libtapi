@@ -95,9 +95,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "CodeGenInstAlias.h"
 #include "CodeGenInstruction.h"
-#include "CodeGenRegisters.h"
 #include "CodeGenTarget.h"
 #include "SubtargetFeatureInfo.h"
 #include "Types.h"
@@ -107,6 +105,7 @@
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/Config/llvm-config.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -506,9 +505,9 @@ struct MatchableInfo {
   PointerUnion<const CodeGenInstruction*, const CodeGenInstAlias*> DefRec;
 
   const CodeGenInstruction *getResultInst() const {
-    if (isa<const CodeGenInstruction *>(DefRec))
-      return cast<const CodeGenInstruction *>(DefRec);
-    return cast<const CodeGenInstAlias *>(DefRec)->ResultInst;
+    if (DefRec.is<const CodeGenInstruction*>())
+      return DefRec.get<const CodeGenInstruction*>();
+    return DefRec.get<const CodeGenInstAlias*>()->ResultInst;
   }
 
   /// ResOperands - This is the operand list that should be built for the result
@@ -534,7 +533,7 @@ struct MatchableInfo {
   std::string ConversionFnKind;
 
   /// If this instruction is deprecated in some form.
-  bool HasDeprecation = false;
+  bool HasDeprecation;
 
   /// If this is an alias, this is use to determine whether or not to using
   /// the conversion function defined by the instruction's AsmMatchConverter
@@ -564,11 +563,11 @@ struct MatchableInfo {
         ConversionFnKind(RHS.ConversionFnKind),
         HasDeprecation(RHS.HasDeprecation),
         UseInstAsmMatchConverter(RHS.UseInstAsmMatchConverter) {
-    assert(!isa<const CodeGenInstAlias *>(DefRec));
+    assert(!DefRec.is<const CodeGenInstAlias *>());
   }
 
   ~MatchableInfo() {
-    delete dyn_cast_if_present<const CodeGenInstAlias *>(DefRec);
+    delete DefRec.dyn_cast<const CodeGenInstAlias*>();
   }
 
   // Two-operand aliases clone from the main matchable, but mark the second
@@ -630,17 +629,6 @@ struct MatchableInfo {
         return false;
     }
 
-    // For X86 AVX/AVX512 instructions, we prefer vex encoding because the
-    // vex encoding size is smaller. Since X86InstrSSE.td is included ahead
-    // of X86InstrAVX512.td, the AVX instruction ID is less than AVX512 ID.
-    // We use the ID to sort AVX instruction before AVX512 instruction in
-    // matching table.
-    if (TheDef->isSubClassOf("Instruction") &&
-        TheDef->getValueAsBit("HasPositionOrder") &&
-        RHS.TheDef->isSubClassOf("Instruction") &&
-        RHS.TheDef->getValueAsBit("HasPositionOrder"))
-      return TheDef->getID() < RHS.TheDef->getID();
-
     // Give matches that require more features higher precedence. This is useful
     // because we cannot define AssemblerPredicates with the negation of
     // processor features. For example, ARM v6 "nop" may be either a HINT or
@@ -649,6 +637,15 @@ struct MatchableInfo {
     // requires V6 while MOV does not.
     if (RequiredFeatures.size() != RHS.RequiredFeatures.size())
       return RequiredFeatures.size() > RHS.RequiredFeatures.size();
+
+    // For X86 AVX/AVX512 instructions, we prefer vex encoding because the
+    // vex encoding size is smaller. Since X86InstrSSE.td is included ahead
+    // of X86InstrAVX512.td, the AVX instruction ID is less than AVX512 ID.
+    // We use the ID to sort AVX instruction before AVX512 instruction in
+    // matching table.
+    if (TheDef->isSubClassOf("Instruction") &&
+        TheDef->getValueAsBit("HasPositionOrder"))
+      return TheDef->getID() < RHS.TheDef->getID();
 
     return false;
   }
@@ -1453,23 +1450,17 @@ void AsmMatcherInfo::buildOperandMatchInfo() {
   typedef std::map<ClassInfo *, unsigned, deref<std::less<>>> OpClassMaskTy;
   OpClassMaskTy OpClassMask;
 
-  bool CallCustomParserForAllOperands =
-      AsmParser->getValueAsBit("CallCustomParserForAllOperands");
   for (const auto &MI : Matchables) {
     OpClassMask.clear();
 
     // Keep track of all operands of this instructions which belong to the
     // same class.
-    unsigned NumOptionalOps = 0;
     for (unsigned i = 0, e = MI->AsmOperands.size(); i != e; ++i) {
       const MatchableInfo::AsmOperand &Op = MI->AsmOperands[i];
-      if (CallCustomParserForAllOperands || !Op.Class->ParserMethod.empty()) {
-        unsigned &OperandMask = OpClassMask[Op.Class];
-        OperandMask |= maskTrailingOnes<unsigned>(NumOptionalOps + 1)
-                       << (i - NumOptionalOps);
-      }
-      if (Op.Class->IsOptional)
-        ++NumOptionalOps;
+      if (Op.Class->ParserMethod.empty())
+        continue;
+      unsigned &OperandMask = OpClassMask[Op.Class];
+      OperandMask |= (1 << i);
     }
 
     // Generate operand match info for each mnemonic/operand class pair.
@@ -1616,13 +1607,13 @@ void AsmMatcherInfo::buildInfo() {
       else
         OperandName = Token.substr(1);
 
-      if (isa<const CodeGenInstruction *>(II->DefRec))
+      if (II->DefRec.is<const CodeGenInstruction*>())
         buildInstructionOperandReference(II.get(), OperandName, i);
       else
         buildAliasOperandReference(II.get(), OperandName, Op);
     }
 
-    if (isa<const CodeGenInstruction *>(II->DefRec)) {
+    if (II->DefRec.is<const CodeGenInstruction*>()) {
       II->buildInstructionResultOperands();
       // If the instruction has a two-operand alias, build up the
       // matchable here. We'll add them in bulk at the end to avoid
@@ -1685,7 +1676,7 @@ void AsmMatcherInfo::
 buildInstructionOperandReference(MatchableInfo *II,
                                  StringRef OperandName,
                                  unsigned AsmOpIdx) {
-  const CodeGenInstruction &CGI = *cast<const CodeGenInstruction *>(II->DefRec);
+  const CodeGenInstruction &CGI = *II->DefRec.get<const CodeGenInstruction*>();
   const CGIOperandList &Operands = CGI.Operands;
   MatchableInfo::AsmOperand *Op = &II->AsmOperands[AsmOpIdx];
 
@@ -1748,7 +1739,7 @@ buildInstructionOperandReference(MatchableInfo *II,
 void AsmMatcherInfo::buildAliasOperandReference(MatchableInfo *II,
                                                 StringRef OperandName,
                                                 MatchableInfo::AsmOperand &Op) {
-  const CodeGenInstAlias &CGA = *cast<const CodeGenInstAlias *>(II->DefRec);
+  const CodeGenInstAlias &CGA = *II->DefRec.get<const CodeGenInstAlias*>();
 
   // Set up the operand class.
   for (unsigned i = 0, e = CGA.ResultOperands.size(); i != e; ++i)
@@ -1821,7 +1812,7 @@ void MatchableInfo::buildInstructionResultOperands() {
 }
 
 void MatchableInfo::buildAliasResultOperands(bool AliasConstraintsAreChecked) {
-  const CodeGenInstAlias &CGA = *cast<const CodeGenInstAlias *>(DefRec);
+  const CodeGenInstAlias &CGA = *DefRec.get<const CodeGenInstAlias*>();
   const CodeGenInstruction *ResultInst = getResultInst();
 
   // Map of:  $reg -> #lastref
@@ -2845,12 +2836,12 @@ static bool emitMnemonicAliases(raw_ostream &OS, const AsmMatcherInfo &Info,
   return true;
 }
 
-static void
-emitCustomOperandParsing(raw_ostream &OS, CodeGenTarget &Target,
-                         const AsmMatcherInfo &Info, StringRef ClassName,
-                         StringToOffsetTable &StringTable,
-                         unsigned MaxMnemonicIndex, unsigned MaxFeaturesIndex,
-                         bool HasMnemonicFirst, const Record &AsmParser) {
+static void emitCustomOperandParsing(raw_ostream &OS, CodeGenTarget &Target,
+                              const AsmMatcherInfo &Info, StringRef ClassName,
+                              StringToOffsetTable &StringTable,
+                              unsigned MaxMnemonicIndex,
+                              unsigned MaxFeaturesIndex,
+                              bool HasMnemonicFirst) {
   unsigned MaxMask = 0;
   for (const OperandMatchEntry &OMI : Info.OperandMatchInfo) {
     MaxMask |= OMI.OperandMask;
@@ -2927,7 +2918,7 @@ emitCustomOperandParsing(raw_ostream &OS, CodeGenTarget &Target,
 
   // Emit the operand class switch to call the correct custom parser for
   // the found operand class.
-  OS << "ParseStatus " << Target.getName() << ClassName << "::\n"
+  OS << "OperandMatchResultTy " << Target.getName() << ClassName << "::\n"
      << "tryCustomParseOperand(OperandVector"
      << " &Operands,\n                      unsigned MCK) {\n\n"
      << "  switch(MCK) {\n";
@@ -2940,15 +2931,15 @@ emitCustomOperandParsing(raw_ostream &OS, CodeGenTarget &Target,
   }
 
   OS << "  default:\n";
-  OS << "    return ParseStatus::NoMatch;\n";
+  OS << "    return MatchOperand_NoMatch;\n";
   OS << "  }\n";
-  OS << "  return ParseStatus::NoMatch;\n";
+  OS << "  return MatchOperand_NoMatch;\n";
   OS << "}\n\n";
 
   // Emit the static custom operand parser. This code is very similar with
   // the other matcher. Also use MatchResultTy here just in case we go for
   // a better error handling.
-  OS << "ParseStatus " << Target.getName() << ClassName << "::\n"
+  OS << "OperandMatchResultTy " << Target.getName() << ClassName << "::\n"
      << "MatchOperandParserImpl(OperandVector"
      << " &Operands,\n                       StringRef Mnemonic,\n"
      << "                       bool ParseForAllFeatures) {\n";
@@ -2979,7 +2970,7 @@ emitCustomOperandParsing(raw_ostream &OS, CodeGenTarget &Target,
   }
 
   OS << "  if (MnemonicRange.first == MnemonicRange.second)\n";
-  OS << "    return ParseStatus::NoMatch;\n\n";
+  OS << "    return MatchOperand_NoMatch;\n\n";
 
   OS << "  for (const OperandMatchEntry *it = MnemonicRange.first,\n"
      << "       *ie = MnemonicRange.second; it != ie; ++it) {\n";
@@ -3001,17 +2992,15 @@ emitCustomOperandParsing(raw_ostream &OS, CodeGenTarget &Target,
   OS << "      continue;\n\n";
 
   // Emit call to the custom parser method
-  StringRef ParserName = AsmParser.getValueAsString("OperandParserMethod");
-  if (ParserName.empty())
-    ParserName = "tryCustomParseOperand";
   OS << "    // call custom parse method to handle the operand\n";
-  OS << "    ParseStatus Result = " << ParserName << "(Operands, it->Class);\n";
-  OS << "    if (!Result.isNoMatch())\n";
+  OS << "    OperandMatchResultTy Result = ";
+  OS << "tryCustomParseOperand(Operands, it->Class);\n";
+  OS << "    if (Result != MatchOperand_NoMatch)\n";
   OS << "      return Result;\n";
   OS << "  }\n\n";
 
   OS << "  // Okay, we had no match.\n";
-  OS << "  return ParseStatus::NoMatch;\n";
+  OS << "  return MatchOperand_NoMatch;\n";
   OS << "}\n\n";
 }
 
@@ -3040,9 +3029,11 @@ static void emitAsmTiedOperandConstraints(CodeGenTarget &Target,
   OS << "      if (OpndNum1 != OpndNum2) {\n";
   OS << "        auto &SrcOp1 = Operands[OpndNum1];\n";
   OS << "        auto &SrcOp2 = Operands[OpndNum2];\n";
-  OS << "        if (!AsmParser.areEqualRegs(*SrcOp1, *SrcOp2)) {\n";
-  OS << "          ErrorInfo = OpndNum2;\n";
-  OS << "          return false;\n";
+  OS << "        if (SrcOp1->isReg() && SrcOp2->isReg()) {\n";
+  OS << "          if (!AsmParser.regsEqual(*SrcOp1, *SrcOp2)) {\n";
+  OS << "            ErrorInfo = OpndNum2;\n";
+  OS << "            return false;\n";
+  OS << "          }\n";
   OS << "        }\n";
   OS << "      }\n";
   OS << "      break;\n";
@@ -3204,8 +3195,6 @@ void AsmMatcherEmitter::run(raw_ostream &OS) {
   Record *AsmParser = Target.getAsmParser();
   StringRef ClassName = AsmParser->getValueAsString("AsmParserClassName");
 
-  emitSourceFileHeader("Assembly Matcher Source Fragment", OS);
-
   // Compute the information on the instructions to match.
   AsmMatcherInfo Info(AsmParser, Target, Records);
   Info.buildInfo();
@@ -3307,12 +3296,12 @@ void AsmMatcherEmitter::run(raw_ostream &OS) {
 
 
   if (!Info.OperandMatchInfo.empty()) {
-    OS << "  ParseStatus MatchOperandParserImpl(\n";
+    OS << "  OperandMatchResultTy MatchOperandParserImpl(\n";
     OS << "    OperandVector &Operands,\n";
     OS << "    StringRef Mnemonic,\n";
     OS << "    bool ParseForAllFeatures = false);\n";
 
-    OS << "  ParseStatus tryCustomParseOperand(\n";
+    OS << "  OperandMatchResultTy tryCustomParseOperand(\n";
     OS << "    OperandVector &Operands,\n";
     OS << "    unsigned MCK);\n\n";
   }
@@ -3679,8 +3668,7 @@ void AsmMatcherEmitter::run(raw_ostream &OS) {
   OS << "      else\n";
   OS << "        DEBUG_WITH_TYPE(\"asm-matcher\", dbgs() << \": \");\n";
   OS << "      if (ActualIdx >= Operands.size()) {\n";
-  OS << "        DEBUG_WITH_TYPE(\"asm-matcher\", dbgs() << \"actual operand "
-        "index out of range\\n\");\n";
+  OS << "        DEBUG_WITH_TYPE(\"asm-matcher\", dbgs() << \"actual operand index out of range \");\n";
   if (ReportMultipleNearMisses) {
     OS << "        bool ThisOperandValid = (Formal == " <<"InvalidMatchClass) || "
                                    "isSubclass(Formal, OptionalMatchClass);\n";
@@ -3699,26 +3687,17 @@ void AsmMatcherEmitter::run(raw_ostream &OS) {
     OS << "            break;\n";
     OS << "          }\n";
     OS << "        } else {\n";
-    OS << "          DEBUG_WITH_TYPE(\"asm-matcher\", dbgs() << \"but formal "
-          "operand not required\\n\");\n";
+    OS << "          DEBUG_WITH_TYPE(\"asm-matcher\", dbgs() << \"but formal operand not required\\n\");\n";
+    OS << "          break;\n";
     OS << "        }\n";
     OS << "        continue;\n";
   } else {
-    OS << "        if (Formal == InvalidMatchClass) {\n";
+    OS << "        OperandsValid = (Formal == InvalidMatchClass) || isSubclass(Formal, OptionalMatchClass);\n";
+    OS << "        if (!OperandsValid) ErrorInfo = ActualIdx;\n";
     if (HasOptionalOperands) {
-      OS << "          OptionalOperandsMask.set(FormalIdx, " << MaxNumOperands
+      OS << "        OptionalOperandsMask.set(FormalIdx, " << MaxNumOperands
          << ");\n";
     }
-    OS << "          break;\n";
-    OS << "        }\n";
-    OS << "        if (isSubclass(Formal, OptionalMatchClass)) {\n";
-    if (HasOptionalOperands) {
-      OS << "          OptionalOperandsMask.set(FormalIdx);\n";
-    }
-    OS << "          continue;\n";
-    OS << "        }\n";
-    OS << "        OperandsValid = false;\n";
-    OS << "        ErrorInfo = ActualIdx;\n";
     OS << "        break;\n";
   }
   OS << "      }\n";
@@ -3951,7 +3930,7 @@ void AsmMatcherEmitter::run(raw_ostream &OS) {
     OS << "        MII.getDeprecatedInfo(Inst, getSTI(), Info)) {\n";
     OS << "      SMLoc Loc = ((" << Target.getName()
        << "Operand &)*Operands[0]).getStartLoc();\n";
-    OS << "      getParser().Warning(Loc, Info, std::nullopt);\n";
+    OS << "      getParser().Warning(Loc, Info, None);\n";
     OS << "    }\n";
   }
 
@@ -3983,7 +3962,7 @@ void AsmMatcherEmitter::run(raw_ostream &OS) {
   if (!Info.OperandMatchInfo.empty())
     emitCustomOperandParsing(OS, Target, Info, ClassName, StringTable,
                              MaxMnemonicIndex, FeatureBitsets.size(),
-                             HasMnemonicFirst, *AsmParser);
+                             HasMnemonicFirst);
 
   OS << "#endif // GET_MATCHER_IMPLEMENTATION\n\n";
 
@@ -4003,5 +3982,11 @@ void AsmMatcherEmitter::run(raw_ostream &OS) {
   OS << "#endif // GET_MNEMONIC_CHECKER\n\n";
 }
 
-static TableGen::Emitter::OptClass<AsmMatcherEmitter>
-    X("gen-asm-matcher", "Generate assembly instruction matcher");
+namespace llvm {
+
+void EmitAsmMatcher(RecordKeeper &RK, raw_ostream &OS) {
+  emitSourceFileHeader("Assembly Matcher Source Fragment", OS);
+  AsmMatcherEmitter(RK).run(OS);
+}
+
+} // end namespace llvm

@@ -24,7 +24,6 @@
 #include "clang/StaticAnalyzer/Core/PathSensitive/AnalysisManager.h"
 #include "llvm/ADT/APSInt.h"
 #include "llvm/ADT/SmallVector.h"
-#include <optional>
 #include <utility>
 
 using namespace clang;
@@ -280,13 +279,17 @@ void MallocOverflowSecurityChecker::OutputPossibleOverflows(
   c.Visit(mgr.getAnalysisDeclContext(D)->getBody());
 
   // Output warnings for all overflows that are left.
-  for (const MallocOverflowCheck &Check : PossibleMallocOverflows) {
+  for (CheckOverflowOps::theVecType::iterator
+       i = PossibleMallocOverflows.begin(),
+       e = PossibleMallocOverflows.end();
+       i != e;
+       ++i) {
     BR.EmitBasicReport(
         D, this, "malloc() size overflow", categories::UnixAPI,
         "the computation of the size of the memory allocation may overflow",
-        PathDiagnosticLocation::createOperatorLoc(Check.mulop,
+        PathDiagnosticLocation::createOperatorLoc(i->mulop,
                                                   BR.getSourceManager()),
-        Check.mulop->getSourceRange());
+        i->mulop->getSourceRange());
   }
 }
 
@@ -305,27 +308,26 @@ void MallocOverflowSecurityChecker::checkASTCodeBody(const Decl *D,
     CFGBlock *block = *it;
     for (CFGBlock::iterator bi = block->begin(), be = block->end();
          bi != be; ++bi) {
-        if (std::optional<CFGStmt> CS = bi->getAs<CFGStmt>()) {
-          if (const CallExpr *TheCall = dyn_cast<CallExpr>(CS->getStmt())) {
-            // Get the callee.
-            const FunctionDecl *FD = TheCall->getDirectCallee();
+      if (Optional<CFGStmt> CS = bi->getAs<CFGStmt>()) {
+        if (const CallExpr *TheCall = dyn_cast<CallExpr>(CS->getStmt())) {
+          // Get the callee.
+          const FunctionDecl *FD = TheCall->getDirectCallee();
 
-            if (!FD)
-              continue;
+          if (!FD)
+            continue;
 
-            // Get the name of the callee. If it's a builtin, strip off the
-            // prefix.
-            IdentifierInfo *FnInfo = FD->getIdentifier();
-            if (!FnInfo)
-              continue;
+          // Get the name of the callee. If it's a builtin, strip off the prefix.
+          IdentifierInfo *FnInfo = FD->getIdentifier();
+          if (!FnInfo)
+            continue;
 
-            if (FnInfo->isStr("malloc") || FnInfo->isStr("_MALLOC")) {
-              if (TheCall->getNumArgs() == 1)
-                CheckMallocArgument(PossibleMallocOverflows, TheCall,
-                                    mgr.getASTContext());
-            }
+          if (FnInfo->isStr ("malloc") || FnInfo->isStr ("_MALLOC")) {
+            if (TheCall->getNumArgs() == 1)
+              CheckMallocArgument(PossibleMallocOverflows, TheCall,
+                                  mgr.getASTContext());
           }
         }
+      }
     }
   }
 

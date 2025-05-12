@@ -1,7 +1,4 @@
-set(LLVM_LINK_COMPONENTS
-  Support
-  TargetParser
-  )
+set(LLVM_LINK_COMPONENTS support)
 
 set(BUILDVARIABLES_SRCPATH ${CMAKE_CURRENT_SOURCE_DIR}/BuildVariables.inc.in)
 set(BUILDVARIABLES_OBJPATH ${CMAKE_CURRENT_BINARY_DIR}/BuildVariables.inc)
@@ -80,7 +77,7 @@ llvm_expand_pseudo_components(LLVM_DYLIB_COMPONENTS_expanded "${LLVM_DYLIB_COMPO
 configure_file(${BUILDVARIABLES_SRCPATH} ${BUILDVARIABLES_OBJPATH} @ONLY)
 
 # Set build-time environment(s).
-add_compile_definitions(CMAKE_CFG_INTDIR="${CMAKE_CFG_INTDIR}")
+add_definitions(-DCMAKE_CFG_INTDIR="${CMAKE_CFG_INTDIR}")
 
 if(LLVM_ENABLE_MODULES)
   target_compile_options(llvm-config PUBLIC
@@ -91,18 +88,10 @@ endif()
 # Add the dependency on the generation step.
 add_file_dependencies(${CMAKE_CURRENT_SOURCE_DIR}/llvm-config.cpp ${BUILDVARIABLES_OBJPATH})
 
-if(CMAKE_CROSSCOMPILING)
-  if (LLVM_NATIVE_TOOL_DIR AND NOT LLVM_CONFIG_PATH)
-    if (EXISTS "${LLVM_NATIVE_TOOL_DIR}/llvm-config${LLVM_HOST_EXECUTABLE_SUFFIX}")
-      set(LLVM_CONFIG_PATH "${LLVM_NATIVE_TOOL_DIR}/llvm-config${LLVM_HOST_EXECUTABLE_SUFFIX}")
-    endif()
-  endif()
+if(CMAKE_CROSSCOMPILING AND NOT LLVM_CONFIG_PATH)
+  build_native_tool(llvm-config LLVM_CONFIG_PATH)
+  set(LLVM_CONFIG_PATH "${LLVM_CONFIG_PATH}" CACHE STRING "")
 
-  if (NOT LLVM_CONFIG_PATH)
-    build_native_tool(llvm-config LLVM_CONFIG_PATH)
-    set(LLVM_CONFIG_PATH "${LLVM_CONFIG_PATH}" CACHE STRING "")
-
-    add_custom_target(NativeLLVMConfig DEPENDS ${LLVM_CONFIG_PATH})
-    add_dependencies(llvm-config NativeLLVMConfig)
-  endif()
+  add_custom_target(NativeLLVMConfig DEPENDS ${LLVM_CONFIG_PATH})
+  add_dependencies(llvm-config NativeLLVMConfig)
 endif()

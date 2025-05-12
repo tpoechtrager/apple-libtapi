@@ -15,7 +15,6 @@
 
 #include <functional>
 #include <memory>
-#include <optional>
 #include <ostream>
 #include <string>
 #include <utility>
@@ -30,10 +29,8 @@
 #include "clang/Analysis/CFG.h"
 #include "clang/Analysis/FlowSensitive/ControlFlowContext.h"
 #include "clang/Analysis/FlowSensitive/DataflowAnalysis.h"
-#include "clang/Analysis/FlowSensitive/DataflowAnalysisContext.h"
 #include "clang/Analysis/FlowSensitive/DataflowEnvironment.h"
 #include "clang/Analysis/FlowSensitive/MatchSwitch.h"
-#include "clang/Analysis/FlowSensitive/NoopAnalysis.h"
 #include "clang/Analysis/FlowSensitive/WatchedLiteralsSolver.h"
 #include "clang/Basic/LLVM.h"
 #include "clang/Serialization/PCHContainerOperations.h"
@@ -43,10 +40,9 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
-#include "llvm/Support/Allocator.h"
 #include "llvm/Support/Errc.h"
 #include "llvm/Support/Error.h"
-#include "llvm/Testing/Annotations/Annotations.h"
+#include "llvm/Testing/Support/Annotations.h"
 
 namespace clang {
 namespace dataflow {
@@ -102,7 +98,7 @@ struct AnalysisOutputs {
   const Environment &InitEnv;
   // Stores the state of a CFG block if it has been evaluated by the analysis.
   // The indices correspond to the block IDs.
-  llvm::ArrayRef<std::optional<TypeErasedDataflowAnalysisState>> BlockStates;
+  llvm::ArrayRef<llvm::Optional<TypeErasedDataflowAnalysisState>> BlockStates;
 };
 
 /// Arguments for building the dataflow analysis.
@@ -138,21 +134,10 @@ template <typename AnalysisT> struct AnalysisInputs {
     ASTBuildVirtualMappedFiles = std::move(Arg);
     return std::move(*this);
   }
-  AnalysisInputs<AnalysisT> &&
-  withBuiltinOptions(DataflowAnalysisContext::Options Options) && {
-    BuiltinOptions = std::move(Options);
-    return std::move(*this);
-  }
-  AnalysisInputs<AnalysisT> &&
-  withSolverFactory(std::function<std::unique_ptr<Solver>()> Factory) && {
-    assert(Factory);
-    SolverFactory = std::move(Factory);
-    return std::move(*this);
-  }
 
   /// Required. Input code that is analyzed.
   llvm::StringRef Code;
-  /// Required. All functions that match this matcher are analyzed.
+  /// Required. The body of the function which matches this matcher is analyzed.
   ast_matchers::internal::Matcher<FunctionDecl> TargetFuncMatcher;
   /// Required. The analysis to be run is constructed with this function that
   /// takes as argument the AST generated from the code being analyzed and the
@@ -174,12 +159,6 @@ template <typename AnalysisT> struct AnalysisInputs {
   ArrayRef<std::string> ASTBuildArgs = {};
   /// Optional. Options for building the AST context.
   tooling::FileContentMappings ASTBuildVirtualMappedFiles = {};
-  /// Configuration options for the built-in model.
-  DataflowAnalysisContext::Options BuiltinOptions;
-  /// SAT solver factory.
-  std::function<std::unique_ptr<Solver>()> SolverFactory = [] {
-    return std::make_unique<WatchedLiteralsSolver>();
-  };
 };
 
 /// Returns assertions based on annotations that are present after statements in
@@ -188,16 +167,15 @@ llvm::Expected<llvm::DenseMap<const Stmt *, std::string>>
 buildStatementToAnnotationMapping(const FunctionDecl *Func,
                                   llvm::Annotations AnnotatedCode);
 
-/// Returns line numbers and content of the annotations in `AnnotatedCode`
-/// within the token range `BoundingRange`.
-llvm::DenseMap<unsigned, std::string> buildLineToAnnotationMapping(
-    const SourceManager &SM, const LangOptions &LangOpts,
-    SourceRange BoundingRange, llvm::Annotations AnnotatedCode);
+/// Returns line numbers and content of the annotations in `AnnotatedCode`.
+llvm::DenseMap<unsigned, std::string>
+buildLineToAnnotationMapping(SourceManager &SM,
+                             llvm::Annotations AnnotatedCode);
 
-/// Runs dataflow specified from `AI.MakeAnalysis` and `AI.PostVisitCFG` on all
-/// functions that match `AI.TargetFuncMatcher` in `AI.Code`.  Given the
-/// analysis outputs, `VerifyResults` checks that the results from the analysis
-/// are correct.
+/// Runs dataflow specified from `AI.MakeAnalysis` and `AI.PostVisitCFG` on the
+/// body of the function that matches `AI.TargetFuncMatcher` in `AI.Code`.
+/// Given the analysis outputs, `VerifyResults` checks that the results from the
+/// analysis are correct.
 ///
 /// Requirements:
 ///
@@ -225,13 +203,35 @@ checkDataflow(AnalysisInputs<AnalysisT> AI,
                                       "they were printed to the test log");
   }
 
+  // Get AST node of target function.
+  const FunctionDecl *Target = ast_matchers::selectFirst<FunctionDecl>(
+      "target", ast_matchers::match(
+                    ast_matchers::functionDecl(ast_matchers::isDefinition(),
+                                               AI.TargetFuncMatcher)
+                        .bind("target"),
+                    Context));
+  if (Target == nullptr)
+    return llvm::make_error<llvm::StringError>(
+        llvm::errc::invalid_argument, "Could not find target function.");
+
+  // Build control flow graph from body of target function.
+  auto MaybeCFCtx =
+      ControlFlowContext::build(Target, *Target->getBody(), Context);
+  if (!MaybeCFCtx)
+    return MaybeCFCtx.takeError();
+  auto &CFCtx = *MaybeCFCtx;
+
+  // Initialize states for running dataflow analysis.
+  DataflowAnalysisContext DACtx(std::make_unique<WatchedLiteralsSolver>());
+  Environment InitEnv(DACtx, *Target);
+  auto Analysis = AI.MakeAnalysis(Context, InitEnv);
   std::function<void(const CFGElement &,
                      const TypeErasedDataflowAnalysisState &)>
-      TypeErasedPostVisitCFG = nullptr;
+      PostVisitCFGClosure = nullptr;
   if (AI.PostVisitCFG) {
-    TypeErasedPostVisitCFG = [&AI, &Context](
-                                 const CFGElement &Element,
-                                 const TypeErasedDataflowAnalysisState &State) {
+    PostVisitCFGClosure = [&AI, &Context](
+                              const CFGElement &Element,
+                              const TypeErasedDataflowAnalysisState &State) {
       AI.PostVisitCFG(Context, Element,
                       TransferStateForDiagnostics<typename AnalysisT::Lattice>(
                           llvm::any_cast<const typename AnalysisT::Lattice &>(
@@ -240,56 +240,32 @@ checkDataflow(AnalysisInputs<AnalysisT> AI,
     };
   }
 
-  for (const ast_matchers::BoundNodes &BN :
-       ast_matchers::match(ast_matchers::functionDecl(
-                               ast_matchers::hasBody(ast_matchers::stmt()),
-                               AI.TargetFuncMatcher)
-                               .bind("target"),
-                           Context)) {
-    // Get the AST node of the target function.
-    const FunctionDecl *Target = BN.getNodeAs<FunctionDecl>("target");
-    if (Target == nullptr)
-      return llvm::make_error<llvm::StringError>(
-          llvm::errc::invalid_argument, "Could not find the target function.");
-
-    // Build the control flow graph for the target function.
-    auto MaybeCFCtx = ControlFlowContext::build(*Target);
-    if (!MaybeCFCtx) return MaybeCFCtx.takeError();
-    auto &CFCtx = *MaybeCFCtx;
-
-    // Initialize states for running dataflow analysis.
-    DataflowAnalysisContext DACtx(AI.SolverFactory(),
-                                  {/*Opts=*/AI.BuiltinOptions});
-    Environment InitEnv(DACtx, *Target);
-    auto Analysis = AI.MakeAnalysis(Context, InitEnv);
-
-    AnalysisOutputs AO{AnnotatedCode, Context, Target, CFCtx,
-                       Analysis,      InitEnv, {}};
-
-    // Additional test setup.
-    if (AI.SetupTest) {
-      if (auto Error = AI.SetupTest(AO)) return Error;
-    }
-
-    // If successful, the dataflow analysis returns a mapping from block IDs to
-    // the post-analysis states for the CFG blocks that have been evaluated.
-    llvm::Expected<std::vector<std::optional<TypeErasedDataflowAnalysisState>>>
-        MaybeBlockStates = runTypeErasedDataflowAnalysis(
-            CFCtx, Analysis, InitEnv, TypeErasedPostVisitCFG);
-    if (!MaybeBlockStates) return MaybeBlockStates.takeError();
-    AO.BlockStates = *MaybeBlockStates;
-
-    // Verify dataflow analysis outputs.
-    VerifyResults(AO);
+  // Additional test setup.
+  AnalysisOutputs AO{AnnotatedCode, Context, Target, CFCtx,
+                     Analysis,      InitEnv, {}};
+  if (AI.SetupTest) {
+    if (auto Error = AI.SetupTest(AO))
+      return Error;
   }
 
+  // If successful, the dataflow analysis returns a mapping from block IDs to
+  // the post-analysis states for the CFG blocks that have been evaluated.
+  llvm::Expected<std::vector<llvm::Optional<TypeErasedDataflowAnalysisState>>>
+      MaybeBlockStates = runTypeErasedDataflowAnalysis(CFCtx, Analysis, InitEnv,
+                                                       PostVisitCFGClosure);
+  if (!MaybeBlockStates)
+    return MaybeBlockStates.takeError();
+  AO.BlockStates = *MaybeBlockStates;
+
+  // Verify dataflow analysis outputs.
+  VerifyResults(AO);
   return llvm::Error::success();
 }
 
-/// Runs dataflow specified from `AI.MakeAnalysis` and `AI.PostVisitCFG` on all
-/// functions that match `AI.TargetFuncMatcher` in `AI.Code`. Given the
-/// annotation line numbers and analysis outputs, `VerifyResults` checks that
-/// the results from the analysis are correct.
+/// Runs dataflow specified from `AI.MakeAnalysis` and `AI.PostVisitCFG` on the
+/// body of the function that matches `AI.TargetFuncMatcher` in `AI.Code`. Given
+/// the annotation line numbers and analysis outputs, `VerifyResults` checks
+/// that the results from the analysis are correct.
 ///
 /// Requirements:
 ///
@@ -306,17 +282,16 @@ checkDataflow(AnalysisInputs<AnalysisT> AI,
                   VerifyResults) {
   return checkDataflow<AnalysisT>(
       std::move(AI), [&VerifyResults](const AnalysisOutputs &AO) {
-        auto AnnotationLinesAndContent = buildLineToAnnotationMapping(
-            AO.ASTCtx.getSourceManager(), AO.ASTCtx.getLangOpts(),
-            AO.Target->getSourceRange(), AO.Code);
+        auto AnnotationLinesAndContent =
+            buildLineToAnnotationMapping(AO.ASTCtx.getSourceManager(), AO.Code);
         VerifyResults(AnnotationLinesAndContent, AO);
       });
 }
 
-/// Runs dataflow specified from `AI.MakeAnalysis` and `AI.PostVisitCFG` on all
-/// functions that match `AI.TargetFuncMatcher` in `AI.Code`. Given the state
-/// computed at each annotated statement and analysis outputs, `VerifyResults`
-/// checks that the results from the analysis are correct.
+/// Runs dataflow specified from `AI.MakeAnalysis` and `AI.PostVisitCFG` on the
+/// body of the function that matches `AI.TargetFuncMatcher` in `AI.Code`. Given
+/// the state computed at each annotated statement and analysis outputs,
+/// `VerifyResults` checks that the results from the analysis are correct.
 ///
 /// Requirements:
 ///
@@ -375,7 +350,7 @@ checkDataflow(AnalysisInputs<AnalysisT> AI,
         if (It == StmtToAnnotations.end())
           return;
         auto [_, InsertSuccess] = AnnotationStates.insert(
-            {It->second, StateT{State.Lattice, State.Env.fork()}});
+            {It->second, StateT{State.Lattice, State.Env}});
         (void)_;
         (void)InsertSuccess;
         assert(InsertSuccess);
@@ -386,26 +361,8 @@ checkDataflow(AnalysisInputs<AnalysisT> AI,
           .withPostVisitCFG(std::move(PostVisitCFG)),
       [&VerifyResults, &AnnotationStates](const AnalysisOutputs &AO) {
         VerifyResults(AnnotationStates, AO);
-
-        // `checkDataflow()` can analyze more than one function.  Reset the
-        // variables to prepare for analyzing the next function.
-        AnnotationStates.clear();
       });
 }
-
-using BuiltinOptions = DataflowAnalysisContext::Options;
-
-/// Runs dataflow on `Code` with a `NoopAnalysis` and calls `VerifyResults` to
-/// verify the results.
-llvm::Error checkDataflowWithNoopAnalysis(
-    llvm::StringRef Code,
-    std::function<
-        void(const llvm::StringMap<DataflowAnalysisState<NoopLattice>> &,
-             ASTContext &)>
-        VerifyResults,
-    DataflowAnalysisOptions Options,
-    LangStandard::Kind Std = LangStandard::lang_cxx17,
-    llvm::StringRef TargetFun = "target");
 
 /// Returns the `ValueDecl` for the given identifier.
 ///
@@ -414,111 +371,51 @@ llvm::Error checkDataflowWithNoopAnalysis(
 ///   `Name` must be unique in `ASTCtx`.
 const ValueDecl *findValueDecl(ASTContext &ASTCtx, llvm::StringRef Name);
 
-/// Returns the `IndirectFieldDecl` for the given identifier.
-///
-/// Requirements:
-///
-///   `Name` must be unique in `ASTCtx`.
-const IndirectFieldDecl *findIndirectFieldDecl(ASTContext &ASTCtx,
-                                               llvm::StringRef Name);
-
-/// Returns the storage location (of type `LocT`) for the given identifier.
-/// `LocT` must be a subclass of `StorageLocation` and must be of the
-/// appropriate type.
-///
-/// Requirements:
-///
-///   `Name` must be unique in `ASTCtx`.
-template <class LocT>
-LocT &getLocForDecl(ASTContext &ASTCtx, const Environment &Env,
-                    llvm::StringRef Name) {
-  const ValueDecl *VD = findValueDecl(ASTCtx, Name);
-  assert(VD != nullptr);
-  return *cast<LocT>(Env.getStorageLocation(*VD));
-}
-
-/// Returns the value (of type `ValueT`) for the given identifier.
-/// `ValueT` must be a subclass of `Value` and must be of the appropriate type.
-///
-/// Requirements:
-///
-///   `Name` must be unique in `ASTCtx`.
-template <class ValueT>
-ValueT &getValueForDecl(ASTContext &ASTCtx, const Environment &Env,
-                        llvm::StringRef Name) {
-  const ValueDecl *VD = findValueDecl(ASTCtx, Name);
-  assert(VD != nullptr);
-  return *cast<ValueT>(Env.getValue(*VD));
-}
-
-/// Returns the value of a `Field` on the record referenced by `Loc.`
-/// Returns null if `Loc` is null.
-inline Value *getFieldValue(const AggregateStorageLocation *Loc,
-                            const ValueDecl &Field, const Environment &Env) {
-  if (Loc == nullptr)
-    return nullptr;
-  StorageLocation *FieldLoc = Loc->getChild(Field);
-  if (FieldLoc == nullptr)
-    return nullptr;
-  return Env.getValue(*FieldLoc);
-}
-
-/// Returns the value of a `Field` on a `Struct.
-/// Returns null if `Struct` is null.
-///
-/// Note: This function currently does not use the `Env` parameter, but it will
-/// soon be needed to look up the `Value` when `setChild()` changes to return a
-/// `StorageLocation *`.
-inline Value *getFieldValue(const StructValue *Struct, const ValueDecl &Field,
-                            const Environment &Env) {
-  if (Struct == nullptr)
-    return nullptr;
-  StorageLocation *FieldLoc = Struct->getChild(Field);
-  if (FieldLoc == nullptr)
-    return nullptr;
-  return Env.getValue(*FieldLoc);
-}
-
 /// Creates and owns constraints which are boolean values.
 class ConstraintContext {
-  unsigned NextAtom = 0;
-  llvm::BumpPtrAllocator A;
-
-  const Formula *make(Formula::Kind K,
-                      llvm::ArrayRef<const Formula *> Operands) {
-    return &Formula::create(A, K, Operands);
-  }
-
 public:
-  // Returns a reference to a fresh atomic variable.
-  const Formula *atom() {
-    return &Formula::create(A, Formula::AtomRef, {}, NextAtom++);
+  // Creates an atomic boolean value.
+  BoolValue *atom() {
+    Vals.push_back(std::make_unique<AtomicBoolValue>());
+    return Vals.back().get();
   }
 
-  // Creates a boolean conjunction.
-  const Formula *conj(const Formula *LHS, const Formula *RHS) {
-    return make(Formula::And, {LHS, RHS});
+  // Creates a boolean conjunction value.
+  BoolValue *conj(BoolValue *LeftSubVal, BoolValue *RightSubVal) {
+    Vals.push_back(
+        std::make_unique<ConjunctionValue>(*LeftSubVal, *RightSubVal));
+    return Vals.back().get();
   }
 
-  // Creates a boolean disjunction.
-  const Formula *disj(const Formula *LHS, const Formula *RHS) {
-    return make(Formula::Or, {LHS, RHS});
+  // Creates a boolean disjunction value.
+  BoolValue *disj(BoolValue *LeftSubVal, BoolValue *RightSubVal) {
+    Vals.push_back(
+        std::make_unique<DisjunctionValue>(*LeftSubVal, *RightSubVal));
+    return Vals.back().get();
   }
 
-  // Creates a boolean negation.
-  const Formula *neg(const Formula *Operand) {
-    return make(Formula::Not, {Operand});
+  // Creates a boolean negation value.
+  BoolValue *neg(BoolValue *SubVal) {
+    Vals.push_back(std::make_unique<NegationValue>(*SubVal));
+    return Vals.back().get();
   }
 
-  // Creates a boolean implication.
-  const Formula *impl(const Formula *LHS, const Formula *RHS) {
-    return make(Formula::Implies, {LHS, RHS});
+  // Creates a boolean implication value.
+  BoolValue *impl(BoolValue *LeftSubVal, BoolValue *RightSubVal) {
+    Vals.push_back(
+        std::make_unique<ImplicationValue>(*LeftSubVal, *RightSubVal));
+    return Vals.back().get();
   }
 
-  // Creates a boolean biconditional.
-  const Formula *iff(const Formula *LHS, const Formula *RHS) {
-    return make(Formula::Equal, {LHS, RHS});
+  // Creates a boolean biconditional value.
+  BoolValue *iff(BoolValue *LeftSubVal, BoolValue *RightSubVal) {
+    Vals.push_back(
+        std::make_unique<BiconditionalValue>(*LeftSubVal, *RightSubVal));
+    return Vals.back().get();
   }
+
+private:
+  std::vector<std::unique_ptr<BoolValue>> Vals;
 };
 
 } // namespace test

@@ -400,10 +400,10 @@ CloneLoopBlocks(Loop *L, Value *NewIter, const bool UseEpilogRemainder,
   if (UnrollRemainder)
     return NewLoop;
 
-  std::optional<MDNode *> NewLoopID = makeFollowupLoopID(
+  Optional<MDNode *> NewLoopID = makeFollowupLoopID(
       LoopID, {LLVMLoopUnrollFollowupAll, LLVMLoopUnrollFollowupRemainder});
   if (NewLoopID) {
-    NewLoop->setLoopID(*NewLoopID);
+    NewLoop->setLoopID(NewLoopID.value());
 
     // Do not setLoopAlreadyUnrolled if loop attributes have been defined
     // explicitly.
@@ -457,7 +457,7 @@ static bool canProfitablyUnrollMultiExitLoop(
   // call.
   return (OtherExits.size() == 1 &&
           (UnrollRuntimeOtherExitPredictable ||
-           OtherExits[0]->getPostdominatingDeoptimizeCall()));
+           OtherExits[0]->getTerminatingDeoptimizeCall()));
   // TODO: These can be fine-tuned further to consider code size or deopt states
   // that are captured by the deoptimize exit block.
   // Also, we can extend this to support more cases, if we actually
@@ -812,7 +812,10 @@ bool llvm::UnrollRuntimeLoopRemainder(
     updateLatchBranchWeightsForRemainderLoop(L, remainderLoop, Count);
 
   // Insert the cloned blocks into the function.
-  F->splice(InsertBot->getIterator(), F, NewBlocks[0]->getIterator(), F->end());
+  F->getBasicBlockList().splice(InsertBot->getIterator(),
+                                F->getBasicBlockList(),
+                                NewBlocks[0]->getIterator(),
+                                F->end());
 
   // Now the loop blocks are cloned and the other exiting blocks from the
   // remainder are connected to the original Loop's exit blocks. The remaining

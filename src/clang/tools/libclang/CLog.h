@@ -10,7 +10,6 @@
 #define LLVM_CLANG_TOOLS_LIBCLANG_CLOG_H
 
 #include "clang-c/Index.h"
-#include "clang/Basic/FileEntry.h"
 #include "clang/Basic/LLVM.h"
 #include "llvm/ADT/IntrusiveRefCntPtr.h"
 #include "llvm/ADT/SmallString.h"
@@ -24,6 +23,8 @@ class format_object_base;
 }
 
 namespace clang {
+  class FileEntry;
+
 namespace cxindex {
 
 class Logger;
@@ -64,7 +65,7 @@ public:
   ~Logger();
 
   Logger &operator<<(CXTranslationUnit);
-  Logger &operator<<(FileEntryRef FE);
+  Logger &operator<<(const FileEntry *FE);
   Logger &operator<<(CXCursor cursor);
   Logger &operator<<(CXSourceLocation);
   Logger &operator<<(CXSourceRange);

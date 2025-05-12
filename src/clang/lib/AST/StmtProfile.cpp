@@ -29,12 +29,10 @@ namespace {
   protected:
     llvm::FoldingSetNodeID &ID;
     bool Canonical;
-    bool ProfileLambdaExpr;
 
   public:
-    StmtProfiler(llvm::FoldingSetNodeID &ID, bool Canonical,
-                 bool ProfileLambdaExpr)
-        : ID(ID), Canonical(Canonical), ProfileLambdaExpr(ProfileLambdaExpr) {}
+    StmtProfiler(llvm::FoldingSetNodeID &ID, bool Canonical)
+        : ID(ID), Canonical(Canonical) {}
 
     virtual ~StmtProfiler() {}
 
@@ -85,10 +83,8 @@ namespace {
 
   public:
     StmtProfilerWithPointers(llvm::FoldingSetNodeID &ID,
-                             const ASTContext &Context, bool Canonical,
-                             bool ProfileLambdaExpr)
-        : StmtProfiler(ID, Canonical, ProfileLambdaExpr), Context(Context) {}
-
+                             const ASTContext &Context, bool Canonical)
+        : StmtProfiler(ID, Canonical), Context(Context) {}
   private:
     void HandleStmtClass(Stmt::StmtClass SC) override {
       ID.AddInteger(SC);
@@ -103,15 +99,7 @@ namespace {
           ID.AddInteger(NTTP->getDepth());
           ID.AddInteger(NTTP->getIndex());
           ID.AddBoolean(NTTP->isParameterPack());
-          // C++20 [temp.over.link]p6:
-          //   Two template-parameters are equivalent under the following
-          //   conditions: [...] if they declare non-type template parameters,
-          //   they have equivalent types ignoring the use of type-constraints
-          //   for placeholder types
-          //
-          // TODO: Why do we need to include the type in the profile? It's not
-          // part of the mangling.
-          VisitType(Context.getUnconstrainedType(NTTP->getType()));
+          VisitType(NTTP->getType());
           return;
         }
 
@@ -123,9 +111,6 @@ namespace {
           // definition of "equivalent" (per C++ [temp.over.link]) is at
           // least as strong as the definition of "equivalent" used for
           // name mangling.
-          //
-          // TODO: The Itanium C++ ABI only uses the top-level cv-qualifiers,
-          // not the entirety of the type.
           VisitType(Parm->getType());
           ID.AddInteger(Parm->getFunctionScopeDepth());
           ID.AddInteger(Parm->getFunctionScopeIndex());
@@ -185,8 +170,7 @@ namespace {
     ODRHash &Hash;
   public:
     StmtProfilerWithoutPointers(llvm::FoldingSetNodeID &ID, ODRHash &Hash)
-        : StmtProfiler(ID, /*Canonical=*/false, /*ProfileLambdaExpr=*/false),
-          Hash(Hash) {}
+        : StmtProfiler(ID, false), Hash(Hash) {}
 
   private:
     void HandleStmtClass(Stmt::StmtClass SC) override {
@@ -545,15 +529,6 @@ void OMPClauseProfiler::VisitOMPDynamicAllocatorsClause(
 
 void OMPClauseProfiler::VisitOMPAtomicDefaultMemOrderClause(
     const OMPAtomicDefaultMemOrderClause *C) {}
-
-void OMPClauseProfiler::VisitOMPAtClause(const OMPAtClause *C) {}
-
-void OMPClauseProfiler::VisitOMPSeverityClause(const OMPSeverityClause *C) {}
-
-void OMPClauseProfiler::VisitOMPMessageClause(const OMPMessageClause *C) {
-  if (C->getMessageString())
-    Profiler->VisitStmt(C->getMessageString());
-}
 
 void OMPClauseProfiler::VisitOMPScheduleClause(const OMPScheduleClause *C) {
   VistOMPClauseWithPreInit(C);
@@ -919,15 +894,6 @@ void OMPClauseProfiler::VisitOMPAffinityClause(const OMPAffinityClause *C) {
 }
 void OMPClauseProfiler::VisitOMPOrderClause(const OMPOrderClause *C) {}
 void OMPClauseProfiler::VisitOMPBindClause(const OMPBindClause *C) {}
-void OMPClauseProfiler::VisitOMPXDynCGroupMemClause(
-    const OMPXDynCGroupMemClause *C) {
-  VistOMPClauseWithPreInit(C);
-  if (Expr *Size = C->getSize())
-    Profiler->VisitStmt(Size);
-}
-void OMPClauseProfiler::VisitOMPDoacrossClause(const OMPDoacrossClause *C) {
-  VisitOMPClauseList(C);
-}
 } // namespace
 
 void
@@ -1048,9 +1014,6 @@ void StmtProfiler::VisitOMPTaskwaitDirective(const OMPTaskwaitDirective *S) {
   VisitOMPExecutableDirective(S);
 }
 
-void StmtProfiler::VisitOMPErrorDirective(const OMPErrorDirective *S) {
-  VisitOMPExecutableDirective(S);
-}
 void StmtProfiler::VisitOMPTaskgroupDirective(const OMPTaskgroupDirective *S) {
   VisitOMPExecutableDirective(S);
   if (const Expr *E = S->getReductionRef())
@@ -1538,7 +1501,7 @@ void StmtProfiler::VisitDesignatedInitExpr(const DesignatedInitExpr *S) {
       assert(D.isArrayRangeDesignator());
       ID.AddInteger(2);
     }
-    ID.AddInteger(D.getArrayIndex());
+    ID.AddInteger(D.getFirstExprIndex());
   }
 }
 
@@ -1647,8 +1610,8 @@ void StmtProfiler::VisitRequiresExpr(const RequiresExpr *S) {
     } else {
       ID.AddInteger(concepts::Requirement::RK_Nested);
       auto *NestedReq = cast<concepts::NestedRequirement>(Req);
-      ID.AddBoolean(NestedReq->hasInvalidConstraint());
-      if (!NestedReq->hasInvalidConstraint())
+      ID.AddBoolean(NestedReq->isSubstitutionFailure());
+      if (!NestedReq->isSubstitutionFailure())
         Visit(NestedReq->getConstraintExpr());
     }
   }
@@ -1656,8 +1619,7 @@ void StmtProfiler::VisitRequiresExpr(const RequiresExpr *S) {
 
 static Stmt::StmtClass DecodeOperatorCall(const CXXOperatorCallExpr *S,
                                           UnaryOperatorKind &UnaryOp,
-                                          BinaryOperatorKind &BinaryOp,
-                                          unsigned &NumArgs) {
+                                          BinaryOperatorKind &BinaryOp) {
   switch (S->getOperator()) {
   case OO_None:
   case OO_New:
@@ -1670,7 +1632,7 @@ static Stmt::StmtClass DecodeOperatorCall(const CXXOperatorCallExpr *S,
     llvm_unreachable("Invalid operator call kind");
 
   case OO_Plus:
-    if (NumArgs == 1) {
+    if (S->getNumArgs() == 1) {
       UnaryOp = UO_Plus;
       return Stmt::UnaryOperatorClass;
     }
@@ -1679,7 +1641,7 @@ static Stmt::StmtClass DecodeOperatorCall(const CXXOperatorCallExpr *S,
     return Stmt::BinaryOperatorClass;
 
   case OO_Minus:
-    if (NumArgs == 1) {
+    if (S->getNumArgs() == 1) {
       UnaryOp = UO_Minus;
       return Stmt::UnaryOperatorClass;
     }
@@ -1688,7 +1650,7 @@ static Stmt::StmtClass DecodeOperatorCall(const CXXOperatorCallExpr *S,
     return Stmt::BinaryOperatorClass;
 
   case OO_Star:
-    if (NumArgs == 1) {
+    if (S->getNumArgs() == 1) {
       UnaryOp = UO_Deref;
       return Stmt::UnaryOperatorClass;
     }
@@ -1709,7 +1671,7 @@ static Stmt::StmtClass DecodeOperatorCall(const CXXOperatorCallExpr *S,
     return Stmt::BinaryOperatorClass;
 
   case OO_Amp:
-    if (NumArgs == 1) {
+    if (S->getNumArgs() == 1) {
       UnaryOp = UO_AddrOf;
       return Stmt::UnaryOperatorClass;
     }
@@ -1818,13 +1780,13 @@ static Stmt::StmtClass DecodeOperatorCall(const CXXOperatorCallExpr *S,
     return Stmt::BinaryOperatorClass;
 
   case OO_PlusPlus:
-    UnaryOp = NumArgs == 1 ? UO_PreInc : UO_PostInc;
-    NumArgs = 1;
+    UnaryOp = S->getNumArgs() == 1? UO_PreInc
+                                  : UO_PostInc;
     return Stmt::UnaryOperatorClass;
 
   case OO_MinusMinus:
-    UnaryOp = NumArgs == 1 ? UO_PreDec : UO_PostDec;
-    NumArgs = 1;
+    UnaryOp = S->getNumArgs() == 1? UO_PreDec
+                                  : UO_PostDec;
     return Stmt::UnaryOperatorClass;
 
   case OO_Comma:
@@ -1870,11 +1832,10 @@ void StmtProfiler::VisitCXXOperatorCallExpr(const CXXOperatorCallExpr *S) {
 
     UnaryOperatorKind UnaryOp = UO_Extension;
     BinaryOperatorKind BinaryOp = BO_Comma;
-    unsigned NumArgs = S->getNumArgs();
-    Stmt::StmtClass SC = DecodeOperatorCall(S, UnaryOp, BinaryOp, NumArgs);
+    Stmt::StmtClass SC = DecodeOperatorCall(S, UnaryOp, BinaryOp);
 
     ID.AddInteger(SC);
-    for (unsigned I = 0; I != NumArgs; ++I)
+    for (unsigned I = 0, N = S->getNumArgs(); I != N; ++I)
       Visit(S->getArg(I));
     if (SC == Stmt::UnaryOperatorClass)
       ID.AddInteger(UnaryOp);
@@ -2037,27 +1998,14 @@ StmtProfiler::VisitCXXTemporaryObjectExpr(const CXXTemporaryObjectExpr *S) {
 
 void
 StmtProfiler::VisitLambdaExpr(const LambdaExpr *S) {
-  if (!ProfileLambdaExpr) {
-    // Do not recursively visit the children of this expression. Profiling the
-    // body would result in unnecessary work, and is not safe to do during
-    // deserialization.
-    VisitStmtNoChildren(S);
+  // Do not recursively visit the children of this expression. Profiling the
+  // body would result in unnecessary work, and is not safe to do during
+  // deserialization.
+  VisitStmtNoChildren(S);
 
-    // C++20 [temp.over.link]p5:
-    //   Two lambda-expressions are never considered equivalent.
-    VisitDecl(S->getLambdaClass());
-
-    return;
-  }
-
-  CXXRecordDecl *Lambda = S->getLambdaClass();
-  ID.AddInteger(Lambda->getODRHash());
-
-  for (const auto &Capture : Lambda->captures()) {
-    ID.AddInteger(Capture.getCaptureKind());
-    if (Capture.capturesVariable())
-      VisitDecl(Capture.getCapturedVar());
-  }
+  // C++20 [temp.over.link]p5:
+  //   Two lambda-expressions are never considered equivalent.
+  VisitDecl(S->getLambdaClass());
 }
 
 void
@@ -2231,10 +2179,6 @@ void StmtProfiler::VisitMaterializeTemporaryExpr(
 void StmtProfiler::VisitCXXFoldExpr(const CXXFoldExpr *S) {
   VisitExpr(S);
   ID.AddInteger(S->getOperator());
-}
-
-void StmtProfiler::VisitCXXParenListInitExpr(const CXXParenListInitExpr *S) {
-  VisitExpr(S);
 }
 
 void StmtProfiler::VisitCoroutineBodyStmt(const CoroutineBodyStmt *S) {
@@ -2411,8 +2355,8 @@ void StmtProfiler::VisitTemplateArgument(const TemplateArgument &Arg) {
 }
 
 void Stmt::Profile(llvm::FoldingSetNodeID &ID, const ASTContext &Context,
-                   bool Canonical, bool ProfileLambdaExpr) const {
-  StmtProfilerWithPointers Profiler(ID, Context, Canonical, ProfileLambdaExpr);
+                   bool Canonical) const {
+  StmtProfilerWithPointers Profiler(ID, Context, Canonical);
   Profiler.Visit(this);
 }
 

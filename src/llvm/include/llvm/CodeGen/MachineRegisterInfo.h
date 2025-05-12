@@ -17,7 +17,6 @@
 #include "llvm/ADT/BitVector.h"
 #include "llvm/ADT/IndexedMap.h"
 #include "llvm/ADT/PointerUnion.h"
-#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringSet.h"
 #include "llvm/ADT/iterator_range.h"
@@ -57,15 +56,11 @@ public:
     virtual ~Delegate() = default;
 
     virtual void MRI_NoteNewVirtualRegister(Register Reg) = 0;
-    virtual void MRI_NoteCloneVirtualRegister(Register NewReg,
-                                              Register SrcReg) {
-      MRI_NoteNewVirtualRegister(NewReg);
-    }
   };
 
 private:
   MachineFunction *MF;
-  SmallPtrSet<Delegate *, 1> TheDelegates;
+  Delegate *TheDelegate = nullptr;
 
   /// True if subregister liveness is tracked.
   const bool TracksSubRegLiveness;
@@ -101,9 +96,8 @@ private:
   /// first member of the pair being non-zero. If the hinted register is
   /// virtual, it means the allocator should prefer the physical register
   /// allocated to it if any.
-  IndexedMap<std::pair<unsigned, SmallVector<Register, 4>>,
-             VirtReg2IndexFunctor>
-      RegAllocHints;
+  IndexedMap<std::pair<Register, SmallVector<Register, 4>>,
+             VirtReg2IndexFunctor> RegAllocHints;
 
   /// PhysRegUseDefLists - This is an array of the head of the use/def list for
   /// physical registers.
@@ -160,28 +154,19 @@ public:
 
   void resetDelegate(Delegate *delegate) {
     // Ensure another delegate does not take over unless the current
-    // delegate first unattaches itself.
-    assert(TheDelegates.count(delegate) &&
-           "Only an existing delegate can perform reset!");
-    TheDelegates.erase(delegate);
+    // delegate first unattaches itself. If we ever need to multicast
+    // notifications, we will need to change to using a list.
+    assert(TheDelegate == delegate &&
+           "Only the current delegate can perform reset!");
+    TheDelegate = nullptr;
   }
 
-  void addDelegate(Delegate *delegate) {
-    assert(delegate && !TheDelegates.count(delegate) &&
-           "Attempted to add null delegate, or to change it without "
+  void setDelegate(Delegate *delegate) {
+    assert(delegate && !TheDelegate &&
+           "Attempted to set delegate to null, or to change it without "
            "first resetting it!");
 
-    TheDelegates.insert(delegate);
-  }
-
-  void noteNewVirtualRegister(Register Reg) {
-    for (auto *TheDelegate : TheDelegates)
-      TheDelegate->MRI_NoteNewVirtualRegister(Reg);
-  }
-
-  void noteCloneVirtualRegister(Register NewReg, Register SrcReg) {
-    for (auto *TheDelegate : TheDelegates)
-      TheDelegate->MRI_NoteCloneVirtualRegister(NewReg, SrcReg);
+    TheDelegate = delegate;
   }
 
   //===--------------------------------------------------------------------===//
@@ -453,7 +438,7 @@ public:
   }
 
   void insertVRegByName(StringRef Name, Register Reg) {
-    assert((Name.empty() || !VRegNames.contains(Name)) &&
+    assert((Name.empty() || VRegNames.find(Name) == VRegNames.end()) &&
            "Named VRegs Must be Unique.");
     if (!Name.empty()) {
       VRegNames.insert(Name);
@@ -660,9 +645,9 @@ public:
   /// This shouldn't be used directly unless \p Reg has a register class.
   /// \see getRegClassOrNull when this might happen.
   const TargetRegisterClass *getRegClass(Register Reg) const {
-    assert(isa<const TargetRegisterClass *>(VRegInfo[Reg.id()].first) &&
+    assert(VRegInfo[Reg.id()].first.is<const TargetRegisterClass *>() &&
            "Register class not set, wrong accessor");
-    return cast<const TargetRegisterClass *>(VRegInfo[Reg.id()].first);
+    return VRegInfo[Reg.id()].first.get<const TargetRegisterClass *>();
   }
 
   /// Return the register class of \p Reg, or null if Reg has not been assigned
@@ -678,7 +663,7 @@ public:
   /// the select pass, using getRegClass is safe.
   const TargetRegisterClass *getRegClassOrNull(Register Reg) const {
     const RegClassOrRegBank &Val = VRegInfo[Reg].first;
-    return dyn_cast_if_present<const TargetRegisterClass *>(Val);
+    return Val.dyn_cast<const TargetRegisterClass *>();
   }
 
   /// Return the register bank of \p Reg, or null if Reg has not been assigned
@@ -687,7 +672,7 @@ public:
   /// RegisterBankInfo::getRegBankFromRegClass.
   const RegisterBank *getRegBankOrNull(Register Reg) const {
     const RegClassOrRegBank &Val = VRegInfo[Reg].first;
-    return dyn_cast_if_present<const RegisterBank *>(Val);
+    return Val.dyn_cast<const RegisterBank *>();
   }
 
   /// Return the register bank or register class of \p Reg.
@@ -758,7 +743,7 @@ public:
   /// Get the low-level type of \p Reg or LLT{} if Reg is not a generic
   /// (target independent) virtual register.
   LLT getType(Register Reg) const {
-    if (Reg.isVirtual() && VRegToType.inBounds(Reg))
+    if (Register::isVirtualRegister(Reg) && VRegToType.inBounds(Reg))
       return VRegToType[Reg];
     return LLT{};
   }
@@ -800,7 +785,7 @@ public:
   /// addRegAllocationHint - Add a register allocation hint to the hints
   /// vector for VReg.
   void addRegAllocationHint(Register VReg, Register PrefReg) {
-    assert(VReg.isVirtual());
+    assert(Register::isVirtualRegister(VReg));
     RegAllocHints[VReg].second.push_back(PrefReg);
   }
 
@@ -819,25 +804,27 @@ public:
   /// getRegAllocationHint - Return the register allocation hint for the
   /// specified virtual register. If there are many hints, this returns the
   /// one with the greatest weight.
-  std::pair<unsigned, Register> getRegAllocationHint(Register VReg) const {
+  std::pair<Register, Register>
+  getRegAllocationHint(Register VReg) const {
     assert(VReg.isVirtual());
     Register BestHint = (RegAllocHints[VReg.id()].second.size() ?
                          RegAllocHints[VReg.id()].second[0] : Register());
-    return {RegAllocHints[VReg.id()].first, BestHint};
+    return std::pair<Register, Register>(RegAllocHints[VReg.id()].first,
+                                         BestHint);
   }
 
   /// getSimpleHint - same as getRegAllocationHint except it will only return
   /// a target independent hint.
   Register getSimpleHint(Register VReg) const {
     assert(VReg.isVirtual());
-    std::pair<unsigned, Register> Hint = getRegAllocationHint(VReg);
+    std::pair<Register, Register> Hint = getRegAllocationHint(VReg);
     return Hint.first ? Register() : Hint.second;
   }
 
   /// getRegAllocationHints - Return a reference to the vector of all
   /// register allocation hints for VReg.
-  const std::pair<unsigned, SmallVector<Register, 4>> &
-  getRegAllocationHints(Register VReg) const {
+  const std::pair<Register, SmallVector<Register, 4>>
+  &getRegAllocationHints(Register VReg) const {
     assert(VReg.isVirtual());
     return RegAllocHints[VReg];
   }
@@ -912,18 +899,6 @@ public:
   /// freezeReservedRegs - Called by the register allocator to freeze the set
   /// of reserved registers before allocation begins.
   void freezeReservedRegs(const MachineFunction&);
-
-  /// reserveReg -- Mark a register as reserved so checks like isAllocatable 
-  /// will not suggest using it. This should not be used during the middle
-  /// of a function walk, or when liveness info is available.
-  void reserveReg(MCRegister PhysReg, const TargetRegisterInfo *TRI) {
-    assert(reservedRegsFrozen() &&
-           "Reserved registers haven't been frozen yet. ");
-    MCRegAliasIterator R(PhysReg, TRI, true);
-
-    for (; R.isValid(); ++R)
-      ReservedRegs.set(*R);
-  }
 
   /// reservedRegsFrozen - Returns true after freezeReservedRegs() was called
   /// to ensure the set of reserved registers stays constant.

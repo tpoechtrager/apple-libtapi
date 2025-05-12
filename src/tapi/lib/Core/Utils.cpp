@@ -208,8 +208,6 @@ std::unique_ptr<InterfaceFile> createInterfaceFile(const APIs &apis,
       file->setApplicationExtensionSafe();
     if (binaryInfo.isTwoLevelNamespace)
       file->setTwoLevelNamespace();
-    if (binaryInfo.isOSLibNotForSharedCache)
-      file->setOSLibNotForSharedCache();
     file->setCurrentVersion(binaryInfo.currentVersion);
     file->setCompatibilityVersion(binaryInfo.compatibilityVersion);
     file->addParentUmbrella(target, binaryInfo.parentUmbrella);
@@ -248,6 +246,20 @@ std::unique_ptr<InterfaceFile> convertToInterfaceFile(const APIs &apis) {
     file->addDocument(createInterfaceFile(apis, *it));
 
   return file;
+}
+
+SimpleSymbol parseSymbol(StringRef symbolName) {
+  if (symbolName.startswith(".objc_class_name_"))
+    return {symbolName.drop_front(17), SymbolKind::ObjectiveCClass};
+  if (symbolName.startswith("_OBJC_CLASS_$_"))
+    return {symbolName.drop_front(14), SymbolKind::ObjectiveCClass};
+  if (symbolName.startswith("_OBJC_METACLASS_$_"))
+    return {symbolName.drop_front(18), SymbolKind::ObjectiveCClass};
+  if (symbolName.startswith("_OBJC_EHTYPE_$_"))
+    return {symbolName.drop_front(15), SymbolKind::ObjectiveCClassEHType};
+  if (symbolName.startswith("_OBJC_IVAR_$_"))
+    return {symbolName.drop_front(13), SymbolKind::ObjectiveCInstanceVariable};
+  return {symbolName, SymbolKind::GlobalSymbol};
 }
 
 TAPI_NAMESPACE_INTERNAL_END

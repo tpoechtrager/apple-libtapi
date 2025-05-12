@@ -1,4 +1,4 @@
-import("//third-party/unittest/unittest.gni")
+import("//llvm/utils/unittest/unittest.gni")
 
 unittest("ClangIncludeFixerTests") {
   configs += [ "//llvm/utils/gn/build:clang_code" ]

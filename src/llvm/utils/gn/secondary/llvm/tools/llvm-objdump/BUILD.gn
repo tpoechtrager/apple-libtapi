@@ -56,7 +56,6 @@ executable("llvm-objdump") {
     "//llvm/lib/Target:AllTargetsDescs",
     "//llvm/lib/Target:AllTargetsDisassemblers",
     "//llvm/lib/Target:AllTargetsInfos",
-    "//llvm/lib/TargetParser",
     "//llvm/utils/gn/build/libs/xar",
   ]
   sources = [

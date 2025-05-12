@@ -69,7 +69,8 @@ public:
     if (!CondS || CondS->computeComplexity() > ComplexityThreshold)
       return State;
 
-    for (SymbolRef Antecedent : CondS->symbols()) {
+    for (auto B=CondS->symbol_begin(), E=CondS->symbol_end(); B != E; ++B) {
+      const SymbolRef Antecedent = *B;
       State = addImplication(Antecedent, State, true);
       State = addImplication(Antecedent, State, false);
     }

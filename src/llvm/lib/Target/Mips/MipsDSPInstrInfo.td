@@ -452,6 +452,7 @@ class RDDSP_DESC_BASE<string instr_asm, SDPatternOperator OpNode,
   list<dag> Pattern = [(set GPR32Opnd:$rd, (OpNode timmZExt10:$mask))];
   InstrItinClass Itinerary = itin;
   string BaseOpcode = instr_asm;
+  bit isMoveReg = 1;
 }
 
 class WRDSP_DESC_BASE<string instr_asm, SDPatternOperator OpNode,
@@ -462,6 +463,7 @@ class WRDSP_DESC_BASE<string instr_asm, SDPatternOperator OpNode,
   list<dag> Pattern = [(OpNode GPR32Opnd:$rs, timmZExt10:$mask)];
   InstrItinClass Itinerary = itin;
   string BaseOpcode = instr_asm;
+  bit isMoveReg = 1;
 }
 
 class DPA_W_PH_DESC_BASE<string instr_asm, SDPatternOperator OpNode> {

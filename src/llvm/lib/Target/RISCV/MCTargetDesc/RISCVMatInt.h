@@ -10,7 +10,7 @@
 #define LLVM_LIB_TARGET_RISCV_MCTARGETDESC_MATINT_H
 
 #include "llvm/ADT/SmallVector.h"
-#include "llvm/TargetParser/SubtargetFeature.h"
+#include "llvm/MC/SubtargetFeature.h"
 #include <cstdint>
 
 namespace llvm {
@@ -25,17 +25,11 @@ enum OpndKind {
   RegX0,  // ADD_UW
 };
 
-class Inst {
+struct Inst {
   unsigned Opc;
-  int32_t Imm; // The largest value we need to store is 20 bits.
+  int64_t Imm;
 
-public:
-  Inst(unsigned Opc, int64_t I) : Opc(Opc), Imm(I) {
-    assert(I == Imm && "truncated");
-  }
-
-  unsigned getOpcode() const { return Opc; }
-  int64_t getImm() const { return Imm; }
+  Inst(unsigned Opc, int64_t Imm) : Opc(Opc), Imm(Imm) {}
 
   OpndKind getOpndKind() const;
 };

@@ -20,6 +20,7 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/IntrusiveRefCntPtr.h"
+#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/PointerUnion.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
@@ -29,7 +30,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <iterator>
-#include <optional>
 #include <utility>
 
 namespace clang {
@@ -150,11 +150,6 @@ public:
   virtual bool
   FindExternalVisibleDeclsByName(const DeclContext *DC, DeclarationName Name);
 
-  virtual bool FindExternalVisibleMethodsByName(const DeclContext *DC,
-                                                DeclarationName Name) {
-    return false;
-  }
-
   /// Ensures that the table of all visible declarations inside this
   /// context is up to date.
   ///
@@ -165,7 +160,7 @@ public:
   virtual Module *getModule(unsigned ID) { return nullptr; }
 
   /// Return a descriptor for the corresponding module, if one exists.
-  virtual std::optional<ASTSourceDescriptor> getSourceDescriptor(unsigned ID);
+  virtual llvm::Optional<ASTSourceDescriptor> getSourceDescriptor(unsigned ID);
 
   enum ExtKind { EK_Always, EK_Never, EK_ReplyHazy };
 
@@ -376,21 +371,13 @@ public:
   /// \param Source the external AST source.
   ///
   /// \returns a pointer to the AST node.
-  T *get(ExternalASTSource *Source) const {
+  T* get(ExternalASTSource *Source) const {
     if (isOffset()) {
       assert(Source &&
              "Cannot deserialize a lazy pointer without an AST source");
       Ptr = reinterpret_cast<uint64_t>((Source->*Get)(Ptr >> 1));
     }
     return reinterpret_cast<T*>(Ptr);
-  }
-
-  /// Retrieve the address of the AST node pointer. Deserializes the pointee if
-  /// necessary.
-  T **getAddressOfPointer(ExternalASTSource *Source) const {
-    // Ensure the integer is in pointer form.
-    (void)get(Source);
-    return reinterpret_cast<T**>(&Ptr);
   }
 };
 

@@ -10,7 +10,6 @@ executable("llvm-lto") {
     "//llvm/lib/Support",
     "//llvm/lib/Target",
     "//llvm/lib/Target:TargetsToBuild",
-    "//llvm/lib/TargetParser",
   ]
   sources = [ "llvm-lto.cpp" ]
 }

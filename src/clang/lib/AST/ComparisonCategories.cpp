@@ -17,11 +17,10 @@
 #include "clang/AST/DeclCXX.h"
 #include "clang/AST/Type.h"
 #include "llvm/ADT/SmallVector.h"
-#include <optional>
 
 using namespace clang;
 
-std::optional<ComparisonCategoryType>
+Optional<ComparisonCategoryType>
 clang::getComparisonCategoryForBuiltinCmp(QualType T) {
   using CCT = ComparisonCategoryType;
 
@@ -38,7 +37,7 @@ clang::getComparisonCategoryForBuiltinCmp(QualType T) {
     return CCT::StrongOrdering;
 
   // TODO: Extend support for operator<=> to ObjC types.
-  return std::nullopt;
+  return llvm::None;
 }
 
 bool ComparisonCategoryInfo::ValueInfo::hasValidIntValue() const {

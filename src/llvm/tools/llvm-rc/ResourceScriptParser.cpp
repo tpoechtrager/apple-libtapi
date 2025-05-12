@@ -11,7 +11,6 @@
 //===---------------------------------------------------------------------===//
 
 #include "ResourceScriptParser.h"
-#include "llvm/ADT/StringExtras.h"
 #include "llvm/Option/ArgList.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Path.h"
@@ -555,7 +554,7 @@ Expected<Control> RCParser::parseControl() {
   RETURN_IF_ERROR(consumeType(Kind::Comma));
 
   IntOrString Class;
-  std::optional<IntWithNotMask> Style;
+  Optional<IntWithNotMask> Style;
   if (ClassUpper == "CONTROL") {
     // CONTROL text, id, class, style, x, y, width, height [, exstyle] [, helpID]
     ASSIGN_OR_RETURN(ClassStr, readString());
@@ -578,12 +577,12 @@ Expected<Control> RCParser::parseControl() {
     }
   }
 
-  std::optional<uint32_t> ExStyle;
+  Optional<uint32_t> ExStyle;
   if (consumeOptionalType(Kind::Comma)) {
     ASSIGN_OR_RETURN(Val, readInt());
     ExStyle = *Val;
   }
-  std::optional<uint32_t> HelpID;
+  Optional<uint32_t> HelpID;
   if (consumeOptionalType(Kind::Comma)) {
     ASSIGN_OR_RETURN(Val, readInt());
     HelpID = *Val;

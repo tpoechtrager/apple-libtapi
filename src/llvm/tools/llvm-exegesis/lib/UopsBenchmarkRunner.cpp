@@ -25,19 +25,19 @@ UopsBenchmarkRunner::runMeasurements(const FunctionExecutor &Executor) const {
        IssueCounter != IssueCounterEnd; ++IssueCounter) {
     if (!IssueCounter->Counter)
       continue;
-    auto ExpectedCounterValue = Executor.runAndSample(IssueCounter->Counter);
+    auto ExpectedCounterValue = Executor.runAndMeasure(IssueCounter->Counter);
     if (!ExpectedCounterValue)
       return ExpectedCounterValue.takeError();
     Result.push_back(BenchmarkMeasure::Create(IssueCounter->ProcResName,
-                                              (*ExpectedCounterValue)[0]));
+                                              *ExpectedCounterValue));
   }
   // NumMicroOps.
   if (const char *const UopsCounter = PCI.UopsCounter) {
-    auto ExpectedCounterValue = Executor.runAndSample(UopsCounter);
+    auto ExpectedCounterValue = Executor.runAndMeasure(UopsCounter);
     if (!ExpectedCounterValue)
       return ExpectedCounterValue.takeError();
     Result.push_back(
-        BenchmarkMeasure::Create("NumMicroOps", (*ExpectedCounterValue)[0]));
+        BenchmarkMeasure::Create("NumMicroOps", *ExpectedCounterValue));
   }
   return std::move(Result);
 }

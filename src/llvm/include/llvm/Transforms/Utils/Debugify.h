@@ -192,8 +192,8 @@ class DebugifyEachInstrumentation {
   DebugifyStatsMap *DIStatsMap = nullptr;
 
 public:
-  void registerCallbacks(PassInstrumentationCallbacks &PIC,
-                         ModuleAnalysisManager &MAM);
+
+  void registerCallbacks(PassInstrumentationCallbacks &PIC);
   // Used within DebugifyMode::SyntheticDebugInfo mode.
   void setDIStatsMap(DebugifyStatsMap &StatMap) { DIStatsMap = &StatMap; }
   const DebugifyStatsMap &getDebugifyStatsMap() const { return *DIStatsMap; }

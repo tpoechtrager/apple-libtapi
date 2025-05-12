@@ -9,17 +9,16 @@
 #include "DirectoryScanner.h"
 
 #include "llvm/Support/Path.h"
-#include <optional>
 
 namespace clang {
 
 using namespace llvm;
 
-std::optional<sys::fs::file_status> getFileStatus(StringRef Path) {
+Optional<sys::fs::file_status> getFileStatus(StringRef Path) {
   sys::fs::file_status Status;
   std::error_code EC = status(Path, Status);
   if (EC)
-    return std::nullopt;
+    return None;
   return Status;
 }
 

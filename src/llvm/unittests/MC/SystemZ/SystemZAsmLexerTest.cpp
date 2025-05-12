@@ -358,7 +358,7 @@ TEST_F(SystemZAsmLexerLinux, CheckDefaultQuestionAtStartOfIdentifier) {
   Parser->getLexer().Lex();
 
   SmallVector<AsmToken::TokenKind> ExpectedTokens(
-      {AsmToken::Question, AsmToken::Identifier, AsmToken::EndOfStatement,
+      {AsmToken::Error, AsmToken::Identifier, AsmToken::EndOfStatement,
        AsmToken::Eof});
   lexAndCheckTokens(AsmStr, ExpectedTokens);
 }

@@ -12,6 +12,7 @@
 
 #include "llvm/Transforms/Utils/LoopUtils.h"
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/PriorityWorklist.h"
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/SetVector.h"
@@ -246,27 +247,27 @@ void llvm::addStringMetadataToLoop(Loop *TheLoop, const char *StringMD,
   TheLoop->setLoopID(NewLoopID);
 }
 
-std::optional<ElementCount>
+Optional<ElementCount>
 llvm::getOptionalElementCountLoopAttribute(const Loop *TheLoop) {
-  std::optional<int> Width =
+  Optional<int> Width =
       getOptionalIntLoopAttribute(TheLoop, "llvm.loop.vectorize.width");
 
   if (Width) {
-    std::optional<int> IsScalable = getOptionalIntLoopAttribute(
+    Optional<int> IsScalable = getOptionalIntLoopAttribute(
         TheLoop, "llvm.loop.vectorize.scalable.enable");
     return ElementCount::get(*Width, IsScalable.value_or(false));
   }
 
-  return std::nullopt;
+  return None;
 }
 
-std::optional<MDNode *> llvm::makeFollowupLoopID(
+Optional<MDNode *> llvm::makeFollowupLoopID(
     MDNode *OrigLoopID, ArrayRef<StringRef> FollowupOptions,
     const char *InheritOptionsExceptPrefix, bool AlwaysNew) {
   if (!OrigLoopID) {
     if (AlwaysNew)
       return nullptr;
-    return std::nullopt;
+    return None;
   }
 
   assert(OrigLoopID->getOperand(0) == OrigLoopID);
@@ -325,7 +326,7 @@ std::optional<MDNode *> llvm::makeFollowupLoopID(
   // Attributes of the followup loop not specified explicity, so signal to the
   // transformation pass to add suitable attributes.
   if (!AlwaysNew && !HasAnyFollowup)
-    return std::nullopt;
+    return None;
 
   // If no attributes were added or remove, the previous loop Id can be reused.
   if (!AlwaysNew && !Changed)
@@ -353,10 +354,10 @@ TransformationMode llvm::hasUnrollTransformation(const Loop *L) {
   if (getBooleanLoopAttribute(L, "llvm.loop.unroll.disable"))
     return TM_SuppressedByUser;
 
-  std::optional<int> Count =
+  Optional<int> Count =
       getOptionalIntLoopAttribute(L, "llvm.loop.unroll.count");
   if (Count)
-    return *Count == 1 ? TM_SuppressedByUser : TM_ForcedByUser;
+    return Count.value() == 1 ? TM_SuppressedByUser : TM_ForcedByUser;
 
   if (getBooleanLoopAttribute(L, "llvm.loop.unroll.enable"))
     return TM_ForcedByUser;
@@ -374,10 +375,10 @@ TransformationMode llvm::hasUnrollAndJamTransformation(const Loop *L) {
   if (getBooleanLoopAttribute(L, "llvm.loop.unroll_and_jam.disable"))
     return TM_SuppressedByUser;
 
-  std::optional<int> Count =
+  Optional<int> Count =
       getOptionalIntLoopAttribute(L, "llvm.loop.unroll_and_jam.count");
   if (Count)
-    return *Count == 1 ? TM_SuppressedByUser : TM_ForcedByUser;
+    return Count.value() == 1 ? TM_SuppressedByUser : TM_ForcedByUser;
 
   if (getBooleanLoopAttribute(L, "llvm.loop.unroll_and_jam.enable"))
     return TM_ForcedByUser;
@@ -389,15 +390,15 @@ TransformationMode llvm::hasUnrollAndJamTransformation(const Loop *L) {
 }
 
 TransformationMode llvm::hasVectorizeTransformation(const Loop *L) {
-  std::optional<bool> Enable =
+  Optional<bool> Enable =
       getOptionalBoolLoopAttribute(L, "llvm.loop.vectorize.enable");
 
   if (Enable == false)
     return TM_SuppressedByUser;
 
-  std::optional<ElementCount> VectorizeWidth =
+  Optional<ElementCount> VectorizeWidth =
       getOptionalElementCountLoopAttribute(L);
-  std::optional<int> InterleaveCount =
+  Optional<int> InterleaveCount =
       getOptionalIntLoopAttribute(L, "llvm.loop.interleave.count");
 
   // 'Forcing' vector width and interleave count to one effectively disables
@@ -465,19 +466,6 @@ llvm::collectChildrenInLoop(DomTreeNode *N, const Loop *CurLoop) {
 
   return Worklist;
 }
-
-bool llvm::isAlmostDeadIV(PHINode *PN, BasicBlock *LatchBlock, Value *Cond) {
-  int LatchIdx = PN->getBasicBlockIndex(LatchBlock);
-  Value *IncV = PN->getIncomingValue(LatchIdx);
-
-  for (User *U : PN->users())
-    if (U != Cond && U != IncV) return false;
-
-  for (User *U : IncV->users())
-    if (U != Cond && U != PN) return false;
-  return true;
-}
-
 
 void llvm::deleteDeadLoop(Loop *L, DominatorTree *DT, ScalarEvolution *SE,
                           LoopInfo *LI, MemorySSA *MSSA) {
@@ -606,7 +594,7 @@ void llvm::deleteDeadLoop(Loop *L, DominatorTree *DT, ScalarEvolution *SE,
   }
 
   // Use a map to unique and a vector to guarantee deterministic ordering.
-  llvm::SmallDenseSet<DebugVariable, 4> DeadDebugSet;
+  llvm::SmallDenseSet<std::pair<DIVariable *, DIExpression *>, 4> DeadDebugSet;
   llvm::SmallVector<DbgVariableIntrinsic *, 4> DeadDebugInst;
 
   if (ExitBlock) {
@@ -635,23 +623,28 @@ void llvm::deleteDeadLoop(Loop *L, DominatorTree *DT, ScalarEvolution *SE,
         auto *DVI = dyn_cast<DbgVariableIntrinsic>(&I);
         if (!DVI)
           continue;
-        if (!DeadDebugSet.insert(DebugVariable(DVI)).second)
+        auto Key =
+            DeadDebugSet.find({DVI->getVariable(), DVI->getExpression()});
+        if (Key != DeadDebugSet.end())
           continue;
+        DeadDebugSet.insert({DVI->getVariable(), DVI->getExpression()});
         DeadDebugInst.push_back(DVI);
       }
 
     // After the loop has been deleted all the values defined and modified
-    // inside the loop are going to be unavailable. Values computed in the
-    // loop will have been deleted, automatically causing their debug uses
-    // be be replaced with undef. Loop invariant values will still be available.
-    // Move dbg.values out the loop so that earlier location ranges are still
-    // terminated and loop invariant assignments are preserved.
+    // inside the loop are going to be unavailable.
+    // Since debug values in the loop have been deleted, inserting an undef
+    // dbg.value truncates the range of any dbg.value before the loop where the
+    // loop used to be. This is particularly important for constant values.
+    DIBuilder DIB(*ExitBlock->getModule());
     Instruction *InsertDbgValueBefore = ExitBlock->getFirstNonPHI();
     assert(InsertDbgValueBefore &&
            "There should be a non-PHI instruction in exit block, else these "
            "instructions will have no parent.");
     for (auto *DVI : DeadDebugInst)
-      DVI->moveBefore(InsertDbgValueBefore);
+      DIB.insertDbgValueIntrinsic(UndefValue::get(Builder.getInt32Ty()),
+                                  DVI->getVariable(), DVI->getExpression(),
+                                  DVI->getDebugLoc(), InsertDbgValueBefore);
   }
 
   // Remove the block from the reference counting scheme, so that we can
@@ -793,22 +786,22 @@ static BranchInst *getExpectedExitLoopLatchBranch(Loop *L) {
 
 /// Return the estimated trip count for any exiting branch which dominates
 /// the loop latch.
-static std::optional<uint64_t> getEstimatedTripCount(BranchInst *ExitingBranch,
-                                                     Loop *L,
-                                                     uint64_t &OrigExitWeight) {
+static Optional<uint64_t>
+getEstimatedTripCount(BranchInst *ExitingBranch, Loop *L,
+                      uint64_t &OrigExitWeight) {
   // To estimate the number of times the loop body was executed, we want to
   // know the number of times the backedge was taken, vs. the number of times
   // we exited the loop.
   uint64_t LoopWeight, ExitWeight;
   if (!extractBranchWeights(*ExitingBranch, LoopWeight, ExitWeight))
-    return std::nullopt;
+    return None;
 
   if (L->contains(ExitingBranch->getSuccessor(1)))
     std::swap(LoopWeight, ExitWeight);
 
   if (!ExitWeight)
     // Don't have a way to return predicated infinite
-    return std::nullopt;
+    return None;
 
   OrigExitWeight = ExitWeight;
 
@@ -819,7 +812,7 @@ static std::optional<uint64_t> getEstimatedTripCount(BranchInst *ExitingBranch,
   return ExitCount + 1;
 }
 
-std::optional<unsigned>
+Optional<unsigned>
 llvm::getLoopEstimatedTripCount(Loop *L,
                                 unsigned *EstimatedLoopInvocationWeight) {
   // Currently we take the estimate exit count only from the loop latch,
@@ -828,14 +821,14 @@ llvm::getLoopEstimatedTripCount(Loop *L,
   // TODO: incorporate information from other exits
   if (BranchInst *LatchBranch = getExpectedExitLoopLatchBranch(L)) {
     uint64_t ExitWeight;
-    if (std::optional<uint64_t> EstTripCount =
-            getEstimatedTripCount(LatchBranch, L, ExitWeight)) {
+    if (Optional<uint64_t> EstTripCount =
+        getEstimatedTripCount(LatchBranch, L, ExitWeight)) {
       if (EstimatedLoopInvocationWeight)
         *EstimatedLoopInvocationWeight = ExitWeight;
       return *EstTripCount;
     }
   }
-  return std::nullopt;
+  return None;
 }
 
 bool llvm::setLoopEstimatedTripCount(Loop *L, unsigned EstimatedTripCount,
@@ -892,29 +885,6 @@ bool llvm::hasIterationCountInvariantInParent(Loop *InnerLoop,
   return true;
 }
 
-Intrinsic::ID llvm::getMinMaxReductionIntrinsicOp(RecurKind RK) {
-  switch (RK) {
-  default:
-    llvm_unreachable("Unknown min/max recurrence kind");
-  case RecurKind::UMin:
-    return Intrinsic::umin;
-  case RecurKind::UMax:
-    return Intrinsic::umax;
-  case RecurKind::SMin:
-    return Intrinsic::smin;
-  case RecurKind::SMax:
-    return Intrinsic::smax;
-  case RecurKind::FMin:
-    return Intrinsic::minnum;
-  case RecurKind::FMax:
-    return Intrinsic::maxnum;
-  case RecurKind::FMinimum:
-    return Intrinsic::minimum;
-  case RecurKind::FMaximum:
-    return Intrinsic::maximum;
-  }
-}
-
 CmpInst::Predicate llvm::getMinMaxReductionPredicate(RecurKind RK) {
   switch (RK) {
   default:
@@ -931,9 +901,6 @@ CmpInst::Predicate llvm::getMinMaxReductionPredicate(RecurKind RK) {
     return CmpInst::FCMP_OLT;
   case RecurKind::FMax:
     return CmpInst::FCMP_OGT;
-  // We do not add FMinimum/FMaximum recurrence kind here since there is no
-  // equivalent predicate which compares signed zeroes according to the
-  // semantics of the intrinsics (llvm.minimum/maximum).
   }
 }
 
@@ -948,14 +915,6 @@ Value *llvm::createSelectCmpOp(IRBuilderBase &Builder, Value *StartVal,
 
 Value *llvm::createMinMaxOp(IRBuilderBase &Builder, RecurKind RK, Value *Left,
                             Value *Right) {
-  Type *Ty = Left->getType();
-  if (Ty->isIntOrIntVectorTy() ||
-      (RK == RecurKind::FMinimum || RK == RecurKind::FMaximum)) {
-    // TODO: Add float minnum/maxnum support when FMF nnan is set.
-    Intrinsic::ID Id = getMinMaxReductionIntrinsicOp(RK);
-    return Builder.CreateIntrinsic(Ty, Id, {Left, Right}, nullptr,
-                                   "rdx.minmax");
-  }
   CmpInst::Predicate Pred = getMinMaxReductionPredicate(RK);
   Value *Cmp = Builder.CreateCmp(Pred, Left, Right, "rdx.minmax.cmp");
   Value *Select = Builder.CreateSelect(Cmp, Left, Right, "rdx.minmax.select");
@@ -1101,10 +1060,6 @@ Value *llvm::createSimpleTargetReduction(IRBuilderBase &Builder,
     return Builder.CreateFPMaxReduce(Src);
   case RecurKind::FMin:
     return Builder.CreateFPMinReduce(Src);
-  case RecurKind::FMinimum:
-    return Builder.CreateFPMinimumReduce(Src);
-  case RecurKind::FMaximum:
-    return Builder.CreateFPMaximumReduce(Src);
   default:
     llvm_unreachable("Unhandled opcode");
   }
@@ -1171,20 +1126,6 @@ bool llvm::isKnownNonNegativeInLoop(const SCEV *S, const Loop *L,
   const SCEV *Zero = SE.getZero(S->getType());
   return SE.isAvailableAtLoopEntry(S, L) &&
          SE.isLoopEntryGuardedByCond(L, ICmpInst::ICMP_SGE, S, Zero);
-}
-
-bool llvm::isKnownPositiveInLoop(const SCEV *S, const Loop *L,
-                                 ScalarEvolution &SE) {
-  const SCEV *Zero = SE.getZero(S->getType());
-  return SE.isAvailableAtLoopEntry(S, L) &&
-         SE.isLoopEntryGuardedByCond(L, ICmpInst::ICMP_SGT, S, Zero);
-}
-
-bool llvm::isKnownNonPositiveInLoop(const SCEV *S, const Loop *L,
-                                    ScalarEvolution &SE) {
-  const SCEV *Zero = SE.getZero(S->getType());
-  return SE.isAvailableAtLoopEntry(S, L) &&
-         SE.isLoopEntryGuardedByCond(L, ICmpInst::ICMP_SLE, S, Zero);
 }
 
 bool llvm::cannotBeMinInLoop(const SCEV *S, const Loop *L, ScalarEvolution &SE,
@@ -1540,7 +1481,7 @@ void llvm::setProfileInfoAfterUnrolling(Loop *OrigLoop, Loop *UnrolledLoop,
 
   // Get number of iterations in the original scalar loop.
   unsigned OrigLoopInvocationWeight = 0;
-  std::optional<unsigned> OrigAverageTripCount =
+  Optional<unsigned> OrigAverageTripCount =
       getLoopEstimatedTripCount(OrigLoop, &OrigLoopInvocationWeight);
   if (!OrigAverageTripCount)
     return;
@@ -1767,9 +1708,10 @@ Value *llvm::addDiffRuntimeChecks(
   return MemoryRuntimeCheck;
 }
 
-std::optional<IVConditionInfo>
-llvm::hasPartialIVCondition(const Loop &L, unsigned MSSAThreshold,
-                            const MemorySSA &MSSA, AAResults &AA) {
+Optional<IVConditionInfo> llvm::hasPartialIVCondition(const Loop &L,
+                                                      unsigned MSSAThreshold,
+                                                      const MemorySSA &MSSA,
+                                                      AAResults &AA) {
   auto *TI = dyn_cast<BranchInst>(L.getHeader()->getTerminator());
   if (!TI || !TI->isConditional())
     return {};
@@ -1826,7 +1768,7 @@ llvm::hasPartialIVCondition(const Loop &L, unsigned MSSAThreshold,
       [&L, &AA, &AccessedLocs, &ExitingBlocks, &InstToDuplicate,
        MSSAThreshold](BasicBlock *Succ, BasicBlock *Header,
                       SmallVector<MemoryAccess *, 4> AccessesToCheck)
-      -> std::optional<IVConditionInfo> {
+      -> Optional<IVConditionInfo> {
     IVConditionInfo Info;
     // First, collect all blocks in the loop that are on a patch from Succ
     // to the header.

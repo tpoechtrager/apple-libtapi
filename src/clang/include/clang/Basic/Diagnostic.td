@@ -55,11 +55,11 @@ class DiagCategory<string Name> {
 }
 
 // Diagnostic Groups.
-class DiagGroup<string Name, list<DiagGroup> subgroups = [], code docs = [{}]> {
+class DiagGroup<string Name, list<DiagGroup> subgroups = []> {
   string GroupName = Name;
   list<DiagGroup> SubGroups = subgroups;
   string CategoryName = "";
-  code Documentation = docs;
+  code Documentation = [{}];
 }
 class InGroup<DiagGroup G> { DiagGroup Group = G; }
 //class IsGroup<string Name> { DiagGroup Group = DiagGroup<Name>; }
@@ -75,10 +75,10 @@ include "DiagnosticGroups.td"
 
 
 // All diagnostics emitted by the compiler are an indirect subclass of this.
-class Diagnostic<string summary, DiagClass DC, Severity defaultmapping> {
+class Diagnostic<string text, DiagClass DC, Severity defaultmapping> {
   /// Component is specified by the file with a big let directive.
   string         Component = ?;
-  string         Summary = summary;
+  string         Text = text;
   DiagClass      Class = DC;
   SFINAEResponse SFINAE = SFINAE_Suppress;
   bit            AccessControl = 0;
@@ -157,6 +157,7 @@ class DefaultRemark { Severity DefaultSeverity = SEV_Remark; }
 
 // Definitions for Diagnostics.
 include "DiagnosticASTKinds.td"
+include "DiagnosticAnalysisKinds.td"
 include "DiagnosticCASKinds.td"
 include "DiagnosticCommentKinds.td"
 include "DiagnosticCommonKinds.td"

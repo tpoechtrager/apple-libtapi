@@ -11,13 +11,11 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Transforms/Utils/MemoryOpRemark.h"
-#include "llvm/ADT/SmallString.h"
 #include "llvm/Analysis/OptimizationRemarkEmitter.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/DebugInfo.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicInst.h"
-#include <optional>
 
 using namespace llvm;
 using namespace llvm::ore;
@@ -146,10 +144,9 @@ static void inlineVolatileOrAtomicWithExtraArgs(bool *Inline, bool Volatile,
     R << " Atomic: " << NV("StoreAtomic", false) << ".";
 }
 
-static std::optional<uint64_t>
-getSizeInBytes(std::optional<uint64_t> SizeInBits) {
+static Optional<uint64_t> getSizeInBytes(Optional<uint64_t> SizeInBits) {
   if (!SizeInBits || *SizeInBits % 8 != 0)
-    return std::nullopt;
+    return None;
   return *SizeInBits / 8;
 }
 
@@ -300,17 +297,17 @@ void MemoryOpRemark::visitSizeOperand(Value *V, DiagnosticInfoIROptimization &R)
   }
 }
 
-static std::optional<StringRef> nameOrNone(const Value *V) {
+static Optional<StringRef> nameOrNone(const Value *V) {
   if (V->hasName())
     return V->getName();
-  return std::nullopt;
+  return None;
 }
 
 void MemoryOpRemark::visitVariable(const Value *V,
                                    SmallVectorImpl<VariableInfo> &Result) {
   if (auto *GV = dyn_cast<GlobalVariable>(V)) {
     auto *Ty = GV->getValueType();
-    uint64_t Size = DL.getTypeSizeInBits(Ty).getFixedValue();
+    uint64_t Size = DL.getTypeSizeInBits(Ty).getFixedSize();
     VariableInfo Var{nameOrNone(GV), Size};
     if (!Var.isEmpty())
       Result.push_back(std::move(Var));
@@ -322,9 +319,9 @@ void MemoryOpRemark::visitVariable(const Value *V,
   // Try to get an llvm.dbg.declare, which has a DILocalVariable giving us the
   // real debug info name and size of the variable.
   for (const DbgVariableIntrinsic *DVI :
-       FindDbgDeclareUses(const_cast<Value *>(V))) {
+       FindDbgAddrUses(const_cast<Value *>(V))) {
     if (DILocalVariable *DILV = DVI->getVariable()) {
-      std::optional<uint64_t> DISize = getSizeInBytes(DILV->getSizeInBits());
+      Optional<uint64_t> DISize = getSizeInBytes(DILV->getSizeInBits());
       VariableInfo Var{DILV->getName(), DISize};
       if (!Var.isEmpty()) {
         Result.push_back(std::move(Var));
@@ -342,9 +339,9 @@ void MemoryOpRemark::visitVariable(const Value *V,
     return;
 
   // If not, get it from the alloca.
-  std::optional<TypeSize> TySize = AI->getAllocationSize(DL);
-  std::optional<uint64_t> Size =
-      TySize ? std::optional(TySize->getFixedValue()) : std::nullopt;
+  Optional<TypeSize> TySize = AI->getAllocationSizeInBits(DL);
+  Optional<uint64_t> Size =
+      TySize ? getSizeInBytes(TySize->getFixedSize()) : None;
   VariableInfo Var{nameOrNone(AI), Size};
   if (!Var.isEmpty())
     Result.push_back(std::move(Var));
@@ -364,7 +361,7 @@ void MemoryOpRemark::visitPtr(Value *Ptr, bool IsRead, DiagnosticInfoIROptimizat
     uint64_t Size = Ptr->getPointerDereferenceableBytes(DL, CanBeNull, CanBeFreed);
     if (!Size)
       return;
-    VIs.push_back({std::nullopt, Size});
+    VIs.push_back({None, Size});
   }
 
   R << (IsRead ? "\n Read Variables: " : "\n Written Variables: ");
@@ -388,8 +385,7 @@ bool AutoInitRemark::canHandle(const Instruction *I) {
     return false;
   return any_of(I->getMetadata(LLVMContext::MD_annotation)->operands(),
                 [](const MDOperand &Op) {
-                  return isa<MDString>(Op.get()) &&
-                         cast<MDString>(Op.get())->getString() == "auto-init";
+                  return cast<MDString>(Op.get())->getString() == "auto-init";
                 });
 }
 

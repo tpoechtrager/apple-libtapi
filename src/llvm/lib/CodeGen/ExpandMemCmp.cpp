@@ -28,7 +28,6 @@
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/SizeOpts.h"
-#include <optional>
 
 using namespace llvm;
 
@@ -71,18 +70,18 @@ class MemCmpExpansion {
     ResultBlock() = default;
   };
 
-  CallInst *const CI = nullptr;
+  CallInst *const CI;
   ResultBlock ResBlock;
   const uint64_t Size;
   unsigned MaxLoadSize = 0;
   uint64_t NumLoadsNonOneByte = 0;
   const uint64_t NumLoadsPerBlockForZeroCmp;
   std::vector<BasicBlock *> LoadCmpBlocks;
-  BasicBlock *EndBlock = nullptr;
-  PHINode *PhiRes = nullptr;
+  BasicBlock *EndBlock;
+  PHINode *PhiRes;
   const bool IsUsedForZeroCmp;
   const DataLayout &DL;
-  DomTreeUpdater *DTU = nullptr;
+  DomTreeUpdater *DTU;
   IRBuilder<> Builder;
   // Represents the decomposition in blocks of the expansion. For example,
   // comparing 33 bytes on X86+sse can be done with 2x16-byte loads and
@@ -288,11 +287,17 @@ MemCmpExpansion::LoadPair MemCmpExpansion::getLoadPair(Type *LoadSizeType,
   Align RhsAlign = RhsSource->getPointerAlignment(DL);
   if (OffsetBytes > 0) {
     auto *ByteType = Type::getInt8Ty(CI->getContext());
-    LhsSource = Builder.CreateConstGEP1_64(ByteType, LhsSource, OffsetBytes);
-    RhsSource = Builder.CreateConstGEP1_64(ByteType, RhsSource, OffsetBytes);
+    LhsSource = Builder.CreateConstGEP1_64(
+        ByteType, Builder.CreateBitCast(LhsSource, ByteType->getPointerTo()),
+        OffsetBytes);
+    RhsSource = Builder.CreateConstGEP1_64(
+        ByteType, Builder.CreateBitCast(RhsSource, ByteType->getPointerTo()),
+        OffsetBytes);
     LhsAlign = commonAlignment(LhsAlign, OffsetBytes);
     RhsAlign = commonAlignment(RhsAlign, OffsetBytes);
   }
+  LhsSource = Builder.CreateBitCast(LhsSource, LoadSizeType->getPointerTo());
+  RhsSource = Builder.CreateBitCast(RhsSource, LoadSizeType->getPointerTo());
 
   // Create a constant or a load from the source.
   Value *Lhs = nullptr;
@@ -872,14 +877,15 @@ ExpandMemCmpPass::runImpl(Function &F, const TargetLibraryInfo *TLI,
                           const TargetTransformInfo *TTI,
                           const TargetLowering *TL, ProfileSummaryInfo *PSI,
                           BlockFrequencyInfo *BFI, DominatorTree *DT) {
-  std::optional<DomTreeUpdater> DTU;
+  Optional<DomTreeUpdater> DTU;
   if (DT)
     DTU.emplace(DT, DomTreeUpdater::UpdateStrategy::Lazy);
 
   const DataLayout& DL = F.getParent()->getDataLayout();
   bool MadeChanges = false;
   for (auto BBIt = F.begin(); BBIt != F.end();) {
-    if (runOnBlock(*BBIt, TLI, TTI, TL, DL, PSI, BFI, DTU ? &*DTU : nullptr)) {
+    if (runOnBlock(*BBIt, TLI, TTI, TL, DL, PSI, BFI,
+                   DTU ? DTU.getPointer() : nullptr)) {
       MadeChanges = true;
       // If changes were made, restart the function from the beginning, since
       // the structure of the function was changed.

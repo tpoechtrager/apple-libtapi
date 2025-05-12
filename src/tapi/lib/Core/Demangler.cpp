@@ -27,20 +27,24 @@ Demangler::~Demangler() { dlclose(libswiftCoreHandle); }
 
 bool Demangler::isItaniumEncoding(StringRef mangledName) {
   // Itanium encoding requires 1 or 3 leading underscores, followed by 'Z'.
-  return mangledName.starts_with("_Z") || mangledName.starts_with("___Z");
+  return mangledName.startswith("_Z") || mangledName.startswith("___Z");
 }
 
 DemangledName Demangler::demangle(StringRef mangledName) {
   DemangledName result{
-      .str = mangledName.str(), .isItanium = false, .isSwift = false};
+      .str = mangledName.str(), .isSwift = false, .isItanium = false};
   char *demangled = nullptr;
 
   if (isItaniumEncoding(mangledName)) {
-    demangled = llvm::itaniumDemangle(mangledName.str().c_str());
+    demangled =
+        llvm::itaniumDemangle(mangledName.str().c_str(), /*buf=*/nullptr,
+                              /*n=*/nullptr, /*status=*/nullptr);
     result.isItanium = true;
-  } else if (mangledName.starts_with("_") &&
+  } else if (mangledName.startswith("_") &&
              isItaniumEncoding(mangledName.drop_front())) {
-    demangled = llvm::itaniumDemangle(mangledName.str().c_str() + 1);
+    demangled =
+        llvm::itaniumDemangle(mangledName.str().c_str() + 1, /*buf=*/nullptr,
+                              /*n=*/nullptr, /*status=*/nullptr);
     result.isItanium = true;
   } else if ((demangled = swift_demangle_f(
                   mangledName.str().c_str(), mangledName.size(),

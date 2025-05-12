@@ -103,12 +103,6 @@ static cl::opt<std::string>
                       cl::desc("Configuration file for comparing SDKDB"),
                       cl::cat(compareCategory));
 
-static cl::opt<std::string>
-    comparePlatform("platform",
-                    cl::desc("base platform (macos, ios, tvos, watchos, xros) "
-                             "for comparing SDKDB\n"),
-                    cl::cat(compareCategory));
-
 static cl::opt<std::string> sdkdbFile(cl::Positional, cl::desc("<SDKDB>"),
                                       cl::Required, cl::cat(tapiCategory));
 
@@ -320,13 +314,6 @@ int main(int argc, const char *argv[]) {
         return 1;
       }
       builder.setCompareConfigFileReader(std::move(reader.get()));
-    }
-
-    if (!comparePlatform.empty()) {
-      if (!builder.setFilteredPlatforms(comparePlatform)) {
-        errs() << "invalid platform type: " << comparePlatform << "\n";
-        return 1;
-      }
     }
 
     builder.setNoNewAPI(noNewAPI);

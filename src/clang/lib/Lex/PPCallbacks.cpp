@@ -16,14 +16,14 @@ using namespace clang;
 PPCallbacks::~PPCallbacks() = default;
 
 void PPCallbacks::HasInclude(SourceLocation Loc, StringRef FileName,
-                             bool IsAngled, OptionalFileEntryRef File,
+                             bool IsAngled, Optional<FileEntryRef> File,
                              SrcMgr::CharacteristicKind FileType) {}
 
 // Out of line key method.
 PPChainedCallbacks::~PPChainedCallbacks() = default;
 
 void PPChainedCallbacks::HasInclude(SourceLocation Loc, StringRef FileName,
-                                    bool IsAngled, OptionalFileEntryRef File,
+                                    bool IsAngled, Optional<FileEntryRef> File,
                                     SrcMgr::CharacteristicKind FileType) {
   First->HasInclude(Loc, FileName, IsAngled, File, FileType);
   Second->HasInclude(Loc, FileName, IsAngled, File, FileType);

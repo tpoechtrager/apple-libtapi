@@ -64,17 +64,6 @@ public:
 
   public:
     SimpleRemoteEPCServer &server() { return S; }
-    StringMap<std::vector<char>> &bootstrapMap() { return BootstrapMap; }
-    template <typename T, typename SPSTagT>
-    void setBootstrapMapValue(std::string Key, const T &Value) {
-      std::vector<char> Buffer;
-      Buffer.resize(shared::SPSArgList<SPSTagT>::size(Value));
-      shared::SPSOutputBuffer OB(Buffer.data(), Buffer.size());
-      bool Success = shared::SPSArgList<SPSTagT>::serialize(OB, Value);
-      (void)Success;
-      assert(Success && "Bootstrap map value serialization failed");
-      BootstrapMap[std::move(Key)] = std::move(Buffer);
-    }
     StringMap<ExecutorAddr> &bootstrapSymbols() { return BootstrapSymbols; }
     std::vector<std::unique_ptr<ExecutorBootstrapService>> &services() {
       return Services;
@@ -87,7 +76,6 @@ public:
   private:
     Setup(SimpleRemoteEPCServer &S) : S(S) {}
     SimpleRemoteEPCServer &S;
-    StringMap<std::vector<char>> BootstrapMap;
     StringMap<ExecutorAddr> BootstrapSymbols;
     std::vector<std::unique_ptr<ExecutorBootstrapService>> Services;
   };
@@ -126,8 +114,7 @@ public:
     for (auto &Service : Server->Services)
       Service->addBootstrapSymbols(S.bootstrapSymbols());
 
-    if (auto Err = Server->sendSetupMessage(std::move(S.BootstrapMap),
-                                            std::move(S.BootstrapSymbols)))
+    if (auto Err = Server->sendSetupMessage(std::move(S.BootstrapSymbols)))
       return std::move(Err);
     return std::move(Server);
   }
@@ -154,8 +141,7 @@ private:
   Error sendMessage(SimpleRemoteEPCOpcode OpC, uint64_t SeqNo,
                     ExecutorAddr TagAddr, ArrayRef<char> ArgBytes);
 
-  Error sendSetupMessage(StringMap<std::vector<char>> BootstrapMap,
-                         StringMap<ExecutorAddr> BootstrapSymbols);
+  Error sendSetupMessage(StringMap<ExecutorAddr> BootstrapSymbols);
 
   Error handleResult(uint64_t SeqNo, ExecutorAddr TagAddr,
                      SimpleRemoteEPCArgBytesVector ArgBytes);

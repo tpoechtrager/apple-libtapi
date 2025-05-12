@@ -370,12 +370,13 @@ class PointerEscape {
                                                             Kind);
 
     InvalidatedSymbols RegularEscape;
-    for (SymbolRef Sym : Escaped)
-      if (!ETraits->hasTrait(
-              Sym, RegionAndSymbolInvalidationTraits::TK_PreserveContents) &&
-          !ETraits->hasTrait(
-              Sym, RegionAndSymbolInvalidationTraits::TK_SuppressEscape))
-        RegularEscape.insert(Sym);
+    for (InvalidatedSymbols::const_iterator I = Escaped.begin(),
+                                            E = Escaped.end(); I != E; ++I)
+      if (!ETraits->hasTrait(*I,
+              RegionAndSymbolInvalidationTraits::TK_PreserveContents) &&
+          !ETraits->hasTrait(*I,
+              RegionAndSymbolInvalidationTraits::TK_SuppressEscape))
+        RegularEscape.insert(*I);
 
     if (RegularEscape.empty())
       return State;
@@ -409,13 +410,13 @@ class ConstPointerEscape {
       return State;
 
     InvalidatedSymbols ConstEscape;
-    for (SymbolRef Sym : Escaped) {
-      if (ETraits->hasTrait(
-              Sym, RegionAndSymbolInvalidationTraits::TK_PreserveContents) &&
-          !ETraits->hasTrait(
-              Sym, RegionAndSymbolInvalidationTraits::TK_SuppressEscape))
-        ConstEscape.insert(Sym);
-    }
+    for (InvalidatedSymbols::const_iterator I = Escaped.begin(),
+                                            E = Escaped.end(); I != E; ++I)
+      if (ETraits->hasTrait(*I,
+              RegionAndSymbolInvalidationTraits::TK_PreserveContents) &&
+          !ETraits->hasTrait(*I,
+              RegionAndSymbolInvalidationTraits::TK_SuppressEscape))
+        ConstEscape.insert(*I);
 
     if (ConstEscape.empty())
       return State;

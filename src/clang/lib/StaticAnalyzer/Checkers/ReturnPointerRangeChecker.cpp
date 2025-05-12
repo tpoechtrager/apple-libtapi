@@ -41,10 +41,6 @@ void ReturnPointerRangeChecker::checkPreStmt(const ReturnStmt *RS,
   if (!RetE)
     return;
 
-  // Skip "body farmed" functions.
-  if (RetE->getSourceRange().isInvalid())
-    return;
-
   SVal V = C.getSVal(RetE);
   const MemRegion *R = V.getAsRegion();
 

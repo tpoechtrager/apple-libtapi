@@ -53,7 +53,9 @@ protected:
 
   PtrT makePtr(ValueT *V) { return PtrT(V); }
 
-  ArrayRef<PtrT> testArray(size_t N) { return ArrayRef(&TestPtrs[0], N); }
+  ArrayRef<PtrT> testArray(size_t N) {
+    return makeArrayRef(&TestPtrs[0], N);
+  }
 
   void appendValues(VectorT &V, ArrayRef<PtrT> Values) {
     for (size_t i = 0, e = Values.size(); i != e; ++i)

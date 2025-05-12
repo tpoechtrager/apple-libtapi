@@ -20,7 +20,6 @@
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/InitializePasses.h"
-#include <optional>
 
 using namespace llvm;
 
@@ -61,10 +60,9 @@ bool OptimizationRemarkEmitter::invalidate(
   return false;
 }
 
-std::optional<uint64_t>
-OptimizationRemarkEmitter::computeHotness(const Value *V) {
+Optional<uint64_t> OptimizationRemarkEmitter::computeHotness(const Value *V) {
   if (!BFI)
-    return std::nullopt;
+    return None;
 
   return BFI->getBlockProfileCount(cast<BasicBlock>(V));
 }

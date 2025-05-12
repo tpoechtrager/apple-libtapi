@@ -1,0 +1,174 @@
+{
+  "api_json_version": 1,
+  "categories": [
+    {
+      "col": 12,
+      "file": "test.m",
+      "instanceMethods": [
+        {
+          "col": 1,
+          "file": "test.m",
+          "introduced": "10.10",
+          "line": 27,
+          "name": "method"
+        }
+      ],
+      "interface": "A",
+      "introduced": "10.10",
+      "line": 26,
+      "name": "P",
+      "protocols": [
+        "P"
+      ]
+    }
+  ],
+  "enums": [
+    {
+      "col": 6,
+      "constants": [
+        {
+          "col": 9,
+          "file": "test.m",
+          "line": 5,
+          "name": "MyValue"
+        },
+        {
+          "col": 9,
+          "file": "test.m",
+          "line": 5,
+          "name": "MyValue1"
+        },
+        {
+          "col": 9,
+          "file": "test.m",
+          "line": 5,
+          "name": "MyValue2"
+        }
+      ],
+      "file": "test.m",
+      "line": 5,
+      "name": "MyEnum"
+    }
+  ],
+  "globals": [
+    {
+      "access": "public",
+      "col": 6,
+      "file": "test.m",
+      "introduced": "10.10",
+      "kind": "function",
+      "line": 41,
+      "linkage": "exported",
+      "name": "_foobar"
+    }
+  ],
+  "interfaces": [
+    {
+      "categories": [
+        "P"
+      ],
+      "classMethods": [
+        {
+          "col": 1,
+          "file": "test.m",
+          "introduced": "10.4",
+          "line": 15,
+          "name": "bar",
+          "obsoleted": "10.7"
+        }
+      ],
+      "col": 12,
+      "file": "test.m",
+      "instanceMethods": [
+        {
+          "col": 1,
+          "file": "test.m",
+          "line": 14,
+          "name": "foo",
+          "unavailable": true
+        }
+      ],
+      "ivars": [
+        {
+          "access": "public",
+          "accessControl": "protected",
+          "col": 7,
+          "file": "test.m",
+          "line": 12,
+          "name": "a"
+        }
+      ],
+      "line": 11,
+      "linkage": "exported",
+      "name": "A",
+      "properties": [
+        {
+          "attr": [
+            "dynamic"
+          ],
+          "col": 23,
+          "file": "test.m",
+          "getter": "baz",
+          "line": 16,
+          "name": "baz",
+          "setter": "setBaz:"
+        },
+        {
+          "attr": [
+            "readonly",
+            "class"
+          ],
+          "col": 32,
+          "file": "test.m",
+          "getter": "nowrite",
+          "line": 17,
+          "name": "nowrite"
+        }
+      ],
+      "super": "NSObject"
+    },
+    {
+      "col": 12,
+      "file": "test.m",
+      "line": 1,
+      "linkage": "exported",
+      "name": "NSObject",
+      "super": ""
+    }
+  ],
+  "protocols": [
+    {
+      "col": 11,
+      "file": "test.m",
+      "instanceMethods": [
+        {
+          "col": 1,
+          "file": "test.m",
+          "introduced": "10.10",
+          "line": 12,
+          "name": "method"
+        }
+      ],
+      "introduced": "10.10",
+      "line": 21,
+      "name": "P"
+    }
+  ],
+  "target": "x86_64-apple-macosx",
+  "typedefs": [
+    {
+      "access": "public",
+      "col": 3,
+      "file": "test.m",
+      "line": 9,
+      "name": "MyEnum"
+    },
+    {
+      "access": "public",
+      "col": 13,
+      "file": "test.m",
+      "line": 3,
+      "name": "MyInt"
+    }
+  ]
+}

@@ -16,7 +16,6 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ExecutionEngine/Orc/ExecutionUtils.h"
-#include "llvm/ExecutionEngine/Orc/Shared/ExecutorAddress.h"
 
 #include <memory>
 
@@ -52,10 +51,9 @@ public:
   llvm::Error removeModule(PartialTranslationUnit &PTU);
   llvm::Error runCtors() const;
   llvm::Error cleanUp();
-  llvm::Expected<llvm::orc::ExecutorAddr>
+  llvm::Expected<llvm::JITTargetAddress>
   getSymbolAddress(llvm::StringRef Name, SymbolNameKind NameKind) const;
-
-  llvm::orc::LLJIT &GetExecutionEngine() { return *Jit; }
+  llvm::orc::LLJIT *getExecutionEngine() const { return Jit.get(); }
 };
 
 } // end namespace clang

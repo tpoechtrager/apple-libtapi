@@ -19,6 +19,7 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Support/CBindingWrapping.h"
 #include "llvm/Support/RWMutex.h"
 #include <memory>
 #include <vector>
@@ -87,6 +88,9 @@ public:
   /// it no longer receives passRegistered() callbacks.
   void removeRegistrationListener(PassRegistrationListener *L);
 };
+
+// Create wrappers for C Binding types (see CBindingWrapping.h).
+DEFINE_STDCXX_CONVERSION_FUNCTIONS(PassRegistry, LLVMPassRegistryRef)
 
 } // end namespace llvm
 

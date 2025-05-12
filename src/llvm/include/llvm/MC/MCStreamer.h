@@ -15,6 +15,7 @@
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/MC/MCDirectives.h"
@@ -22,15 +23,14 @@
 #include "llvm/MC/MCLinkerOptimizationHint.h"
 #include "llvm/MC/MCPseudoProbe.h"
 #include "llvm/MC/MCWinEH.h"
+#include "llvm/Support/ARMTargetParser.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/MD5.h"
 #include "llvm/Support/SMLoc.h"
 #include "llvm/Support/VersionTuple.h"
-#include "llvm/TargetParser/ARMTargetParser.h"
 #include <cassert>
 #include <cstdint>
 #include <memory>
-#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -157,7 +157,7 @@ public:
   virtual void emitTextAttribute(unsigned Attribute, StringRef String);
   virtual void emitIntTextAttribute(unsigned Attribute, unsigned IntValue,
                                     StringRef StringValue = "");
-  virtual void emitFPU(ARM::FPUKind FPU);
+  virtual void emitFPU(unsigned FPU);
   virtual void emitArch(ARM::ArchKind Arch);
   virtual void emitArchExtension(uint64_t ArchExt);
   virtual void emitObjectArch(ARM::ArchKind Arch);
@@ -214,10 +214,6 @@ class MCStreamer {
   std::unique_ptr<MCTargetStreamer> TargetStreamer;
 
   std::vector<MCDwarfFrameInfo> DwarfFrameInfos;
-  // This is a pair of index into DwarfFrameInfos and the MCSection associated
-  // with the frame. Note, we use an index instead of an iterator because they
-  // can be invalidated in std::vector.
-  SmallVector<std::pair<size_t, MCSection *>, 1> FrameInfoStack;
   MCDwarfFrameInfo *getCurrentDwarfFrameInfo();
 
   /// Similar to DwarfFrameInfos, but for SEH unwind info. Chained frames may
@@ -253,9 +249,6 @@ class MCStreamer {
   /// useable from an integrated assembler, but assembly syntax is under
   /// discussion for future inclusion.
   bool AllowAutoPadding = false;
-
-  /// Generate debug info that is Cas Friendly
-  bool GenerateCasFriendlyDebugInfo = false;
 
 protected:
   MCStreamer(MCContext &Ctx);
@@ -310,13 +303,6 @@ public:
 
   void setAllowAutoPadding(bool v) { AllowAutoPadding = v; }
   bool getAllowAutoPadding() const { return AllowAutoPadding; }
-
-  void setGenerateCasFriendlyDebugInfo(bool v) {
-    GenerateCasFriendlyDebugInfo = v;
-  }
-  bool getGenerateCasFriendlyDebugInfo() const {
-    return GenerateCasFriendlyDebugInfo;
-  }
 
   /// When emitting an object file, create and emit a real label. When emitting
   /// textual assembly, this should do nothing to avoid polluting our output.
@@ -620,9 +606,11 @@ public:
   /// \param LabelSym - Label on the block of storage.
   /// \param Size - The size of the block of storage.
   /// \param CsectSym - Csect name for the block of storage.
-  /// \param Alignment - The alignment of the symbol in bytes.
+  /// \param ByteAlignment - The alignment of the symbol in bytes. Must be a
+  /// power of 2.
   virtual void emitXCOFFLocalCommonSymbol(MCSymbol *LabelSym, uint64_t Size,
-                                          MCSymbol *CsectSym, Align Alignment);
+                                          MCSymbol *CsectSym,
+                                          unsigned ByteAlignment);
 
   /// Emit a symbol's linkage and visibility with a linkage directive for XCOFF.
   ///
@@ -649,8 +637,7 @@ public:
   /// \param Symbol - The function containing the trap.
   /// \param Lang - The language code for the exception entry.
   /// \param Reason - The reason code for the exception entry.
-  virtual void emitXCOFFExceptDirective(const MCSymbol *Symbol,
-                                        const MCSymbol *Trap,
+  virtual void emitXCOFFExceptDirective(const MCSymbol *Symbol, MCSymbol *Trap,
                                         unsigned Lang, unsigned Reason,
                                         unsigned FunctionSize, bool hasDebug);
 
@@ -658,13 +645,7 @@ public:
   /// relocation table for one or more symbols.
   ///
   /// \param Sym - The symbol on the .ref directive.
-  virtual void emitXCOFFRefDirective(const MCSymbol *Symbol);
-
-  /// Emit a C_INFO symbol with XCOFF embedded metadata to the .info section.
-  ///
-  /// \param Name - The embedded metadata name
-  /// \param Metadata - The embedded metadata
-  virtual void emitXCOFFCInfoSym(StringRef Name, StringRef Metadata);
+  virtual void emitXCOFFRefDirective(StringRef Sym);
 
   /// Emit an ELF .size directive.
   ///
@@ -690,9 +671,10 @@ public:
   ///
   /// \param Symbol - The common symbol to emit.
   /// \param Size - The size of the common symbol.
-  /// \param ByteAlignment - The alignment of the symbol.
+  /// \param ByteAlignment - The alignment of the symbol if
+  /// non-zero. This must be a power of 2.
   virtual void emitCommonSymbol(MCSymbol *Symbol, uint64_t Size,
-                                Align ByteAlignment) = 0;
+                                unsigned ByteAlignment) = 0;
 
   /// Emit a local common (.lcomm) symbol.
   ///
@@ -700,16 +682,17 @@ public:
   /// \param Size - The size of the common symbol.
   /// \param ByteAlignment - The alignment of the common symbol in bytes.
   virtual void emitLocalCommonSymbol(MCSymbol *Symbol, uint64_t Size,
-                                     Align ByteAlignment);
+                                     unsigned ByteAlignment);
 
   /// Emit the zerofill section and an optional symbol.
   ///
   /// \param Section - The zerofill section to create and or to put the symbol
   /// \param Symbol - The zerofill symbol to emit, if non-NULL.
   /// \param Size - The size of the zerofill symbol.
-  /// \param ByteAlignment - The alignment of the zerofill symbol.
+  /// \param ByteAlignment - The alignment of the zerofill symbol if
+  /// non-zero. This must be a power of 2 on some targets.
   virtual void emitZerofill(MCSection *Section, MCSymbol *Symbol = nullptr,
-                            uint64_t Size = 0, Align ByteAlignment = Align(1),
+                            uint64_t Size = 0, unsigned ByteAlignment = 0,
                             SMLoc Loc = SMLoc()) = 0;
 
   /// Emit a thread local bss (.tbss) symbol.
@@ -717,9 +700,10 @@ public:
   /// \param Section - The thread local common section.
   /// \param Symbol - The thread local common symbol to emit.
   /// \param Size - The size of the symbol.
-  /// \param ByteAlignment - The alignment of the thread local common symbol.
+  /// \param ByteAlignment - The alignment of the thread local common symbol
+  /// if non-zero.  This must be a power of 2 on some targets.
   virtual void emitTBSSSymbol(MCSection *Section, MCSymbol *Symbol,
-                              uint64_t Size, Align ByteAlignment = Align(1));
+                              uint64_t Size, unsigned ByteAlignment = 0);
 
   /// @}
   /// \name Generating Data
@@ -780,11 +764,11 @@ public:
 
   /// Special case of EmitULEB128Value that avoids the client having to
   /// pass in a MCExpr for constant integers.
-  unsigned emitULEB128IntValue(uint64_t Value, unsigned PadTo = 0);
+  void emitULEB128IntValue(uint64_t Value, unsigned PadTo = 0);
 
   /// Special case of EmitSLEB128Value that avoids the client having to
   /// pass in a MCExpr for constant integers.
-  unsigned emitSLEB128IntValue(int64_t Value);
+  void emitSLEB128IntValue(int64_t Value);
 
   /// Special case of EmitValue that avoids the client having to pass in
   /// a MCExpr for MCSymbols.
@@ -874,14 +858,15 @@ public:
   ///
   /// This used to implement the .align assembler directive.
   ///
-  /// \param Alignment - The alignment to reach.
+  /// \param ByteAlignment - The alignment to reach. This must be a power of
+  /// two on some targets.
   /// \param Value - The value to use when filling bytes.
   /// \param ValueSize - The size of the integer (in bytes) to emit for
   /// \p Value. This must match a native machine width.
   /// \param MaxBytesToEmit - The maximum numbers of bytes to emit, or 0. If
   /// the alignment cannot be reached in this many bytes, no bytes are
   /// emitted.
-  virtual void emitValueToAlignment(Align Alignment, int64_t Value = 0,
+  virtual void emitValueToAlignment(unsigned ByteAlignment, int64_t Value = 0,
                                     unsigned ValueSize = 1,
                                     unsigned MaxBytesToEmit = 0);
 
@@ -890,12 +875,14 @@ public:
   /// This used to align code where the alignment bytes may be executed.  This
   /// can emit different bytes for different sizes to optimize execution.
   ///
-  /// \param Alignment - The alignment to reach.
+  /// \param ByteAlignment - The alignment to reach. This must be a power of
+  /// two on some targets.
   /// \param STI - The MCSubtargetInfo in operation when padding is emitted.
   /// \param MaxBytesToEmit - The maximum numbers of bytes to emit, or 0. If
   /// the alignment cannot be reached in this many bytes, no bytes are
   /// emitted.
-  virtual void emitCodeAlignment(Align Alignment, const MCSubtargetInfo *STI,
+  virtual void emitCodeAlignment(unsigned ByteAlignment,
+                                 const MCSubtargetInfo *STI,
                                  unsigned MaxBytesToEmit = 0);
 
   /// Emit some number of copies of \p Value until the byte offset \p
@@ -925,10 +912,11 @@ public:
 
   /// Associate a filename with a specified logical file number.  This
   /// implements the DWARF2 '.file 4 "foo.c"' assembler directive.
-  unsigned emitDwarfFileDirective(
-      unsigned FileNo, StringRef Directory, StringRef Filename,
-      std::optional<MD5::MD5Result> Checksum = std::nullopt,
-      std::optional<StringRef> Source = std::nullopt, unsigned CUID = 0) {
+  unsigned emitDwarfFileDirective(unsigned FileNo, StringRef Directory,
+                                  StringRef Filename,
+                                  Optional<MD5::MD5Result> Checksum = None,
+                                  Optional<StringRef> Source = None,
+                                  unsigned CUID = 0) {
     return cantFail(
         tryEmitDwarfFileDirective(FileNo, Directory, Filename, Checksum,
                                   Source, CUID));
@@ -941,13 +929,13 @@ public:
   /// '.file 4 "dir/foo.c" md5 "..." source "..."' assembler directive.
   virtual Expected<unsigned> tryEmitDwarfFileDirective(
       unsigned FileNo, StringRef Directory, StringRef Filename,
-      std::optional<MD5::MD5Result> Checksum = std::nullopt,
-      std::optional<StringRef> Source = std::nullopt, unsigned CUID = 0);
+      Optional<MD5::MD5Result> Checksum = None, Optional<StringRef> Source = None,
+      unsigned CUID = 0);
 
   /// Specify the "root" file of the compilation, using the ".file 0" extension.
   virtual void emitDwarfFile0Directive(StringRef Directory, StringRef Filename,
-                                       std::optional<MD5::MD5Result> Checksum,
-                                       std::optional<StringRef> Source,
+                                       Optional<MD5::MD5Result> Checksum,
+                                       Optional<StringRef> Source,
                                        unsigned CUID = 0);
 
   virtual void emitCFIBKeyFrame();
@@ -1044,29 +1032,28 @@ public:
   virtual void emitCFISections(bool EH, bool Debug);
   void emitCFIStartProc(bool IsSimple, SMLoc Loc = SMLoc());
   void emitCFIEndProc();
-  virtual void emitCFIDefCfa(int64_t Register, int64_t Offset, SMLoc Loc = {});
-  virtual void emitCFIDefCfaOffset(int64_t Offset, SMLoc Loc = {});
-  virtual void emitCFIDefCfaRegister(int64_t Register, SMLoc Loc = {});
+  virtual void emitCFIDefCfa(int64_t Register, int64_t Offset);
+  virtual void emitCFIDefCfaOffset(int64_t Offset);
+  virtual void emitCFIDefCfaRegister(int64_t Register);
   virtual void emitCFILLVMDefAspaceCfa(int64_t Register, int64_t Offset,
-                                       int64_t AddressSpace, SMLoc Loc = {});
-  virtual void emitCFIOffset(int64_t Register, int64_t Offset, SMLoc Loc = {});
+                                       int64_t AddressSpace);
+  virtual void emitCFIOffset(int64_t Register, int64_t Offset);
   virtual void emitCFIPersonality(const MCSymbol *Sym, unsigned Encoding);
   virtual void emitCFILsda(const MCSymbol *Sym, unsigned Encoding);
-  virtual void emitCFIRememberState(SMLoc Loc);
-  virtual void emitCFIRestoreState(SMLoc Loc);
-  virtual void emitCFISameValue(int64_t Register, SMLoc Loc = {});
-  virtual void emitCFIRestore(int64_t Register, SMLoc Loc = {});
-  virtual void emitCFIRelOffset(int64_t Register, int64_t Offset, SMLoc Loc);
-  virtual void emitCFIAdjustCfaOffset(int64_t Adjustment, SMLoc Loc = {});
-  virtual void emitCFIEscape(StringRef Values, SMLoc Loc = {});
+  virtual void emitCFIRememberState();
+  virtual void emitCFIRestoreState();
+  virtual void emitCFISameValue(int64_t Register);
+  virtual void emitCFIRestore(int64_t Register);
+  virtual void emitCFIRelOffset(int64_t Register, int64_t Offset);
+  virtual void emitCFIAdjustCfaOffset(int64_t Adjustment);
+  virtual void emitCFIEscape(StringRef Values);
   virtual void emitCFIReturnColumn(int64_t Register);
-  virtual void emitCFIGnuArgsSize(int64_t Size, SMLoc Loc = {});
+  virtual void emitCFIGnuArgsSize(int64_t Size);
   virtual void emitCFISignalFrame();
-  virtual void emitCFIUndefined(int64_t Register, SMLoc Loc = {});
-  virtual void emitCFIRegister(int64_t Register1, int64_t Register2,
-                               SMLoc Loc = {});
-  virtual void emitCFIWindowSave(SMLoc Loc = {});
-  virtual void emitCFINegateRAState(SMLoc Loc = {});
+  virtual void emitCFIUndefined(int64_t Register);
+  virtual void emitCFIRegister(int64_t Register1, int64_t Register2);
+  virtual void emitCFIWindowSave();
+  virtual void emitCFINegateRAState();
 
   virtual void emitWinCFIStartProc(const MCSymbol *Symbol, SMLoc Loc = SMLoc());
   virtual void emitWinCFIEndProc(SMLoc Loc = SMLoc());
@@ -1104,12 +1091,12 @@ public:
 
   virtual void emitSyntaxDirective();
 
-  /// Record a relocation described by the .reloc directive. Return std::nullopt
-  /// if succeeded. Otherwise, return a pair (Name is invalid, error message).
-  virtual std::optional<std::pair<bool, std::string>>
+  /// Record a relocation described by the .reloc directive. Return None if
+  /// succeeded. Otherwise, return a pair (Name is invalid, error message).
+  virtual Optional<std::pair<bool, std::string>>
   emitRelocDirective(const MCExpr &Offset, StringRef Name, const MCExpr *Expr,
                      SMLoc Loc, const MCSubtargetInfo &STI) {
-    return std::nullopt;
+    return None;
   }
 
   virtual void emitAddrsig() {}
@@ -1120,13 +1107,13 @@ public:
 
   /// Emit the a pseudo probe into the current section.
   virtual void emitPseudoProbe(uint64_t Guid, uint64_t Index, uint64_t Type,
-                               uint64_t Attr, uint64_t Discriminator,
-                               const MCPseudoProbeInlineStack &InlineStack,
-                               MCSymbol *FnSym);
+                               uint64_t Attr,
+                               const MCPseudoProbeInlineStack &InlineStack);
 
   /// Set the bundle alignment mode from now on in the section.
-  /// The value 1 means turn the bundle alignment off.
-  virtual void emitBundleAlignMode(Align Alignment);
+  /// The argument is the power of 2 to which the alignment is set. The
+  /// value 0 means turn the bundle alignment off.
+  virtual void emitBundleAlignMode(unsigned AlignPow2);
 
   /// The following instructions are a bundle-locked group.
   ///

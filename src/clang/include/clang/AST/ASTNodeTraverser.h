@@ -104,8 +104,7 @@ public:
         Visit(Comment, Comment);
 
       // Decls within functions are visited by the body.
-      if (!isa<FunctionDecl>(*D) && !isa<ObjCMethodDecl>(*D) &&
-          !isa<BlockDecl>(*D)) {
+      if (!isa<FunctionDecl>(*D) && !isa<ObjCMethodDecl>(*D)) {
         if (Traversal != TK_AsIs) {
           if (const auto *CTSD = dyn_cast<ClassTemplateSpecializationDecl>(D)) {
             auto SK = CTSD->getSpecializationKind();
@@ -247,7 +246,7 @@ public:
                     .getTypeConstraint()
                     ->getImmediatelyDeclaredConstraint());
       } else if (auto *NR = dyn_cast<concepts::NestedRequirement>(R)) {
-        if (!NR->hasInvalidConstraint())
+        if (!NR->isSubstitutionFailure())
           Visit(NR->getConstraintExpr());
       }
     });
@@ -385,19 +384,21 @@ public:
   }
   void VisitAttributedType(const AttributedType *T) {
     // FIXME: AttrKind
-    if (T->getModifiedType() != T->getEquivalentType())
-      Visit(T->getModifiedType());
+    Visit(T->getModifiedType());
   }
   void VisitBTFTagAttributedType(const BTFTagAttributedType *T) {
     Visit(T->getWrappedType());
   }
-  void VisitSubstTemplateTypeParmType(const SubstTemplateTypeParmType *) {}
+  void VisitSubstTemplateTypeParmType(const SubstTemplateTypeParmType *T) {
+    Visit(T->getReplacedParameter());
+  }
   void
   VisitSubstTemplateTypeParmPackType(const SubstTemplateTypeParmPackType *T) {
+    Visit(T->getReplacedParameter());
     Visit(T->getArgumentPack());
   }
   void VisitTemplateSpecializationType(const TemplateSpecializationType *T) {
-    for (const auto &Arg : T->template_arguments())
+    for (const auto &Arg : *T)
       Visit(Arg);
   }
   void VisitObjCObjectPointerType(const ObjCObjectPointerType *T) {
@@ -477,8 +478,6 @@ public:
   void VisitFileScopeAsmDecl(const FileScopeAsmDecl *D) {
     Visit(D->getAsmString());
   }
-
-  void VisitTopLevelStmtDecl(const TopLevelStmtDecl *D) { Visit(D->getStmt()); }
 
   void VisitCapturedDecl(const CapturedDecl *D) { Visit(D->getBody()); }
 
@@ -627,14 +626,7 @@ public:
     Visit(D->getConstraintExpr());
   }
 
-  void VisitImplicitConceptSpecializationDecl(
-      const ImplicitConceptSpecializationDecl *CSD) {
-    for (const TemplateArgument &Arg : CSD->getTemplateArguments())
-      Visit(Arg);
-  }
-
   void VisitConceptSpecializationExpr(const ConceptSpecializationExpr *CSE) {
-    Visit(CSE->getSpecializationDecl());
     if (CSE->hasExplicitTemplateArgs())
       for (const auto &ArgLoc : CSE->getTemplateArgsAsWritten()->arguments())
         dumpTemplateArgumentLoc(ArgLoc);
@@ -646,15 +638,8 @@ public:
   }
 
   void VisitFriendDecl(const FriendDecl *D) {
-    if (D->getFriendType()) {
-      // Traverse any CXXRecordDecl owned by this type, since
-      // it will not be in the parent context:
-      if (auto *ET = D->getFriendType()->getType()->getAs<ElaboratedType>())
-        if (auto *TD = ET->getOwnedTagDecl())
-          Visit(TD);
-    } else {
+    if (!D->getFriendType())
       Visit(D->getFriendDecl());
-    }
   }
 
   void VisitObjCMethodDecl(const ObjCMethodDecl *D) {
@@ -719,12 +704,6 @@ public:
     }
   }
 
-  void VisitCXXParenListInitExpr(const CXXParenListInitExpr *PLIE) {
-    if (auto *Filler = PLIE->getArrayFiller()) {
-      Visit(Filler, "array_filler");
-    }
-  }
-
   void VisitBlockExpr(const BlockExpr *Node) { Visit(Node->getBlockDecl()); }
 
   void VisitOpaqueValueExpr(const OpaqueValueExpr *Node) {
@@ -733,11 +712,8 @@ public:
   }
 
   void VisitGenericSelectionExpr(const GenericSelectionExpr *E) {
-    if (E->isExprPredicate()) {
-      Visit(E->getControllingExpr());
-      Visit(E->getControllingExpr()->getType()); // FIXME: remove
-    } else
-      Visit(E->getControllingType()->getType());
+    Visit(E->getControllingExpr());
+    Visit(E->getControllingExpr()->getType()); // FIXME: remove
 
     for (const auto Assoc : E->associations()) {
       Visit(Assoc);

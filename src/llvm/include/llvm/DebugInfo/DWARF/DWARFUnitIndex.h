@@ -110,22 +110,9 @@ class DWARFUnitIndex {
 public:
   class Entry {
   public:
-    class SectionContribution {
-    private:
-      uint64_t Offset;
-      uint64_t Length;
-
-    public:
-      SectionContribution() : Offset(0), Length(0) {}
-      SectionContribution(uint64_t Offset, uint64_t Length)
-          : Offset(Offset), Length(Length) {}
-
-      void setOffset(uint64_t Value) { Offset = Value; }
-      void setLength(uint64_t Value) { Length = Value; }
-      uint64_t getOffset() const { return Offset; }
-      uint64_t getLength() const { return Length; }
-      uint32_t getOffset32() const { return (uint32_t)Offset; }
-      uint32_t getLength32() const { return (uint32_t)Length; }
+    struct SectionContribution {
+      uint32_t Offset;
+      uint32_t Length;
     };
 
   private:
@@ -137,14 +124,12 @@ public:
   public:
     const SectionContribution *getContribution(DWARFSectionKind Sec) const;
     const SectionContribution *getContribution() const;
-    SectionContribution &getContribution();
 
     const SectionContribution *getContributions() const {
       return Contributions.get();
     }
 
     uint64_t getSignature() const { return Signature; }
-    bool isValid() { return Index; }
   };
 
 private:
@@ -175,19 +160,15 @@ public:
 
   uint32_t getVersion() const { return Header.Version; }
 
-  const Entry *getFromOffset(uint64_t Offset) const;
+  const Entry *getFromOffset(uint32_t Offset) const;
   const Entry *getFromHash(uint64_t Offset) const;
 
   ArrayRef<DWARFSectionKind> getColumnKinds() const {
-    return ArrayRef(ColumnKinds.get(), Header.NumColumns);
+    return makeArrayRef(ColumnKinds.get(), Header.NumColumns);
   }
 
   ArrayRef<Entry> getRows() const {
-    return ArrayRef(Rows.get(), Header.NumBuckets);
-  }
-
-  MutableArrayRef<Entry> getMutableRows() {
-    return MutableArrayRef(Rows.get(), Header.NumBuckets);
+    return makeArrayRef(Rows.get(), Header.NumBuckets);
   }
 };
 

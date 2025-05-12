@@ -47,7 +47,7 @@ class BitstreamVisitor {
 
 protected:
   llvm::BitstreamCursor &Stream;
-  std::optional<llvm::BitstreamBlockInfo> BlockInfo;
+  Optional<llvm::BitstreamBlockInfo> BlockInfo;
   std::string *Error;
 
 public:
@@ -89,7 +89,7 @@ public:
 
       case llvm::BitstreamEntry::SubBlock: {
         if (Entry.ID == llvm::bitc::BLOCKINFO_BLOCK_ID) {
-          Expected<std::optional<llvm::BitstreamBlockInfo>> MaybeBlockInfo = Stream.ReadBlockInfoBlock();
+          Expected<Optional<llvm::BitstreamBlockInfo>> MaybeBlockInfo = Stream.ReadBlockInfoBlock();
           if (!MaybeBlockInfo) {
             Error = toString(MaybeBlockInfo.takeError());
             return false;

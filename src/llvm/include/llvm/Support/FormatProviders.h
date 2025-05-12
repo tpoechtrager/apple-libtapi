@@ -14,6 +14,7 @@
 #ifndef LLVM_SUPPORT_FORMATPROVIDERS_H
 #define LLVM_SUPPORT_FORMATPROVIDERS_H
 
+#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/ADT/Twine.h"
@@ -21,7 +22,6 @@
 #include "llvm/Support/NativeFormatting.h"
 
 #include <array>
-#include <optional>
 #include <type_traits>
 
 namespace llvm {
@@ -35,7 +35,7 @@ struct use_integral_formatter
 
 template <typename T>
 struct use_char_formatter
-    : public std::integral_constant<bool, std::is_same_v<T, char>> {};
+    : public std::integral_constant<bool, std::is_same<T, char>::value> {};
 
 template <typename T>
 struct is_cstring
@@ -46,28 +46,27 @@ struct is_cstring
 template <typename T>
 struct use_string_formatter
     : public std::integral_constant<bool,
-                                    std::is_convertible_v<T, llvm::StringRef>> {
-};
+                                    std::is_convertible<T, llvm::StringRef>::value> {};
 
 template <typename T>
 struct use_pointer_formatter
-    : public std::integral_constant<bool, std::is_pointer_v<T> &&
+    : public std::integral_constant<bool, std::is_pointer<T>::value &&
                                               !is_cstring<T>::value> {};
 
 template <typename T>
 struct use_double_formatter
-    : public std::integral_constant<bool, std::is_floating_point_v<T>> {};
+    : public std::integral_constant<bool, std::is_floating_point<T>::value> {};
 
 class HelperFunctions {
 protected:
-  static std::optional<size_t> parseNumericPrecision(StringRef Str) {
+  static Optional<size_t> parseNumericPrecision(StringRef Str) {
     size_t Prec;
-    std::optional<size_t> Result;
+    Optional<size_t> Result;
     if (Str.empty())
-      Result = std::nullopt;
+      Result = None;
     else if (Str.getAsInteger(10, Prec)) {
       assert(false && "Invalid precision specifier");
-      Result = std::nullopt;
+      Result = None;
     } else {
       assert(Prec < 100 && "Precision out of range");
       Result = std::min<size_t>(99u, Prec);
@@ -76,7 +75,7 @@ protected:
   }
 
   static bool consumeHexStyle(StringRef &Str, HexPrintStyle &Style) {
-    if (!Str.starts_with_insensitive("x"))
+    if (!Str.startswith_insensitive("x"))
       return false;
 
     if (Str.consume_front("x-"))
@@ -313,7 +312,7 @@ struct format_provider<T,
     else
       S = FloatStyle::Fixed;
 
-    std::optional<size_t> Precision = parseNumericPrecision(Style);
+    Optional<size_t> Precision = parseNumericPrecision(Style);
     if (!Precision)
       Precision = getDefaultPrecision(S);
 
@@ -356,6 +355,7 @@ struct range_item_has_provider
 
 template <typename IterT> class format_provider<llvm::iterator_range<IterT>> {
   using value = typename std::iterator_traits<IterT>::value_type;
+  using reference = typename std::iterator_traits<IterT>::reference;
 
   static StringRef consumeOneOption(StringRef &Style, char Indicator,
                                     StringRef Default) {
@@ -403,13 +403,15 @@ public:
     auto Begin = V.begin();
     auto End = V.end();
     if (Begin != End) {
-      auto Adapter = detail::build_format_adapter(*Begin);
+      auto Adapter =
+          detail::build_format_adapter(std::forward<reference>(*Begin));
       Adapter.format(Stream, ArgStyle);
       ++Begin;
     }
     while (Begin != End) {
       Stream << Sep;
-      auto Adapter = detail::build_format_adapter(*Begin);
+      auto Adapter =
+          detail::build_format_adapter(std::forward<reference>(*Begin));
       Adapter.format(Stream, ArgStyle);
       ++Begin;
     }

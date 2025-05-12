@@ -65,7 +65,7 @@ void JITLinkerBase::linkPhase2(std::unique_ptr<JITLinkerBase> Self,
   if (AR)
     Alloc = std::move(*AR);
   else
-    return abandonAllocAndBailOut(std::move(Self), AR.takeError());
+    return Ctx->notifyFailed(AR.takeError());
 
   LLVM_DEBUG({
     dbgs() << "Link graph \"" << G->getName()
@@ -75,13 +75,13 @@ void JITLinkerBase::linkPhase2(std::unique_ptr<JITLinkerBase> Self,
 
   // Run post-allocation passes.
   if (auto Err = runPasses(Passes.PostAllocationPasses))
-    return abandonAllocAndBailOut(std::move(Self), std::move(Err));
+    return Ctx->notifyFailed(std::move(Err));
 
   // Notify client that the defined symbols have been assigned addresses.
   LLVM_DEBUG(dbgs() << "Resolving symbols defined in " << G->getName() << "\n");
 
   if (auto Err = Ctx->notifyResolved(*G))
-    return abandonAllocAndBailOut(std::move(Self), std::move(Err));
+    return Ctx->notifyFailed(std::move(Err));
 
   auto ExternalSymbols = getExternalSymbolNames();
 
@@ -218,7 +218,8 @@ void JITLinkerBase::applyLookupResult(AsyncLookupResult Result) {
     assert(!Sym->isDefined() && "Symbol being resolved is already defined");
     auto ResultI = Result.find(Sym->getName());
     if (ResultI != Result.end()) {
-      Sym->getAddressable().setAddress(ResultI->second.getAddress());
+      Sym->getAddressable().setAddress(
+          orc::ExecutorAddr(ResultI->second.getAddress()));
       Sym->setLinkage(ResultI->second.getFlags().isWeak() ? Linkage::Weak
                                                           : Linkage::Strong);
       Sym->setScope(ResultI->second.getFlags().isExported() ? Scope::Default

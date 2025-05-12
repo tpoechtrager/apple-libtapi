@@ -114,6 +114,9 @@ private:
 
 } // end namespace SymbolRewriter
 
+ModulePass *createRewriteSymbolsPass();
+ModulePass *createRewriteSymbolsPass(SymbolRewriter::RewriteDescriptorList &);
+
 class RewriteSymbolPass : public PassInfoMixin<RewriteSymbolPass> {
 public:
   RewriteSymbolPass() { loadAndParseMapFiles(); }

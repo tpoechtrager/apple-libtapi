@@ -80,13 +80,6 @@ public:
   void AddCXXStdlibLibArgs(const llvm::opt::ArgList &Args,
                            llvm::opt::ArgStringList &CmdArgs) const override;
 
-  void addClangTargetOptions(
-      const llvm::opt::ArgList &Args, llvm::opt::ArgStringList &CC1Args,
-      Action::OffloadKind DeviceOffloadingKind) const override;
-
-  void addProfileRTLibs(const llvm::opt::ArgList &Args,
-                        llvm::opt::ArgStringList &CmdArgs) const override;
-
   CXXStdlibType GetDefaultCXXStdlibType() const override;
 
   RuntimeLibType GetDefaultRuntimeLibType() const override;

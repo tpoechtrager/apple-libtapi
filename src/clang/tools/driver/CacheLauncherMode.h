@@ -25,9 +25,8 @@ namespace clang {
 /// returned.
 ///
 /// \returns \p None if the arguments got adjusted, or the exit code to return.
-std::optional<int>
-handleClangCacheInvocation(SmallVectorImpl<const char *> &Args,
-                           llvm::StringSaver &Saver);
+Optional<int> handleClangCacheInvocation(SmallVectorImpl<const char *> &Args,
+                                         llvm::StringSaver &Saver);
 
 } // namespace clang
 

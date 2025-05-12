@@ -16,7 +16,7 @@
 
 #include "llvm/CodeGen/CallingConvLower.h"
 #include "llvm/CodeGen/MachineFunction.h"
-#include "llvm/CodeGen/MachineValueType.h"
+#include "llvm/Support/MachineValueType.h"
 
 namespace llvm {
 
@@ -66,8 +66,7 @@ class M68kMachineFunctionInfo : public MachineFunctionInfo {
   unsigned ArgumentStackSize = 0;
 
 public:
-  explicit M68kMachineFunctionInfo(const Function &F,
-                                   const TargetSubtargetInfo *STI) {}
+  explicit M68kMachineFunctionInfo(const MachineFunction &MF) {}
 
   MachineFunctionInfo *
   clone(BumpPtrAllocator &Allocator, MachineFunction &DestMF,

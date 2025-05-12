@@ -75,7 +75,7 @@ private:
   void emitVTableSymbols(const CXXRecordDecl *decl, APILoc loc,
                          AvailabilityInfo avail, APIAccess access,
                          bool emittedVTable = false);
-  std::optional<std::pair<APIAccess, APILoc>>
+  llvm::Optional<std::pair<APIAccess, APILoc>>
   getFileAttributesForDecl(const NamedDecl *decl) const;
   std::string getMangledName(const NamedDecl *decl) const;
   std::string getBackendMangledName(Twine name) const;

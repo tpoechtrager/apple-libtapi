@@ -61,7 +61,7 @@ class STLAlgorithmModeling : public Checker<eval::Call> {
 public:
   STLAlgorithmModeling() = default;
 
-  bool AggressiveStdFindModeling = false;
+  bool AggressiveStdFindModeling;
 
   bool evalCall(const CallEvent &Call, CheckerContext &C) const;
 }; //

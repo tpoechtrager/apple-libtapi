@@ -21,7 +21,6 @@
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/MD5.h"
-#include <optional>
 
 static llvm::cl::opt<bool>
     EnableValueProfiling("enable-value-profiling",
@@ -756,7 +755,7 @@ void PGOHash::combine(HashType Type) {
   if (Count && Count % NumTypesPerWord == 0) {
     using namespace llvm::support;
     uint64_t Swapped = endian::byte_swap<uint64_t, little>(Working);
-    MD5.update(llvm::ArrayRef((uint8_t *)&Swapped, sizeof(Swapped)));
+    MD5.update(llvm::makeArrayRef((uint8_t *)&Swapped, sizeof(Swapped)));
     Working = 0;
   }
 
@@ -782,7 +781,7 @@ uint64_t PGOHash::finalize() {
     } else {
       using namespace llvm::support;
       uint64_t Swapped = endian::byte_swap<uint64_t, little>(Working);
-      MD5.update(llvm::ArrayRef((uint8_t *)&Swapped, sizeof(Swapped)));
+      MD5.update(llvm::makeArrayRef((uint8_t *)&Swapped, sizeof(Swapped)));
     }
   }
 
@@ -966,11 +965,11 @@ void CodeGenPGO::emitCounterIncrement(CGBuilderTy &Builder, const Stmt *S,
                          Builder.getInt32(Counter), StepV};
   if (!StepV)
     Builder.CreateCall(CGM.getIntrinsic(llvm::Intrinsic::instrprof_increment),
-                       ArrayRef(Args, 4));
+                       makeArrayRef(Args, 4));
   else
     Builder.CreateCall(
         CGM.getIntrinsic(llvm::Intrinsic::instrprof_increment_step),
-        ArrayRef(Args));
+        makeArrayRef(Args));
 }
 
 void CodeGenPGO::setValueProfilingFlag(llvm::Module &M) {
@@ -1036,7 +1035,7 @@ void CodeGenPGO::loadRegionCounts(llvm::IndexedInstrProfReader *PGOReader,
   llvm::Expected<llvm::InstrProfRecord> RecordExpected =
       PGOReader->getInstrProfRecord(FuncName, FunctionHash);
   if (auto E = RecordExpected.takeError()) {
-    auto IPE = std::get<0>(llvm::InstrProfError::take(std::move(E)));
+    auto IPE = llvm::InstrProfError::take(std::move(E));
     if (IPE == llvm::instrprof_error::unknown_function)
       CGM.getPGOStats().addMissing(IsInMainFile);
     else if (IPE == llvm::instrprof_error::hash_mismatch)
@@ -1117,7 +1116,7 @@ CodeGenFunction::createProfileWeightsForLoop(const Stmt *Cond,
                                              uint64_t LoopCount) const {
   if (!PGO.haveRegionCounts())
     return nullptr;
-  std::optional<uint64_t> CondCount = PGO.getStmtCount(Cond);
+  Optional<uint64_t> CondCount = PGO.getStmtCount(Cond);
   if (!CondCount || *CondCount == 0)
     return nullptr;
   return createProfileWeights(LoopCount,

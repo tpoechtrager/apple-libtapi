@@ -430,7 +430,7 @@ void IntrinsicLowering::LowerIntrinsicCall(CallInst *CI) {
     ReplaceFPIntrinsicWithCall(CI, "copysignf", "copysign", "copysignl");
     break;
   }
-  case Intrinsic::get_rounding:
+  case Intrinsic::flt_rounds:
      // Lower to "round to the nearest"
      if (!CI->getType()->isVoidTy())
        CI->replaceAllUsesWith(ConstantInt::get(CI->getType(), 1));

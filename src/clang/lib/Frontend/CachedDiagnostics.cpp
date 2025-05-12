@@ -25,7 +25,6 @@
 #include "llvm/Support/EndianStream.h"
 #include "llvm/Support/StringSaver.h"
 #include "llvm/Support/YAMLTraits.h"
-#include <variant>
 
 using namespace clang;
 using namespace clang::cas;
@@ -41,14 +40,14 @@ struct Location {
 };
 
 struct Range {
-  std::optional<Location> Begin;
-  std::optional<Location> End;
+  Optional<Location> Begin;
+  Optional<Location> End;
   bool IsTokenRange;
 };
 
 struct FixItHint {
-  std::optional<Range> RemoveRange;
-  std::optional<Range> InsertFromRange;
+  Optional<Range> RemoveRange;
+  Optional<Range> InsertFromRange;
   std::string CodeToInsert;
   bool BeforePreviousInsertions;
 };
@@ -59,7 +58,7 @@ struct SLocEntry {
     // Using \c shared_ptr instead of \c unique_ptr to accomodate the YAML
     // [de]serialization functions.
     std::shared_ptr<MemoryBuffer> Buffer;
-    std::optional<Location> IncludeLoc;
+    Optional<Location> IncludeLoc;
 
     // Only used during compilation.
     bool IsScratchBuffer = false;
@@ -69,9 +68,9 @@ struct SLocEntry {
   };
 
   struct ExpansionInfo {
-    std::optional<Location> SpellingLoc;
-    std::optional<Location> ExpansionStartLoc;
-    std::optional<Location> ExpansionEndLoc;
+    Optional<Location> SpellingLoc;
+    Optional<Location> ExpansionStartLoc;
+    Optional<Location> ExpansionEndLoc;
     unsigned Length;
     bool IsTokenRange;
   };
@@ -103,7 +102,7 @@ struct Diagnostic {
   unsigned ID;
   DiagnosticsEngine::Level Level;
   std::string Message;
-  std::optional<Location> Loc;
+  Optional<Location> Loc;
   std::vector<Range> Ranges;
   std::vector<FixItHint> FixIts;
 };
@@ -157,15 +156,15 @@ struct CachedDiagnosticSerializer {
   unsigned addDiag(const StoredDiagnostic &Diag);
   StoredDiagnostic getDiag(unsigned Idx);
 
-  std::optional<cached_diagnostics::Location>
+  Optional<cached_diagnostics::Location>
   convertLoc(const FullSourceLoc &Loc);
   FullSourceLoc convertCachedLoc(
-      const std::optional<cached_diagnostics::Location> &CachedLoc);
+      const Optional<cached_diagnostics::Location> &CachedLoc);
 
-  std::optional<cached_diagnostics::Range>
+  Optional<cached_diagnostics::Range>
   convertRange(const CharSourceRange &Range, const SourceManager &SM);
   CharSourceRange convertCachedRange(
-      const std::optional<cached_diagnostics::Range> &CachedRange);
+      const Optional<cached_diagnostics::Range> &CachedRange);
 
   cached_diagnostics::FixItHint convertFixIt(const FixItHint &FixIt,
                                              const SourceManager &SM);
@@ -211,7 +210,7 @@ unsigned CachedDiagnosticSerializer::addDiag(const StoredDiagnostic &Diag) {
   if (Diag.getLocation().isValid()) {
     const SourceManager &SM = Diag.getLocation().getManager();
     for (const CharSourceRange &Range : Diag.getRanges()) {
-      if (std::optional<cached_diagnostics::Range> CachedRange =
+      if (Optional<cached_diagnostics::Range> CachedRange =
               convertRange(Range, SM))
         CachedDiag.Ranges.push_back(std::move(*CachedRange));
     }
@@ -243,7 +242,7 @@ StoredDiagnostic CachedDiagnosticSerializer::getDiag(unsigned Idx) {
   return Diag;
 }
 
-std::optional<cached_diagnostics::Location>
+Optional<cached_diagnostics::Location>
 CachedDiagnosticSerializer::convertLoc(const FullSourceLoc &Loc) {
   if (Loc.isInvalid())
     return std::nullopt;
@@ -283,7 +282,7 @@ CachedDiagnosticSerializer::convertLoc(const FullSourceLoc &Loc) {
 }
 
 FullSourceLoc CachedDiagnosticSerializer::convertCachedLoc(
-    const std::optional<cached_diagnostics::Location> &CachedLoc) {
+    const Optional<cached_diagnostics::Location> &CachedLoc) {
   if (!CachedLoc)
     return FullSourceLoc();
 
@@ -292,7 +291,7 @@ FullSourceLoc CachedDiagnosticSerializer::convertCachedLoc(
   return FullSourceLoc(Loc, SourceMgr);
 }
 
-std::optional<cached_diagnostics::Range>
+Optional<cached_diagnostics::Range>
 CachedDiagnosticSerializer::convertRange(const CharSourceRange &Range,
                                          const SourceManager &SM) {
   if (Range.isInvalid())
@@ -306,7 +305,7 @@ CachedDiagnosticSerializer::convertRange(const CharSourceRange &Range,
 }
 
 CharSourceRange CachedDiagnosticSerializer::convertCachedRange(
-    const std::optional<cached_diagnostics::Range> &CachedRange) {
+    const Optional<cached_diagnostics::Range> &CachedRange) {
   if (!CachedRange)
     return CharSourceRange();
 
@@ -443,7 +442,7 @@ template <> struct MappingTraits<cached_diagnostics::SLocEntry> {
         io.mapRequired("expansion", s.getAsExpansionInfo());
       }
     } else {
-      std::optional<cached_diagnostics::SLocEntry::FileInfo> FI;
+      Optional<cached_diagnostics::SLocEntry::FileInfo> FI;
       io.mapOptional("file", FI);
       if (FI) {
         s.Data = std::move(*FI);
@@ -476,7 +475,7 @@ template <> struct MappingTraits<cached_diagnostics::SLocEntry::FileInfo> {
         io.mapRequired("buffer", EncodedContents);
       }
     } else {
-      std::optional<std::string> EncodedContents;
+      Optional<std::string> EncodedContents;
       io.mapOptional("buffer", EncodedContents);
       if (EncodedContents) {
         std::vector<char> Decoded;

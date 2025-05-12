@@ -7,13 +7,13 @@
 //===----------------------------------------------------------------------===//
 
 #include "TestAsmPrinter.h"
+#include "llvm/ADT/Triple.h"
 #include "llvm/CodeGen/AsmPrinter.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Target/TargetLoweringObjectFile.h"
 #include "llvm/Target/TargetMachine.h"
-#include "llvm/TargetParser/Triple.h"
 
 using namespace llvm;
 using ::testing::StrictMock;
@@ -50,7 +50,7 @@ llvm::Error TestAsmPrinter::init(const Target *TheTarget, StringRef TripleName,
                                  uint16_t DwarfVersion,
                                  dwarf::DwarfFormat DwarfFormat) {
   TM.reset(TheTarget->createTargetMachine(TripleName, "", "", TargetOptions(),
-                                          std::nullopt));
+                                          None));
   if (!TM)
     return make_error<StringError>("no target machine for target " + TripleName,
                                    inconvertibleErrorCode());
@@ -80,5 +80,11 @@ llvm::Error TestAsmPrinter::init(const Target *TheTarget, StringRef TripleName,
 }
 
 void TestAsmPrinter::setDwarfUsesRelocationsAcrossSections(bool Enable) {
-  Asm->setDwarfUsesRelocationsAcrossSections(Enable);
+  struct HackMCAsmInfo : MCAsmInfo {
+    void setDwarfUsesRelocationsAcrossSections(bool Enable) {
+      DwarfUsesRelocationsAcrossSections = Enable;
+    }
+  };
+  static_cast<HackMCAsmInfo *>(const_cast<MCAsmInfo *>(TM->getMCAsmInfo()))
+      ->setDwarfUsesRelocationsAcrossSections(Enable);
 }

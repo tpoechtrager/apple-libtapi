@@ -9,8 +9,7 @@
 // This file exposes a function named BuildMI, which is useful for dramatically
 // simplifying how MachineInstr's are created.  It allows use of code like this:
 //
-//   MIMetadata MIMD(MI);  // Propagates DebugLoc and other metadata
-//   M = BuildMI(MBB, MI, MIMD, TII.get(X86::ADD8rr), Dst)
+//   M = BuildMI(MBB, MI, DL, TII.get(X86::ADD8rr), Dst)
 //           .addReg(argVal1)
 //           .addReg(argVal2);
 //
@@ -236,8 +235,8 @@ public:
 
   const MachineInstrBuilder &addMetadata(const MDNode *MD) const {
     MI->addOperand(*MF, MachineOperand::CreateMetadata(MD));
-    assert((MI->isDebugValueLike() ? static_cast<bool>(MI->getDebugVariable())
-                                   : true) &&
+    assert((MI->isDebugValue() ? static_cast<bool>(MI->getDebugVariable())
+                               : true) &&
            "first MDNode argument of a DBG_VALUE not a variable");
     assert((MI->isDebugLabel() ? static_cast<bool>(MI->getDebugLabel())
                                : true) &&
@@ -485,6 +484,13 @@ MachineInstrBuilder BuildMI(MachineFunction &MF, const DebugLoc &DL,
                             Register Reg, const MDNode *Variable,
                             const MDNode *Expr);
 
+/// This version of the builder builds a DBG_VALUE intrinsic
+/// for a MachineOperand.
+MachineInstrBuilder BuildMI(MachineFunction &MF, const DebugLoc &DL,
+                            const MCInstrDesc &MCID, bool IsIndirect,
+                            const MachineOperand &MO, const MDNode *Variable,
+                            const MDNode *Expr);
+
 /// This version of the builder builds a DBG_VALUE or DBG_VALUE_LIST intrinsic
 /// for a MachineOperand.
 MachineInstrBuilder BuildMI(MachineFunction &MF, const DebugLoc &DL,
@@ -501,8 +507,16 @@ MachineInstrBuilder BuildMI(MachineBasicBlock &BB,
                             Register Reg, const MDNode *Variable,
                             const MDNode *Expr);
 
-/// This version of the builder builds a DBG_VALUE, DBG_INSTR_REF, or
-/// DBG_VALUE_LIST intrinsic for a machine operand and inserts it at position I.
+/// This version of the builder builds a DBG_VALUE intrinsic
+/// for a machine operand and inserts it at position I.
+MachineInstrBuilder BuildMI(MachineBasicBlock &BB,
+                            MachineBasicBlock::iterator I, const DebugLoc &DL,
+                            const MCInstrDesc &MCID, bool IsIndirect,
+                            MachineOperand &MO, const MDNode *Variable,
+                            const MDNode *Expr);
+
+/// This version of the builder builds a DBG_VALUE or DBG_VALUE_LIST intrinsic
+/// for a machine operand and inserts it at position I.
 MachineInstrBuilder BuildMI(MachineBasicBlock &BB,
                             MachineBasicBlock::iterator I, const DebugLoc &DL,
                             const MCInstrDesc &MCID, bool IsIndirect,
@@ -556,7 +570,7 @@ inline unsigned getRegState(const MachineOperand &RegOp) {
          getUndefRegState(RegOp.isUndef()) |
          getInternalReadRegState(RegOp.isInternalRead()) |
          getDebugRegState(RegOp.isDebug()) |
-         getRenamableRegState(RegOp.getReg().isPhysical() &&
+         getRenamableRegState(Register::isPhysicalRegister(RegOp.getReg()) &&
                               RegOp.isRenamable());
 }
 

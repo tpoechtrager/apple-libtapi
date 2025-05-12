@@ -55,11 +55,17 @@ std::string StrError(int errnum) {
 #elif HAVE_DECL_STRERROR_S // "Windows Secure API"
   strerror_s(buffer, MaxErrStrLen - 1, errnum);
   str = buffer;
-#else
+#elif defined(HAVE_STRERROR)
   // Copy the thread un-safe result of strerror into
   // the buffer as fast as possible to minimize impact
   // of collision of strerror in multiple threads.
   str = strerror(errnum);
+#else
+  // Strange that this system doesn't even have strerror
+  // but, oh well, just use a generic message
+  raw_string_ostream stream(str);
+  stream << "Error #" << errnum;
+  stream.flush();
 #endif
   return str;
 }

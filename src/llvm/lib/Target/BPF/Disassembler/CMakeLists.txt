@@ -3,7 +3,6 @@ add_llvm_component_library(LLVMBPFDisassembler
 
   LINK_COMPONENTS
   MCDisassembler
-  MC
   BPFInfo
   Support
 

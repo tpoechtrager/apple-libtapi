@@ -567,7 +567,8 @@ TEST_F(FormatTestJava, FormatsLambdas) {
 TEST_F(FormatTestJava, BreaksStringLiterals) {
   // FIXME: String literal breaking is currently disabled for Java and JS, as it
   // requires strings to be merged using "+" which we don't support.
-  verifyFormat("\"some text other\";", getStyleWithColumns(14));
+  EXPECT_EQ("\"some text other\";",
+            format("\"some text other\";", getStyleWithColumns(14)));
 }
 
 TEST_F(FormatTestJava, AlignsBlockComments) {

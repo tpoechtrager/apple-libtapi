@@ -794,10 +794,9 @@ public:
   /// def-use chain of uses.
   void ensureOptimizedUses();
 
-  AliasAnalysis &getAA() { return *AA; }
-
 protected:
   // Used by Memory SSA dumpers and wrapper pass
+  friend class MemorySSAPrinterLegacyPass;
   friend class MemorySSAUpdater;
 
   void verifyOrderingDominationAndDefUses(
@@ -841,12 +840,12 @@ protected:
                                       bool CreationMustSucceed = true);
 
 private:
-  class ClobberWalkerBase;
-  class CachingWalker;
-  class SkipSelfWalker;
+  template <class AliasAnalysisType> class ClobberWalkerBase;
+  template <class AliasAnalysisType> class CachingWalker;
+  template <class AliasAnalysisType> class SkipSelfWalker;
   class OptimizeUses;
 
-  CachingWalker *getWalkerImpl();
+  CachingWalker<AliasAnalysis> *getWalkerImpl();
   void buildMemorySSA(BatchAAResults &BAA);
 
   void prepareForMoveTo(MemoryAccess *, BasicBlock *);
@@ -893,9 +892,9 @@ private:
   mutable DenseMap<const MemoryAccess *, unsigned long> BlockNumbering;
 
   // Memory SSA building info
-  std::unique_ptr<ClobberWalkerBase> WalkerBase;
-  std::unique_ptr<CachingWalker> Walker;
-  std::unique_ptr<SkipSelfWalker> SkipWalker;
+  std::unique_ptr<ClobberWalkerBase<AliasAnalysis>> WalkerBase;
+  std::unique_ptr<CachingWalker<AliasAnalysis>> Walker;
+  std::unique_ptr<SkipSelfWalker<AliasAnalysis>> SkipWalker;
   unsigned NextID = 0;
   bool IsOptimized = false;
 };
@@ -916,6 +915,18 @@ protected:
   // This function should not be used by new passes.
   static bool defClobbersUseOrDef(MemoryDef *MD, const MemoryUseOrDef *MU,
                                   AliasAnalysis &AA);
+};
+
+// This pass does eager building and then printing of MemorySSA. It is used by
+// the tests to be able to build, dump, and verify Memory SSA.
+class MemorySSAPrinterLegacyPass : public FunctionPass {
+public:
+  MemorySSAPrinterLegacyPass();
+
+  bool runOnFunction(Function &) override;
+  void getAnalysisUsage(AnalysisUsage &AU) const override;
+
+  static char ID;
 };
 
 /// An analysis that produces \c MemorySSA for a function.
@@ -946,11 +957,9 @@ public:
 /// Printer pass for \c MemorySSA.
 class MemorySSAPrinterPass : public PassInfoMixin<MemorySSAPrinterPass> {
   raw_ostream &OS;
-  bool EnsureOptimizedUses;
 
 public:
-  explicit MemorySSAPrinterPass(raw_ostream &OS, bool EnsureOptimizedUses)
-      : OS(OS), EnsureOptimizedUses(EnsureOptimizedUses) {}
+  explicit MemorySSAPrinterPass(raw_ostream &OS) : OS(OS) {}
 
   PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
 };
@@ -1032,17 +1041,15 @@ public:
   ///
   /// calling this API on load(%a) will return the MemoryPhi, not the MemoryDef
   /// in the if (a) branch.
-  MemoryAccess *getClobberingMemoryAccess(const Instruction *I,
-                                          BatchAAResults &AA) {
+  MemoryAccess *getClobberingMemoryAccess(const Instruction *I) {
     MemoryAccess *MA = MSSA->getMemoryAccess(I);
     assert(MA && "Handed an instruction that MemorySSA doesn't recognize?");
-    return getClobberingMemoryAccess(MA, AA);
+    return getClobberingMemoryAccess(MA);
   }
 
   /// Does the same thing as getClobberingMemoryAccess(const Instruction *I),
   /// but takes a MemoryAccess instead of an Instruction.
-  virtual MemoryAccess *getClobberingMemoryAccess(MemoryAccess *,
-                                                  BatchAAResults &AA) = 0;
+  virtual MemoryAccess *getClobberingMemoryAccess(MemoryAccess *) = 0;
 
   /// Given a potentially clobbering memory access and a new location,
   /// calling this will give you the nearest dominating clobbering MemoryAccess
@@ -1056,24 +1063,7 @@ public:
   /// will return that MemoryDef, whereas the above would return the clobber
   /// starting from the use side of  the memory def.
   virtual MemoryAccess *getClobberingMemoryAccess(MemoryAccess *,
-                                                  const MemoryLocation &,
-                                                  BatchAAResults &AA) = 0;
-
-  MemoryAccess *getClobberingMemoryAccess(const Instruction *I) {
-    BatchAAResults BAA(MSSA->getAA());
-    return getClobberingMemoryAccess(I, BAA);
-  }
-
-  MemoryAccess *getClobberingMemoryAccess(MemoryAccess *MA) {
-    BatchAAResults BAA(MSSA->getAA());
-    return getClobberingMemoryAccess(MA, BAA);
-  }
-
-  MemoryAccess *getClobberingMemoryAccess(MemoryAccess *MA,
-                                          const MemoryLocation &Loc) {
-    BatchAAResults BAA(MSSA->getAA());
-    return getClobberingMemoryAccess(MA, Loc, BAA);
-  }
+                                                  const MemoryLocation &) = 0;
 
   /// Given a memory access, invalidate anything this walker knows about
   /// that access.
@@ -1096,11 +1086,9 @@ public:
   // getClobberingMemoryAccess.
   using MemorySSAWalker::getClobberingMemoryAccess;
 
+  MemoryAccess *getClobberingMemoryAccess(MemoryAccess *) override;
   MemoryAccess *getClobberingMemoryAccess(MemoryAccess *,
-                                          BatchAAResults &) override;
-  MemoryAccess *getClobberingMemoryAccess(MemoryAccess *,
-                                          const MemoryLocation &,
-                                          BatchAAResults &) override;
+                                          const MemoryLocation &) override;
 };
 
 using MemoryAccessPair = std::pair<MemoryAccess *, MemoryLocation>;
@@ -1261,11 +1249,11 @@ private:
           const_cast<Value *>(Location.Ptr),
           OriginalAccess->getBlock()->getModule()->getDataLayout(), nullptr);
 
-      if (Value *Addr =
-              Translator.translateValue(OriginalAccess->getBlock(),
+      if (!Translator.PHITranslateValue(OriginalAccess->getBlock(),
                                         DefIterator.getPhiArgBlock(), DT, true))
-        if (Addr != CurrentPair.second.Ptr)
-          CurrentPair.second = CurrentPair.second.getWithNewPtr(Addr);
+        if (Translator.getAddr() != CurrentPair.second.Ptr)
+          CurrentPair.second =
+              CurrentPair.second.getWithNewPtr(Translator.getAddr());
 
       // Mark size as unknown, if the location is not guaranteed to be
       // loop-invariant for any possible loop in the function. Setting the size

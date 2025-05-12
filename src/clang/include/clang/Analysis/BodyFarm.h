@@ -17,7 +17,7 @@
 #include "clang/AST/DeclBase.h"
 #include "clang/Basic/LLVM.h"
 #include "llvm/ADT/DenseMap.h"
-#include <optional>
+#include "llvm/ADT/Optional.h"
 
 namespace clang {
 
@@ -40,11 +40,8 @@ public:
   /// Remove copy constructor to avoid accidental copying.
   BodyFarm(const BodyFarm &other) = delete;
 
-  /// Delete copy assignment operator.
-  BodyFarm &operator=(const BodyFarm &other) = delete;
-
 private:
-  typedef llvm::DenseMap<const Decl *, std::optional<Stmt *>> BodyMap;
+  typedef llvm::DenseMap<const Decl *, Optional<Stmt *>> BodyMap;
 
   ASTContext &C;
   BodyMap Bodies;

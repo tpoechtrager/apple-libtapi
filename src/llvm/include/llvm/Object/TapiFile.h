@@ -20,11 +20,16 @@
 #include "llvm/Support/Error.h"
 #include "llvm/Support/MemoryBufferRef.h"
 #include "llvm/TextAPI/Architecture.h"
-#include "llvm/TextAPI/InterfaceFile.h"
 
 namespace llvm {
 
 class raw_ostream;
+
+namespace MachO {
+
+class InterfaceFile;
+
+}
 
 namespace object {
 
@@ -46,11 +51,9 @@ public:
 
   Expected<SymbolRef::Type> getSymbolType(DataRefImpl DRI) const;
 
-  bool hasSegmentInfo() { return FileKind >= MachO::FileType::TBD_V5; }
-
   static bool classof(const Binary *v) { return v->isTapiFile(); }
 
-  bool is64Bit() const override { return MachO::is64Bit(Arch); }
+  bool is64Bit() { return MachO::is64Bit(Arch); }
 
 private:
   struct Symbol {
@@ -66,7 +69,6 @@ private:
 
   std::vector<Symbol> Symbols;
   MachO::Architecture Arch;
-  MachO::FileType FileKind;
 };
 
 } // end namespace object.

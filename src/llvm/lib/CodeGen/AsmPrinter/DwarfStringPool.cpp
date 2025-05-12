@@ -20,7 +20,7 @@ using namespace llvm;
 DwarfStringPool::DwarfStringPool(BumpPtrAllocator &A, AsmPrinter &Asm,
                                  StringRef Prefix)
     : Pool(A), Prefix(Prefix),
-      ShouldCreateSymbols(Asm.doesDwarfUseRelocationsAcrossSections()) {}
+      ShouldCreateSymbols(Asm.MAI->doesDwarfUseRelocationsAcrossSections()) {}
 
 StringMapEntry<DwarfStringPool::EntryTy> &
 DwarfStringPool::getEntryImpl(AsmPrinter &Asm, StringRef Str) {

@@ -7,8 +7,6 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/DebugInfo/PDB/Native/PDBFileBuilder.h"
-#include "llvm/ADT/SmallString.h"
-#include "llvm/ADT/StringExtras.h"
 #include "llvm/DebugInfo/CodeView/CodeView.h"
 #include "llvm/DebugInfo/CodeView/GUID.h"
 #include "llvm/DebugInfo/MSF/MSFBuilder.h"
@@ -340,7 +338,7 @@ Error PDBFileBuilder::commit(StringRef Filename, codeview::GUID *Guid) {
   if (Info->hashPDBContentsToGUID()) {
     // Compute a hash of all sections of the output file.
     uint64_t Digest =
-        xxh3_64bits({Buffer.getBufferStart(), Buffer.getBufferEnd()});
+        xxHash64({Buffer.getBufferStart(), Buffer.getBufferEnd()});
 
     H->Age = 1;
 
@@ -356,7 +354,7 @@ Error PDBFileBuilder::commit(StringRef Filename, codeview::GUID *Guid) {
   } else {
     H->Age = Info->getAge();
     H->Guid = Info->getGuid();
-    std::optional<uint32_t> Sig = Info->getSignature();
+    Optional<uint32_t> Sig = Info->getSignature();
     H->Signature = Sig ? *Sig : time(nullptr);
   }
 

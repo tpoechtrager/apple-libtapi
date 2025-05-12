@@ -37,9 +37,8 @@ public:
   /// have been customized).
   ///
   /// Thread-safe.
-  Expected<OutputFile>
-  createFile(const Twine &Path,
-             std::optional<OutputConfig> Config = std::nullopt);
+  Expected<OutputFile> createFile(const Twine &Path,
+                                  Optional<OutputConfig> Config = None);
 
 protected:
   /// Must be thread-safe. Virtual function has a different name than \a
@@ -50,7 +49,7 @@ protected:
   ///
   /// \pre \p Config is valid or None.
   virtual Expected<std::unique_ptr<OutputFileImpl>>
-  createFileImpl(StringRef Path, std::optional<OutputConfig> Config) = 0;
+  createFileImpl(StringRef Path, Optional<OutputConfig> Config) = 0;
 
   OutputBackend() = default;
 

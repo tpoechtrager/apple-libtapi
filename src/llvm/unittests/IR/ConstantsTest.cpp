@@ -207,6 +207,7 @@ TEST(ConstantsTest, AsInstructionsTest) {
   Type *Int64Ty = Type::getInt64Ty(Context);
   Type *Int32Ty = Type::getInt32Ty(Context);
   Type *Int16Ty = Type::getInt16Ty(Context);
+  Type *Int1Ty = Type::getInt1Ty(Context);
   Type *FloatTy = Type::getFloatTy(Context);
   Type *DoubleTy = Type::getDoubleTy(Context);
 
@@ -218,6 +219,7 @@ TEST(ConstantsTest, AsInstructionsTest) {
   Constant *P0 = ConstantExpr::getPtrToInt(Global, Int32Ty);
   Constant *P1 = ConstantExpr::getUIToFP(P0, FloatTy);
   Constant *P2 = ConstantExpr::getUIToFP(P0, DoubleTy);
+  Constant *P3 = ConstantExpr::getTrunc(P0, Int1Ty);
   Constant *P4 = ConstantExpr::getPtrToInt(Global2, Int32Ty);
   Constant *P5 = ConstantExpr::getUIToFP(P4, FloatTy);
   Constant *P6 = ConstantExpr::getBitCast(P4, FixedVectorType::get(Int16Ty, 2));
@@ -268,6 +270,8 @@ TEST(ConstantsTest, AsInstructionsTest) {
   CHECK(ConstantExpr::getFPExtend(P1, DoubleTy),
         "fpext float " P1STR " to double");
 
+  CHECK(ConstantExpr::getSelect(P3, P0, P4),
+        "select i1 " P3STR ", i32 " P0STR ", i32 " P4STR);
   CHECK(ConstantExpr::getICmp(CmpInst::ICMP_EQ, P0, P4),
         "icmp eq i32 " P0STR ", " P4STR);
   CHECK(ConstantExpr::getFCmp(CmpInst::FCMP_ULT, P1, P5),
@@ -467,8 +471,9 @@ TEST(ConstantsTest, BuildConstantDataVectors) {
   }
 }
 
-TEST(ConstantsTest, BitcastToGEP) {
+void bitcastToGEPHelper(bool useOpaquePointers) {
   LLVMContext Context;
+  Context.setOpaquePointers(useOpaquePointers);
   std::unique_ptr<Module> M(new Module("MyModule", Context));
 
   auto *i32 = Type::getInt32Ty(Context);
@@ -480,13 +485,22 @@ TEST(ConstantsTest, BitcastToGEP) {
       new GlobalVariable(*M, S, false, GlobalValue::ExternalLinkage, nullptr);
   auto *PtrTy = PointerType::get(i32, 0);
   auto *C = ConstantExpr::getBitCast(G, PtrTy);
-  /* With opaque pointers, no cast is necessary. */
-  EXPECT_EQ(C, G);
+  if (Context.supportsTypedPointers()) {
+    EXPECT_EQ(cast<ConstantExpr>(C)->getOpcode(), Instruction::BitCast);
+  } else {
+    /* With opaque pointers, no cast is necessary. */
+    EXPECT_EQ(C, G);
+  }
+}
+
+TEST(ConstantsTest, BitcastToGEP) {
+  bitcastToGEPHelper(true);
+  bitcastToGEPHelper(false);
 }
 
 bool foldFuncPtrAndConstToNull(LLVMContext &Context, Module *TheModule,
                                uint64_t AndValue,
-                               MaybeAlign FunctionAlign = std::nullopt) {
+                               MaybeAlign FunctionAlign = llvm::None) {
   Type *VoidType(Type::getVoidTy(Context));
   FunctionType *FuncType(FunctionType::get(VoidType, false));
   Function *Func(

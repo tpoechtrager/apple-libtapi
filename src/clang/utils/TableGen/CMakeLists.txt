@@ -25,6 +25,6 @@ add_tablegen(clang-tblgen CLANG
   TableGen.cpp
   )
 
-target_link_libraries(clang-tblgen PRIVATE clangSupport_tablegen)
+target_link_libraries(clang-tblgen PRIVATE clangSupport)
 
 set_target_properties(clang-tblgen PROPERTIES FOLDER "Clang tablegenning")

@@ -56,7 +56,6 @@ public:
   class Node;
   class Module;
   class ModuleImport;
-  class SpuriousImport;
   class ModuleMap;
   class APINotes;
 
@@ -107,7 +106,6 @@ public:
   enum class NodeKind : uint8_t {
     Tree,
     ModuleImport,
-    SpuriousImport,
   };
 
   /// The kind of node included at the given index.
@@ -157,7 +155,7 @@ public:
   static Expected<IncludeTree>
   create(ObjectStore &DB, SrcMgr::CharacteristicKind FileCharacteristic,
          ObjectRef BaseFile, ArrayRef<IncludeInfo> Includes,
-         std::optional<ObjectRef> SubmoduleName, llvm::SmallBitVector Checks);
+         Optional<ObjectRef> SubmoduleName, llvm::SmallBitVector Checks);
 
   static Expected<IncludeTree> get(ObjectStore &DB, ObjectRef Ref);
 
@@ -339,8 +337,7 @@ public:
   /// Whether this module should only be "marked visible" rather than imported.
   bool visibilityOnly() const { return (bool)getData()[0]; }
 
-  llvm::Error print(llvm::raw_ostream &OS, unsigned Indent = 0,
-                    char End = '\n');
+  llvm::Error print(llvm::raw_ostream &OS, unsigned Indent = 0);
 
   static bool isValid(const ObjectProxy &Node) {
     if (!IncludeTreeBase::isValid(Node))
@@ -359,62 +356,9 @@ public:
 
 private:
   friend class IncludeTreeBase<ModuleImport>;
-  friend class SpuriousImport;
   friend class Node;
 
   explicit ModuleImport(ObjectProxy Node) : IncludeTreeBase(std::move(Node)) {
-    assert(isValid(*this));
-  }
-};
-
-class IncludeTree::SpuriousImport
-    : public IncludeTreeBase<SpuriousImport> {
-public:
-  static Expected<SpuriousImport>
-  create(ObjectStore &DB, ObjectRef ImportRef, ObjectRef TreeRef);
-
-  static constexpr StringRef getNodeKind() { return "SpIm"; }
-
-  Expected<ModuleImport> getModuleImport() {
-    std::optional<ObjectProxy> Proxy;
-    if (llvm::Error Err = getCAS().getProxy(getReference(0)).moveInto(Proxy))
-      return std::move(Err);
-    return ModuleImport(*Proxy);
-  }
-
-  Expected<IncludeTree> getIncludeTree() {
-    std::optional<ObjectProxy> Proxy;
-    if (llvm::Error Err = getCAS().getProxy(getReference(1)).moveInto(Proxy))
-      return std::move(Err);
-    return IncludeTree(*Proxy);
-  }
-
-  llvm::Error print(llvm::raw_ostream &OS, unsigned Indent = 0);
-
-  static bool isValid(const ObjectProxy &Node) {
-    if (!IncludeTreeBase::isValid(Node))
-      return false;
-    IncludeTreeBase Base(Node);
-    if (Base.getNumReferences() != 2 && Base.getData().size() != 0)
-      return false;
-    return ModuleImport::isValid(Base.getCAS(), Base.getReference(0)) &&
-           IncludeTree::isValid(Base.getCAS(), Base.getReference(1));
-  }
-
-  static bool isValid(ObjectStore &DB, ObjectRef Ref) {
-    auto Node = DB.getProxy(Ref);
-    if (!Node) {
-      llvm::consumeError(Node.takeError());
-      return false;
-    }
-    return isValid(*Node);
-  }
-
-private:
-  friend class IncludeTreeBase;
-  friend class Node;
-
-  explicit SpuriousImport(ObjectProxy Node) : IncludeTreeBase(std::move(Node)) {
     assert(isValid(*this));
   }
 };
@@ -429,10 +373,6 @@ public:
   ModuleImport getModuleImport() const {
     assert(K == NodeKind::ModuleImport);
     return ModuleImport(N);
-  }
-  SpuriousImport getSpuriousImport() const {
-    assert(K == NodeKind::SpuriousImport);
-    return SpuriousImport(N);
   }
   NodeKind getKind() const { return K; }
 
@@ -462,24 +402,16 @@ public:
     bool InferSubmodules : 1;
     bool InferExplicitSubmodules : 1;
     bool InferExportWildcard : 1;
-    bool UseExportAsModuleLinkName: 1;
     ModuleFlags()
         : IsFramework(false), IsExplicit(false), IsExternC(false),
           IsSystem(false), InferSubmodules(false),
-          InferExplicitSubmodules(false), InferExportWildcard(false),
-          UseExportAsModuleLinkName(false) {}
+          InferExplicitSubmodules(false), InferExportWildcard(false) {}
   };
 
   ModuleFlags getFlags() const;
 
   /// The name of the current (sub)module.
-  StringRef getName() const {
-    return dataAfterFlags().split('\0').first;
-  }
-
-  StringRef getExportAsModule() const {
-    return dataAfterFlags().split('\0').second;
-  }
+  StringRef getName() const { return dataAfterFlags(); }
 
   size_t getNumSubmodules() const;
 
@@ -513,7 +445,7 @@ public:
   llvm::Error print(llvm::raw_ostream &OS, unsigned Indent = 0);
 
   static Expected<Module> create(ObjectStore &DB, StringRef ModuleName,
-                                 StringRef ExportAs, ModuleFlags Flags,
+                                 ModuleFlags Flags,
                                  ArrayRef<ObjectRef> Submodules,
                                  std::optional<ObjectRef> ExportList,
                                  std::optional<ObjectRef> LinkLibraries);
@@ -762,19 +694,19 @@ public:
 
   ObjectRef getFileListRef() const { return getReference(1); }
 
-  std::optional<ObjectRef> getPCHRef() const {
+  Optional<ObjectRef> getPCHRef() const {
     if (auto Index = getPCHRefIndex())
       return getReference(*Index);
     return std::nullopt;
   }
 
-  std::optional<ObjectRef> getModuleMapRef() const {
+  Optional<ObjectRef> getModuleMapRef() const {
     if (auto Index = getModuleMapRefIndex())
       return getReference(*Index);
     return std::nullopt;
   }
 
-  std::optional<ObjectRef> getAPINotesRef() const {
+  Optional<ObjectRef> getAPINotesRef() const {
     if (auto Index = getAPINotesRefIndex())
       return getReference(*Index);
     return std::nullopt;
@@ -794,18 +726,18 @@ public:
     return IncludeTree::FileList(std::move(*Node));
   }
 
-  Expected<std::optional<IncludeTree::File>> getPCH() {
-    if (std::optional<ObjectRef> Ref = getPCHRef()) {
+  Expected<Optional<StringRef>> getPCHBuffer() {
+    if (Optional<ObjectRef> Ref = getPCHRef()) {
       auto Node = getCAS().getProxy(*Ref);
       if (!Node)
         return Node.takeError();
-      return IncludeTree::File(std::move(*Node));
+      return Node->getData();
     }
-    return std::nullopt;
+    return None;
   }
 
-  Expected<std::optional<IncludeTree::ModuleMap>> getModuleMap() {
-    if (std::optional<ObjectRef> Ref = getModuleMapRef()) {
+  Expected<Optional<IncludeTree::ModuleMap>> getModuleMap() {
+    if (Optional<ObjectRef> Ref = getModuleMapRef()) {
       auto Node = getCAS().getProxy(*Ref);
       if (!Node)
         return Node.takeError();
@@ -814,8 +746,8 @@ public:
     return std::nullopt;
   }
 
-  Expected<std::optional<IncludeTree::APINotes>> getAPINotes() {
-    if (std::optional<ObjectRef> Ref = getAPINotesRef()) {
+  Expected<Optional<IncludeTree::APINotes>> getAPINotes() {
+    if (Optional<ObjectRef> Ref = getAPINotesRef()) {
       auto Node = getCAS().getProxy(*Ref);
       if (!Node)
         return Node.takeError();
@@ -826,8 +758,8 @@ public:
 
   static Expected<IncludeTreeRoot>
   create(ObjectStore &DB, ObjectRef MainFileTree, ObjectRef FileList,
-         std::optional<ObjectRef> PCHRef, std::optional<ObjectRef> ModuleMapRef,
-         std::optional<ObjectRef> APINotesRef);
+         Optional<ObjectRef> PCHRef, Optional<ObjectRef> ModuleMapRef,
+         Optional<ObjectRef> APINotesRef);
 
   static Expected<IncludeTreeRoot> get(ObjectStore &DB, ObjectRef Ref);
 
@@ -868,11 +800,6 @@ private:
 /// implementation of a file system.
 Expected<IntrusiveRefCntPtr<llvm::vfs::FileSystem>>
 createIncludeTreeFileSystem(IncludeTreeRoot &Root);
-
-/// Create the same IncludeTreeFileSystem but from IncludeTree::FileList.
-Expected<IntrusiveRefCntPtr<llvm::vfs::FileSystem>>
-createIncludeTreeFileSystem(llvm::cas::ObjectStore &CAS,
-                            IncludeTree::FileList &List);
 
 } // namespace cas
 } // namespace clang

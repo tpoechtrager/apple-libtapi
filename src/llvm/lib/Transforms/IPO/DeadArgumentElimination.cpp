@@ -16,11 +16,9 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "llvm/Transforms/IPO/DeadArgumentElimination.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/IR/Argument.h"
-#include "llvm/IR/AttributeMask.h"
 #include "llvm/IR/Attributes.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Constants.h"
@@ -45,6 +43,7 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/IPO.h"
+#include "llvm/Transforms/IPO/DeadArgumentElimination.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include <cassert>
 #include <utility>
@@ -85,11 +84,6 @@ public:
 
   virtual bool shouldHackArguments() const { return false; }
 };
-
-bool isMustTailCalleeAnalyzable(const CallBase &CB) {
-  assert(CB.isMustTailCall());
-  return CB.getCalledFunction() && !CB.getCalledFunction()->isDeclaration();
-}
 
 } // end anonymous namespace
 
@@ -228,7 +222,7 @@ bool DeadArgumentEliminationPass::deleteDeadVarargs(Function &F) {
   // Since we have now created the new function, splice the body of the old
   // function right into the new function, leaving the old rotting hulk of the
   // function empty.
-  NF->splice(NF->begin(), &F);
+  NF->getBasicBlockList().splice(NF->begin(), F.getBasicBlockList());
 
   // Loop over the argument list, transferring uses of the old arguments over to
   // the new arguments, also transferring over the names as well.  While we're
@@ -526,16 +520,8 @@ void DeadArgumentEliminationPass::surveyFunction(const Function &F) {
   for (const BasicBlock &BB : F) {
     // If we have any returns of `musttail` results - the signature can't
     // change
-    if (const auto *TC = BB.getTerminatingMustTailCall()) {
+    if (BB.getTerminatingMustTailCall() != nullptr)
       HasMustTailCalls = true;
-      // In addition, if the called function is not locally defined (or unknown,
-      // if this is an indirect call), we can't change the callsite and thus
-      // can't change this function's signature either.
-      if (!isMustTailCalleeAnalyzable(*TC)) {
-        markLive(F);
-        return;
-      }
-    }
   }
 
   if (HasMustTailCalls) {
@@ -1010,7 +996,7 @@ bool DeadArgumentEliminationPass::removeDeadStuffFromFunction(Function *F) {
   // Since we have now created the new function, splice the body of the old
   // function right into the new function, leaving the old rotting hulk of the
   // function empty.
-  NF->splice(NF->begin(), F);
+  NF->getBasicBlockList().splice(NF->begin(), F->getBasicBlockList());
 
   // Loop over the argument list, transferring uses of the old arguments over to
   // the new arguments, also transferring over the names as well.
@@ -1070,7 +1056,7 @@ bool DeadArgumentEliminationPass::removeDeadStuffFromFunction(Function *F) {
         // value (possibly 0 if we became void).
         auto *NewRet = ReturnInst::Create(F->getContext(), RetVal, RI);
         NewRet->setDebugLoc(RI->getDebugLoc());
-        RI->eraseFromParent();
+        BB.getInstList().erase(RI);
       }
 
   // Clone metadata from the old function, including debug info descriptor.
@@ -1095,26 +1081,6 @@ bool DeadArgumentEliminationPass::removeDeadStuffFromFunction(Function *F) {
   return true;
 }
 
-void DeadArgumentEliminationPass::propagateVirtMustcallLiveness(
-    const Module &M) {
-  // If a function was marked "live", and it has musttail callers, they in turn
-  // can't change either.
-  LiveFuncSet NewLiveFuncs(LiveFunctions);
-  while (!NewLiveFuncs.empty()) {
-    LiveFuncSet Temp;
-    for (const auto *F : NewLiveFuncs)
-      for (const auto *U : F->users())
-        if (const auto *CB = dyn_cast<CallBase>(U))
-          if (CB->isMustTailCall())
-            if (!LiveFunctions.count(CB->getParent()->getParent()))
-              Temp.insert(CB->getParent()->getParent());
-    NewLiveFuncs.clear();
-    NewLiveFuncs.insert(Temp.begin(), Temp.end());
-    for (const auto *F : Temp)
-      markLive(*F);
-  }
-}
-
 PreservedAnalyses DeadArgumentEliminationPass::run(Module &M,
                                                    ModuleAnalysisManager &) {
   bool Changed = false;
@@ -1134,8 +1100,6 @@ PreservedAnalyses DeadArgumentEliminationPass::run(Module &M,
   LLVM_DEBUG(dbgs() << "DeadArgumentEliminationPass - Determining liveness\n");
   for (auto &F : M)
     surveyFunction(F);
-
-  propagateVirtMustcallLiveness(M);
 
   // Now, remove all dead arguments and return values from each function in
   // turn.  We use make_early_inc_range here because functions will probably get

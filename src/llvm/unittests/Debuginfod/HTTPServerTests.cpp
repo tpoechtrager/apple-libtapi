@@ -6,7 +6,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "llvm/ADT/StringExtras.h"
 #include "llvm/Debuginfod/HTTPClient.h"
 #include "llvm/Debuginfod/HTTPServer.h"
 #include "llvm/Support/Error.h"

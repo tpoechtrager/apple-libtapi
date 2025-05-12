@@ -19,7 +19,7 @@
 #include "tapi/Driver/ConfigurationFile.h"
 #include "clang/Frontend/FrontendOptions.h"
 #include "llvm/ADT/StringRef.h"
-#include "llvm/TargetParser/Triple.h"
+#include "llvm/ADT/Triple.h"
 #include "llvm/TextAPI/ArchitectureSet.h"
 #include "llvm/TextAPI/PackedVersion.h"
 #include <map>
@@ -91,8 +91,6 @@ public:
   bool useUmbrellaOnly() const;
   bool useSplitHeaderDir() const;
   bool isPromotedToPublicDylib(StringRef installName) const;
-  bool scanPublicHeadersInSDKContentRoot() const;
-  bool ignoreExistingPartialSDKDBs() const;
   PathSeq getSDKMaskPaths() const;
   PathSeq getRootMaskPaths() const;
   std::vector<std::string> getClangExtraArgs(StringRef path) const;

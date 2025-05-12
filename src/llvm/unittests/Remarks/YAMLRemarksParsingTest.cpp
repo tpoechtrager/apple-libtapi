@@ -10,7 +10,6 @@
 #include "llvm/Remarks/Remark.h"
 #include "llvm/Remarks/RemarkParser.h"
 #include "gtest/gtest.h"
-#include <optional>
 
 using namespace llvm;
 
@@ -69,15 +68,14 @@ enum class CmpType {
   Contains
 };
 
-void parseExpectErrorMeta(
-    StringRef Buf, const char *Error, CmpType Cmp,
-    std::optional<StringRef> ExternalFilePrependPath = std::nullopt) {
+void parseExpectErrorMeta(StringRef Buf, const char *Error, CmpType Cmp,
+                          Optional<StringRef> ExternalFilePrependPath = None) {
   std::string ErrorStr;
   raw_string_ostream Stream(ErrorStr);
 
   Expected<std::unique_ptr<remarks::RemarkParser>> MaybeParser =
       remarks::createRemarkParserFromMeta(remarks::Format::YAML, Buf,
-                                          /*StrTab=*/std::nullopt,
+                                          /*StrTab=*/None,
                                           std::move(ExternalFilePrependPath));
   handleAllErrors(MaybeParser.takeError(),
                   [&](const ErrorInfoBase &EIB) { EIB.log(Stream); });
@@ -152,16 +150,6 @@ TEST(YAMLRemarks, ParsingGood) {
             "  - Caller: foo\n"
             "    DebugLoc: { File: file.c, Line: 2, Column: 0 }\n"
             "  - String: ' because its definition is unavailable'\n"
-            "Pass: inline\n"
-            "");
-
-  // Block Remark.
-  parseGood("\n"
-            "--- !Missed\n"
-            "Function: foo\n"
-            "Name: NoDefinition\n"
-            "Args:\n"
-            "  - String:           |\n      \n      \n      blocks\n"
             "Pass: inline\n"
             "");
 }

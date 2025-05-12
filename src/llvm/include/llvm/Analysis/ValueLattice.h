@@ -275,13 +275,13 @@ public:
     return Range;
   }
 
-  std::optional<APInt> asConstantInteger() const {
+  Optional<APInt> asConstantInteger() const {
     if (isConstant() && isa<ConstantInt>(getConstant())) {
       return cast<ConstantInt>(getConstant())->getValue();
     } else if (isConstantRange() && getConstantRange().isSingleElement()) {
       return *getConstantRange().getSingleElement();
     }
-    return std::nullopt;
+    return None;
   }
 
   bool markOverdefined() {
@@ -452,8 +452,37 @@ public:
   /// true, false or undef constants, or nullptr if the comparison cannot be
   /// evaluated.
   Constant *getCompare(CmpInst::Predicate Pred, Type *Ty,
-                       const ValueLatticeElement &Other,
-                       const DataLayout &DL) const;
+                       const ValueLatticeElement &Other) const {
+    if (isUnknownOrUndef() || Other.isUnknownOrUndef())
+      return UndefValue::get(Ty);
+
+    if (isConstant() && Other.isConstant())
+      return ConstantExpr::getCompare(Pred, getConstant(), Other.getConstant());
+
+    if (ICmpInst::isEquality(Pred)) {
+      // not(C) != C => true, not(C) == C => false.
+      if ((isNotConstant() && Other.isConstant() &&
+           getNotConstant() == Other.getConstant()) ||
+          (isConstant() && Other.isNotConstant() &&
+           getConstant() == Other.getNotConstant()))
+        return Pred == ICmpInst::ICMP_NE
+            ? ConstantInt::getTrue(Ty) : ConstantInt::getFalse(Ty);
+    }
+
+    // Integer constants are represented as ConstantRanges with single
+    // elements.
+    if (!isConstantRange() || !Other.isConstantRange())
+      return nullptr;
+
+    const auto &CR = getConstantRange();
+    const auto &OtherCR = Other.getConstantRange();
+    if (CR.icmp(Pred, OtherCR))
+      return ConstantInt::getTrue(Ty);
+    if (CR.icmp(CmpInst::getInversePredicate(Pred), OtherCR))
+      return ConstantInt::getFalse(Ty);
+
+    return nullptr;
+  }
 
   unsigned getNumRangeExtensions() const { return NumRangeExtensions; }
   void setNumRangeExtensions(unsigned N) { NumRangeExtensions = N; }

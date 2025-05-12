@@ -45,7 +45,6 @@
 #include "clang/StaticAnalyzer/Core/PathSensitive/ProgramStateTrait.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/SymbolManager.h"
 #include "llvm/Support/raw_ostream.h"
-#include <optional>
 
 using namespace clang;
 using namespace ento;
@@ -283,7 +282,7 @@ void ObjCDeallocChecker::checkBeginFunction(
       continue;
 
     SVal LVal = State->getLValue(PropImpl->getPropertyIvarDecl(), SelfVal);
-    std::optional<Loc> LValLoc = LVal.getAs<Loc>();
+    Optional<Loc> LValLoc = LVal.getAs<Loc>();
     if (!LValLoc)
       continue;
 
@@ -321,9 +320,7 @@ ObjCDeallocChecker::getInstanceSymbolFromIvarSymbol(SymbolRef IvarSym) const {
   if (!IvarRegion)
     return nullptr;
 
-  const SymbolicRegion *SR = IvarRegion->getSymbolicBase();
-  assert(SR && "Symbolic base should not be nullptr");
-  return SR->getSymbol();
+  return IvarRegion->getSymbolicBase()->getSymbol();
 }
 
 /// If we are in -dealloc or -dealloc is on the stack, handle the call if it is
@@ -754,7 +751,7 @@ bool ObjCDeallocChecker::diagnoseMistakenDealloc(SymbolRef DeallocedValue,
 
 ObjCDeallocChecker::ObjCDeallocChecker()
     : NSObjectII(nullptr), SenTestCaseII(nullptr), XCTestCaseII(nullptr),
-      Block_releaseII(nullptr), CIFilterII(nullptr) {
+      CIFilterII(nullptr) {
 
   MissingReleaseBugType.reset(
       new BugType(this, "Missing ivar release (leak)",
@@ -820,8 +817,8 @@ const ObjCPropertyDecl *ObjCDeallocChecker::findShadowedPropertyDecl(
 
   IdentifierInfo *ID = PropDecl->getIdentifier();
   DeclContext::lookup_result R = CatDecl->getClassInterface()->lookup(ID);
-  for (const NamedDecl *D : R) {
-    auto *ShadowedPropDecl = dyn_cast<ObjCPropertyDecl>(D);
+  for (DeclContext::lookup_iterator I = R.begin(), E = R.end(); I != E; ++I) {
+    auto *ShadowedPropDecl = dyn_cast<ObjCPropertyDecl>(*I);
     if (!ShadowedPropDecl)
       continue;
 
@@ -956,7 +953,7 @@ ObjCDeallocChecker::getValueReleasedByNillingOut(const ObjCMethodCall &M,
   ProgramStateRef State = C.getState();
 
   SVal LVal = State->getLValue(PropIvarDecl, ReceiverVal);
-  std::optional<Loc> LValLoc = LVal.getAs<Loc>();
+  Optional<Loc> LValLoc = LVal.getAs<Loc>();
   if (!LValLoc)
     return nullptr;
 
@@ -1007,7 +1004,7 @@ bool ObjCDeallocChecker::instanceDeallocIsOnStack(const CheckerContext &C,
   return false;
 }
 
-/// Returns true if the ID is a class in which is known to have
+/// Returns true if the ID is a class in which which is known to have
 /// a separate teardown lifecycle. In this case, -dealloc warnings
 /// about missing releases should be suppressed.
 bool ObjCDeallocChecker::classHasSeparateTeardown(

@@ -199,7 +199,7 @@ public:
             unsigned FunctionIdx, unsigned Flags)
       : StartIdx(StartIdx), Len(Len), FirstInst(FirstInst), LastInst(LastInst),
         MBB(MBB), FunctionIdx(FunctionIdx), Flags(Flags) {}
-  Candidate() = delete;
+  Candidate() = default;
 
   /// Used to ensure that \p Candidates are outlined in an order that
   /// preserves the start and end indices of other \p Candidates.
@@ -268,7 +268,7 @@ public:
       C.Benefit = B;
   }
 
-  OutlinedFunction() = delete;
+  OutlinedFunction() = default;
 };
 } // namespace outliner
 } // namespace llvm

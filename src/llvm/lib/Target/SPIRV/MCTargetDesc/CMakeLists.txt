@@ -9,11 +9,9 @@ add_llvm_component_library(LLVMSPIRVDesc
   SPIRVInstPrinter.cpp
 
   LINK_COMPONENTS
-  CodeGenTypes
   MC
   SPIRVInfo
   Support
-  TargetParser
 
   ADD_TO_COMPONENT
   SPIRV

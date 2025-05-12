@@ -1,4 +1,4 @@
-import("//third-party/unittest/unittest.gni")
+import("//llvm/utils/unittest/unittest.gni")
 
 unittest("LLVMExegesisTests") {
   deps = [
@@ -7,14 +7,13 @@ unittest("LLVMExegesisTests") {
     "//llvm/lib/MC/MCParser",
     "//llvm/lib/Object",
     "//llvm/lib/Support",
-    "//llvm/lib/TargetParser",
     "//llvm/tools/llvm-exegesis/lib",
   ]
   include_dirs = [ "../../../tools/llvm-exegesis/lib" ]
   sources = [
     "BenchmarkRunnerTest.cpp",
     "ClusteringTest.cpp",
-    "ProgressMeterTest.cpp",
+    "PerfHelperTest.cpp",
     "RegisterValueTest.cpp",
   ]
 }

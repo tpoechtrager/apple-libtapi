@@ -182,10 +182,10 @@ static void serializeFlags(Object &obj, SymbolFlags flags) {
                        SymbolFlags::ThreadLocalValue);
 }
 
-static std::optional<Object> serializeAPIRecord(const APIRecord &var,
-                                                const APIJSONOption &options) {
+static Optional<Object> serializeAPIRecord(const APIRecord &var,
+                                           const APIJSONOption &options) {
   if (options.publicOnly && var.access != APIAccess::Public)
-    return std::nullopt;
+    return llvm::None;
 
   Object obj;
   obj["name"] = var.name;
@@ -218,11 +218,11 @@ static std::optional<Object> serializeAPIRecord(const APIRecord &var,
   return obj;
 }
 
-static std::optional<Object>
-serializeGlobalRecord(const GlobalRecord &var, const APIJSONOption &options) {
+static Optional<Object> serializeGlobalRecord(const GlobalRecord &var,
+                                              const APIJSONOption &options) {
   auto obj = serializeAPIRecord(var, options);
   if (!obj)
-    return std::nullopt;
+    return llvm::None;
 
   switch (var.kind) {
   case GVKind::Function:
@@ -305,7 +305,7 @@ static void serializeInstanceVariable(Array &container,
 }
 
 void APIJSONVisitor::visitGlobal(const GlobalRecord &record) {
-  if (options.noHiddenGlobal && !record.isExported() && !record.inlined)
+  if (options.externalOnly && !record.isExported())
     return;
 
   auto root = serializeGlobalRecord(record, options);
@@ -315,12 +315,12 @@ void APIJSONVisitor::visitGlobal(const GlobalRecord &record) {
   globals.emplace_back(std::move(*root));
 }
 
-static std::optional<Object>
+static Optional<Object>
 serializeObjCContainer(const ObjCContainerRecord &record,
                        const APIJSONOption &options) {
   auto root = serializeAPIRecord(record, options);
   if (!root)
-    return std::nullopt;
+    return llvm::None;
 
   if (!record.protocols.empty()) {
     Array protocols;
@@ -361,6 +361,9 @@ serializeObjCContainer(const ObjCContainerRecord &record,
 }
 
 void APIJSONVisitor::visitObjCInterface(const ObjCInterfaceRecord &interface) {
+  if (options.externalOnly && !interface.isExported())
+    return;
+
   auto root = serializeObjCContainer(interface, options);
   if (!root)
     return;
@@ -368,7 +371,7 @@ void APIJSONVisitor::visitObjCInterface(const ObjCInterfaceRecord &interface) {
   root.value()["super"] = interface.superClass.str();
 
   serializeLinkage(*root, interface.linkage);
-  serializeBoolean(*root, "hasException", interface.hasExceptionAttribute());
+  serializeBoolean(*root, "hasException", interface.hasExceptionAttribute);
 
   if (!interface.categories.empty()) {
     Array categories;
@@ -399,11 +402,11 @@ void APIJSONVisitor::visitObjCProtocol(const ObjCProtocolRecord &protocol) {
     protocols.emplace_back(std::move(*root));
 }
 
-static std::optional<Object> serializeEnumRecord(const EnumRecord &record,
-                                                 const APIJSONOption &options) {
+static Optional<Object> serializeEnumRecord(const EnumRecord &record,
+                                            const APIJSONOption &options) {
   auto root = serializeAPIRecord(record, options);
   if (!root)
-    return std::nullopt;
+    return llvm::None;
 
   if (!record.constants.empty()) {
     Array constants;
@@ -427,12 +430,11 @@ void APIJSONVisitor::visitEnum(const EnumRecord &record) {
   enums.emplace_back(std::move(*root));
 }
 
-static std::optional<Object>
-serializeTypedefRecord(const TypedefRecord &record,
-                       const APIJSONOption &options) {
+static Optional<Object> serializeTypedefRecord(const TypedefRecord &record,
+                                               const APIJSONOption &options) {
   auto root = serializeAPIRecord(record, options);
   if (!root)
-    return std::nullopt;
+    return llvm::None;
 
   return std::move(*root);
 }
@@ -903,13 +905,11 @@ Error APIJSONParser::parseInterfaces(Array &interfaces) {
       return linkage.takeError();
     auto super = object->getString("super").value_or("");
 
-    ObjCIFSymbolKind symType =
-        ObjCIFSymbolKind::Class | ObjCIFSymbolKind::MetaClass;
-    if (parseBinaryField("hasException", object))
-      symType |= ObjCIFSymbolKind::EHType;
     auto *objcClass =
         result.addObjCInterface(*name, *loc, *avail, *access, *linkage, super,
-                                /*Decl*/ nullptr, symType);
+                                /*Decl*/ nullptr);
+    auto exception = parseBinaryField("hasException", object);
+    objcClass->hasExceptionAttribute = exception;
 
     // Don't need to handle categories here.
     auto err = parseConformedProtocols(objcClass, object);

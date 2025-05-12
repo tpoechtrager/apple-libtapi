@@ -14,8 +14,6 @@
 #include "ReduceDIMetadata.h"
 #include "Delta.h"
 #include "llvm/ADT/Sequence.h"
-#include "llvm/ADT/SetVector.h"
-#include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/IR/InstIterator.h"
@@ -80,9 +78,7 @@ void identifyUninterestingMDNodes(Oracle &O, MDNodeList &MDs) {
   }
 }
 
-static void extractDIMetadataFromModule(Oracle &O, ReducerWorkItem &WorkItem) {
-  Module &Program = WorkItem.getModule();
-
+static void extractDIMetadataFromModule(Oracle &O, Module &Program) {
   MDNodeList MDs;
   // Collect all !dbg metadata attachments.
   for (const auto &DC : Program.debug_compile_units())
@@ -100,5 +96,7 @@ static void extractDIMetadataFromModule(Oracle &O, ReducerWorkItem &WorkItem) {
 }
 
 void llvm::reduceDIMetadataDeltaPass(TestRunner &Test) {
-  runDeltaPass(Test, extractDIMetadataFromModule, "Reducing DIMetadata");
+  outs() << "*** Reducing DIMetadata...\n";
+  runDeltaPass(Test, extractDIMetadataFromModule);
+  outs() << "----------------------------\n";
 }

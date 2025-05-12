@@ -55,7 +55,7 @@ public:
 
   /// Appends new source to the source list.
   ///
-  ///\param[in] Source - An ExternalSemaSource.
+  ///\param[in] source - An ExternalSemaSource.
   ///
   void AddSource(ExternalSemaSource *Source);
 
@@ -359,9 +359,6 @@ public:
   /// \return true if a diagnostic was produced, false otherwise.
   bool MaybeDiagnoseMissingCompleteType(SourceLocation Loc,
                                         QualType T) override;
-
-  // Inform all attached sources that a mangling number was assigned.
-  void AssignedLambdaNumbering(const CXXRecordDecl *Lambda) override;
 
   /// LLVM-style RTTI.
   /// \{

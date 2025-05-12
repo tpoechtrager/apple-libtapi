@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Support/LockFileManager.h"
+#include "llvm/ADT/None.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/Errc.h"
@@ -51,7 +52,7 @@ using namespace llvm;
 /// \param LockFileName The name of the lock file to read.
 ///
 /// \returns The process ID of the process that owns this lock file
-std::optional<std::pair<std::string, int>>
+Optional<std::pair<std::string, int> >
 LockFileManager::readLockFile(StringRef LockFileName) {
   // Read the owning host and PID out of the lock file. If it appears that the
   // owning process is dead, the lock file is invalid.
@@ -59,7 +60,7 @@ LockFileManager::readLockFile(StringRef LockFileName) {
       MemoryBuffer::getFile(LockFileName);
   if (!MBOrErr) {
     sys::fs::remove(LockFileName);
-    return std::nullopt;
+    return None;
   }
   MemoryBuffer &MB = *MBOrErr.get();
 
@@ -76,7 +77,7 @@ LockFileManager::readLockFile(StringRef LockFileName) {
 
   // Delete the lock file. It's invalid anyway.
   sys::fs::remove(LockFileName);
-  return std::nullopt;
+  return None;
 }
 
 static std::error_code getHostID(SmallVectorImpl<char> &HostID) {
@@ -205,8 +206,6 @@ LockFileManager::LockFileManager(StringRef FileName)
       S.append(std::string(UniqueLockFileName.str()));
       setError(Out.error(), S);
       sys::fs::remove(UniqueLockFileName);
-      // Don't call report_fatal_error.
-      Out.clear_error();
       return;
     }
   }

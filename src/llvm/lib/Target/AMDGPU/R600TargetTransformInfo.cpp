@@ -82,10 +82,10 @@ bool R600TTIImpl::isLegalToVectorizeStoreChain(unsigned ChainSizeInBytes,
   return isLegalToVectorizeMemChain(ChainSizeInBytes, Alignment, AddrSpace);
 }
 
-unsigned R600TTIImpl::getMaxInterleaveFactor(ElementCount VF) {
+unsigned R600TTIImpl::getMaxInterleaveFactor(unsigned VF) {
   // Disable unrolling if the loop is not vectorized.
   // TODO: Enable this again.
-  if (VF.isScalar())
+  if (VF == 1)
     return 1;
 
   return 8;
@@ -108,17 +108,14 @@ InstructionCost R600TTIImpl::getCFInstrCost(unsigned Opcode,
 }
 
 InstructionCost R600TTIImpl::getVectorInstrCost(unsigned Opcode, Type *ValTy,
-                                                TTI::TargetCostKind CostKind,
-                                                unsigned Index, Value *Op0,
-                                                Value *Op1) {
+                                                unsigned Index) {
   switch (Opcode) {
   case Instruction::ExtractElement:
   case Instruction::InsertElement: {
     unsigned EltSize =
         DL.getTypeSizeInBits(cast<VectorType>(ValTy)->getElementType());
     if (EltSize < 32) {
-      return BaseT::getVectorInstrCost(Opcode, ValTy, CostKind, Index, Op0,
-                                       Op1);
+      return BaseT::getVectorInstrCost(Opcode, ValTy, Index);
     }
 
     // Extracts are just reads of a subregister, so are free. Inserts are
@@ -129,7 +126,7 @@ InstructionCost R600TTIImpl::getVectorInstrCost(unsigned Opcode, Type *ValTy,
     return Index == ~0u ? 2 : 0;
   }
   default:
-    return BaseT::getVectorInstrCost(Opcode, ValTy, CostKind, Index, Op0, Op1);
+    return BaseT::getVectorInstrCost(Opcode, ValTy, Index);
   }
 }
 

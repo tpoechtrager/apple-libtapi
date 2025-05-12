@@ -63,8 +63,6 @@ public:
       const llvm::opt::ArgList &DriverArgs, const JobAction &JA,
       const llvm::fltSemantics *FPType = nullptr) const override;
 
-  const char *getDefaultLinker() const override;
-
 protected:
   Tool *buildAssembler() const override;
   Tool *buildLinker() const override;

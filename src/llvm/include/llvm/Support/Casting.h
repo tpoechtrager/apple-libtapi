@@ -14,11 +14,11 @@
 #ifndef LLVM_SUPPORT_CASTING_H
 #define LLVM_SUPPORT_CASTING_H
 
+#include "llvm/ADT/Optional.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/type_traits.h"
 #include <cassert>
 #include <memory>
-#include <optional>
 #include <type_traits>
 
 namespace llvm {
@@ -66,7 +66,7 @@ template <typename To, typename From, typename Enabler = void> struct isa_impl {
 
 // Always allow upcasts, and perform no dynamic check for them.
 template <typename To, typename From>
-struct isa_impl<To, From, std::enable_if_t<std::is_base_of_v<To, From>>> {
+struct isa_impl<To, From, std::enable_if_t<std::is_base_of<To, From>::value>> {
   static inline bool doit(const From &) { return true; }
 };
 
@@ -231,7 +231,7 @@ struct cast_convert_val<To, FromTy *, FromTy *> {
 
 template <class X> struct is_simple_type {
   static const bool value =
-      std::is_same_v<X, typename simplify_type<X>::SimpleType>;
+      std::is_same<X, typename simplify_type<X>::SimpleType>::value;
 };
 
 // } // namespace detail
@@ -263,8 +263,8 @@ struct CastIsPossible {
 // over. In fact, some of the isa_impl templates should be moved over to
 // CastIsPossible.
 template <typename To, typename From>
-struct CastIsPossible<To, std::optional<From>> {
-  static inline bool isPossible(const std::optional<From> &f) {
+struct CastIsPossible<To, Optional<From>> {
+  static inline bool isPossible(const Optional<From> &f) {
     assert(f && "CastIsPossible::isPossible called on a nullopt!");
     return isa_impl_wrap<
         To, const From,
@@ -275,7 +275,8 @@ struct CastIsPossible<To, std::optional<From>> {
 /// Upcasting (from derived to base) and casting from a type to itself should
 /// always be possible.
 template <typename To, typename From>
-struct CastIsPossible<To, From, std::enable_if_t<std::is_base_of_v<To, From>>> {
+struct CastIsPossible<To, From,
+                      std::enable_if_t<std::is_base_of<To, From>::value>> {
   static inline bool isPossible(const From &f) { return true; }
 };
 
@@ -318,7 +319,7 @@ namespace detail {
 /// A helper to derive the type to use with `Self` for cast traits, when the
 /// provided CRTP derived type is allowed to be void.
 template <typename OptionalDerived, typename Default>
-using SelfType = std::conditional_t<std::is_same_v<OptionalDerived, void>,
+using SelfType = std::conditional_t<std::is_same<OptionalDerived, void>::value,
                                     Default, OptionalDerived>;
 } // namespace detail
 
@@ -358,18 +359,18 @@ struct UniquePtrCast : public CastIsPossible<To, From *> {
   }
 };
 
-/// This cast trait provides std::optional<T> casting. This means that if you
-/// have a value type, you can cast it to another value type and have dyn_cast
-/// return an std::optional<T>.
+/// This cast trait provides Optional<T> casting. This means that if you have a
+/// value type, you can cast it to another value type and have dyn_cast return
+/// an Optional<T>.
 template <typename To, typename From, typename Derived = void>
 struct OptionalValueCast
     : public CastIsPossible<To, From>,
       public DefaultDoCastIfPossible<
-          std::optional<To>, From,
+          Optional<To>, From,
           detail::SelfType<Derived, OptionalValueCast<To, From>>> {
-  static inline std::optional<To> castFailed() { return std::optional<To>{}; }
+  static inline Optional<To> castFailed() { return Optional<To>{}; }
 
-  static inline std::optional<To> doCast(const From &f) { return To(f); }
+  static inline Optional<To> doCast(const From &f) { return To(f); }
 };
 
 /// Provides a cast trait that strips `const` from types to make it easier to
@@ -389,8 +390,8 @@ struct ConstStrippingForwardingCast {
   // Remove the pointer if it exists, then we can get rid of consts/volatiles.
   using DecayedFrom = std::remove_cv_t<std::remove_pointer_t<From>>;
   // Now if it's a pointer, add it back. Otherwise, we want a ref.
-  using NonConstFrom =
-      std::conditional_t<std::is_pointer_v<From>, DecayedFrom *, DecayedFrom &>;
+  using NonConstFrom = std::conditional_t<std::is_pointer<From>::value,
+                                          DecayedFrom *, DecayedFrom &>;
 
   static inline bool isPossible(const From &f) {
     return ForwardTo::isPossible(const_cast<NonConstFrom>(f));
@@ -532,12 +533,11 @@ struct CastInfo<To, From, std::enable_if_t<!is_simple_type<From>::value>> {
 template <typename To, typename From>
 struct CastInfo<To, std::unique_ptr<From>> : public UniquePtrCast<To, From> {};
 
-/// Provide a CastInfo specialized for std::optional<From>. It's assumed that if
-/// the input is std::optional<From> that the output can be std::optional<To>.
-/// If that's not the case, specialize CastInfo for your use case.
+/// Provide a CastInfo specialized for Optional<From>. It's assumed that if the
+/// input is Optional<From> that the output can be Optional<To>. If that's not
+/// the case, specialize CastInfo for your use case.
 template <typename To, typename From>
-struct CastInfo<To, std::optional<From>> : public OptionalValueCast<To, From> {
-};
+struct CastInfo<To, Optional<From>> : public OptionalValueCast<To, From> {};
 
 /// isa<X> - Return true if the parameter to the template is an instance of one
 /// of the template type arguments.  Used like this:
@@ -606,12 +606,10 @@ template <typename T, typename Enable = void> struct ValueIsPresent {
 };
 
 // Optional provides its own way to check if something is present.
-template <typename T> struct ValueIsPresent<std::optional<T>> {
+template <typename T> struct ValueIsPresent<Optional<T>> {
   using UnwrappedType = T;
-  static inline bool isPresent(const std::optional<T> &t) {
-    return t.has_value();
-  }
-  static inline decltype(auto) unwrapValue(std::optional<T> &t) { return *t; }
+  static inline bool isPresent(const Optional<T> &t) { return t.has_value(); }
+  static inline decltype(auto) unwrapValue(Optional<T> &t) { return t.value(); }
 };
 
 // If something is "nullable" then we just compare it to nullptr to see if it

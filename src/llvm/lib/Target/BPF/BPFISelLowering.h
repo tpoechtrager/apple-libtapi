@@ -23,7 +23,7 @@ class BPFSubtarget;
 namespace BPFISD {
 enum NodeType : unsigned {
   FIRST_NUMBER = ISD::BUILTIN_OP_END,
-  RET_GLUE,
+  RET_FLAG,
   CALL,
   SELECT_CC,
   BR_CC,
@@ -77,7 +77,7 @@ private:
   SDValue LowerGlobalAddress(SDValue Op, SelectionDAG &DAG) const;
 
   // Lower the result values of a call, copying them out of physregs into vregs
-  SDValue LowerCallResult(SDValue Chain, SDValue InGlue,
+  SDValue LowerCallResult(SDValue Chain, SDValue InFlag,
                           CallingConv::ID CallConv, bool IsVarArg,
                           const SmallVectorImpl<ISD::InputArg> &Ins,
                           const SDLoc &DL, SelectionDAG &DAG,

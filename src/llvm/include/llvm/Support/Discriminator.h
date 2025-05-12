@@ -65,6 +65,8 @@ enum FSDiscriminatorPass {
 };
 } // namespace sampleprof
 
+using namespace sampleprof;
+
 // The number of bits reserved for the base discrimininator. The base
 // discriminaitor starts from bit 0.
 static const unsigned BaseDiscriminatorBitWidth = 8;
@@ -80,36 +82,33 @@ static const unsigned FSDiscriminatorBitWidth = 6;
 //  + FSDiscriminatorBitWidth * getNumFSPasses()
 // needs to fit in an unsigned int type.
 static inline unsigned getNumFSPasses() {
-  return static_cast<unsigned>(sampleprof::FSDiscriminatorPass::PassLast);
+  return static_cast<unsigned>(FSDiscriminatorPass::PassLast);
 }
 
 // Return the ending bit for FSPass P.
-static inline unsigned getFSPassBitEnd(sampleprof::FSDiscriminatorPass P) {
+static inline unsigned getFSPassBitEnd(FSDiscriminatorPass P) {
   unsigned I = static_cast<unsigned>(P);
   assert(I <= getNumFSPasses() && "Invalid FS discriminator pass number.");
   return BaseDiscriminatorBitWidth + I * FSDiscriminatorBitWidth - 1;
 }
 
 // Return the begining bit for FSPass P.
-static inline unsigned getFSPassBitBegin(sampleprof::FSDiscriminatorPass P) {
-  if (P == sampleprof::FSDiscriminatorPass::Base)
+static inline unsigned getFSPassBitBegin(FSDiscriminatorPass P) {
+  if (P == FSDiscriminatorPass::Base)
     return 0;
   unsigned I = static_cast<unsigned>(P);
   assert(I <= getNumFSPasses() && "Invalid FS discriminator pass number.");
-  return getFSPassBitEnd(static_cast<sampleprof::FSDiscriminatorPass>(I - 1)) +
-         1;
+  return getFSPassBitEnd(static_cast<FSDiscriminatorPass>(I - 1)) + 1;
 }
 
 // Return the beginning bit for the last FSPass.
 static inline int getLastFSPassBitBegin() {
-  return getFSPassBitBegin(
-      static_cast<sampleprof::FSDiscriminatorPass>(getNumFSPasses()));
+  return getFSPassBitBegin(static_cast<FSDiscriminatorPass>(getNumFSPasses()));
 }
 
 // Return the ending bit for the last FSPass.
 static inline unsigned getLastFSPassBitEnd() {
-  return getFSPassBitEnd(
-      static_cast<sampleprof::FSDiscriminatorPass>(getNumFSPasses()));
+  return getFSPassBitEnd(static_cast<FSDiscriminatorPass>(getNumFSPasses()));
 }
 
 // Return the beginning bit for the base (first) FSPass.

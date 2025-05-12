@@ -18,8 +18,6 @@
 
 namespace llvm {
 void reduceUsingSimplifyCFGDeltaPass(TestRunner &Test);
-void reduceConditionalsTrueDeltaPass(TestRunner &Test);
-void reduceConditionalsFalseDeltaPass(TestRunner &Test);
 } // namespace llvm
 
 #endif

@@ -47,8 +47,8 @@ FullRegNamesWithPercent("ppc-reg-with-percent-prefix", cl::Hidden,
 #define PRINT_ALIAS_INSTR
 #include "PPCGenAsmWriter.inc"
 
-void PPCInstPrinter::printRegName(raw_ostream &OS, MCRegister Reg) const {
-  const char *RegName = getRegisterName(Reg);
+void PPCInstPrinter::printRegName(raw_ostream &OS, unsigned RegNo) const {
+  const char *RegName = getRegisterName(RegNo);
   OS << RegName;
 }
 
@@ -161,7 +161,7 @@ void PPCInstPrinter::printInst(const MCInst *MI, uint64_t Address,
   // On AIX, only emit the extended mnemonics for dcbt and dcbtst if
   // the "modern assembler" is available.
   if ((MI->getOpcode() == PPC::DCBT || MI->getOpcode() == PPC::DCBTST) &&
-      (!TT.isOSAIX() || STI.hasFeature(PPC::FeatureModernAIXAs))) {
+      (!TT.isOSAIX() || STI.getFeatureBits()[PPC::FeatureModernAIXAs])) {
     unsigned char TH = MI->getOperand(0).getImm();
     O << "\tdcbt";
     if (MI->getOpcode() == PPC::DCBTST)
@@ -170,7 +170,7 @@ void PPCInstPrinter::printInst(const MCInst *MI, uint64_t Address,
       O << "t";
     O << " ";
 
-    bool IsBookE = STI.hasFeature(PPC::FeatureBookE);
+    bool IsBookE = STI.getFeatureBits()[PPC::FeatureBookE];
     if (IsBookE && TH != 0 && TH != 16)
       O << (unsigned int) TH << ", ";
 
@@ -564,10 +564,10 @@ void PPCInstPrinter::printTLSCall(const MCInst *MI, unsigned OpNo,
   // come at the _end_ of the expression.
   const MCOperand &Op = MI->getOperand(OpNo);
   const MCSymbolRefExpr *RefExp = nullptr;
-  const MCExpr *Rhs = nullptr;
+  const MCConstantExpr *ConstExp = nullptr;
   if (const MCBinaryExpr *BinExpr = dyn_cast<MCBinaryExpr>(Op.getExpr())) {
     RefExp = cast<MCSymbolRefExpr>(BinExpr->getLHS());
-    Rhs = BinExpr->getRHS();
+    ConstExp = cast<MCConstantExpr>(BinExpr->getRHS());
   } else
     RefExp = cast<MCSymbolRefExpr>(Op.getExpr());
 
@@ -584,14 +584,8 @@ void PPCInstPrinter::printTLSCall(const MCInst *MI, unsigned OpNo,
   if (RefExp->getKind() != MCSymbolRefExpr::VK_None &&
       RefExp->getKind() != MCSymbolRefExpr::VK_PPC_NOTOC)
     O << '@' << MCSymbolRefExpr::getVariantKindName(RefExp->getKind());
-  if (Rhs) {
-    SmallString<0> Buf;
-    raw_svector_ostream Tmp(Buf);
-    Rhs->print(Tmp, &MAI);
-    if (isdigit(Buf[0]))
-      O << '+';
-    O << Buf;
-  }
+  if (ConstExp != nullptr)
+    O << '+' << ConstExp->getValue();
 }
 
 /// showRegistersWithPercentPrefix - Check if this register name should be

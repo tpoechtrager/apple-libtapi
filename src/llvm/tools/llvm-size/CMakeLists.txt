@@ -2,7 +2,6 @@ set(LLVM_LINK_COMPONENTS
   Object
   Option
   Support
-  TargetParser
   )
 
 set(LLVM_TARGET_DEFINITIONS Opts.td)

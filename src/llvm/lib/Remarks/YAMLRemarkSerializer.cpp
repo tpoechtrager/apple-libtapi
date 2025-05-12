@@ -14,7 +14,6 @@
 #include "llvm/Remarks/YAMLRemarkSerializer.h"
 #include "llvm/Remarks/Remark.h"
 #include "llvm/Support/FileSystem.h"
-#include <optional>
 
 using namespace llvm;
 using namespace llvm::remarks;
@@ -23,8 +22,8 @@ using namespace llvm::remarks;
 // unsigned or a StringRef).
 template <typename T>
 static void mapRemarkHeader(yaml::IO &io, T PassName, T RemarkName,
-                            std::optional<RemarkLocation> RL, T FunctionName,
-                            std::optional<uint64_t> Hotness,
+                            Optional<RemarkLocation> RL, T FunctionName,
+                            Optional<uint64_t> Hotness,
                             ArrayRef<Argument> Args) {
   io.mapRequired("Pass", PassName);
   io.mapRequired("Name", RemarkName);
@@ -158,12 +157,12 @@ template <> struct MappingTraits<Argument> {
 LLVM_YAML_IS_SEQUENCE_VECTOR(Argument)
 
 YAMLRemarkSerializer::YAMLRemarkSerializer(raw_ostream &OS, SerializerMode Mode,
-                                           std::optional<StringTable> StrTabIn)
+                                           Optional<StringTable> StrTabIn)
     : YAMLRemarkSerializer(Format::YAML, OS, Mode, std::move(StrTabIn)) {}
 
 YAMLRemarkSerializer::YAMLRemarkSerializer(Format SerializerFormat,
                                            raw_ostream &OS, SerializerMode Mode,
-                                           std::optional<StringTable> StrTabIn)
+                                           Optional<StringTable> StrTabIn)
     : RemarkSerializer(SerializerFormat, OS, Mode),
       YAMLOutput(OS, reinterpret_cast<void *>(this)) {
   StrTab = std::move(StrTabIn);
@@ -176,8 +175,9 @@ void YAMLRemarkSerializer::emit(const Remark &Remark) {
   YAMLOutput << R;
 }
 
-std::unique_ptr<MetaSerializer> YAMLRemarkSerializer::metaSerializer(
-    raw_ostream &OS, std::optional<StringRef> ExternalFilename) {
+std::unique_ptr<MetaSerializer>
+YAMLRemarkSerializer::metaSerializer(raw_ostream &OS,
+                                     Optional<StringRef> ExternalFilename) {
   return std::make_unique<YAMLMetaSerializer>(OS, ExternalFilename);
 }
 
@@ -186,7 +186,7 @@ void YAMLStrTabRemarkSerializer::emit(const Remark &Remark) {
   // metadata first and set DidEmitMeta to avoid emitting it again.
   if (Mode == SerializerMode::Standalone && !DidEmitMeta) {
     std::unique_ptr<MetaSerializer> MetaSerializer =
-        metaSerializer(OS, /*ExternalFilename=*/std::nullopt);
+        metaSerializer(OS, /*ExternalFilename=*/None);
     MetaSerializer->emit();
     DidEmitMeta = true;
   }
@@ -196,7 +196,7 @@ void YAMLStrTabRemarkSerializer::emit(const Remark &Remark) {
 }
 
 std::unique_ptr<MetaSerializer> YAMLStrTabRemarkSerializer::metaSerializer(
-    raw_ostream &OS, std::optional<StringRef> ExternalFilename) {
+    raw_ostream &OS, Optional<StringRef> ExternalFilename) {
   assert(StrTab);
   return std::make_unique<YAMLStrTabMetaSerializer>(OS, ExternalFilename,
                                                     *StrTab);
@@ -216,8 +216,7 @@ static void emitVersion(raw_ostream &OS) {
   OS.write(Version.data(), Version.size());
 }
 
-static void emitStrTab(raw_ostream &OS,
-                       std::optional<const StringTable *> StrTab) {
+static void emitStrTab(raw_ostream &OS, Optional<const StringTable *> StrTab) {
   // Emit the string table in the section.
   uint64_t StrTabSize = StrTab ? (*StrTab)->SerializedSize : 0;
   // Emit the total size of the string table (the size itself excluded):
@@ -242,7 +241,7 @@ static void emitExternalFile(raw_ostream &OS, StringRef Filename) {
 void YAMLMetaSerializer::emit() {
   emitMagic(OS);
   emitVersion(OS);
-  emitStrTab(OS, std::nullopt);
+  emitStrTab(OS, None);
   if (ExternalFilename)
     emitExternalFile(OS, *ExternalFilename);
 }

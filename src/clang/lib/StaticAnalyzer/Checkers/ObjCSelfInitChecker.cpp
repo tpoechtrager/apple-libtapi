@@ -362,17 +362,18 @@ void ObjCSelfInitChecker::printState(raw_ostream &Out, ProgramStateRef State,
   }
 
   Out << NL;
-  for (auto [Sym, Flag] : FlagMap) {
-    Out << Sym << " : ";
+  for (SelfFlagTy::iterator I = FlagMap.begin(), E = FlagMap.end();
+       I != E; ++I) {
+    Out << I->first << " : ";
 
-    if (Flag == SelfFlag_None)
+    if (I->second == SelfFlag_None)
       Out << "none";
 
-    if (Flag & SelfFlag_Self)
+    if (I->second & SelfFlag_Self)
       Out << "self variable";
 
-    if (Flag & SelfFlag_InitRes) {
-      if (Flag != SelfFlag_InitRes)
+    if (I->second & SelfFlag_InitRes) {
+      if (I->second != SelfFlag_InitRes)
         Out << " | ";
       Out << "result of init method";
     }

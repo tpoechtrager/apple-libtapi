@@ -424,8 +424,6 @@ TypeSpecifierType BuiltinTypeLoc::getWrittenTypeSpec() const {
 #include "clang/Basic/PPCTypes.def"
 #define RVV_TYPE(Name, Id, SingletonId) case BuiltinType::Id:
 #include "clang/Basic/RISCVVTypes.def"
-#define WASM_TYPE(Name, Id, SingletonId) case BuiltinType::Id:
-#include "clang/Basic/WebAssemblyReferenceTypes.def"
   case BuiltinType::BuiltinFn:
   case BuiltinType::IncompleteMatrixIdx:
   case BuiltinType::OMPArraySection:
@@ -570,14 +568,17 @@ DependentTemplateSpecializationTypeLoc::initializeLocal(ASTContext &Context,
   setTemplateNameLoc(Loc);
   setLAngleLoc(Loc);
   setRAngleLoc(Loc);
-  TemplateSpecializationTypeLoc::initializeArgLocs(
-      Context, getTypePtr()->template_arguments(), getArgInfos(), Loc);
+  TemplateSpecializationTypeLoc::initializeArgLocs(Context, getNumArgs(),
+                                                   getTypePtr()->getArgs(),
+                                                   getArgInfos(), Loc);
 }
 
-void TemplateSpecializationTypeLoc::initializeArgLocs(
-    ASTContext &Context, ArrayRef<TemplateArgument> Args,
-    TemplateArgumentLocInfo *ArgInfos, SourceLocation Loc) {
-  for (unsigned i = 0, e = Args.size(); i != e; ++i) {
+void TemplateSpecializationTypeLoc::initializeArgLocs(ASTContext &Context,
+                                                      unsigned NumArgs,
+                                                  const TemplateArgument *Args,
+                                              TemplateArgumentLocInfo *ArgInfos,
+                                                      SourceLocation Loc) {
+  for (unsigned i = 0, e = NumArgs; i != e; ++i) {
     switch (Args[i].getKind()) {
     case TemplateArgument::Null:
       llvm_unreachable("Impossible TemplateArgument");
@@ -634,8 +635,9 @@ void AutoTypeLoc::initializeLocal(ASTContext &Context, SourceLocation Loc) {
   setRAngleLoc(Loc);
   setLAngleLoc(Loc);
   setRParenLoc(Loc);
-  TemplateSpecializationTypeLoc::initializeArgLocs(
-      Context, getTypePtr()->getTypeConstraintArguments(), getArgInfos(), Loc);
+  TemplateSpecializationTypeLoc::initializeArgLocs(Context, getNumArgs(),
+                                                   getTypePtr()->getArgs(),
+                                                   getArgInfos(), Loc);
   setNameLoc(Loc);
 }
 

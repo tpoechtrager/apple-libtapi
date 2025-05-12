@@ -19,10 +19,11 @@
 #define LLVM_ADT_BREADTHFIRSTITERATOR_H
 
 #include "llvm/ADT/GraphTraits.h"
+#include "llvm/ADT/None.h"
+#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/iterator_range.h"
 #include <iterator>
-#include <optional>
 #include <queue>
 #include <utility>
 
@@ -50,18 +51,18 @@ public:
   using value_type = typename GT::NodeRef;
   using difference_type = std::ptrdiff_t;
   using pointer = value_type *;
-  using reference = const value_type &;
+  using reference = value_type &;
 
 private:
   using NodeRef = typename GT::NodeRef;
   using ChildItTy = typename GT::ChildIteratorType;
 
   // First element is the node reference, second is the next child to visit.
-  using QueueElement = std::pair<NodeRef, std::optional<ChildItTy>>;
+  using QueueElement = std::pair<NodeRef, Optional<ChildItTy>>;
 
   // Visit queue - used to maintain BFS ordering.
-  // std::optional<> because we need markers for levels.
-  std::queue<std::optional<QueueElement>> VisitQueue;
+  // Optional<> because we need markers for levels.
+  std::queue<Optional<QueueElement>> VisitQueue;
 
   // Current level.
   unsigned Level = 0;
@@ -71,17 +72,17 @@ private:
     Level = 0;
 
     // Also, insert a dummy node as marker.
-    VisitQueue.push(QueueElement(Node, std::nullopt));
-    VisitQueue.push(std::nullopt);
+    VisitQueue.push(QueueElement(Node, None));
+    VisitQueue.push(None);
   }
 
   inline bf_iterator() = default;
 
   inline void toNext() {
-    std::optional<QueueElement> Head = VisitQueue.front();
+    Optional<QueueElement> Head = VisitQueue.front();
     QueueElement H = *Head;
     NodeRef Node = H.first;
-    std::optional<ChildItTy> &ChildIt = H.second;
+    Optional<ChildItTy> &ChildIt = H.second;
 
     if (!ChildIt)
       ChildIt.emplace(GT::child_begin(Node));
@@ -90,14 +91,14 @@ private:
 
       // Already visited?
       if (this->Visited.insert(Next).second)
-        VisitQueue.push(QueueElement(Next, std::nullopt));
+        VisitQueue.push(QueueElement(Next, None));
     }
     VisitQueue.pop();
 
     // Go to the next element skipping markers if needed.
     if (!VisitQueue.empty()) {
       Head = VisitQueue.front();
-      if (Head != std::nullopt)
+      if (Head != None)
         return;
       Level += 1;
       VisitQueue.pop();
@@ -105,7 +106,7 @@ private:
       // Don't push another marker if this is the last
       // element.
       if (!VisitQueue.empty())
-        VisitQueue.push(std::nullopt);
+        VisitQueue.push(None);
     }
   }
 
@@ -123,7 +124,7 @@ public:
 
   bool operator!=(const bf_iterator &RHS) const { return !(*this == RHS); }
 
-  reference operator*() const { return VisitQueue.front()->first; }
+  const NodeRef &operator*() const { return VisitQueue.front()->first; }
 
   // This is a nonstandard operator-> that dereferences the pointer an extra
   // time so that you can actually call methods on the node, because the

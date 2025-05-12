@@ -6,12 +6,9 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "InterpStack.h"
-#include "Boolean.h"
-#include "Floating.h"
-#include "Integral.h"
 #include <cassert>
 #include <cstdlib>
+#include "InterpStack.h"
 
 using namespace clang;
 using namespace clang::interp;
@@ -22,14 +19,11 @@ InterpStack::~InterpStack() {
 
 void InterpStack::clear() {
   if (Chunk && Chunk->Next)
-    std::free(Chunk->Next);
+    free(Chunk->Next);
   if (Chunk)
-    std::free(Chunk);
+    free(Chunk);
   Chunk = nullptr;
   StackSize = 0;
-#ifndef NDEBUG
-  ItemTypes.clear();
-#endif
 }
 
 void *InterpStack::grow(size_t Size) {
@@ -39,7 +33,7 @@ void *InterpStack::grow(size_t Size) {
     if (Chunk && Chunk->Next) {
       Chunk = Chunk->Next;
     } else {
-      StackChunk *Next = new (std::malloc(ChunkSize)) StackChunk(Chunk);
+      StackChunk *Next = new (malloc(ChunkSize)) StackChunk(Chunk);
       if (Chunk)
         Chunk->Next = Next;
       Chunk = Next;
@@ -52,7 +46,7 @@ void *InterpStack::grow(size_t Size) {
   return Object;
 }
 
-void *InterpStack::peekData(size_t Size) const {
+void *InterpStack::peek(size_t Size) const {
   assert(Chunk && "Stack is empty!");
 
   StackChunk *Ptr = Chunk;
@@ -71,7 +65,7 @@ void InterpStack::shrink(size_t Size) {
   while (Size > Chunk->size()) {
     Size -= Chunk->size();
     if (Chunk->Next) {
-      std::free(Chunk->Next);
+      free(Chunk->Next);
       Chunk->Next = nullptr;
     }
     Chunk->End = Chunk->start();
@@ -81,25 +75,4 @@ void InterpStack::shrink(size_t Size) {
 
   Chunk->End -= Size;
   StackSize -= Size;
-}
-
-void InterpStack::dump() const {
-#ifndef NDEBUG
-  llvm::errs() << "Items: " << ItemTypes.size() << ". Size: " << size() << "\n";
-  if (ItemTypes.empty())
-    return;
-
-  size_t Index = 0;
-  size_t Offset = align(primSize(ItemTypes[0]));
-  for (PrimType Ty : ItemTypes) {
-    llvm::errs() << Index << "/" << Offset << ": ";
-    TYPE_SWITCH(Ty, {
-      const T &V = peek<T>(Offset);
-      llvm::errs() << V;
-    });
-    llvm::errs() << "\n";
-    Offset += align(primSize(Ty));
-    ++Index;
-  }
-#endif
 }

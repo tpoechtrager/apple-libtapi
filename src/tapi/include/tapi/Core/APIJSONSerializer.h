@@ -14,10 +14,10 @@
 #define TAPI_CORE_APIJSONSERIALIZER_H
 
 #include "tapi/Core/APIVisitor.h"
+#include "llvm/ADT/Triple.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/TargetParser/Triple.h"
 
 TAPI_NAMESPACE_INTERNAL_BEGIN
 
@@ -25,7 +25,7 @@ struct APIJSONOption {
   bool compact;
   bool noUUID;
   bool noTarget;
-  bool noHiddenGlobal;
+  bool externalOnly;
   bool publicOnly;
   bool ignoreLineCol;
 };

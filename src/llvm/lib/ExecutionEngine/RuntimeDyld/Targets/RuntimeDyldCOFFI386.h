@@ -31,7 +31,7 @@ public:
     return 8; // 2-byte jmp instruction + 32-bit relative address + 2 byte pad
   }
 
-  Align getStubAlignment() override { return Align(1); }
+  unsigned getStubAlignment() override { return 1; }
 
   Expected<object::relocation_iterator>
   processRelocationRef(unsigned SectionID,

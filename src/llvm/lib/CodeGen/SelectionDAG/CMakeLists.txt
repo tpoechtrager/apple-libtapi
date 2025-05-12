@@ -31,11 +31,9 @@ add_llvm_component_library(LLVMSelectionDAG
   LINK_COMPONENTS
   Analysis
   CodeGen
-  CodeGenTypes
   Core
   MC
   Support
   Target
-  TargetParser
   TransformUtils
   )

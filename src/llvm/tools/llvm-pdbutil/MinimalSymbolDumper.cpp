@@ -8,7 +8,6 @@
 
 #include "MinimalSymbolDumper.h"
 
-#include "llvm/ADT/StringExtras.h"
 #include "llvm/DebugInfo/CodeView/CVRecord.h"
 #include "llvm/DebugInfo/CodeView/CodeView.h"
 #include "llvm/DebugInfo/CodeView/Formatters.h"
@@ -211,8 +210,6 @@ static std::string formatSourceLanguage(SourceLanguage Lang) {
     RETURN_CASE(SourceLanguage, D, "d");
     RETURN_CASE(SourceLanguage, Swift, "swift");
     RETURN_CASE(SourceLanguage, Rust, "rust");
-    RETURN_CASE(SourceLanguage, ObjC, "objc");
-    RETURN_CASE(SourceLanguage, ObjCpp, "objc++");
   }
   return formatUnknownEnum(Lang);
 }

@@ -38,7 +38,7 @@ struct LoongArchRegisterInfo : public LoongArchGenRegisterInfo {
     return &LoongArch::GPRRegClass;
   }
 
-  bool eliminateFrameIndex(MachineBasicBlock::iterator MI, int SPAdj,
+  void eliminateFrameIndex(MachineBasicBlock::iterator MI, int SPAdj,
                            unsigned FIOperandNum,
                            RegScavenger *RS = nullptr) const override;
 

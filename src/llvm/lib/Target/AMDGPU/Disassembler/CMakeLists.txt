@@ -7,7 +7,6 @@ add_llvm_component_library(LLVMAMDGPUDisassembler
   AMDGPUDesc
   AMDGPUInfo
   AMDGPUUtils
-  CodeGenTypes
   MC
   MCDisassembler
   Support
@@ -15,3 +14,5 @@ add_llvm_component_library(LLVMAMDGPUDisassembler
   ADD_TO_COMPONENT
   AMDGPU
   )
+
+add_dependencies(LLVMAMDGPUDisassembler AMDGPUCommonTableGen LLVMAMDGPUUtils)

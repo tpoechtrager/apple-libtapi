@@ -364,8 +364,7 @@ uint32_t HexagonMCCodeEmitter::parseBits(size_t Last, MCInst const &MCB,
 }
 
 /// Emit the bundle.
-void HexagonMCCodeEmitter::encodeInstruction(const MCInst &MI,
-                                             SmallVectorImpl<char> &CB,
+void HexagonMCCodeEmitter::encodeInstruction(const MCInst &MI, raw_ostream &OS,
                                              SmallVectorImpl<MCFixup> &Fixups,
                                              const MCSubtargetInfo &STI) const {
   MCInst &HMB = const_cast<MCInst &>(MI);
@@ -381,7 +380,7 @@ void HexagonMCCodeEmitter::encodeInstruction(const MCInst &MI,
   for (auto &I : HexagonMCInstrInfo::bundleInstructions(HMB)) {
     MCInst &HMI = const_cast<MCInst &>(*I.getInst());
 
-    encodeSingleInstruction(HMI, CB, Fixups, STI, parseBits(Last, HMB, HMI));
+    EncodeSingleInstruction(HMI, OS, Fixups, STI, parseBits(Last, HMB, HMI));
     State.Extended = HexagonMCInstrInfo::isImmext(HMI);
     State.Addend += HEXAGON_INSTR_SIZE;
     ++State.Index;
@@ -395,10 +394,10 @@ static bool RegisterMatches(unsigned Consumer, unsigned Producer,
                                                              Consumer);
 }
 
-void HexagonMCCodeEmitter::encodeSingleInstruction(
-    const MCInst &MI, SmallVectorImpl<char> &CB,
-    SmallVectorImpl<MCFixup> &Fixups, const MCSubtargetInfo &STI,
-    uint32_t Parse) const {
+/// EncodeSingleInstruction - Emit a single
+void HexagonMCCodeEmitter::EncodeSingleInstruction(const MCInst &MI,
+      raw_ostream &OS, SmallVectorImpl<MCFixup> &Fixups,
+      const MCSubtargetInfo &STI, uint32_t Parse) const {
   assert(!HexagonMCInstrInfo::isBundle(MI));
   uint64_t Binary;
 
@@ -443,7 +442,7 @@ void HexagonMCCodeEmitter::encodeSingleInstruction(
 
     Binary |= SubBits0 | (SubBits1 << 16);
   }
-  support::endian::write<uint32_t>(CB, Binary, support::little);
+  support::endian::write<uint32_t>(OS, Binary, support::little);
   ++MCNumEmitted;
 }
 
@@ -643,8 +642,11 @@ unsigned HexagonMCCodeEmitter::getExprOpValue(const MCInst &MI,
           Hexagon::fixup_Hexagon_GPREL16_2, Hexagon::fixup_Hexagon_GPREL16_3
         };
         assert(Shift < std::size(GPRelFixups));
-        auto UsesGP = [](const MCInstrDesc &D) {
-          return is_contained(D.implicit_uses(), Hexagon::GP);
+        auto UsesGP = [] (const MCInstrDesc &D) {
+          for (const MCPhysReg *U = D.getImplicitUses(); U && *U; ++U)
+            if (*U == Hexagon::GP)
+              return true;
+          return false;
         };
         if (UsesGP(MCID))
           FixupKind = GPRelFixups[Shift];
@@ -771,9 +773,7 @@ HexagonMCCodeEmitter::getMachineOpValue(MCInst const &MI, MCOperand const &MO,
   assert(!MO.isImm());
   if (MO.isReg()) {
     unsigned Reg = MO.getReg();
-    switch (HexagonMCInstrInfo::getDesc(MCII, MI)
-                .operands()[OperandNumber]
-                .RegClass) {
+    switch (HexagonMCInstrInfo::getDesc(MCII, MI).OpInfo[OperandNumber].RegClass) {
     case GeneralSubRegsRegClassID:
     case GeneralDoubleLow8RegsRegClassID:
       return HexagonMCInstrInfo::getDuplexRegisterNumbering(Reg);

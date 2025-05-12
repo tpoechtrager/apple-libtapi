@@ -7,7 +7,6 @@ add_llvm_component_library(LLVMRISCVAsmParser
   RISCVDesc
   RISCVInfo
   Support
-  TargetParser
 
   ADD_TO_COMPONENT
   RISCV

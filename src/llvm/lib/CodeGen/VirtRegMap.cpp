@@ -116,10 +116,10 @@ bool VirtRegMap::hasPreferredPhys(Register VirtReg) const {
 }
 
 bool VirtRegMap::hasKnownPreference(Register VirtReg) const {
-  std::pair<unsigned, Register> Hint = MRI->getRegAllocationHint(VirtReg);
-  if (Hint.second.isPhysical())
+  std::pair<unsigned, unsigned> Hint = MRI->getRegAllocationHint(VirtReg);
+  if (Register::isPhysicalRegister(Hint.second))
     return true;
-  if (Hint.second.isVirtual())
+  if (Register::isVirtualRegister(Hint.second))
     return hasPhys(Hint.second);
   return false;
 }
@@ -145,7 +145,7 @@ void VirtRegMap::assignVirt2StackSlot(Register virtReg, int SS) {
 void VirtRegMap::print(raw_ostream &OS, const Module*) const {
   OS << "********** REGISTER MAP **********\n";
   for (unsigned i = 0, e = MRI->getNumVirtRegs(); i != e; ++i) {
-    Register Reg = Register::index2VirtReg(i);
+    unsigned Reg = Register::index2VirtReg(i);
     if (Virt2PhysMap[Reg] != (unsigned)VirtRegMap::NO_PHYS_REG) {
       OS << '[' << printReg(Reg, TRI) << " -> "
          << printReg(Virt2PhysMap[Reg], TRI) << "] "
@@ -154,7 +154,7 @@ void VirtRegMap::print(raw_ostream &OS, const Module*) const {
   }
 
   for (unsigned i = 0, e = MRI->getNumVirtRegs(); i != e; ++i) {
-    Register Reg = Register::index2VirtReg(i);
+    unsigned Reg = Register::index2VirtReg(i);
     if (Virt2StackSlotMap[Reg] != VirtRegMap::NO_STACK_SLOT) {
       OS << '[' << printReg(Reg, TRI) << " -> fi#" << Virt2StackSlotMap[Reg]
          << "] " << TRI->getRegClassName(MRI->getRegClass(Reg)) << "\n";
@@ -181,14 +181,14 @@ LLVM_DUMP_METHOD void VirtRegMap::dump() const {
 namespace {
 
 class VirtRegRewriter : public MachineFunctionPass {
-  MachineFunction *MF = nullptr;
-  const TargetRegisterInfo *TRI = nullptr;
-  const TargetInstrInfo *TII = nullptr;
-  MachineRegisterInfo *MRI = nullptr;
-  SlotIndexes *Indexes = nullptr;
-  LiveIntervals *LIS = nullptr;
-  VirtRegMap *VRM = nullptr;
-  LiveDebugVariables *DebugVars = nullptr;
+  MachineFunction *MF;
+  const TargetRegisterInfo *TRI;
+  const TargetInstrInfo *TII;
+  MachineRegisterInfo *MRI;
+  SlotIndexes *Indexes;
+  LiveIntervals *LIS;
+  VirtRegMap *VRM;
+  LiveDebugVariables *DebugVars;
   DenseSet<Register> RewriteRegs;
   bool ClearVirtRegs;
 
@@ -475,7 +475,7 @@ void VirtRegRewriter::expandCopyBundle(MachineInstr &MI) const {
     // clobbering.
     for (int E = MIs.size(), PrevE = E; E > 1; PrevE = E) {
       for (int I = E; I--; )
-        if (!anyRegsAlias(MIs[I], ArrayRef(MIs).take_front(E), TRI)) {
+        if (!anyRegsAlias(MIs[I], makeArrayRef(MIs).take_front(E), TRI)) {
           if (I + 1 != E)
             std::swap(MIs[I], MIs[E - 1]);
           --E;
@@ -514,8 +514,8 @@ bool VirtRegRewriter::subRegLiveThrough(const MachineInstr &MI,
   SlotIndex MIIndex = LIS->getInstructionIndex(MI);
   SlotIndex BeforeMIUses = MIIndex.getBaseIndex();
   SlotIndex AfterMIDefs = MIIndex.getBoundaryIndex();
-  for (MCRegUnit Unit : TRI->regunits(SuperPhysReg)) {
-    const LiveRange &UnitRange = LIS->getRegUnit(Unit);
+  for (MCRegUnitIterator Unit(SuperPhysReg, TRI); Unit.isValid(); ++Unit) {
+    const LiveRange &UnitRange = LIS->getRegUnit(*Unit);
     // If the regunit is live both before and after MI,
     // we assume it is live through.
     // Generally speaking, this is not true, because something like
@@ -633,8 +633,9 @@ void VirtRegRewriter::rewrite() {
     // Don't bother maintaining accurate LiveIntervals for registers which were
     // already allocated.
     for (Register PhysReg : RewriteRegs) {
-      for (MCRegUnit Unit : TRI->regunits(PhysReg)) {
-        LIS->removeRegUnit(Unit);
+      for (MCRegUnitIterator Units(PhysReg, TRI); Units.isValid();
+           ++Units) {
+        LIS->removeRegUnit(*Units);
       }
     }
   }

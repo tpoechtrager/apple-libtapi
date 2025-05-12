@@ -24,10 +24,10 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/ilist.h"
 #include "llvm/ADT/iterator.h"
+#include "llvm/Analysis/EHPersonalities.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/CodeGen/MachineMemOperand.h"
-#include "llvm/IR/EHPersonalities.h"
 #include "llvm/Support/Allocator.h"
 #include "llvm/Support/ArrayRecycler.h"
 #include "llvm/Support/AtomicOrdering.h"
@@ -38,7 +38,6 @@
 #include <cstdint>
 #include <memory>
 #include <utility>
-#include <variant>
 #include <vector>
 
 namespace llvm {
@@ -100,10 +99,9 @@ struct MachineFunctionInfo {
   /// supplied allocator.
   ///
   /// This function can be overridden in a derive class.
-  template <typename FuncInfoTy, typename SubtargetTy = TargetSubtargetInfo>
-  static FuncInfoTy *create(BumpPtrAllocator &Allocator, const Function &F,
-                            const SubtargetTy *STI) {
-    return new (Allocator.Allocate<FuncInfoTy>()) FuncInfoTy(F, STI);
+  template<typename Ty>
+  static Ty *create(BumpPtrAllocator &Allocator, MachineFunction &MF) {
+    return new (Allocator.Allocate<Ty>()) Ty(MF);
   }
 
   template <typename Ty>
@@ -282,7 +280,6 @@ class LLVM_EXTERNAL_VISIBILITY MachineFunction {
   // Keep track of the function section.
   MCSection *Section = nullptr;
 
-  // Catchpad unwind destination info for wasm EH.
   // Keeps track of Wasm exception handling related data. This will be null for
   // functions that aren't using a wasm EH personality.
   WasmEHFuncInfo *WasmEHInfo = nullptr;
@@ -375,10 +372,6 @@ class LLVM_EXTERNAL_VISIBILITY MachineFunction {
   bool HasEHCatchret = false;
   bool HasEHScopes = false;
   bool HasEHFunclets = false;
-  bool IsOutlined = false;
-
-  /// BBID to assign to the next basic block of this function.
-  unsigned NextBBID = 0;
 
   /// Section Type for basic blocks, only relevant with basic block sections.
   BasicBlockSection BBSectionsType = BasicBlockSection::None;
@@ -408,50 +401,16 @@ class LLVM_EXTERNAL_VISIBILITY MachineFunction {
   void init();
 
 public:
-  /// Description of the location of a variable whose Address is valid and
-  /// unchanging during function execution. The Address may be:
-  /// * A stack index, which can be negative for fixed stack objects.
-  /// * A MCRegister, whose entry value contains the address of the variable.
-  class VariableDbgInfo {
-    std::variant<int, MCRegister> Address;
-
-  public:
+  struct VariableDbgInfo {
     const DILocalVariable *Var;
     const DIExpression *Expr;
+    // The Slot can be negative for fixed stack objects.
+    int Slot;
     const DILocation *Loc;
 
     VariableDbgInfo(const DILocalVariable *Var, const DIExpression *Expr,
                     int Slot, const DILocation *Loc)
-        : Address(Slot), Var(Var), Expr(Expr), Loc(Loc) {}
-
-    VariableDbgInfo(const DILocalVariable *Var, const DIExpression *Expr,
-                    MCRegister EntryValReg, const DILocation *Loc)
-        : Address(EntryValReg), Var(Var), Expr(Expr), Loc(Loc) {}
-
-    /// Return true if this variable is in a stack slot.
-    bool inStackSlot() const { return std::holds_alternative<int>(Address); }
-
-    /// Return true if this variable is in the entry value of a register.
-    bool inEntryValueRegister() const {
-      return std::holds_alternative<MCRegister>(Address);
-    }
-
-    /// Returns the stack slot of this variable, assuming `inStackSlot()` is
-    /// true.
-    int getStackSlot() const { return std::get<int>(Address); }
-
-    /// Returns the MCRegister of this variable, assuming
-    /// `inEntryValueRegister()` is true.
-    MCRegister getEntryValueRegister() const {
-      return std::get<MCRegister>(Address);
-    }
-
-    /// Updates the stack slot of this variable, assuming `inStackSlot()` is
-    /// true.
-    void updateStackSlot(int NewSlot) {
-      assert(inStackSlot());
-      Address = NewSlot;
-    }
+        : Var(Var), Expr(Expr), Slot(Slot), Loc(Loc) {}
   };
 
   class Delegate {
@@ -563,10 +522,6 @@ public:
   /// during register allocation. See DebugPHIRegallocPos.
   DenseMap<unsigned, DebugPHIRegallocPos> DebugPHIPositions;
 
-  /// Flag for whether this function contains DBG_VALUEs (false) or
-  /// DBG_INSTR_REF (true).
-  bool UseDebugInstrRef = false;
-
   /// Create a substitution between one <instr,operand> value to a different,
   /// new value.
   void makeDebugValueSubstitution(DebugInstrOperandPair, DebugInstrOperandPair,
@@ -607,16 +562,9 @@ public:
   /// (or DBG_PHI).
   void finalizeDebugInstrRefs();
 
-  /// Determine whether, in the current machine configuration, we should use
-  /// instruction referencing or not.
-  bool shouldUseDebugInstrRef() const;
-
-  /// Returns true if the function's variable locations are tracked with
+  /// Returns true if the function's variable locations should be tracked with
   /// instruction referencing.
   bool useDebugInstrRef() const;
-
-  /// Set whether this function will use instruction referencing or not.
-  void setUseDebugInstrRef(bool UseInstrRef);
 
   /// A reserved operand number representing the instructions memory operand,
   /// for instructions that have a stack spill fused into them.
@@ -804,12 +752,14 @@ public:
   ///
   template<typename Ty>
   Ty *getInfo() {
+    if (!MFInfo)
+      MFInfo = Ty::template create<Ty>(Allocator, *this);
     return static_cast<Ty*>(MFInfo);
   }
 
   template<typename Ty>
   const Ty *getInfo() const {
-    return static_cast<const Ty *>(MFInfo);
+     return const_cast<MachineFunction*>(this)->getInfo<Ty>();
   }
 
   template <typename Ty> Ty *cloneInfo(const Ty &Old) {
@@ -817,9 +767,6 @@ public:
     MFInfo = Ty::template create<Ty>(Allocator, Old);
     return static_cast<Ty *>(MFInfo);
   }
-
-  /// Initialize the target specific MachineFunctionInfo
-  void initTargetMachineFunctionInfo(const TargetSubtargetInfo &STI);
 
   MachineFunctionInfo *cloneInfoFrom(
       const MachineFunction &OrigMF,
@@ -1152,9 +1099,6 @@ public:
   bool hasEHFunclets() const { return HasEHFunclets; }
   void setHasEHFunclets(bool V) { HasEHFunclets = V; }
 
-  bool isOutlined() const { return IsOutlined; }
-  void setIsOutlined(bool V) { IsOutlined = V; }
-
   /// Find or create an LandingPadInfo for the specified MachineBasicBlock.
   LandingPadInfo &getOrCreateLandingPadInfo(MachineBasicBlock *LandingPad);
 
@@ -1277,47 +1221,15 @@ public:
 
   /// \}
 
-  /// Collect information used to emit debugging information of a variable in a
-  /// stack slot.
+  /// Collect information used to emit debugging information of a variable.
   void setVariableDbgInfo(const DILocalVariable *Var, const DIExpression *Expr,
                           int Slot, const DILocation *Loc) {
     VariableDbgInfos.emplace_back(Var, Expr, Slot, Loc);
   }
 
-  /// Collect information used to emit debugging information of a variable in
-  /// the entry value of a register.
-  void setVariableDbgInfo(const DILocalVariable *Var, const DIExpression *Expr,
-                          MCRegister Reg, const DILocation *Loc) {
-    VariableDbgInfos.emplace_back(Var, Expr, Reg, Loc);
-  }
-
   VariableDbgInfoMapTy &getVariableDbgInfo() { return VariableDbgInfos; }
   const VariableDbgInfoMapTy &getVariableDbgInfo() const {
     return VariableDbgInfos;
-  }
-
-  /// Returns the collection of variables for which we have debug info and that
-  /// have been assigned a stack slot.
-  auto getInStackSlotVariableDbgInfo() {
-    return make_filter_range(getVariableDbgInfo(), [](auto &VarInfo) {
-      return VarInfo.inStackSlot();
-    });
-  }
-
-  /// Returns the collection of variables for which we have debug info and that
-  /// have been assigned a stack slot.
-  auto getInStackSlotVariableDbgInfo() const {
-    return make_filter_range(getVariableDbgInfo(), [](const auto &VarInfo) {
-      return VarInfo.inStackSlot();
-    });
-  }
-
-  /// Returns the collection of variables for which we have debug info and that
-  /// have been assigned an entry value register.
-  auto getEntryValueVariableDbgInfo() const {
-    return make_filter_range(getVariableDbgInfo(), [](const auto &VarInfo) {
-      return VarInfo.inEntryValueRegister();
-    });
   }
 
   /// Start tracking the arguments passed to the call \p CallI.

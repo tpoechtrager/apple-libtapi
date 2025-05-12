@@ -37,9 +37,8 @@ namespace MachO {
 enum Architecture : uint8_t;
 class ArchitectureSet;
 class Target;
-enum class EncodeKind : uint8_t;
+enum class SymbolKind : uint8_t;
 enum class SymbolFlags : uint8_t;
-enum class ObjCIFSymbolKind : uint8_t;
 enum FileType : unsigned;
 class InterfaceFile;
 class PackedVersion;
@@ -50,7 +49,6 @@ class TextAPIWriter;
 class TextAPIError;
 enum class TextAPIErrorCode;
 class InterfaceFileRef;
-struct SimpleSymbol;
 
 } // namespace MachO
 
@@ -101,14 +99,12 @@ using llvm::MachO::PlatformType;
 // TextAPI types
 using llvm::MachO::Architecture;
 using llvm::MachO::ArchitectureSet;
-using llvm::MachO::EncodeKind;
 using llvm::MachO::FileType;
 using llvm::MachO::InterfaceFile;
 using llvm::MachO::InterfaceFileRef;
-using llvm::MachO::ObjCIFSymbolKind;
 using llvm::MachO::PackedVersion;
-using llvm::MachO::SimpleSymbol;
 using llvm::MachO::SymbolFlags;
+using llvm::MachO::SymbolKind;
 using llvm::MachO::SymbolSet;
 using llvm::MachO::Target;
 using llvm::MachO::TargetList;

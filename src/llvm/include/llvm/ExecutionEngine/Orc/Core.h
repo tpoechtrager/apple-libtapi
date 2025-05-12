@@ -20,8 +20,6 @@
 #include "llvm/ExecutionEngine/JITLink/JITLinkDylib.h"
 #include "llvm/ExecutionEngine/JITSymbol.h"
 #include "llvm/ExecutionEngine/Orc/ExecutorProcessControl.h"
-#include "llvm/ExecutionEngine/Orc/Shared/ExecutorAddress.h"
-#include "llvm/ExecutionEngine/Orc/Shared/ExecutorSymbolDef.h"
 #include "llvm/ExecutionEngine/Orc/Shared/WrapperFunctionUtils.h"
 #include "llvm/ExecutionEngine/Orc/TaskDispatch.h"
 #include "llvm/Support/Debug.h"
@@ -72,10 +70,6 @@ public:
                                          ~static_cast<uintptr_t>(1));
   }
 
-  /// Runs the given callback under the session lock, passing in the associated
-  /// ResourceKey. This is the safe way to associate resources with trackers.
-  template <typename Func> Error withResourceKeyDo(Func &&F);
-
   /// Remove all resources associated with this key.
   Error remove();
 
@@ -103,9 +97,8 @@ private:
 class ResourceManager {
 public:
   virtual ~ResourceManager();
-  virtual Error handleRemoveResources(JITDylib &JD, ResourceKey K) = 0;
-  virtual void handleTransferResources(JITDylib &JD, ResourceKey DstK,
-                                       ResourceKey SrcK) = 0;
+  virtual Error handleRemoveResources(ResourceKey K) = 0;
+  virtual void handleTransferResources(ResourceKey DstK, ResourceKey SrcK) = 0;
 };
 
 /// A set of symbol names (represented by SymbolStringPtrs for
@@ -117,7 +110,7 @@ using SymbolNameVector = std::vector<SymbolStringPtr>;
 
 /// A map from symbol names (as SymbolStringPtrs) to JITSymbols
 /// (address/flags pairs).
-using SymbolMap = DenseMap<SymbolStringPtr, ExecutorSymbolDef>;
+using SymbolMap = DenseMap<SymbolStringPtr, JITEvaluatedSymbol>;
 
 /// A map from symbol names (as SymbolStringPtrs) to JITSymbolFlags.
 using SymbolFlagsMap = DenseMap<SymbolStringPtr, JITSymbolFlags>;
@@ -537,11 +530,8 @@ public:
   ///        emitted or notified of an error.
   ~MaterializationResponsibility();
 
-  /// Runs the given callback under the session lock, passing in the associated
-  /// ResourceKey. This is the safe way to associate resources with trackers.
-  template <typename Func> Error withResourceKeyDo(Func &&F) const {
-    return RT->withResourceKeyDo(std::forward<Func>(F));
-  }
+  /// Returns the ResourceTracker for this instance.
+  template <typename Func> Error withResourceKeyDo(Func &&F) const;
 
   /// Returns the target JITDylib that these symbols are being materialized
   ///        into.
@@ -606,6 +596,20 @@ public:
   /// additional symbols at materialization time (e.g. stubs, compile
   /// callbacks, metadata).
   Error defineMaterializing(SymbolFlagsMap SymbolFlags);
+
+  /// Define the given symbols as non-existent, removing it from the symbol
+  /// table and notifying any pending queries. Queries that lookup up the
+  /// symbol using the SymbolLookupFlags::WeaklyReferencedSymbol flag will
+  /// behave as if the symbol had not been matched in the first place. Queries
+  /// that required this symbol will fail with a missing symbol definition
+  /// error.
+  ///
+  /// This method is intended to support cleanup of special symbols like
+  /// initializer symbols: Queries using
+  /// SymbolLookupFlags::WeaklyReferencedSymbol can be used to trigger their
+  /// emission, and this method can be used to remove them from the JITDylib
+  /// once materialization is complete.
+  void defineNonExistent(ArrayRef<SymbolStringPtr> Symbols);
 
   /// Notify all not-yet-emitted covered by this MaterializationResponsibility
   /// instance that an error has occurred.
@@ -703,13 +707,6 @@ public:
   /// has been overridden.
   void doDiscard(const JITDylib &JD, const SymbolStringPtr &Name) {
     SymbolFlags.erase(Name);
-    if (InitSymbol == Name) {
-      DEBUG_WITH_TYPE("orc", {
-        dbgs() << "In " << getName() << ": discarding init symbol \""
-               << *Name << "\"\n";
-      });
-      InitSymbol = nullptr;
-    }
     discard(JD, std::move(Name));
   }
 
@@ -750,7 +747,7 @@ private:
 /// \code{.cpp}
 ///   JITDylib &JD = ...;
 ///   SymbolStringPtr Foo = ...;
-///   ExecutorSymbolDef FooSym = ...;
+///   JITEvaluatedSymbol FooSym = ...;
 ///   if (auto Err = JD.define(absoluteSymbols({{Foo, FooSym}})))
 ///     return Err;
 /// \endcode
@@ -854,7 +851,7 @@ public:
 
   /// Notify the query that a requested symbol has reached the required state.
   void notifySymbolMetRequiredState(const SymbolStringPtr &Name,
-                                    ExecutorSymbolDef Sym);
+                                    JITEvaluatedSymbol Sym);
 
   /// Returns true if all symbols covered by this query have been
   ///        resolved.
@@ -1042,11 +1039,6 @@ public:
   void setLinkOrder(JITDylibSearchOrder NewSearchOrder,
                     bool LinkAgainstThisJITDylibFirst = true);
 
-  /// Append the given JITDylibSearchOrder to the link order for this
-  /// JITDylib (discarding any elements already present in this JITDylib's
-  /// link order).
-  void addToLinkOrder(const JITDylibSearchOrder &NewLinks);
-
   /// Add the given JITDylib to the link order for definitions in this
   /// JITDylib.
   ///
@@ -1204,14 +1196,14 @@ private:
         : Flags(Flags), State(static_cast<uint8_t>(SymbolState::NeverSearched)),
           MaterializerAttached(false), PendingRemoval(false) {}
 
-    ExecutorAddr getAddress() const { return Addr; }
+    JITTargetAddress getAddress() const { return Addr; }
     JITSymbolFlags getFlags() const { return Flags; }
     SymbolState getState() const { return static_cast<SymbolState>(State); }
 
     bool hasMaterializerAttached() const { return MaterializerAttached; }
     bool isPendingRemoval() const { return PendingRemoval; }
 
-    void setAddress(ExecutorAddr Addr) { this->Addr = Addr; }
+    void setAddress(JITTargetAddress Addr) { this->Addr = Addr; }
     void setFlags(JITSymbolFlags Flags) { this->Flags = Flags; }
     void setState(SymbolState State) {
       assert(static_cast<uint8_t>(State) < (1 << 6) &&
@@ -1227,10 +1219,12 @@ private:
       this->PendingRemoval = PendingRemoval;
     }
 
-    ExecutorSymbolDef getSymbol() const { return {Addr, Flags}; }
+    JITEvaluatedSymbol getSymbol() const {
+      return JITEvaluatedSymbol(Addr, Flags);
+    }
 
   private:
-    ExecutorAddr Addr;
+    JITTargetAddress Addr = 0;
     JITSymbolFlags Flags;
     uint8_t State : 6;
     uint8_t MaterializerAttached : 1;
@@ -1258,9 +1252,7 @@ private:
                                        const SymbolStringPtr &DependantName,
                                        MaterializingInfo &EmittedMI);
 
-  Expected<SymbolFlagsMap>
-  defineMaterializing(MaterializationResponsibility &FromMR,
-                      SymbolFlagsMap SymbolFlags);
+  Expected<SymbolFlagsMap> defineMaterializing(SymbolFlagsMap SymbolFlags);
 
   Error replace(MaterializationResponsibility &FromMR,
                 std::unique_ptr<MaterializationUnit> MU);
@@ -1408,9 +1400,6 @@ public:
   /// ExecutionSession.
   ExecutorProcessControl &getExecutorProcessControl() { return *EPC; }
 
-  /// Return the triple for the executor.
-  const Triple &getTargetTriple() const { return EPC->getTargetTriple(); }
-
   /// Get the SymbolStringPool for this instance.
   std::shared_ptr<SymbolStringPool> getSymbolStringPool() {
     return EPC->getSymbolStringPool();
@@ -1546,21 +1535,21 @@ public:
   /// Convenience version of blocking lookup.
   /// Searches each of the JITDylibs in the search order in turn for the given
   /// symbol.
-  Expected<ExecutorSymbolDef>
+  Expected<JITEvaluatedSymbol>
   lookup(const JITDylibSearchOrder &SearchOrder, SymbolStringPtr Symbol,
          SymbolState RequiredState = SymbolState::Ready);
 
   /// Convenience version of blocking lookup.
   /// Searches each of the JITDylibs in the search order in turn for the given
   /// symbol. The search will not find non-exported symbols.
-  Expected<ExecutorSymbolDef>
+  Expected<JITEvaluatedSymbol>
   lookup(ArrayRef<JITDylib *> SearchOrder, SymbolStringPtr Symbol,
          SymbolState RequiredState = SymbolState::Ready);
 
   /// Convenience version of blocking lookup.
   /// Searches each of the JITDylibs in the search order in turn for the given
   /// symbol. The search will not find non-exported symbols.
-  Expected<ExecutorSymbolDef>
+  Expected<JITEvaluatedSymbol>
   lookup(ArrayRef<JITDylib *> SearchOrder, StringRef Symbol,
          SymbolState RequiredState = SymbolState::Ready);
 
@@ -1665,9 +1654,10 @@ public:
   /// Run a registered jit-side wrapper function.
   /// This should be called by the ExecutorProcessControl instance in response
   /// to incoming jit-dispatch requests from the executor.
-  void runJITDispatchHandler(SendResultFunction SendResult,
-                             ExecutorAddr HandlerFnTagAddr,
-                             ArrayRef<char> ArgBuffer);
+  void
+  runJITDispatchHandler(SendResultFunction SendResult,
+                        JITTargetAddress HandlerFnTagAddr,
+                        ArrayRef<char> ArgBuffer);
 
   /// Dump the state of all the JITDylibs in this session.
   void dump(raw_ostream &OS);
@@ -1769,22 +1759,23 @@ private:
       OutstandingMUs;
 
   mutable std::mutex JITDispatchHandlersMutex;
-  DenseMap<ExecutorAddr, std::shared_ptr<JITDispatchHandlerFunction>>
+  DenseMap<JITTargetAddress, std::shared_ptr<JITDispatchHandlerFunction>>
       JITDispatchHandlers;
 };
-
-template <typename Func> Error ResourceTracker::withResourceKeyDo(Func &&F) {
-  return getJITDylib().getExecutionSession().runSessionLocked([&]() -> Error {
-    if (isDefunct())
-      return make_error<ResourceTrackerDefunct>(this);
-    F(getKeyUnsafe());
-    return Error::success();
-  });
-}
 
 inline ExecutionSession &
 MaterializationResponsibility::getExecutionSession() const {
   return JD.getExecutionSession();
+}
+
+template <typename Func>
+Error MaterializationResponsibility::withResourceKeyDo(Func &&F) const {
+  return JD.getExecutionSession().runSessionLocked([&]() -> Error {
+    if (RT->isDefunct())
+      return make_error<ResourceTrackerDefunct>(RT);
+    F(RT->getKeyUnsafe());
+    return Error::success();
+  });
 }
 
 template <typename GeneratorT>

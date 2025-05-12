@@ -118,14 +118,14 @@ public:
 
   ArrayRef<const InMemoryObject *> getRefs() const { return getRefsImpl(); }
   ArrayRef<const InMemoryObject *> getRefsImpl() const {
-    return ArrayRef(
+    return makeArrayRef(
         reinterpret_cast<const InMemoryObject *const *>(this + 1), NumRefs);
   }
 
   ArrayRef<char> getData() const { return getDataImpl(); }
   ArrayRef<char> getDataImpl() const {
     ArrayRef<const InMemoryObject *> Refs = getRefs();
-    return ArrayRef(
+    return makeArrayRef(
         reinterpret_cast<const char *>(Refs.data() + Refs.size()), DataSize);
   }
 
@@ -214,10 +214,10 @@ public:
     return getID(asInMemoryObject(Ref));
   }
 
-  std::optional<ObjectRef> getReference(const CASID &ID) const final {
+  Optional<ObjectRef> getReference(const CASID &ID) const final {
     if (const InMemoryObject *Object = getInMemoryObject(ID))
       return toReference(*Object);
-    return std::nullopt;
+    return None;
   }
 
   Expected<bool> isMaterialized(ObjectRef Ref) const final { return true; }
@@ -283,7 +283,7 @@ InMemoryCAS::storeFromNullTerminatedRegion(ArrayRef<uint8_t> ComputedHash,
     return Objects.Allocate(Size, alignof(InMemoryObject));
   };
   auto Generator = [&]() -> const InMemoryObject * {
-    return &InMemoryRefObject::create(Allocator, I, std::nullopt, Data);
+    return &InMemoryRefObject::create(Allocator, I, None, Data);
   };
   const InMemoryObject &Node =
       cast<InMemoryObject>(I.Data.loadOrGenerate(Generator));

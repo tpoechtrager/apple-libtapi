@@ -15,12 +15,13 @@
 #ifndef LLVM_DEBUGINFO_SYMBOLIZE_MARKUPFILTER_H
 #define LLVM_DEBUGINFO_SYMBOLIZE_MARKUPFILTER_H
 
+#include "Markup.h"
+
+#include <map>
+
 #include "llvm/ADT/DenseMap.h"
-#include "llvm/DebugInfo/Symbolize/Markup.h"
-#include "llvm/Object/BuildID.h"
 #include "llvm/Support/WithColor.h"
 #include "llvm/Support/raw_ostream.h"
-#include <map>
 
 namespace llvm {
 namespace symbolize {
@@ -32,7 +33,7 @@ class LLVMSymbolizer;
 class MarkupFilter {
 public:
   MarkupFilter(raw_ostream &OS, LLVMSymbolizer &Symbolizer,
-               std::optional<bool> ColorsEnabled = std::nullopt);
+               Optional<bool> ColorsEnabled = llvm::None);
 
   /// Filters a line containing symbolizer markup and writes the human-readable
   /// results to the output stream.
@@ -109,21 +110,21 @@ private:
   void printRawElement(const MarkupNode &Element);
   void printValue(Twine Value);
 
-  std::optional<Module> parseModule(const MarkupNode &Element) const;
-  std::optional<MMap> parseMMap(const MarkupNode &Element) const;
+  Optional<Module> parseModule(const MarkupNode &Element) const;
+  Optional<MMap> parseMMap(const MarkupNode &Element) const;
 
-  std::optional<uint64_t> parseAddr(StringRef Str) const;
-  std::optional<uint64_t> parseModuleID(StringRef Str) const;
-  std::optional<uint64_t> parseSize(StringRef Str) const;
-  object::BuildID parseBuildID(StringRef Str) const;
-  std::optional<std::string> parseMode(StringRef Str) const;
-  std::optional<PCType> parsePCType(StringRef Str) const;
-  std::optional<uint64_t> parseFrameNumber(StringRef Str) const;
+  Optional<uint64_t> parseAddr(StringRef Str) const;
+  Optional<uint64_t> parseModuleID(StringRef Str) const;
+  Optional<uint64_t> parseSize(StringRef Str) const;
+  Optional<SmallVector<uint8_t>> parseBuildID(StringRef Str) const;
+  Optional<std::string> parseMode(StringRef Str) const;
+  Optional<PCType> parsePCType(StringRef Str) const;
+  Optional<uint64_t> parseFrameNumber(StringRef Str) const;
 
   bool checkTag(const MarkupNode &Node) const;
   bool checkNumFields(const MarkupNode &Element, size_t Size) const;
   bool checkNumFieldsAtLeast(const MarkupNode &Element, size_t Size) const;
-  void warnNumFieldsAtMost(const MarkupNode &Element, size_t Size) const;
+  bool checkNumFieldsAtMost(const MarkupNode &Element, size_t Size) const;
 
   void reportTypeError(StringRef Str, StringRef TypeName) const;
   void reportLocation(StringRef::iterator Loc) const;
@@ -146,10 +147,10 @@ private:
 
   // A module info line currently being built. This incorporates as much mmap
   // information as possible before being emitted.
-  std::optional<ModuleInfoLine> MIL;
+  Optional<ModuleInfoLine> MIL;
 
   // SGR state.
-  std::optional<raw_ostream::Colors> Color;
+  Optional<raw_ostream::Colors> Color;
   bool Bold = false;
 
   // Map from Module ID to Module.

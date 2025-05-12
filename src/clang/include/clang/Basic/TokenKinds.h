@@ -44,14 +44,6 @@ enum ObjCKeywordKind {
   NUM_OBJC_KEYWORDS
 };
 
-/// Provides a namespace for interesting identifers such as float_t and
-/// double_t.
-enum InterestingIdentifierKind {
-#define INTERESTING_IDENTIFIER(X) X,
-#include "clang/Basic/TokenKinds.def"
-  NUM_INTERESTING_IDENTIFIERS
-};
-
 /// Defines the possible values of an on-off-switch (C99 6.10.6p2).
 enum OnOffSwitch {
   OOS_ON, OOS_OFF, OOS_DEFAULT
@@ -106,13 +98,6 @@ bool isAnnotation(TokenKind K);
 
 /// Return true if this is an annotation token representing a pragma.
 bool isPragmaAnnotation(TokenKind K);
-
-inline constexpr bool isRegularKeywordAttribute(TokenKind K) {
-  return (false
-#define KEYWORD_ATTRIBUTE(X) || (K == tok::kw_##X)
-#include "clang/Basic/AttrTokenKinds.inc"
-  );
-}
 
 } // end namespace tok
 } // end namespace clang

@@ -101,9 +101,9 @@ private:
                        const SmallVectorImpl<LiveInterval*> &Intervals) const;
 
 
-  LiveIntervals *LIS = nullptr;
-  MachineRegisterInfo *MRI = nullptr;
-  const TargetInstrInfo *TII = nullptr;
+  LiveIntervals *LIS;
+  MachineRegisterInfo *MRI;
+  const TargetInstrInfo *TII;
 };
 
 } // end anonymous namespace
@@ -130,7 +130,7 @@ bool RenameIndependentSubregs::renameComponents(LiveInterval &LI) const {
     return false;
 
   // Create a new VReg for each class.
-  Register Reg = LI.reg();
+  unsigned Reg = LI.reg();
   const TargetRegisterClass *RegClass = MRI->getRegClass(Reg);
   SmallVector<LiveInterval*, 4> Intervals;
   Intervals.push_back(&LI);
@@ -175,7 +175,7 @@ bool RenameIndependentSubregs::findComponents(IntEqClasses &Classes,
   // across subranges when they are affected by the same MachineOperand.
   const TargetRegisterInfo &TRI = *MRI->getTargetRegisterInfo();
   Classes.grow(NumComponents);
-  Register Reg = LI.reg();
+  unsigned Reg = LI.reg();
   for (const MachineOperand &MO : MRI->reg_nodbg_operands(Reg)) {
     if (!MO.isDef() && !MO.readsReg())
       continue;
@@ -249,7 +249,7 @@ void RenameIndependentSubregs::rewriteOperands(const IntEqClasses &Classes,
       /// Undef use operands are not tracked in the equivalence class,
       /// but need to be updated if they are tied; take care to only
       /// update the tied operand.
-      unsigned OperandNo = MO.getOperandNo();
+      unsigned OperandNo = MI->getOperandNo(&MO);
       unsigned TiedIdx = MI->findTiedOperandIdx(OperandNo);
       MI->getOperand(TiedIdx).setReg(VReg);
 
@@ -304,7 +304,7 @@ void RenameIndependentSubregs::computeMainRangesFixFlags(
   const SlotIndexes &Indexes = *LIS->getSlotIndexes();
   for (size_t I = 0, E = Intervals.size(); I < E; ++I) {
     LiveInterval &LI = *Intervals[I];
-    Register Reg = LI.reg();
+    unsigned Reg = LI.reg();
 
     LI.removeEmptySubRanges();
 
@@ -391,7 +391,7 @@ bool RenameIndependentSubregs::runOnMachineFunction(MachineFunction &MF) {
   // there can't be any further splitting.
   bool Changed = false;
   for (size_t I = 0, E = MRI->getNumVirtRegs(); I < E; ++I) {
-    Register Reg = Register::index2VirtReg(I);
+    unsigned Reg = Register::index2VirtReg(I);
     if (!LIS->hasInterval(Reg))
       continue;
     LiveInterval &LI = LIS->getInterval(Reg);

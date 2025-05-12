@@ -1,0 +1,92 @@
+#!/bin/bash
+
+PLATFORM=$1
+
+case "$PLATFORM" in
+  "ios" )
+    TRAIN=Yukon
+    SDKROOT=`xcrun --sdk iphoneos.internal --show-sdk-path`
+    export RC_ARCHS="arm64 arm64e"
+    export RC_PROJECT_COMPILATION_PLATFORM="ios"
+    export RC_MIN_VERSION_OPTION="-mwatchos-version-min=13.0"
+    ;;
+  "watchos" )
+    TRAIN=Grace
+    SDKROOT=`xcrun --sdk watchos.internal --show-sdk-path`
+    export RC_PROJECT_COMPILATION_PLATFORM="watch"
+    export RC_ARCHS="arm64_32 armv7k"
+    export RC_MIN_VERSION_OPTION="-mwatchos-version-min=6.0"
+    ;;
+  "tvos" )
+    TRAIN=Yager
+    SDKROOT=`xcrun --sdk appletvos.internal --show-sdk-path`
+    export RC_PROJECT_COMPILATION_PLATFORM="atv"
+    export RC_ARCHS="arm64 arm64e"
+    export RC_MIN_VERSION_OPTION="-mtvos-version-min=13.0"
+    ;;
+  "macos" )
+    TRAIN=macOSJazz
+    SDKROOT=`xcrun --sdk macosx.internal --show-sdk-path`
+    export RC_PROJECT_COMPILATION_PLATFORM="osx"
+    export RC_ARCHS="x86_64"
+    # mac train doesn't have the following varible, it is here for testing.
+    # export RC_MIN_VERSION_OPTION="-mmacosx-version-min=10.15"
+    ;;
+esac
+
+BUILDRECORDS=/SWE/Software/$TRAIN/Updates/Current$TRAIN/BuildRecords/
+TAPI=$PWD/bin/tapi
+OUTPUT=$PWD/output
+export RC_XBS=YES
+
+SCRIPT_PATH=`dirname $0`
+
+run_command() {
+  LOG=$1
+  START=`date +%s`
+  ${@:2} &> $LOG
+  RETURN_CODE=$?
+  END=`date +%s`
+  if [ $RETURN_CODE -ne 0 ]; then
+    echo "FAIL ($((END-START))s)"
+  else
+    echo "PASS ($((END-START))s)"
+  fi
+  if [ ! -z "$VERBOSE" ]; then
+    echo "${@:2}"
+  fi
+}
+
+generate_sdkdb() {
+  PROJECT_NAME=$1
+  PROJECT_PATH=$BUILDRECORDS/$PROJECT_NAME
+  OUTPUT_PATH=$OUTPUT/$PROJECT_NAME
+  export RC_ProjectName=$PROJECT_NAME
+
+  mkdir -p $OUTPUT_PATH
+
+  echo -n "Generating SDKDB for $PROJECT_NAME: "
+  run_command $OUTPUT_PATH/Log $TAPI sdkdb $ARCH -isysroot $SDKROOT --output $OUTPUT_PATH --runtime-root $PROJECT_PATH/Root --sdk-content-root $PROJECT_PATH/SDKContentRoot --public-sdk-content-root $PROJECT_PATH/PublicSDKContentRoot -v
+}
+
+if [ ! -z "$2" ]; then
+  generate_sdkdb $2
+else
+  for project in `ls $BUILDRECORDS`
+  do
+    if [[ "$project" =~ "_Sim" ]]; then
+      continue # skip simulator projects for now
+    elif [[ "$project" =~ "_Loc_" ]]; then
+      continue # skip localization projects to save time
+    else
+      generate_sdkdb $project
+    fi
+  done
+
+  # assemble sdkdb
+  find $OUTPUT -name partial.sdkdb > $OUTPUT/sdkdb.filelist
+  echo -n "Assembling public SDKDB: "
+  run_command $OUTPUT/public.log $TAPI sdkdb --action=gen-public --output $OUTPUT --partial-sdkdb-list $OUTPUT/sdkdb.filelist
+  echo -n "Assembling private SDKDB: "
+  run_command $OUTPUT/private.log $TAPI sdkdb --action=gen-private --output $OUTPUT --partial-sdkdb-list $OUTPUT/sdkdb.filelist
+fi

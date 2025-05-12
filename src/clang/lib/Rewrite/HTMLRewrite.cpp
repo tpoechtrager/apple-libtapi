@@ -21,10 +21,8 @@
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/raw_ostream.h"
 #include <memory>
-
 using namespace clang;
-using namespace llvm;
-using namespace html;
+
 
 /// HighlightRange - Highlight a range in the source code with the specified
 /// start/end tags.  B/E must be in the same file.  This ensures that
@@ -104,32 +102,6 @@ void html::HighlightRange(RewriteBuffer &RB, unsigned B, unsigned E,
       break;
     }
   }
-}
-
-namespace clang::html {
-struct RelexRewriteCache {
-  // These structs mimic input arguments of HighlightRange().
-  struct Highlight {
-    SourceLocation B, E;
-    std::string StartTag, EndTag;
-    bool IsTokenRange;
-  };
-  struct RawHighlight {
-    unsigned B, E;
-    std::string StartTag, EndTag;
-  };
-
-  // SmallVector isn't appropriate because these vectors are almost never small.
-  using HighlightList = std::vector<Highlight>;
-  using RawHighlightList = std::vector<RawHighlight>;
-
-  DenseMap<FileID, RawHighlightList> SyntaxHighlights;
-  DenseMap<FileID, HighlightList> MacroHighlights;
-};
-} // namespace clang::html
-
-html::RelexRewriteCacheRef html::instantiateRelexRewriteCache() {
-  return std::make_shared<RelexRewriteCache>();
 }
 
 void html::EscapeText(Rewriter &R, FileID FID,
@@ -470,18 +442,13 @@ input.spoilerhider:checked + label + .spoiler{
 /// information about keywords, macro expansions etc.  This uses the macro
 /// table state from the end of the file, so it won't be perfectly perfect,
 /// but it will be reasonably close.
-static void SyntaxHighlightImpl(
-    Rewriter &R, FileID FID, const Preprocessor &PP,
-    llvm::function_ref<void(RewriteBuffer &, unsigned, unsigned, const char *,
-                            const char *, const char *)>
-        HighlightRangeCallback) {
-
+void html::SyntaxHighlight(Rewriter &R, FileID FID, const Preprocessor &PP) {
   RewriteBuffer &RB = R.getEditBuffer(FID);
+
   const SourceManager &SM = PP.getSourceManager();
   llvm::MemoryBufferRef FromFile = SM.getBufferOrFake(FID);
-  const char *BufferStart = FromFile.getBuffer().data();
-
   Lexer L(FID, FromFile, SM, PP.getLangOpts());
+  const char *BufferStart = L.getBuffer().data();
 
   // Inform the preprocessor that we want to retain comments as tokens, so we
   // can highlight them.
@@ -508,13 +475,13 @@ static void SyntaxHighlightImpl(
 
       // If this is a pp-identifier, for a keyword, highlight it as such.
       if (Tok.isNot(tok::identifier))
-        HighlightRangeCallback(RB, TokOffs, TokOffs + TokLen, BufferStart,
-                               "<span class='keyword'>", "</span>");
+        HighlightRange(RB, TokOffs, TokOffs+TokLen, BufferStart,
+                       "<span class='keyword'>", "</span>");
       break;
     }
     case tok::comment:
-      HighlightRangeCallback(RB, TokOffs, TokOffs + TokLen, BufferStart,
-                             "<span class='comment'>", "</span>");
+      HighlightRange(RB, TokOffs, TokOffs+TokLen, BufferStart,
+                     "<span class='comment'>", "</span>");
       break;
     case tok::utf8_string_literal:
       // Chop off the u part of u8 prefix
@@ -531,8 +498,8 @@ static void SyntaxHighlightImpl(
       [[fallthrough]];
     case tok::string_literal:
       // FIXME: Exclude the optional ud-suffix from the highlighted range.
-      HighlightRangeCallback(RB, TokOffs, TokOffs + TokLen, BufferStart,
-                             "<span class='string_literal'>", "</span>");
+      HighlightRange(RB, TokOffs, TokOffs+TokLen, BufferStart,
+                     "<span class='string_literal'>", "</span>");
       break;
     case tok::hash: {
       // If this is a preprocessor directive, all tokens to end of line are too.
@@ -549,8 +516,8 @@ static void SyntaxHighlightImpl(
       }
 
       // Find end of line.  This is a hack.
-      HighlightRangeCallback(RB, TokOffs, TokEnd, BufferStart,
-                             "<span class='directive'>", "</span>");
+      HighlightRange(RB, TokOffs, TokEnd, BufferStart,
+                     "<span class='directive'>", "</span>");
 
       // Don't skip the next token.
       continue;
@@ -560,43 +527,12 @@ static void SyntaxHighlightImpl(
     L.LexFromRawLexer(Tok);
   }
 }
-void html::SyntaxHighlight(Rewriter &R, FileID FID, const Preprocessor &PP,
-                           RelexRewriteCacheRef Cache) {
-  RewriteBuffer &RB = R.getEditBuffer(FID);
-  const SourceManager &SM = PP.getSourceManager();
-  llvm::MemoryBufferRef FromFile = SM.getBufferOrFake(FID);
-  const char *BufferStart = FromFile.getBuffer().data();
 
-  if (Cache) {
-    auto CacheIt = Cache->SyntaxHighlights.find(FID);
-    if (CacheIt != Cache->SyntaxHighlights.end()) {
-      for (const RelexRewriteCache::RawHighlight &H : CacheIt->second) {
-        HighlightRange(RB, H.B, H.E, BufferStart, H.StartTag.data(),
-                       H.EndTag.data());
-      }
-      return;
-    }
-  }
-
-  // "Every time you would call HighlightRange, cache the inputs as well."
-  auto HighlightRangeCallback = [&](RewriteBuffer &RB, unsigned B, unsigned E,
-                                    const char *BufferStart,
-                                    const char *StartTag, const char *EndTag) {
-    HighlightRange(RB, B, E, BufferStart, StartTag, EndTag);
-
-    if (Cache)
-      Cache->SyntaxHighlights[FID].push_back({B, E, StartTag, EndTag});
-  };
-
-  SyntaxHighlightImpl(R, FID, PP, HighlightRangeCallback);
-}
-
-static void HighlightMacrosImpl(
-    Rewriter &R, FileID FID, const Preprocessor &PP,
-    llvm::function_ref<void(Rewriter &, SourceLocation, SourceLocation,
-                            const char *, const char *, bool)>
-        HighlightRangeCallback) {
-
+/// HighlightMacros - This uses the macro table state from the end of the
+/// file, to re-expand macros and insert (into the HTML) information about the
+/// macro expansions.  This won't be perfectly perfect, but it will be
+/// reasonably close.
+void html::HighlightMacros(Rewriter &R, FileID FID, const Preprocessor& PP) {
   // Re-lex the raw token stream into a token buffer.
   const SourceManager &SM = PP.getSourceManager();
   std::vector<Token> TokenStream;
@@ -723,44 +659,11 @@ static void HighlightMacrosImpl(
     // get highlighted.
     Expansion = "<span class='macro_popup'>" + Expansion + "</span></span>";
 
-    HighlightRangeCallback(R, LLoc.getBegin(), LLoc.getEnd(),
-                           "<span class='macro'>", Expansion.c_str(),
-                           LLoc.isTokenRange());
+    HighlightRange(R, LLoc.getBegin(), LLoc.getEnd(), "<span class='macro'>",
+                   Expansion.c_str(), LLoc.isTokenRange());
   }
 
   // Restore the preprocessor's old state.
   TmpPP.setDiagnostics(*OldDiags);
   TmpPP.setPragmasEnabled(PragmasPreviouslyEnabled);
-}
-
-/// HighlightMacros - This uses the macro table state from the end of the
-/// file, to re-expand macros and insert (into the HTML) information about the
-/// macro expansions.  This won't be perfectly perfect, but it will be
-/// reasonably close.
-void html::HighlightMacros(Rewriter &R, FileID FID, const Preprocessor &PP,
-                           RelexRewriteCacheRef Cache) {
-  if (Cache) {
-    auto CacheIt = Cache->MacroHighlights.find(FID);
-    if (CacheIt != Cache->MacroHighlights.end()) {
-      for (const RelexRewriteCache::Highlight &H : CacheIt->second) {
-        HighlightRange(R, H.B, H.E, H.StartTag.data(), H.EndTag.data(),
-                       H.IsTokenRange);
-      }
-      return;
-    }
-  }
-
-  // "Every time you would call HighlightRange, cache the inputs as well."
-  auto HighlightRangeCallback = [&](Rewriter &R, SourceLocation B,
-                                    SourceLocation E, const char *StartTag,
-                                    const char *EndTag, bool isTokenRange) {
-    HighlightRange(R, B, E, StartTag, EndTag, isTokenRange);
-
-    if (Cache) {
-      Cache->MacroHighlights[FID].push_back(
-          {B, E, StartTag, EndTag, isTokenRange});
-    }
-  };
-
-  HighlightMacrosImpl(R, FID, PP, HighlightRangeCallback);
 }

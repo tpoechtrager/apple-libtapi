@@ -4,7 +4,6 @@ executable("llvm-exegesis") {
   deps = [
     "lib",
     "//llvm/lib/CodeGen",
-    "//llvm/lib/CodeGen",
     "//llvm/lib/ExecutionEngine",
     "//llvm/lib/ExecutionEngine/MCJIT",
     "//llvm/lib/MC",
@@ -15,7 +14,6 @@ executable("llvm-exegesis") {
     "//llvm/lib/Target:AllTargetsDescs",
     "//llvm/lib/Target:AllTargetsDisassemblers",
     "//llvm/lib/Target:AllTargetsInfos",
-    "//llvm/lib/TargetParser",
   ]
   sources = [ "llvm-exegesis.cpp" ]
 }

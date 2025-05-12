@@ -10,6 +10,7 @@
 #define LLVM_DEBUGINFO_CODEVIEW_CONTINUATIONRECORDBUILDER_H
 
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/DebugInfo/CodeView/CVRecord.h"
 #include "llvm/DebugInfo/CodeView/TypeRecordMapping.h"
@@ -25,7 +26,7 @@ enum class ContinuationRecordKind { FieldList, MethodOverloadList };
 
 class ContinuationRecordBuilder {
   SmallVector<uint32_t, 4> SegmentOffsets;
-  std::optional<ContinuationRecordKind> Kind;
+  Optional<ContinuationRecordKind> Kind;
   AppendingBinaryByteStream Buffer;
   BinaryStreamWriter SegmentWriter;
   TypeRecordMapping Mapping;
@@ -35,7 +36,7 @@ class ContinuationRecordBuilder {
 
   void insertSegmentEnd(uint32_t Offset);
   CVType createSegmentRecord(uint32_t OffBegin, uint32_t OffEnd,
-                             std::optional<TypeIndex> RefersTo);
+                             Optional<TypeIndex> RefersTo);
 
 public:
   ContinuationRecordBuilder();

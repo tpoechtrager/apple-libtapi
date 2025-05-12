@@ -38,6 +38,7 @@ class BPFSubtarget : public BPFGenSubtargetInfo {
 private:
   void initializeEnvironment();
   void initSubtargetFeatures(StringRef CPU, StringRef FS);
+  bool probeJmpExt();
 
 protected:
   // unused

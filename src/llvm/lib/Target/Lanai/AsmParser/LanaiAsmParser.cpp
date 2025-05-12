@@ -35,7 +35,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <optional>
 
 using namespace llvm;
 
@@ -62,12 +61,13 @@ class LanaiAsmParser : public MCTargetAsmParser {
 
   bool parsePrePost(StringRef Type, int *OffsetValue);
 
+  bool ParseDirective(AsmToken DirectiveID) override;
+
   bool ParseInstruction(ParseInstructionInfo &Info, StringRef Name,
                         SMLoc NameLoc, OperandVector &Operands) override;
 
-  bool parseRegister(MCRegister &RegNum, SMLoc &StartLoc,
-                     SMLoc &EndLoc) override;
-  OperandMatchResultTy tryParseRegister(MCRegister &RegNo, SMLoc &StartLoc,
+  bool ParseRegister(unsigned &RegNum, SMLoc &StartLoc, SMLoc &EndLoc) override;
+  OperandMatchResultTy tryParseRegister(unsigned &RegNo, SMLoc &StartLoc,
                                         SMLoc &EndLoc) override;
 
   bool MatchAndEmitInstruction(SMLoc IdLoc, unsigned &Opcode,
@@ -647,6 +647,8 @@ public:
 
 } // end anonymous namespace
 
+bool LanaiAsmParser::ParseDirective(AsmToken /*DirectiveId*/) { return true; }
+
 bool LanaiAsmParser::MatchAndEmitInstruction(SMLoc IdLoc, unsigned &Opcode,
                                              OperandVector &Operands,
                                              MCStreamer &Out,
@@ -691,7 +693,7 @@ std::unique_ptr<LanaiOperand>
 LanaiAsmParser::parseRegister(bool RestoreOnFailure) {
   SMLoc Start = Parser.getTok().getLoc();
   SMLoc End = SMLoc::getFromPointer(Parser.getTok().getLoc().getPointer() - 1);
-  std::optional<AsmToken> PercentTok;
+  Optional<AsmToken> PercentTok;
 
   unsigned RegNum;
   // Eat the '%'.
@@ -703,18 +705,18 @@ LanaiAsmParser::parseRegister(bool RestoreOnFailure) {
     RegNum = MatchRegisterName(Lexer.getTok().getIdentifier());
     if (RegNum == 0) {
       if (PercentTok && RestoreOnFailure)
-        Lexer.UnLex(*PercentTok);
+        Lexer.UnLex(PercentTok.value());
       return nullptr;
     }
     Parser.Lex(); // Eat identifier token
     return LanaiOperand::createReg(RegNum, Start, End);
   }
   if (PercentTok && RestoreOnFailure)
-    Lexer.UnLex(*PercentTok);
+    Lexer.UnLex(PercentTok.value());
   return nullptr;
 }
 
-bool LanaiAsmParser::parseRegister(MCRegister &RegNum, SMLoc &StartLoc,
+bool LanaiAsmParser::ParseRegister(unsigned &RegNum, SMLoc &StartLoc,
                                    SMLoc &EndLoc) {
   const AsmToken &Tok = getParser().getTok();
   StartLoc = Tok.getLoc();
@@ -725,7 +727,7 @@ bool LanaiAsmParser::parseRegister(MCRegister &RegNum, SMLoc &StartLoc,
   return (Op == nullptr);
 }
 
-OperandMatchResultTy LanaiAsmParser::tryParseRegister(MCRegister &RegNum,
+OperandMatchResultTy LanaiAsmParser::tryParseRegister(unsigned &RegNum,
                                                       SMLoc &StartLoc,
                                                       SMLoc &EndLoc) {
   const AsmToken &Tok = getParser().getTok();

@@ -16,6 +16,7 @@
 #include "clang/ASTMatchers/Dynamic/Diagnostics.h"
 #include "clang/ASTMatchers/Dynamic/Registry.h"
 #include "clang/Basic/CharInfo.h"
+#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/ManagedStatic.h"
@@ -24,7 +25,6 @@
 #include <cerrno>
 #include <cstddef>
 #include <cstdlib>
-#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -395,10 +395,10 @@ bool Parser::parseIdentifierPrefixImpl(VariantValue *Value) {
         return false;
 
       assert(NamedValue.isMatcher());
-      std::optional<DynTypedMatcher> Result =
+      llvm::Optional<DynTypedMatcher> Result =
           NamedValue.getMatcher().getSingleMatcher();
       if (Result) {
-        std::optional<DynTypedMatcher> Bound = Result->tryBind(BindID);
+        llvm::Optional<DynTypedMatcher> Bound = Result->tryBind(BindID);
         if (Bound) {
           *Value = VariantMatcher::SingleMatcher(*Bound);
           return true;
@@ -438,7 +438,7 @@ bool Parser::parseIdentifierPrefixImpl(VariantValue *Value) {
     return false;
   }
 
-  std::optional<MatcherCtor> Ctor = S->lookupMatcherCtor(NameToken.Text);
+  llvm::Optional<MatcherCtor> Ctor = S->lookupMatcherCtor(NameToken.Text);
 
   // Parse as a matcher expression.
   return parseMatcherExpressionImpl(NameToken, OpenToken, Ctor, Value);
@@ -517,7 +517,7 @@ bool Parser::parseMatcherBuilder(MatcherCtor Ctor, const TokenInfo &NameToken,
       ArgValue.Text = NodeMatcherToken.Text;
       ArgValue.Range = NodeMatcherToken.Range;
 
-      std::optional<MatcherCtor> MappedMatcher =
+      llvm::Optional<MatcherCtor> MappedMatcher =
           S->lookupMatcherCtor(ArgValue.Text);
 
       if (!MappedMatcher) {
@@ -628,7 +628,7 @@ bool Parser::parseMatcherBuilder(MatcherCtor Ctor, const TokenInfo &NameToken,
 ///   returns \c false.
 bool Parser::parseMatcherExpressionImpl(const TokenInfo &NameToken,
                                         const TokenInfo &OpenToken,
-                                        std::optional<MatcherCtor> Ctor,
+                                        llvm::Optional<MatcherCtor> Ctor,
                                         VariantValue *Value) {
   if (!Ctor) {
     Error->addError(NameToken.Range, Error->ET_RegistryMatcherNotFound)
@@ -828,7 +828,7 @@ Parser::Parser(CodeTokenizer *Tokenizer, Sema *S,
 
 Parser::RegistrySema::~RegistrySema() = default;
 
-std::optional<MatcherCtor>
+llvm::Optional<MatcherCtor>
 Parser::RegistrySema::lookupMatcherCtor(StringRef MatcherName) {
   return Registry::lookupMatcherCtor(MatcherName);
 }
@@ -904,18 +904,19 @@ Parser::completeExpression(StringRef &Code, unsigned CompletionOffset, Sema *S,
   return P.Completions;
 }
 
-std::optional<DynTypedMatcher>
+llvm::Optional<DynTypedMatcher>
 Parser::parseMatcherExpression(StringRef &Code, Sema *S,
                                const NamedValueMap *NamedValues,
                                Diagnostics *Error) {
   VariantValue Value;
   if (!parseExpression(Code, S, NamedValues, &Value, Error))
-    return std::nullopt;
+    return llvm::Optional<DynTypedMatcher>();
   if (!Value.isMatcher()) {
     Error->addError(SourceRange(), Error->ET_ParserNotAMatcher);
-    return std::nullopt;
+    return llvm::Optional<DynTypedMatcher>();
   }
-  std::optional<DynTypedMatcher> Result = Value.getMatcher().getSingleMatcher();
+  llvm::Optional<DynTypedMatcher> Result =
+      Value.getMatcher().getSingleMatcher();
   if (!Result) {
     Error->addError(SourceRange(), Error->ET_ParserOverloadedType)
         << Value.getTypeAsString();

@@ -115,9 +115,6 @@ add_clang_executable(clang-fuzzer
   EXCLUDE_FROM_ALL
   ${DUMMY_MAIN}
   ClangFuzzer.cpp
-
-  DEPENDS
-  ClangDriverOptions
   )
 
 target_link_libraries(clang-fuzzer
@@ -130,9 +127,6 @@ add_clang_executable(clang-objc-fuzzer
   EXCLUDE_FROM_ALL
   ${DUMMY_MAIN}
   ClangObjectiveCFuzzer.cpp
-
-  DEPENDS
-  ClangDriverOptions
   )
 
 target_link_libraries(clang-objc-fuzzer

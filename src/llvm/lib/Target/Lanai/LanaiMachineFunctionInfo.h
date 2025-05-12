@@ -38,7 +38,7 @@ class LanaiMachineFunctionInfo : public MachineFunctionInfo {
   int VarArgsFrameIndex;
 
 public:
-  LanaiMachineFunctionInfo(const Function &F, const TargetSubtargetInfo *STI)
+  explicit LanaiMachineFunctionInfo(MachineFunction &MF)
       : VarArgsFrameIndex(0) {}
   MachineFunctionInfo *
   clone(BumpPtrAllocator &Allocator, MachineFunction &DestMF,

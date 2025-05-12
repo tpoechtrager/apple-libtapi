@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "AArch64SMEAttributes.h"
+#include "llvm/ADT/None.h"
 #include "llvm/IR/InstrTypes.h"
 #include <cassert>
 
@@ -48,27 +49,25 @@ SMEAttrs::SMEAttrs(const AttributeList &Attrs) {
     Bitmask |= ZA_Preserved;
 }
 
-std::optional<bool>
-SMEAttrs::requiresSMChange(const SMEAttrs &Callee,
-                           bool BodyOverridesInterface) const {
+Optional<bool> SMEAttrs::requiresSMChange(const SMEAttrs &Callee,
+                                          bool BodyOverridesInterface) const {
   // If the transition is not through a call (e.g. when considering inlining)
   // and Callee has a streaming body, then we can ignore the interface of
   // Callee.
   if (BodyOverridesInterface && Callee.hasStreamingBody()) {
-    return hasStreamingInterfaceOrBody() ? std::nullopt
-                                         : std::optional<bool>(true);
+    return hasStreamingInterfaceOrBody() ? None : Optional<bool>(true);
   }
 
   if (Callee.hasStreamingCompatibleInterface())
-    return std::nullopt;
+    return None;
 
   // Both non-streaming
   if (hasNonStreamingInterfaceAndBody() && Callee.hasNonStreamingInterface())
-    return std::nullopt;
+    return None;
 
   // Both streaming
   if (hasStreamingInterfaceOrBody() && Callee.hasStreamingInterface())
-    return std::nullopt;
+    return None;
 
   return Callee.hasStreamingInterface();
 }

@@ -28,7 +28,6 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FormatVariadic.h"
 #include <cassert>
-#include <optional>
 #include <vector>
 
 using namespace clang;
@@ -36,7 +35,10 @@ using namespace ento;
 
 bool CheckerManager::hasPathSensitiveCheckers() const {
   const auto IfAnyAreNonEmpty = [](const auto &... Callbacks) -> bool {
-    return (!Callbacks.empty() || ...);
+    bool Result = false;
+    // FIXME: Use fold expressions in C++17.
+    LLVM_ATTRIBUTE_UNUSED int Unused[]{0, (Result |= !Callbacks.empty())...};
+    return Result;
   };
   return IfAnyAreNonEmpty(
       StmtCheckers, PreObjCMessageCheckers, ObjCMessageNilCheckers,
@@ -654,7 +656,7 @@ void CheckerManager::runCheckersForEvalCall(ExplodedNodeSet &Dst,
                                             ExprEngine &Eng,
                                             const EvalCallOptions &CallOpts) {
   for (auto *const Pred : Src) {
-    std::optional<CheckerNameRef> evaluatorChecker;
+    Optional<CheckerNameRef> evaluatorChecker;
 
     ExplodedNodeSet checkDst;
     NodeBuilder B(Pred, checkDst, Eng.getBuilderContext());

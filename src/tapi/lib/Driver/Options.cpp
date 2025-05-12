@@ -21,13 +21,11 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Option/ArgList.h"
 #include "llvm/Option/OptSpecifier.h"
-#include "llvm/Support/JSON.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Process.h"
 #include "llvm/Support/Program.h"
 #include "llvm/Support/VirtualFileSystem.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/TextAPI/TextAPIError.h"
 #include <string>
 #include <utility>
 
@@ -142,15 +140,15 @@ static std::string getClangResourcesPath(FileManager &fm) {
 
   // Try the default tapi path.
   SmallString<PATH_MAX> path(tapiDir);
-  llvm::sys::path::append(path, "..", CLANG_INSTALL_LIBDIR_BASENAME, "tapi",
-                          TAPI_MAKE_STRING(TAPI_VERSION_MAJOR));
+  llvm::sys::path::append(path, "..", CLANG_INSTALL_LIBDIR_BASENAME,
+                          "tapi", TAPI_MAKE_STRING(TAPI_VERSION));
   if (fm.exists(path))
     return path.str().str();
 
   // Try the default clang path. This is used by check-tapi.
   path = tapiDir;
   llvm::sys::path::append(path, "..", CLANG_INSTALL_LIBDIR_BASENAME, "clang",
-                          CLANG_VERSION_MAJOR_STRING);
+                          CLANG_VERSION_STRING);
   if (fm.exists(path))
     return path.str().str();
 
@@ -162,7 +160,7 @@ static std::string getClangExecutablePath() {
   // the default search PATH.
   auto tapiDir = getTAPIExecutableDirectory();
   auto clangBinary =
-      sys::findProgramByName("clang", ArrayRef(StringRef(tapiDir)));
+      sys::findProgramByName("clang", makeArrayRef(StringRef(tapiDir)));
   if (clangBinary.getError())
     clangBinary = sys::findProgramByName("clang");
   if (auto ec = clangBinary.getError())
@@ -186,48 +184,8 @@ static std::string getTAPIConfigurationFile(FileManager &fm,
   return std::string();
 }
 
-/// Parse JSON input into argument list.
-///
-/* Expected input format.
- *  { "label" : ["-ClangArg1", "-ClangArg2"] }
- */
-///
-/// Input is interpreted as "-Xlabel ClangArg1 -XLabel ClangArg2".
-static Expected<llvm::opt::InputArgList>
-getArgListFromJSON(const StringRef input, llvm::opt::OptTable *optTable,
-                   std::vector<std::string> &storage) {
-  auto valOrErr = json::parse(input);
-  if (!valOrErr)
-    return valOrErr.takeError();
 
-  auto *root = valOrErr->getAsObject();
-  if (!root)
-    return llvm::opt::InputArgList();
-
-  for (const auto &kv : *root) {
-    auto *argList = kv.getSecond().getAsArray();
-    std::string label = "-X" + kv.getFirst().str();
-    if (!argList)
-      return make_error<TextAPIError>(TextAPIErrorCode::InvalidInputFormat);
-    for (auto arg : *argList) {
-      auto argStr = arg.getAsString();
-      if (!argStr)
-        return make_error<TextAPIError>(TextAPIErrorCode::InvalidInputFormat);
-      storage.emplace_back(label);
-      storage.emplace_back(*argStr);
-    }
-  }
-
-  std::vector<const char *> cArgs(storage.size());
-  llvm::for_each(
-      storage, [&cArgs](std::string &str) { cArgs.emplace_back(str.data()); });
-
-  unsigned missingArgIndex, missingArgCount;
-  return optTable->ParseArgs(cArgs, missingArgIndex, missingArgCount);
-}
-
-
-static std::optional<Triple>
+static Optional<Triple>
 parsePlatformAndDeploymentTarget(DiagnosticsEngine &diag, InputArgList &args) {
   // Handle deployment target.
   const std::pair<unsigned, PlatformType> platforms[] = {
@@ -252,7 +210,7 @@ parsePlatformAndDeploymentTarget(DiagnosticsEngine &diag, InputArgList &args) {
     if (first != nullptr) {
       diag.report(clang::diag::err_drv_argument_not_allowed_with)
           << first->getAsString(args) << arg->getAsString(args);
-      return std::nullopt;
+      return llvm::None;
     }
 
     first = arg;
@@ -271,7 +229,6 @@ parsePlatformAndDeploymentTarget(DiagnosticsEngine &diag, InputArgList &args) {
         {"WATCHOS_DEPLOYMENT_TARGET", PLATFORM_WATCHOS},
         {"BRIDGEOS_DEPLOYMENT_TARGET", PLATFORM_BRIDGEOS},
         {"DRIVERKIT_DEPLOYMENT_TARGET", PLATFORM_DRIVERKIT},
-        {"XROS_DEPLOYMENT_TARGET", PLATFORM_XROS},
     };
 
     const char *first = nullptr;
@@ -283,7 +240,7 @@ parsePlatformAndDeploymentTarget(DiagnosticsEngine &diag, InputArgList &args) {
       if (first != nullptr) {
         diag.report(clang::diag::err_drv_conflicting_deployment_targets)
             << first << target.first;
-        return std::nullopt;
+        return llvm::None;
       }
 
       first = target.first;
@@ -302,71 +259,16 @@ parsePlatformAndDeploymentTarget(DiagnosticsEngine &diag, InputArgList &args) {
   return target;
 }
 
-bool Options::processOptionList(DiagnosticsEngine &diag,
-                                llvm::opt::InputArgList &args) {
-  auto *arg = args.getLastArg(OPT_option_list);
-  if (!arg)
-    return true;
-
-  const StringRef path = arg->getValue(0);
-  auto inputOrErr = fm->getBufferForFile(path);
-  if (auto err = inputOrErr.getError()) {
-    diag.report(diag::err_cannot_read_file) << path << err.message();
-    return false;
-  }
-
-  // Backing storage referenced for argument processing.
-  std::vector<std::string> storage;
-
-  auto argsOrErr =
-      getArgListFromJSON((*inputOrErr)->getBuffer(), table.get(), storage);
-  if (auto err = argsOrErr.takeError()) {
-    diag.report(diag::err_cannot_read_file) << path << toString(std::move(err));
-    return false;
-  }
-
-  return processXOptions(diag, *argsOrErr, /*clearOptions=*/false);
-}
-
-bool Options::processXOptions(DiagnosticsEngine &diag, InputArgList &args,
-                              bool clearOptions) {
-  // Preset Xoptions before iterating through arg list.
-  if (clearOptions) {
-    if (args.hasArgNoClaim(OPT_Xparser))
-      frontendOptions.clangExtraArgs.clear();
-    if (args.hasArgNoClaim(OPT_Xproject))
-      projectLevelOptions = {};
-    if (args.hasArgNoClaim(OPT_X))
-      frontendOptions.uniqueClangArgs.clear();
-  }
+bool Options::processXarchOptions(DiagnosticsEngine &diag, InputArgList &args) {
   for (auto it = args.begin(), e = args.end(); it != e; ++it) {
     auto *arg = *it;
-    // Handle special labels first.
-    if (arg->getOption().matches(OPT_Xparser)) {
-      processXparserOptions(args, it);
-      continue;
-    } else if (arg->getOption().matches(OPT_Xarch__)) {
-      if (!processXarchOptions(diag, args, it))
-        return false;
-      continue;
-    } else if (arg->getOption().matches(OPT_Xplatform__)) {
-      if (!processXplatformOptions(diag, args, it))
-        return false;
-      continue;
-    } else if (arg->getOption().matches(OPT_Xproject)) {
-      if (!processXprojectOptions(diag, args, it))
-        return false;
-      continue;
-    } else if (!arg->getOption().matches(OPT_X))
+    if (!arg->getOption().matches(OPT_Xarch__))
       continue;
 
-    // Handle any user defined labels.
-    const std::string label = arg->getValue(0);
-
-    // Ban "public" and "private" labels.
-    const auto checkedLabel = StringRef(label).lower();
-    if ((checkedLabel == "public") || (checkedLabel == "private")) {
-      diag.report(diag::err_invalid_label) << label;
+    auto architecture = getArchitectureFromName(arg->getValue(0));
+    if (architecture == AK_unknown) {
+      diag.report(clang::diag::err_drv_invalid_arch_name)
+          << arg->getAsString(args);
       return false;
     }
 
@@ -376,11 +278,14 @@ bool Options::processXOptions(DiagnosticsEngine &diag, InputArgList &args,
           << arg->getAsString(args) << 1;
       return false;
     }
-
     auto *nextArg = *nextIt;
     switch ((ID)nextArg->getOption().getID()) {
-    case OPT_D:
-    case OPT_U:
+    case OPT_allowable_client:
+    case OPT_reexport_install_name:
+    case OPT_reexport_l:
+    case OPT_reexport_framework:
+    case OPT_reexport_library:
+    case OPT_rpath:
       break;
     default:
       diag.report(clang::diag::err_drv_argument_not_allowed_with)
@@ -388,133 +293,45 @@ bool Options::processXOptions(DiagnosticsEngine &diag, InputArgList &args,
       return false;
     }
 
-    const StringRef argString = nextArg->getSpelling();
-    const auto &argValues = nextArg->getValues();
-    if (argValues.empty())
-      frontendOptions.uniqueClangArgs[label].emplace_back(argString.str());
-    else
-      for (const auto &value : argValues)
-        frontendOptions.uniqueClangArgs[label].emplace_back(
-            (argString + value).str());
-
+    argToArchMap[nextArg] = architecture;
     arg->claim();
-    nextArg->claim();
   }
-
-  return true;
-}
-
-void Options::processXparserOptions(llvm::opt::InputArgList &args,
-                                    arg_iterator curr) {
-  auto *arg = *curr;
-  if (arg->isClaimed())
-    return;
-  frontendOptions.clangExtraArgs.emplace_back(arg->getValue());
-  arg->claim();
-}
-
-bool Options::processXprojectOptions(DiagnosticsEngine &diag,
-                                     llvm::opt::InputArgList &args,
-                                     arg_iterator curr) {
-  auto *arg = *curr;
-
-  auto nextIt = std::next(curr);
-  if (nextIt == args.end()) {
-    diag.report(clang::diag::err_drv_missing_argument)
-        << arg->getAsString(args) << 1;
-    return false;
-  }
-
-  auto *nextArg = *nextIt;
-  switch ((ID)nextArg->getOption().getID()) {
-  case OPT_fobjc_arc:
-    projectLevelOptions.useObjectiveCARC = true;
-    break;
-  case OPT_fmodules:
-    projectLevelOptions.enableModules = true;
-    break;
-  case OPT_fmodules_cache_path:
-    projectLevelOptions.moduleCachePath = nextArg->getValue();
-    break;
-  case OPT_include_:
-    projectLevelOptions.prefixHeaders.emplace_back(nextArg->getValue());
-    break;
-  default:
-    diag.report(clang::diag::err_drv_argument_not_allowed_with)
-        << arg->getAsString(args) << nextArg->getAsString(args);
-    return false;
-  }
-  arg->claim();
-  nextArg->claim();
-  return true;
-}
-
-bool Options::processXarchOptions(DiagnosticsEngine &diag,
-                                  llvm::opt::InputArgList &args,
-                                  arg_iterator curr) {
-  auto *arg = *curr;
-  auto architecture = getArchitectureFromName(arg->getValue(0));
-  if (architecture == AK_unknown) {
-    diag.report(clang::diag::err_drv_invalid_arch_name)
-        << arg->getAsString(args);
-    return false;
-  }
-
-  auto nextIt = std::next(curr);
-  if (nextIt == args.end()) {
-    diag.report(clang::diag::err_drv_missing_argument)
-        << arg->getAsString(args) << 1;
-    return false;
-  }
-  auto *nextArg = *nextIt;
-  switch ((ID)nextArg->getOption().getID()) {
-  case OPT_allowable_client:
-  case OPT_reexport_install_name:
-  case OPT_reexport_l:
-  case OPT_reexport_framework:
-  case OPT_reexport_library:
-  case OPT_rpath:
-    break;
-  default:
-    diag.report(clang::diag::err_drv_argument_not_allowed_with)
-        << arg->getAsString(args) << nextArg->getAsString(args);
-    return false;
-  }
-
-  argToArchMap[nextArg] = architecture;
-  arg->claim();
 
   return true;
 }
 
 bool Options::processXplatformOptions(DiagnosticsEngine &diag,
-                                      InputArgList &args, arg_iterator curr) {
-  auto *arg = *curr;
+                                      InputArgList &args) {
+  for (auto it = args.begin(), e = args.end(); it != e; ++it) {
+    auto *arg = *it;
+    if (!arg->getOption().matches(OPT_Xplatform__))
+      continue;
 
-  auto platform = getPlatformFromName(arg->getValue(0));
-  if (platform == PLATFORM_UNKNOWN) {
-    diag.report(diag::err_invalid_platform_name) << arg->getAsString(args);
-    return false;
-  }
+    auto platform = getPlatformFromName(arg->getValue(0));
+    if (platform == PLATFORM_UNKNOWN) {
+      diag.report(diag::err_invalid_platform_name) << arg->getAsString(args);
+      return false;
+    }
 
-  auto nextIt = std::next(curr);
-  if (nextIt == args.end()) {
-    diag.report(clang::diag::err_drv_missing_argument)
-        << arg->getAsString(args) << 1;
-    return false;
-  }
-  auto *nextArg = *nextIt;
-  switch ((ID)nextArg->getOption().getID()) {
-  case OPT_iframework:
-    break;
-  default:
-    diag.report(clang::diag::err_drv_argument_not_allowed_with)
-        << arg->getAsString(args) << nextArg->getAsString(args);
-    return false;
-  }
+    auto nextIt = std::next(it);
+    if (nextIt == e) {
+      diag.report(clang::diag::err_drv_missing_argument)
+          << arg->getAsString(args) << 1;
+      return false;
+    }
+    auto *nextArg = *nextIt;
+    switch ((ID)nextArg->getOption().getID()) {
+    case OPT_iframework:
+      break;
+    default:
+      diag.report(clang::diag::err_drv_argument_not_allowed_with)
+          << arg->getAsString(args) << nextArg->getAsString(args);
+      return false;
+    }
 
-  argToPlatformMap[nextArg] = platform;
-  arg->claim();
+    argToPlatformMap[nextArg] = platform;
+    arg->claim();
+  }
 
   return true;
 }
@@ -699,10 +516,10 @@ bool Options::processLinkerOptions(DiagnosticsEngine &diag,
   if (args.hasArgNoClaim(OPT_allowable_client))
     linkerOptions.allowableClients.clear();
 
-  
-  ArchitectureSet architectures; 
-  for (auto t : frontendOptions.targets)
-    architectures.set(mapToArchitecture(t));
+  std::vector<Target> targetTriples;
+  for (auto t: frontendOptions.targets)
+    targetTriples.emplace_back(t);
+  auto architectures = mapToArchitectureSet(targetTriples);
   for (auto *arg : args.filtered(OPT_allowable_client)) {
     if (argToArchMap.count(arg))
       linkerOptions.allowableClients.emplace_back(arg->getValue(),
@@ -763,9 +580,6 @@ bool Options::processLinkerOptions(DiagnosticsEngine &diag,
                                                       architectures);
   }
 
-  linkerOptions.isOSLibNotForSharedCache =
-      args.hasArg(OPT_not_for_dyld_shared_cache);
-
   if (args.hasArgNoClaim(OPT_rpath))
     linkerOptions.rpaths.clear();
   for (auto *arg : args.filtered(OPT_rpath)) {
@@ -774,11 +588,6 @@ bool Options::processLinkerOptions(DiagnosticsEngine &diag,
     else
       linkerOptions.rpaths.emplace_back(arg->getValue(), architectures);
   }
-
-  if (args.hasArgNoClaim(OPT_relinked_library))
-    linkerOptions.relinkedLibraries.clear();
-  for (auto *arg : args.filtered(OPT_relinked_library))
-    linkerOptions.relinkedLibraries.emplace_back(arg->getValue());
 
   // Handle application extension safe flag.
   if (::getenv("LD_NO_ENCRYPT") != nullptr)
@@ -790,8 +599,12 @@ bool Options::processLinkerOptions(DiagnosticsEngine &diag,
   linkerOptions.isApplicationExtensionSafe =
       args.hasFlag(OPT_fapplication_extension, OPT_fno_application_extension,
                    /*Default=*/linkerOptions.isApplicationExtensionSafe);
-  for (auto *arg : args.filtered(OPT_alias_list))
-    linkerOptions.aliasLists.emplace_back(arg->getValue());
+  for (auto *arg : args.filtered(OPT_alias_list)) {
+    if (argToArchMap.count(arg))
+      linkerOptions.aliasLists.emplace_back(arg->getValue(), argToArchMap[arg]);
+    else
+      linkerOptions.aliasLists.emplace_back(arg->getValue(), architectures);
+  }
 
   return true;
 }
@@ -834,7 +647,7 @@ bool Options::processFrontendOptions(DiagnosticsEngine &diag,
     frontendOptions.systemFrameworkPaths.emplace_back(
         arg->getValue(), argToPlatformMap.count(arg)
                              ? argToPlatformMap[arg]
-                             : std::optional<PlatformType>{});
+                             : llvm::Optional<PlatformType>{});
 
   // Handle framework paths.
   PathSeq frameworkPaths;
@@ -852,12 +665,6 @@ bool Options::processFrontendOptions(DiagnosticsEngine &diag,
   PathSeq defaultFrameworkPaths = {"/Library/Frameworks",
                                    "/System/Library/Frameworks"};
 
-  // Add the private framework path, since it is not added by default.
-  // Except when invoking SDKDB as it responsible for providing expected paths.
-  if ((command != TAPICommand::SDKDB) && (command != TAPICommand::Stubify) &&
-      StringRef(frontendOptions.isysroot).contains("Internal"))
-    defaultFrameworkPaths.emplace_back("/System/Library/PrivateFrameworks");
-
   if (!libraryPaths.empty())
     frontendOptions.libraryPaths = libraryPaths;
 
@@ -874,7 +681,7 @@ bool Options::processFrontendOptions(DiagnosticsEngine &diag,
     SmallString<PATH_MAX> path(frontendOptions.isysroot);
     sys::path::append(path, frameworkPath);
     frontendOptions.systemFrameworkPaths.emplace_back(
-        path.str(), std::optional<PlatformType>{});
+        std::string(path), llvm::Optional<PlatformType>{});
   }
 
   // Do basic error checking first for mixing -target and -arch options.
@@ -922,7 +729,6 @@ bool Options::processFrontendOptions(DiagnosticsEngine &diag,
       case Triple::TvOS:
       case Triple::WatchOS:
       case Triple::DriverKit:
-      case Triple::XROS:
         break;
       }
 
@@ -1039,6 +845,13 @@ bool Options::processFrontendOptions(DiagnosticsEngine &diag,
   // Handle language std.
   if (auto *arg = args.getLastArg(OPT_std_EQ))
     frontendOptions.language_std = arg->getValue();
+  else {
+    // Project workaround for: rdar://105020631
+    if (frontendOptions.language == clang::Language::ObjCXX || 
+        frontendOptions.language == clang::Language::CXX)
+      frontendOptions.language_std = "c++14";
+  }
+
 
   // Handle SYSTEM include paths.
   if (args.hasArgNoClaim(OPT_isystem))
@@ -1046,13 +859,6 @@ bool Options::processFrontendOptions(DiagnosticsEngine &diag,
 
   for (auto *arg : args.filtered(OPT_isystem))
     frontendOptions.systemIncludePaths.emplace_back(arg->getValue());
-
-  // Handle AFTER include paths.
-  if (args.hasArgNoClaim(OPT_idirafter))
-    frontendOptions.afterIncludePaths.clear();
-
-  for (auto *arg : args.filtered(OPT_idirafter))
-    frontendOptions.afterIncludePaths.emplace_back(arg->getValue());
 
   // Handle include paths.
   if (args.hasArgNoClaim(OPT_I))
@@ -1068,25 +874,11 @@ bool Options::processFrontendOptions(DiagnosticsEngine &diag,
   for (auto *arg : args.filtered(OPT_iquote))
     frontendOptions.quotedIncludePaths.emplace_back(arg->getValue());
 
-  // Handle prefix headers.
-  if (auto *arg = args.getLastArgNoClaim(OPT_include_))
-    if (!arg->isClaimed()) {
-      diag.report(diag::err_prefix_header_usage) << arg->getAsString(args);
-      return false;
-    }
-
-  if (auto *arg = args.getLastArgNoClaim(OPT_include_pch)) {
-    diag.report(diag::err_pch) << arg->getAsString(args);
-    return false;
-  }
-
   // Add macros from the command line.
   if (args.hasArgNoClaim(OPT_D) || args.hasArgNoClaim(OPT_U))
     frontendOptions.macros.clear();
 
   for (auto *arg : args.filtered(OPT_D, OPT_U)) {
-    if (arg->isClaimed())
-      continue;
     if (arg->getOption().matches(OPT_D))
       frontendOptions.macros.emplace_back(arg->getValue(), /*isUndef=*/false);
     else
@@ -1107,28 +899,32 @@ bool Options::processFrontendOptions(DiagnosticsEngine &diag,
     frontendOptions.visibility = arg->getValue();
 
   // Handle module related options.
-  if (auto *arg = args.getLastArgNoClaim(OPT_fmodules))
-    if (!arg->isClaimed())
-      frontendOptions.enableModules = true;
+  if (args.hasArg(OPT_fmodules))
+    frontendOptions.enableModules = true;
 
-  if (auto *arg = args.getLastArgNoClaim(OPT_fmodules_cache_path))
-    if (!arg->isClaimed())
-      frontendOptions.moduleCachePath = arg->getValue();
+  if (auto *arg = args.getLastArg(OPT_fmodules_cache_path))
+    frontendOptions.moduleCachePath = arg->getValue();
 
   if (args.hasArg(OPT_fmodules_validate_system_headers))
     frontendOptions.validateSystemHeaders = true;
 
-  if (auto *arg = args.getLastArgNoClaim(OPT_product_name))
+  if (auto *arg = args.getLastArg(OPT_product_name))
     frontendOptions.productName = arg->getValue();
+
+  // Handle extra arguments for the parser.
+  if (args.hasArgNoClaim(OPT_Xparser))
+    frontendOptions.clangExtraArgs.clear();
+
+  for (auto *arg : args.filtered(OPT_Xparser))
+    frontendOptions.clangExtraArgs.emplace_back(arg->getValue());
 
   // Handle clang resource path.
   if (frontendOptions.clangResourcePath.empty())
     frontendOptions.clangResourcePath = getClangResourcesPath(*fm);
 
   // Handle Objective-C ARC
-  if (auto *arg = args.getLastArgNoClaim(OPT_fobjc_arc))
-    if (!arg->isClaimed())
-      frontendOptions.useObjectiveCARC = true;
+  if (args.hasArg(OPT_fobjc_arc))
+    frontendOptions.useObjectiveCARC = true;
 
   if (args.hasArg(OPT_fobjc_weak))
     frontendOptions.useObjectiveCWeakARC = true;
@@ -1286,9 +1082,6 @@ bool Options::processTAPIOptions(DiagnosticsEngine &diag, InputArgList &args) {
 
   if (args.hasArg(OPT_deletePrivateFrameworks))
     tapiOptions.deletePrivateFrameworks = true;
-  
-  if (args.hasArg(OPT_removeSharedCacheFlag))
-    tapiOptions.removeSharedCacheFlag = true;
 
   if (args.hasArg(OPT_noUUIDs))
     diag.report(diag::warn_no_uuids);
@@ -1383,15 +1176,6 @@ bool Options::processTAPIOptions(DiagnosticsEngine &diag, InputArgList &args) {
     }
   }
 
-  // Handle previously ignored, but invalid options.
-  for (auto *arg :
-       args.filtered(OPT_log, OPT_fvisibility_inlines, OPT_l, OPT_framework,
-                     OPT_fnortt, OPT_fno_exceptions)) {
-    if (arg->isClaimed())
-      continue;
-    diag.report(diag::warn_ignored_option) << arg->getAsString(args);
-  }
-
   return true;
 }
 
@@ -1409,10 +1193,6 @@ bool Options::processSDKDBOptions(DiagnosticsEngine &diag, InputArgList &args) {
     diag.report(diag::err_parsing_disabled);
     return false;
   }
-
-  // Handle configuration file.
-  if (auto *arg = args.getLastArg(OPT_config_file))
-    sdkdbOptions.configurationFile = arg->getValue();
 
   // Handle diagnostics file.
   if (auto *arg = args.getLastArg(OPT_diagnostics_file))
@@ -1508,10 +1288,10 @@ Options::Options(DiagnosticsEngine &diag, ArrayRef<const char *> argString) {
     return;
 
   // This has to happen before all other option processing.
-  if (!processXOptions(diag, args))
+  if (!processXarchOptions(diag, args))
     return;
 
-  if (!processOptionList(diag, args))
+  if (!processXplatformOptions(diag, args))
     return;
 
   if (!processDriverOptions(diag, args))
@@ -1567,55 +1347,6 @@ static void printDriverHelp(bool hidden = false) {
       << "See 'tapi <command> --help' to read more about a specific command.\n";
 }
 
-/// \brief Print InstallAPI hidden help.
-static void printInstallAPIHiddenHelp() {
-  outs()
-      << "\n\nRare InstallAPI Options:\n\n"
-         "  -X<label> <arg>         Parse input headers with additional "
-         "<arg>.\n"
-         "The pass is uniquely identified with <label>. "
-         "Each unique and user-defined <label> multiples the number of passes "
-         "tapi parses over header input. "
-         "The <arg> is respected for each <label> pass and is mutually "
-         "exclusive to other labels.\n"
-         "Only -D<macro> and -U<macro> are respected with user-defined labels."
-         "\n\n\n"
-         "  -Xproject <arg>         Add <arg> when parsing project "
-         "header input.\n"
-         "Only -fmodules, -fobjc-arc and -include are respected with -Xproject."
-         "\n\n\n"
-         "  -Xarch_<arch> <arg>     Apply <arg> for <arch> slice in "
-         "output.\n"
-         "Only -allowable-client, -reexport-l, -reexport_framework and -rpath "
-         "are respected with -Xarch."
-         "\n\n\n"
-         "  -Xplatform_<platform> <arg>\n"
-         "                          Add <arg> when parsing over header "
-         "input for <platform>.\n"
-         "Only -iframework is respected with -Xplatform."
-         "\n\n\n"
-         "  -Xparser <arg>          Add <arg> when parsing over header "
-         "input.\n"
-         "Any clang parsing options can be applied with -Xparser."
-         "\n\n\n"
-         "  -optionlist <path>      Read <path> that contains X<label> "
-         "arguments to parse.\n"
-         "The <path> should be to a json file holding any of the above "
-         "-X<label> options.\n\n"
-         "Expected Format:\n"
-         "   {\n"
-         "      \"label\" : [\"-clangArg1\", \"-clangArg2\"],\n"
-         "   }\n\n"
-         "Example Usage:\n"
-         "   {\n"
-         "      \"DarwinMacros\" : [\"-DApple=1\", \"-DUnix\"],\n"
-         "   }\n"
-         "This is equivalent to 'tapi installapi -XDarwinMacros -DApple=1 "
-         "-XDarwinMacros -DUnix'\n";
-
-  return;
-}
-
 void Options::printHelp() const {
   if (command == TAPICommand::Driver) {
     printDriverHelp(driverOptions.printHelpHidden);
@@ -1627,8 +1358,6 @@ void Options::printHelp() const {
       (programName + " " + getNameFromTAPICommand(command)).str().c_str(),
       toolName, /*FlagsToInclude=*/getIncludeOptionFlagMasks(command),
       /*FlagsToExclude=*/0, /*ShowAllAliases=*/false);
-  if (command == TAPICommand::InstallAPI && driverOptions.printHelpHidden)
-    printInstallAPIHiddenHelp();
 }
 
 TAPI_NAMESPACE_INTERNAL_END

@@ -33,7 +33,7 @@ static std::pair<Type *, Align> getArgumentTypeAlign(const Argument &Arg,
   if (!ArgAlign)
     ArgAlign = DL.getABITypeAlign(Ty);
 
-  return std::pair(Ty, *ArgAlign);
+  return std::make_pair(Ty, *ArgAlign);
 }
 
 namespace llvm {
@@ -409,18 +409,12 @@ void MetadataStreamerYamlV2::emitHiddenKernelArgs(const Function &Func,
 
   // Emit "default queue" and "completion action" arguments if enqueue kernel is
   // used, otherwise emit dummy "none" arguments.
-  if (HiddenArgNumBytes >= 40) {
-    if (!Func.hasFnAttribute("amdgpu-no-default-queue")) {
-      emitKernelArg(DL, Int8PtrTy, Align(8), ValueKind::HiddenDefaultQueue);
-    } else {
-      emitKernelArg(DL, Int8PtrTy, Align(8), ValueKind::HiddenNone);
-    }
-  }
-
   if (HiddenArgNumBytes >= 48) {
-    if (!Func.hasFnAttribute("amdgpu-no-completion-action")) {
+    if (Func.hasFnAttribute("calls-enqueue-kernel")) {
+      emitKernelArg(DL, Int8PtrTy, Align(8), ValueKind::HiddenDefaultQueue);
       emitKernelArg(DL, Int8PtrTy, Align(8), ValueKind::HiddenCompletionAction);
     } else {
+      emitKernelArg(DL, Int8PtrTy, Align(8), ValueKind::HiddenNone);
       emitKernelArg(DL, Int8PtrTy, Align(8), ValueKind::HiddenNone);
     }
   }
@@ -506,16 +500,16 @@ void MetadataStreamerMsgPackV3::verify(StringRef HSAMetadataString) const {
   }
 }
 
-std::optional<StringRef>
+Optional<StringRef>
 MetadataStreamerMsgPackV3::getAccessQualifier(StringRef AccQual) const {
-  return StringSwitch<std::optional<StringRef>>(AccQual)
+  return StringSwitch<Optional<StringRef>>(AccQual)
       .Case("read_only", StringRef("read_only"))
       .Case("write_only", StringRef("write_only"))
       .Case("read_write", StringRef("read_write"))
-      .Default(std::nullopt);
+      .Default(None);
 }
 
-std::optional<StringRef> MetadataStreamerMsgPackV3::getAddressSpaceQualifier(
+Optional<StringRef> MetadataStreamerMsgPackV3::getAddressSpaceQualifier(
     unsigned AddressSpace) const {
   switch (AddressSpace) {
   case AMDGPUAS::PRIVATE_ADDRESS:
@@ -531,7 +525,7 @@ std::optional<StringRef> MetadataStreamerMsgPackV3::getAddressSpaceQualifier(
   case AMDGPUAS::REGION_ADDRESS:
     return StringRef("region");
   default:
-    return std::nullopt;
+    return None;
   }
 }
 
@@ -842,20 +836,14 @@ void MetadataStreamerMsgPackV3::emitHiddenKernelArgs(
 
   // Emit "default queue" and "completion action" arguments if enqueue kernel is
   // used, otherwise emit dummy "none" arguments.
-  if (HiddenArgNumBytes >= 40) {
-    if (!Func.hasFnAttribute("amdgpu-no-default-queue")) {
+  if (HiddenArgNumBytes >= 48) {
+    if (Func.hasFnAttribute("calls-enqueue-kernel")) {
       emitKernelArg(DL, Int8PtrTy, Align(8), "hidden_default_queue", Offset,
                     Args);
-    } else {
-      emitKernelArg(DL, Int8PtrTy, Align(8), "hidden_none", Offset, Args);
-    }
-  }
-
-  if (HiddenArgNumBytes >= 48) {
-    if (!Func.hasFnAttribute("amdgpu-no-completion-action")) {
       emitKernelArg(DL, Int8PtrTy, Align(8), "hidden_completion_action", Offset,
                     Args);
     } else {
+      emitKernelArg(DL, Int8PtrTy, Align(8), "hidden_none", Offset, Args);
       emitKernelArg(DL, Int8PtrTy, Align(8), "hidden_none", Offset, Args);
     }
   }
@@ -872,8 +860,7 @@ void MetadataStreamerMsgPackV3::emitHiddenKernelArgs(
 }
 
 msgpack::MapDocNode MetadataStreamerMsgPackV3::getHSAKernelProps(
-    const MachineFunction &MF, const SIProgramInfo &ProgramInfo,
-    unsigned CodeObjectVersion) const {
+    const MachineFunction &MF, const SIProgramInfo &ProgramInfo) const {
   const GCNSubtarget &STM = MF.getSubtarget<GCNSubtarget>();
   const SIMachineFunctionInfo &MFI = *MF.getInfo<SIMachineFunctionInfo>();
   const Function &F = MF.getFunction();
@@ -887,13 +874,9 @@ msgpack::MapDocNode MetadataStreamerMsgPackV3::getHSAKernelProps(
       Kern.getDocument()->getNode(ProgramInfo.LDSSize);
   Kern[".private_segment_fixed_size"] =
       Kern.getDocument()->getNode(ProgramInfo.ScratchSize);
-  if (CodeObjectVersion >= AMDGPU::AMDHSA_COV5)
+  if (AMDGPU::getAmdhsaCodeObjectVersion() >= 5)
     Kern[".uses_dynamic_stack"] =
         Kern.getDocument()->getNode(ProgramInfo.DynamicCallStack);
-
-  if (CodeObjectVersion >= AMDGPU::AMDHSA_COV5 && STM.supportsWGP())
-    Kern[".workgroup_processor_mode"] =
-        Kern.getDocument()->getNode(ProgramInfo.WgpMode);
 
   // FIXME: The metadata treats the minimum as 16?
   Kern[".kernarg_segment_align"] =
@@ -943,12 +926,10 @@ void MetadataStreamerMsgPackV3::end() {
 void MetadataStreamerMsgPackV3::emitKernel(const MachineFunction &MF,
                                            const SIProgramInfo &ProgramInfo) {
   auto &Func = MF.getFunction();
-  if (Func.getCallingConv() != CallingConv::AMDGPU_KERNEL &&
-      Func.getCallingConv() != CallingConv::SPIR_KERNEL)
-    return;
+  auto Kern = getHSAKernelProps(MF, ProgramInfo);
 
-  auto CodeObjectVersion = AMDGPU::getCodeObjectVersion(*Func.getParent());
-  auto Kern = getHSAKernelProps(MF, ProgramInfo, CodeObjectVersion);
+  assert(Func.getCallingConv() == CallingConv::AMDGPU_KERNEL ||
+         Func.getCallingConv() == CallingConv::SPIR_KERNEL);
 
   auto Kernels =
       getRootMetadata("amdhsa.kernels").getArray(/*Convert=*/true);
@@ -1072,18 +1053,13 @@ void MetadataStreamerMsgPackV5::emitHiddenKernelArgs(
   else
     Offset += 8; // Skipped.
 
-  if (!Func.hasFnAttribute("amdgpu-no-default-queue")) {
+  if (Func.hasFnAttribute("calls-enqueue-kernel")) {
     emitKernelArg(DL, Int8PtrTy, Align(8), "hidden_default_queue", Offset,
                   Args);
-  } else {
-    Offset += 8; // Skipped.
-  }
-
-  if (!Func.hasFnAttribute("amdgpu-no-completion-action")) {
     emitKernelArg(DL, Int8PtrTy, Align(8), "hidden_completion_action", Offset,
                   Args);
   } else {
-    Offset += 8; // Skipped.
+    Offset += 16; // Skipped.
   }
 
   Offset += 72; // Reserved.
@@ -1100,15 +1076,6 @@ void MetadataStreamerMsgPackV5::emitHiddenKernelArgs(
   if (MFI.hasQueuePtr())
     emitKernelArg(DL, Int8PtrTy, Align(8), "hidden_queue_ptr", Offset, Args);
 }
-
-void MetadataStreamerMsgPackV5::emitKernelAttrs(const Function &Func,
-                                                msgpack::MapDocNode Kern) {
-  MetadataStreamerMsgPackV3::emitKernelAttrs(Func, Kern);
-
-  if (Func.getFnAttribute("uniform-work-group-size").getValueAsBool())
-    Kern[".uniform_work_group_size"] = Kern.getDocument()->getNode(1);
-}
-
 
 } // end namespace HSAMD
 } // end namespace AMDGPU

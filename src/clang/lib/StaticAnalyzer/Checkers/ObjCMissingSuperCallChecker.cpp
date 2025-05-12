@@ -103,7 +103,9 @@ void ObjCSuperCallChecker::fillSelectors(ASTContext &Ctx,
   llvm::SmallPtrSet<Selector, 16> &ClassSelectors =
       SelectorsForClass[ClassName];
   // Fill the Selectors SmallSet with all selectors we want to check.
-  for (SelectorDescriptor Descriptor : Sel) {
+  for (ArrayRef<SelectorDescriptor>::iterator I = Sel.begin(), E = Sel.end();
+       I != E; ++I) {
+    SelectorDescriptor Descriptor = *I;
     assert(Descriptor.ArgumentCount <= 1); // No multi-argument selectors yet.
 
     // Get the selector.

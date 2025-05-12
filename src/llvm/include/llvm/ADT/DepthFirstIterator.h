@@ -35,10 +35,11 @@
 #define LLVM_ADT_DEPTHFIRSTITERATOR_H
 
 #include "llvm/ADT/GraphTraits.h"
+#include "llvm/ADT/None.h"
+#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/iterator_range.h"
 #include <iterator>
-#include <optional>
 #include <utility>
 #include <vector>
 
@@ -88,7 +89,7 @@ public:
   using value_type = typename GT::NodeRef;
   using difference_type = std::ptrdiff_t;
   using pointer = value_type *;
-  using reference = const value_type &;
+  using reference = value_type &;
 
 private:
   using NodeRef = typename GT::NodeRef;
@@ -97,14 +98,14 @@ private:
   // First element is node reference, second is the 'next child' to visit.
   // The second child is initialized lazily to pick up graph changes during the
   // DFS.
-  using StackElement = std::pair<NodeRef, std::optional<ChildItTy>>;
+  using StackElement = std::pair<NodeRef, Optional<ChildItTy>>;
 
   // VisitStack - Used to maintain the ordering.  Top = current block
   std::vector<StackElement> VisitStack;
 
   inline df_iterator(NodeRef Node) {
     this->Visited.insert(Node);
-    VisitStack.push_back(StackElement(Node, std::nullopt));
+    VisitStack.push_back(StackElement(Node, None));
   }
 
   inline df_iterator() = default; // End is when stack is empty
@@ -112,7 +113,7 @@ private:
   inline df_iterator(NodeRef Node, SetType &S)
       : df_iterator_storage<SetType, ExtStorage>(S) {
     if (this->Visited.insert(Node).second)
-      VisitStack.push_back(StackElement(Node, std::nullopt));
+      VisitStack.push_back(StackElement(Node, None));
   }
 
   inline df_iterator(SetType &S)
@@ -123,7 +124,7 @@ private:
   inline void toNext() {
     do {
       NodeRef Node = VisitStack.back().first;
-      std::optional<ChildItTy> &Opt = VisitStack.back().second;
+      Optional<ChildItTy> &Opt = VisitStack.back().second;
 
       if (!Opt)
         Opt.emplace(GT::child_begin(Node));
@@ -136,7 +137,7 @@ private:
         // Has our next sibling been visited?
         if (this->Visited.insert(Next).second) {
           // No, do it now.
-          VisitStack.push_back(StackElement(Next, std::nullopt));
+          VisitStack.push_back(StackElement(Next, None));
           return;
         }
       }
@@ -165,7 +166,7 @@ public:
   }
   bool operator!=(const df_iterator &x) const { return !(*this == x); }
 
-  reference operator*() const { return VisitStack.back().first; }
+  const NodeRef &operator*() const { return VisitStack.back().first; }
 
   // This is a nonstandard operator-> that dereferences the pointer an extra
   // time... so that you can actually call methods ON the Node, because

@@ -10,6 +10,7 @@
 #define LLVM_DEBUGINFO_CODEVIEW_LAZYRANDOMTYPECOLLECTION_H
 
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/DebugInfo/CodeView/TypeCollection.h"
 #include "llvm/DebugInfo/CodeView/TypeIndex.h"
@@ -68,15 +69,15 @@ public:
 
   uint32_t getOffsetOfType(TypeIndex Index);
 
-  std::optional<CVType> tryGetType(TypeIndex Index);
+  Optional<CVType> tryGetType(TypeIndex Index);
 
   CVType getType(TypeIndex Index) override;
   StringRef getTypeName(TypeIndex Index) override;
   bool contains(TypeIndex Index) override;
   uint32_t size() override;
   uint32_t capacity() override;
-  std::optional<TypeIndex> getFirst() override;
-  std::optional<TypeIndex> getNext(TypeIndex Prev) override;
+  Optional<TypeIndex> getFirst() override;
+  Optional<TypeIndex> getNext(TypeIndex Prev) override;
   bool replaceType(TypeIndex &Index, CVType Data, bool Stabilize) override;
 
 private:

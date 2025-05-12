@@ -344,7 +344,6 @@ const EnumEntry<COFF::MachineTypes> ImageFileMachineType[] = {
   LLVM_READOBJ_ENUM_ENT(COFF, IMAGE_FILE_MACHINE_ARM      ),
   LLVM_READOBJ_ENUM_ENT(COFF, IMAGE_FILE_MACHINE_ARM64    ),
   LLVM_READOBJ_ENUM_ENT(COFF, IMAGE_FILE_MACHINE_ARM64EC  ),
-  LLVM_READOBJ_ENUM_ENT(COFF, IMAGE_FILE_MACHINE_ARM64X   ),
   LLVM_READOBJ_ENUM_ENT(COFF, IMAGE_FILE_MACHINE_ARMNT    ),
   LLVM_READOBJ_ENUM_ENT(COFF, IMAGE_FILE_MACHINE_EBC      ),
   LLVM_READOBJ_ENUM_ENT(COFF, IMAGE_FILE_MACHINE_I386     ),
@@ -545,10 +544,9 @@ const EnumEntry<COFF::DebugType> ImageDebugType[] = {
 
 static const EnumEntry<COFF::WeakExternalCharacteristics>
 WeakExternalCharacteristics[] = {
-  { "NoLibrary"       , COFF::IMAGE_WEAK_EXTERN_SEARCH_NOLIBRARY },
-  { "Library"         , COFF::IMAGE_WEAK_EXTERN_SEARCH_LIBRARY   },
-  { "Alias"           , COFF::IMAGE_WEAK_EXTERN_SEARCH_ALIAS     },
-  { "AntiDependency"  , COFF::IMAGE_WEAK_EXTERN_ANTI_DEPENDENCY  },
+  { "NoLibrary", COFF::IMAGE_WEAK_EXTERN_SEARCH_NOLIBRARY },
+  { "Library"  , COFF::IMAGE_WEAK_EXTERN_SEARCH_LIBRARY   },
+  { "Alias"    , COFF::IMAGE_WEAK_EXTERN_SEARCH_ALIAS     }
 };
 
 const EnumEntry<uint32_t> SubSectionTypes[] = {
@@ -669,15 +667,16 @@ void COFFDumper::printFileHeaders() {
 
   {
     DictScope D(W, "ImageFileHeader");
-    W.printEnum("Machine", Obj->getMachine(), ArrayRef(ImageFileMachineType));
+    W.printEnum  ("Machine", Obj->getMachine(),
+                    makeArrayRef(ImageFileMachineType));
     W.printNumber("SectionCount", Obj->getNumberOfSections());
     W.printHex   ("TimeDateStamp", FormattedTime, Obj->getTimeDateStamp());
     W.printHex   ("PointerToSymbolTable", Obj->getPointerToSymbolTable());
     W.printNumber("SymbolCount", Obj->getNumberOfSymbols());
     W.printNumber("StringTableSize", Obj->getStringTableSize());
     W.printNumber("OptionalHeaderSize", Obj->getSizeOfOptionalHeader());
-    W.printFlags("Characteristics", Obj->getCharacteristics(),
-                 ArrayRef(ImageFileCharacteristics));
+    W.printFlags ("Characteristics", Obj->getCharacteristics(),
+                    makeArrayRef(ImageFileCharacteristics));
   }
 
   // Print PE header. This header does not exist if this is an object file and
@@ -738,10 +737,9 @@ void COFFDumper::printPEHeader(const PEHeader *Hdr) {
   W.printNumber("MinorSubsystemVersion", Hdr->MinorSubsystemVersion);
   W.printNumber("SizeOfImage", Hdr->SizeOfImage);
   W.printNumber("SizeOfHeaders", Hdr->SizeOfHeaders);
-  W.printHex   ("CheckSum", Hdr->CheckSum);
-  W.printEnum("Subsystem", Hdr->Subsystem, ArrayRef(PEWindowsSubsystem));
-  W.printFlags("Characteristics", Hdr->DLLCharacteristics,
-               ArrayRef(PEDLLCharacteristics));
+  W.printEnum  ("Subsystem", Hdr->Subsystem, makeArrayRef(PEWindowsSubsystem));
+  W.printFlags ("Characteristics", Hdr->DLLCharacteristics,
+                makeArrayRef(PEDLLCharacteristics));
   W.printNumber("SizeOfStackReserve", Hdr->SizeOfStackReserve);
   W.printNumber("SizeOfStackCommit", Hdr->SizeOfStackCommit);
   W.printNumber("SizeOfHeapReserve", Hdr->SizeOfHeapReserve);
@@ -758,7 +756,7 @@ void COFFDumper::printPEHeader(const PEHeader *Hdr) {
     };
 
     for (uint32_t i = 0; i < Hdr->NumberOfRvaAndSize; ++i)
-      if (i < std::size(directory))
+      if (i < sizeof(directory) / sizeof(char *))
         printDataDirectory(i, directory[i]);
       else
         printDataDirectory(i, "Unknown");
@@ -776,7 +774,7 @@ void COFFDumper::printCOFFDebugDirectory() {
     W.printHex("TimeDateStamp", FormattedTime, D.TimeDateStamp);
     W.printHex("MajorVersion", D.MajorVersion);
     W.printHex("MinorVersion", D.MinorVersion);
-    W.printEnum("Type", D.Type, ArrayRef(ImageDebugType));
+    W.printEnum("Type", D.Type, makeArrayRef(ImageDebugType));
     W.printHex("SizeOfData", D.SizeOfData);
     W.printHex("AddressOfRawData", D.AddressOfRawData);
     W.printHex("PointerToRawData", D.PointerToRawData);
@@ -793,7 +791,7 @@ void COFFDumper::printCOFFDebugDirectory() {
       DictScope PDBScope(W, "PDBInfo");
       W.printHex("PDBSignature", DebugInfo->Signature.CVSignature);
       if (DebugInfo->Signature.CVSignature == OMF::Signature::PDB70) {
-        W.printBinary("PDBGUID", ArrayRef(DebugInfo->PDB70.Signature));
+        W.printBinary("PDBGUID", makeArrayRef(DebugInfo->PDB70.Signature));
         W.printNumber("PDBAge", DebugInfo->PDB70.Age);
         W.printString("PDBFileName", PDBFileName);
       }
@@ -809,7 +807,7 @@ void COFFDumper::printCOFFDebugDirectory() {
         // but that might change in the future
         uint16_t Characteristics = RawData[0];
         W.printFlags("ExtendedCharacteristics", Characteristics,
-                     ArrayRef(PEExtendedDLLCharacteristics));
+                     makeArrayRef(PEExtendedDLLCharacteristics));
       }
       W.printBinaryBlock("RawData", RawData);
     }
@@ -940,34 +938,36 @@ void COFFDumper::printCOFFLoadConfig() {
       OS << " flags " << utohexstr(Flags);
   };
 
-  // The stride gives the number of extra bytes in addition to the 4-byte
-  // RVA of each entry in the table. As of writing only a 1-byte extra flag
-  // has been defined.
-  uint32_t Stride = Tables.GuardFlags >> 28;
-  PrintExtraCB PrintExtra = Stride == 1 ? +PrintGuardFlags : nullptr;
-
   if (Tables.GuardFidTableVA) {
     ListScope LS(W, "GuardFidTable");
-    printRVATable(Tables.GuardFidTableVA, Tables.GuardFidTableCount,
-                  4 + Stride, PrintExtra);
+    if (uint32_t Size =
+            Tables.GuardFlags &
+            uint32_t(COFF::GuardFlags::CF_FUNCTION_TABLE_SIZE_MASK)) {
+      // The size mask gives the number of extra bytes in addition to the 4-byte
+      // RVA of each entry in the table. As of writing only a 1-byte extra flag
+      // has been defined.
+      Size = (Size >> 28) + 4;
+      printRVATable(Tables.GuardFidTableVA, Tables.GuardFidTableCount, Size,
+                    PrintGuardFlags);
+    } else {
+      printRVATable(Tables.GuardFidTableVA, Tables.GuardFidTableCount, 4);
+    }
   }
 
   if (Tables.GuardIatTableVA) {
     ListScope LS(W, "GuardIatTable");
-    printRVATable(Tables.GuardIatTableVA, Tables.GuardIatTableCount,
-                  4 + Stride, PrintExtra);
+    printRVATable(Tables.GuardIatTableVA, Tables.GuardIatTableCount, 4);
   }
 
   if (Tables.GuardLJmpTableVA) {
     ListScope LS(W, "GuardLJmpTable");
-    printRVATable(Tables.GuardLJmpTableVA, Tables.GuardLJmpTableCount,
-                  4 + Stride, PrintExtra);
+    printRVATable(Tables.GuardLJmpTableVA, Tables.GuardLJmpTableCount, 4);
   }
 
   if (Tables.GuardEHContTableVA) {
     ListScope LS(W, "GuardEHContTable");
-    printRVATable(Tables.GuardEHContTableVA, Tables.GuardEHContTableCount,
-                  4 + Stride, PrintExtra);
+    printRVATable(Tables.GuardEHContTableVA, Tables.GuardEHContTableCount, 5,
+                  PrintGuardFlags);
   }
 }
 
@@ -1021,7 +1021,8 @@ void COFFDumper::printCOFFLoadConfig(const T *Conf, LoadConfigTables &Tables) {
   W.printHex("GuardCFCheckDispatch", Conf->GuardCFCheckDispatch);
   W.printHex("GuardCFFunctionTable", Conf->GuardCFFunctionTable);
   W.printNumber("GuardCFFunctionCount", Conf->GuardCFFunctionCount);
-  W.printFlags("GuardFlags", Conf->GuardFlags, ArrayRef(PELoadConfigGuardFlags),
+  W.printFlags("GuardFlags", Conf->GuardFlags,
+               makeArrayRef(PELoadConfigGuardFlags),
                (uint32_t)COFF::GuardFlags::CF_FUNCTION_TABLE_SIZE_MASK);
 
   Tables.GuardFidTableVA = Conf->GuardCFFunctionTable;
@@ -1167,7 +1168,7 @@ void COFFDumper::printCodeViewSymbolSection(StringRef SectionName,
       W.printHex("IgnoredSubsectionKind", SubType);
       SubType &= ~SubsectionIgnoreFlag;
     }
-    W.printEnum("SubSectionType", SubType, ArrayRef(SubSectionTypes));
+    W.printEnum("SubSectionType", SubType, makeArrayRef(SubSectionTypes));
     W.printHex("SubSectionSize", SubSectionSize);
 
     // Get the contents of the subsection.
@@ -1264,7 +1265,7 @@ void COFFDumper::printCodeViewSymbolSection(StringRef SectionName,
         W.printHex("MaxStackSize", FD.MaxStackSize);
         W.printHex("PrologSize", FD.PrologSize);
         W.printHex("SavedRegsSize", FD.SavedRegsSize);
-        W.printFlags("Flags", FD.Flags, ArrayRef(FrameDataFlags));
+        W.printFlags("Flags", FD.Flags, makeArrayRef(FrameDataFlags));
 
         // The FrameFunc string is a small RPN program. It can be broken up into
         // statements that end in the '=' operator, which assigns the value on
@@ -1382,7 +1383,7 @@ void COFFDumper::printCodeViewFileChecksums(StringRef Subsection) {
     W.printHex("Filename", Filename, FC.FileNameOffset);
     W.printHex("ChecksumSize", FC.Checksum.size());
     W.printEnum("ChecksumKind", uint8_t(FC.Kind),
-                ArrayRef(FileChecksumKindNames));
+                makeArrayRef(FileChecksumKindNames));
 
     W.printBinary("ChecksumBytes", FC.Checksum);
   }
@@ -1457,17 +1458,17 @@ void COFFDumper::mergeCodeViewTypes(MergingTypeTableBuilder &CVIDs,
                     Obj->getFileName());
       }
       SmallVector<TypeIndex, 128> SourceToDest;
-      std::optional<PCHMergerInfo> PCHInfo;
+      Optional<uint32_t> PCHSignature;
       if (GHash) {
         std::vector<GloballyHashedType> Hashes =
             GloballyHashedType::hashTypes(Types);
         if (Error E =
                 mergeTypeAndIdRecords(GlobalCVIDs, GlobalCVTypes, SourceToDest,
-                                      Types, Hashes, PCHInfo))
+                                      Types, Hashes, PCHSignature))
           return reportError(std::move(E), Obj->getFileName());
       } else {
         if (Error E = mergeTypeAndIdRecords(CVIDs, CVTypes, SourceToDest, Types,
-                                            PCHInfo))
+                                            PCHSignature))
           return reportError(std::move(E), Obj->getFileName());
       }
     }
@@ -1521,9 +1522,9 @@ void COFFDumper::printSectionHeaders() {
     W.printHex   ("PointerToLineNumbers", Section->PointerToLinenumbers);
     W.printNumber("RelocationCount", Section->NumberOfRelocations);
     W.printNumber("LineNumberCount", Section->NumberOfLinenumbers);
-    W.printFlags("Characteristics", Section->Characteristics,
-                 ArrayRef(ImageSectionCharacteristics),
-                 COFF::SectionCharacteristics(0x00F00000));
+    W.printFlags ("Characteristics", Section->Characteristics,
+                    makeArrayRef(ImageSectionCharacteristics),
+                    COFF::SectionCharacteristics(0x00F00000));
 
     if (opts::SectionRelocations) {
       ListScope D(W, "Relocations");
@@ -1659,10 +1660,11 @@ void COFFDumper::printSymbol(const SymbolRef &Sym) {
   W.printString("Name", SymbolName);
   W.printNumber("Value", Symbol.getValue());
   W.printNumber("Section", SectionName, Symbol.getSectionNumber());
-  W.printEnum("BaseType", Symbol.getBaseType(), ArrayRef(ImageSymType));
-  W.printEnum("ComplexType", Symbol.getComplexType(), ArrayRef(ImageSymDType));
-  W.printEnum("StorageClass", Symbol.getStorageClass(),
-              ArrayRef(ImageSymClass));
+  W.printEnum  ("BaseType", Symbol.getBaseType(), makeArrayRef(ImageSymType));
+  W.printEnum  ("ComplexType", Symbol.getComplexType(),
+                                                   makeArrayRef(ImageSymDType));
+  W.printEnum  ("StorageClass", Symbol.getStorageClass(),
+                                                   makeArrayRef(ImageSymClass));
   W.printNumber("AuxSymbolCount", Symbol.getNumberOfAuxSymbols());
 
   for (uint8_t I = 0; I < Symbol.getNumberOfAuxSymbols(); ++I) {
@@ -1684,8 +1686,8 @@ void COFFDumper::printSymbol(const SymbolRef &Sym) {
 
       DictScope AS(W, "AuxWeakExternal");
       W.printNumber("Linked", getSymbolName(Aux->TagIndex), Aux->TagIndex);
-      W.printEnum("Search", Aux->Characteristics,
-                  ArrayRef(WeakExternalCharacteristics));
+      W.printEnum  ("Search", Aux->Characteristics,
+                    makeArrayRef(WeakExternalCharacteristics));
 
     } else if (Symbol.isFileRecord()) {
       const char *FileName;
@@ -1710,7 +1712,7 @@ void COFFDumper::printSymbol(const SymbolRef &Sym) {
       W.printNumber("LineNumberCount", Aux->NumberOfLinenumbers);
       W.printHex("Checksum", Aux->CheckSum);
       W.printNumber("Number", AuxNumber);
-      W.printEnum("Selection", Aux->Selection, ArrayRef(ImageCOMDATSelect));
+      W.printEnum("Selection", Aux->Selection, makeArrayRef(ImageCOMDATSelect));
 
       if (Section && Section->Characteristics & COFF::IMAGE_SCN_LNK_COMDAT
           && Aux->Selection == COFF::IMAGE_COMDAT_SELECT_ASSOCIATIVE) {
@@ -1757,7 +1759,6 @@ void COFFDumper::printUnwindInfo() {
   }
   case COFF::IMAGE_FILE_MACHINE_ARM64:
   case COFF::IMAGE_FILE_MACHINE_ARM64EC:
-  case COFF::IMAGE_FILE_MACHINE_ARM64X:
   case COFF::IMAGE_FILE_MACHINE_ARMNT: {
     ARM::WinEH::Decoder Decoder(W, Obj->getMachine() !=
                                        COFF::IMAGE_FILE_MACHINE_ARMNT);
@@ -1767,7 +1768,7 @@ void COFFDumper::printUnwindInfo() {
   }
   default:
     W.printEnum("unsupported Image Machine", Obj->getMachine(),
-                ArrayRef(ImageFileMachineType));
+                makeArrayRef(ImageFileMachineType));
     break;
   }
 }
@@ -2015,7 +2016,7 @@ void COFFDumper::printResourceDirectoryTable(
         std::copy(RawEntryNameString.begin(), RawEntryNameString.end(),
                   EndianCorrectedNameString.begin() + 1);
         EndianCorrectedNameString[0] = UNI_UTF16_BYTE_ORDER_MARK_SWAPPED;
-        RawEntryNameString = ArrayRef(EndianCorrectedNameString);
+        RawEntryNameString = makeArrayRef(EndianCorrectedNameString);
       }
       std::string EntryNameString;
       if (!llvm::convertUTF16ToUTF8String(RawEntryNameString, EntryNameString))
@@ -2125,7 +2126,7 @@ void COFFDumper::printAddrsig() {
   const uint8_t *End = AddrsigContents.bytes_end();
   while (Cur != End) {
     unsigned Size;
-    const char *Err = nullptr;
+    const char *Err;
     uint64_t SymIndex = decodeULEB128(Cur, &Size, End, &Err);
     if (Err)
       reportError(createError(Err), Obj->getFileName());
@@ -2227,6 +2228,6 @@ void COFFDumper::printCOFFTLSDirectory(
   W.printHex("AddressOfCallBacks", TlsTable->AddressOfCallBacks);
   W.printHex("SizeOfZeroFill", TlsTable->SizeOfZeroFill);
   W.printFlags("Characteristics", TlsTable->Characteristics,
-               ArrayRef(ImageSectionCharacteristics),
+               makeArrayRef(ImageSectionCharacteristics),
                COFF::SectionCharacteristics(COFF::IMAGE_SCN_ALIGN_MASK));
 }

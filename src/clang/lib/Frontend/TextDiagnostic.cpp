@@ -20,7 +20,6 @@
 #include "llvm/Support/Path.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
-#include <optional>
 
 using namespace clang;
 
@@ -91,108 +90,89 @@ static int bytesSincePreviousTabOrLineBegin(StringRef SourceLine, size_t i) {
 ///        printableTextForNextCharacter.
 ///
 /// \param SourceLine The line of source
-/// \param I Pointer to byte index,
+/// \param i Pointer to byte index,
 /// \param TabStop used to expand tabs
 /// \return pair(printable text, 'true' iff original text was printable)
 ///
 static std::pair<SmallString<16>, bool>
-printableTextForNextCharacter(StringRef SourceLine, size_t *I,
+printableTextForNextCharacter(StringRef SourceLine, size_t *i,
                               unsigned TabStop) {
-  assert(I && "I must not be null");
-  assert(*I < SourceLine.size() && "must point to a valid index");
+  assert(i && "i must not be null");
+  assert(*i<SourceLine.size() && "must point to a valid index");
 
-  if (SourceLine[*I] == '\t') {
+  if (SourceLine[*i]=='\t') {
     assert(0 < TabStop && TabStop <= DiagnosticOptions::MaxTabStop &&
            "Invalid -ftabstop value");
-    unsigned Col = bytesSincePreviousTabOrLineBegin(SourceLine, *I);
-    unsigned NumSpaces = TabStop - (Col % TabStop);
+    unsigned col = bytesSincePreviousTabOrLineBegin(SourceLine, *i);
+    unsigned NumSpaces = TabStop - col%TabStop;
     assert(0 < NumSpaces && NumSpaces <= TabStop
            && "Invalid computation of space amt");
-    ++(*I);
+    ++(*i);
 
-    SmallString<16> ExpandedTab;
-    ExpandedTab.assign(NumSpaces, ' ');
-    return std::make_pair(ExpandedTab, true);
+    SmallString<16> expandedTab;
+    expandedTab.assign(NumSpaces, ' ');
+    return std::make_pair(expandedTab, true);
   }
 
-  const unsigned char *Begin = SourceLine.bytes_begin() + *I;
+  unsigned char const *begin, *end;
+  begin = reinterpret_cast<unsigned char const *>(&*(SourceLine.begin() + *i));
+  end = begin + (SourceLine.size() - *i);
 
-  // Fast path for the common ASCII case.
-  if (*Begin < 0x80 && llvm::sys::locale::isPrint(*Begin)) {
-    ++(*I);
-    return std::make_pair(SmallString<16>(Begin, Begin + 1), true);
-  }
-  unsigned CharSize = llvm::getNumBytesForUTF8(*Begin);
-  const unsigned char *End = Begin + CharSize;
+  if (llvm::isLegalUTF8Sequence(begin, end)) {
+    llvm::UTF32 c;
+    llvm::UTF32 *cptr = &c;
+    unsigned char const *original_begin = begin;
+    unsigned char const *cp_end =
+        begin + llvm::getNumBytesForUTF8(SourceLine[*i]);
 
-  // Convert it to UTF32 and check if it's printable.
-  if (End <= SourceLine.bytes_end() && llvm::isLegalUTF8Sequence(Begin, End)) {
-    llvm::UTF32 C;
-    llvm::UTF32 *CPtr = &C;
+    llvm::ConversionResult res = llvm::ConvertUTF8toUTF32(
+        &begin, cp_end, &cptr, cptr + 1, llvm::strictConversion);
+    (void)res;
+    assert(llvm::conversionOK == res);
+    assert(0 < begin-original_begin
+           && "we must be further along in the string now");
+    *i += begin-original_begin;
 
-    // Begin and end before conversion.
-    unsigned char const *OriginalBegin = Begin;
-    llvm::ConversionResult Res = llvm::ConvertUTF8toUTF32(
-        &Begin, End, &CPtr, CPtr + 1, llvm::strictConversion);
-    (void)Res;
-    assert(Res == llvm::conversionOK);
-    assert(OriginalBegin < Begin);
-    assert((Begin - OriginalBegin) == CharSize);
-
-    (*I) += (Begin - OriginalBegin);
-
-    // Valid, multi-byte, printable UTF8 character.
-    if (llvm::sys::locale::isPrint(C))
-      return std::make_pair(SmallString<16>(OriginalBegin, End), true);
-
-    // Valid but not printable.
-    SmallString<16> Str("<U+>");
-    while (C) {
-      Str.insert(Str.begin() + 3, llvm::hexdigit(C % 16));
-      C /= 16;
+    if (!llvm::sys::locale::isPrint(c)) {
+      // If next character is valid UTF-8, but not printable
+      SmallString<16> expandedCP("<U+>");
+      while (c) {
+        expandedCP.insert(expandedCP.begin()+3, llvm::hexdigit(c%16));
+        c/=16;
+      }
+      while (expandedCP.size() < 8)
+        expandedCP.insert(expandedCP.begin()+3, llvm::hexdigit(0));
+      return std::make_pair(expandedCP, false);
     }
-    while (Str.size() < 8)
-      Str.insert(Str.begin() + 3, llvm::hexdigit(0));
-    return std::make_pair(Str, false);
+
+    // If next character is valid UTF-8, and printable
+    return std::make_pair(SmallString<16>(original_begin, cp_end), true);
+
   }
 
-  // Otherwise, not printable since it's not valid UTF8.
-  SmallString<16> ExpandedByte("<XX>");
-  unsigned char Byte = SourceLine[*I];
-  ExpandedByte[1] = llvm::hexdigit(Byte / 16);
-  ExpandedByte[2] = llvm::hexdigit(Byte % 16);
-  ++(*I);
-  return std::make_pair(ExpandedByte, false);
+  // If next byte is not valid UTF-8 (and therefore not printable)
+  SmallString<16> expandedByte("<XX>");
+  unsigned char byte = SourceLine[*i];
+  expandedByte[1] = llvm::hexdigit(byte / 16);
+  expandedByte[2] = llvm::hexdigit(byte % 16);
+  ++(*i);
+  return std::make_pair(expandedByte, false);
 }
 
 static void expandTabs(std::string &SourceLine, unsigned TabStop) {
-  size_t I = SourceLine.size();
-  while (I > 0) {
-    I--;
-    if (SourceLine[I] != '\t')
+  size_t i = SourceLine.size();
+  while (i>0) {
+    i--;
+    if (SourceLine[i]!='\t')
       continue;
-    size_t TmpI = I;
-    auto [Str, Printable] =
-        printableTextForNextCharacter(SourceLine, &TmpI, TabStop);
-    SourceLine.replace(I, 1, Str.c_str());
+    size_t tmp_i = i;
+    std::pair<SmallString<16>,bool> res
+      = printableTextForNextCharacter(SourceLine, &tmp_i, TabStop);
+    SourceLine.replace(i, 1, res.first.c_str());
   }
 }
 
-/// \p BytesOut:
-///  A mapping from columns to the byte of the source line that produced the
-///  character displaying at that column. This is the inverse of \p ColumnsOut.
-///
-/// The last element in the array is the number of bytes in the source string.
-///
-/// example: (given a tabstop of 8)
-///
-///    "a \t \u3042" -> {0,1,2,-1,-1,-1,-1,-1,3,4,-1,7}
-///
-///  (\\u3042 is represented in UTF-8 by three bytes and takes two columns to
-///   display)
-///
-/// \p ColumnsOut:
-///  A mapping from the bytes
+/// This function takes a raw source line and produces a mapping from the bytes
 ///  of the printable representation of the line to the columns those printable
 ///  characters will appear at (numbering the first column as 0).
 ///
@@ -214,34 +194,60 @@ static void expandTabs(std::string &SourceLine, unsigned TabStop) {
 ///
 ///  (\\u3042 is represented in UTF-8 by three bytes and takes two columns to
 ///   display)
-static void genColumnByteMapping(StringRef SourceLine, unsigned TabStop,
-                                 SmallVectorImpl<int> &BytesOut,
-                                 SmallVectorImpl<int> &ColumnsOut) {
-  assert(BytesOut.empty());
-  assert(ColumnsOut.empty());
+static void byteToColumn(StringRef SourceLine, unsigned TabStop,
+                         SmallVectorImpl<int> &out) {
+  out.clear();
 
   if (SourceLine.empty()) {
-    BytesOut.resize(1u, 0);
-    ColumnsOut.resize(1u, 0);
+    out.resize(1u,0);
     return;
   }
 
-  ColumnsOut.resize(SourceLine.size() + 1, -1);
+  out.resize(SourceLine.size()+1, -1);
 
-  int Columns = 0;
-  size_t I = 0;
-  while (I < SourceLine.size()) {
-    ColumnsOut[I] = Columns;
-    BytesOut.resize(Columns + 1, -1);
-    BytesOut.back() = I;
-    auto [Str, Printable] =
-        printableTextForNextCharacter(SourceLine, &I, TabStop);
-    Columns += llvm::sys::locale::columnWidth(Str);
+  int columns = 0;
+  size_t i = 0;
+  while (i<SourceLine.size()) {
+    out[i] = columns;
+    std::pair<SmallString<16>,bool> res
+      = printableTextForNextCharacter(SourceLine, &i, TabStop);
+    columns += llvm::sys::locale::columnWidth(res.first);
+  }
+  out.back() = columns;
+}
+
+/// This function takes a raw source line and produces a mapping from columns
+///  to the byte of the source line that produced the character displaying at
+///  that column. This is the inverse of the mapping produced by byteToColumn()
+///
+/// The last element in the array is the number of bytes in the source string
+///
+/// example: (given a tabstop of 8)
+///
+///    "a \t \u3042" -> {0,1,2,-1,-1,-1,-1,-1,3,4,-1,7}
+///
+///  (\\u3042 is represented in UTF-8 by three bytes and takes two columns to
+///   display)
+static void columnToByte(StringRef SourceLine, unsigned TabStop,
+                         SmallVectorImpl<int> &out) {
+  out.clear();
+
+  if (SourceLine.empty()) {
+    out.resize(1u, 0);
+    return;
   }
 
-  ColumnsOut.back() = Columns;
-  BytesOut.resize(Columns + 1, -1);
-  BytesOut.back() = I;
+  int columns = 0;
+  size_t i = 0;
+  while (i<SourceLine.size()) {
+    out.resize(columns+1, -1);
+    out.back() = i;
+    std::pair<SmallString<16>,bool> res
+      = printableTextForNextCharacter(SourceLine, &i, TabStop);
+    columns += llvm::sys::locale::columnWidth(res.first);
+  }
+  out.resize(columns+1, -1);
+  out.back() = i;
 }
 
 namespace {
@@ -249,7 +255,8 @@ struct SourceColumnMap {
   SourceColumnMap(StringRef SourceLine, unsigned TabStop)
   : m_SourceLine(SourceLine) {
 
-    genColumnByteMapping(SourceLine, TabStop, m_columnToByte, m_byteToColumn);
+    ::byteToColumn(SourceLine, TabStop, m_byteToColumn);
+    ::columnToByte(SourceLine, TabStop, m_columnToByte);
 
     assert(m_byteToColumn.size()==SourceLine.size()+1);
     assert(0 < m_byteToColumn.size() && 0 < m_columnToByte.size());
@@ -463,7 +470,9 @@ static void selectInterestingSourceRegion(std::string &SourceLine,
   CaretEnd = map.byteToColumn(SourceEnd) + CaretColumnsOutsideSource;
 
   // [CaretStart, CaretEnd) is the slice we want. Update the various
-  // output lines to show only this slice.
+  // output lines to show only this slice, with two-space padding
+  // before the lines so that it looks nicer.
+
   assert(CaretStart!=(unsigned)-1 && CaretEnd!=(unsigned)-1 &&
          SourceStart!=(unsigned)-1 && SourceEnd!=(unsigned)-1);
   assert(SourceStart <= SourceEnd);
@@ -595,13 +604,21 @@ static unsigned findEndOfWord(unsigned Start, StringRef Str,
 /// Str will be printed. This will be non-zero when part of the first
 /// line has already been printed.
 /// \param Bold if the current text should be bold
+/// \param Indentation the number of spaces to indent any lines beyond
+/// the first line.
 /// \returns true if word-wrapping was required, or false if the
 /// string fit on the first line.
-static bool printWordWrapped(raw_ostream &OS, StringRef Str, unsigned Columns,
-                             unsigned Column, bool Bold) {
+static bool printWordWrapped(raw_ostream &OS, StringRef Str,
+                             unsigned Columns,
+                             unsigned Column = 0,
+                             bool Bold = false,
+                             unsigned Indentation = WordWrapIndentation) {
   const unsigned Length = std::min(Str.find('\n'), Str.size());
   bool TextNormal = true;
 
+  // The string used to indent each line.
+  SmallString<16> IndentStr;
+  IndentStr.assign(Indentation, ' ');
   bool Wrapped = false;
   for (unsigned WordStart = 0, WordEnd; WordStart < Length;
        WordStart = WordEnd) {
@@ -630,10 +647,10 @@ static bool printWordWrapped(raw_ostream &OS, StringRef Str, unsigned Columns,
     // This word does not fit on the current line, so wrap to the next
     // line.
     OS << '\n';
-    OS.indent(WordWrapIndentation);
+    OS.write(&IndentStr[0], Indentation);
     applyTemplateHighlighting(OS, Str.substr(WordStart, WordLength),
                               TextNormal, Bold);
-    Column = WordWrapIndentation + WordLength;
+    Column = Indentation + WordLength;
     Wrapped = true;
   }
 
@@ -769,7 +786,7 @@ void TextDiagnostic::emitFilename(StringRef Filename, const SourceManager &SM) {
 
 /// Print out the file/line/column information and include trace.
 ///
-/// This method handles the emission of the diagnostic location information.
+/// This method handlen the emission of the diagnostic location information.
 /// This includes extracting as much location information as is present for
 /// the diagnostic and printing it, as well as any include stack or source
 /// ranges necessary.
@@ -778,7 +795,8 @@ void TextDiagnostic::emitDiagnosticLoc(FullSourceLoc Loc, PresumedLoc PLoc,
                                        ArrayRef<CharSourceRange> Ranges) {
   if (PLoc.isInvalid()) {
     // At least print the file name if available:
-    if (FileID FID = Loc.getFileID(); FID.isValid()) {
+    FileID FID = Loc.getFileID();
+    if (FID.isValid()) {
       if (const FileEntry *FE = Loc.getFileEntry()) {
         emitFilename(FE->getName(), Loc.getManager());
         OS << ": ";
@@ -836,26 +854,31 @@ void TextDiagnostic::emitDiagnosticLoc(FullSourceLoc Loc, PresumedLoc PLoc,
   if (DiagOpts->ShowSourceRanges && !Ranges.empty()) {
     FileID CaretFileID = Loc.getExpansionLoc().getFileID();
     bool PrintedRange = false;
-    const SourceManager &SM = Loc.getManager();
 
-    for (const auto &R : Ranges) {
+    for (ArrayRef<CharSourceRange>::const_iterator RI = Ranges.begin(),
+         RE = Ranges.end();
+         RI != RE; ++RI) {
       // Ignore invalid ranges.
-      if (!R.isValid())
-        continue;
+      if (!RI->isValid()) continue;
 
-      SourceLocation B = SM.getExpansionLoc(R.getBegin());
-      CharSourceRange ERange = SM.getExpansionRange(R.getEnd());
+      auto &SM = Loc.getManager();
+      SourceLocation B = SM.getExpansionLoc(RI->getBegin());
+      CharSourceRange ERange = SM.getExpansionRange(RI->getEnd());
       SourceLocation E = ERange.getEnd();
+      bool IsTokenRange = ERange.isTokenRange();
 
-      // If the start or end of the range is in another file, just
-      // discard it.
-      if (SM.getFileID(B) != CaretFileID || SM.getFileID(E) != CaretFileID)
+      std::pair<FileID, unsigned> BInfo = SM.getDecomposedLoc(B);
+      std::pair<FileID, unsigned> EInfo = SM.getDecomposedLoc(E);
+
+      // If the start or end of the range is in another file, just discard
+      // it.
+      if (BInfo.first != CaretFileID || EInfo.first != CaretFileID)
         continue;
 
       // Add in the length of the token, so that we cover multi-char
       // tokens.
       unsigned TokSize = 0;
-      if (ERange.isTokenRange())
+      if (IsTokenRange)
         TokSize = Lexer::MeasureTokenLength(E, SM, LangOpts);
 
       FullSourceLoc BF(B, SM), EF(E, SM);
@@ -873,11 +896,10 @@ void TextDiagnostic::emitDiagnosticLoc(FullSourceLoc Loc, PresumedLoc PLoc,
 }
 
 void TextDiagnostic::emitIncludeLocation(FullSourceLoc Loc, PresumedLoc PLoc) {
-  if (DiagOpts->ShowLocation && PLoc.isValid()) {
-    OS << "In file included from ";
-    emitFilename(PLoc.getFilename(), Loc.getManager());
-    OS << ':' << PLoc.getLine() << ":\n";
-  } else
+  if (DiagOpts->ShowLocation && PLoc.isValid())
+    OS << "In file included from " << PLoc.getFilename() << ':'
+       << PLoc.getLine() << ":\n";
+  else
     OS << "In included file:\n";
 }
 
@@ -901,16 +923,15 @@ void TextDiagnostic::emitBuildingModuleLocation(FullSourceLoc Loc,
 }
 
 /// Find the suitable set of lines to show to include a set of ranges.
-static std::optional<std::pair<unsigned, unsigned>>
+static llvm::Optional<std::pair<unsigned, unsigned>>
 findLinesForRange(const CharSourceRange &R, FileID FID,
                   const SourceManager &SM) {
-  if (!R.isValid())
-    return std::nullopt;
+  if (!R.isValid()) return None;
 
   SourceLocation Begin = R.getBegin();
   SourceLocation End = R.getEnd();
   if (SM.getFileID(Begin) != FID || SM.getFileID(End) != FID)
-    return std::nullopt;
+    return None;
 
   return std::make_pair(SM.getExpansionLineNumber(Begin),
                         SM.getExpansionLineNumber(End));
@@ -951,43 +972,87 @@ maybeAddRange(std::pair<unsigned, unsigned> A, std::pair<unsigned, unsigned> B,
   return A;
 }
 
-struct LineRange {
-  unsigned LineNo;
-  unsigned StartCol;
-  unsigned EndCol;
-};
+/// Highlight a SourceRange (with ~'s) for any characters on LineNo.
+static void highlightRange(const CharSourceRange &R,
+                           unsigned LineNo, FileID FID,
+                           const SourceColumnMap &map,
+                           std::string &CaretLine,
+                           const SourceManager &SM,
+                           const LangOptions &LangOpts) {
+  if (!R.isValid()) return;
 
-/// Highlight \p R (with ~'s) on the current source line.
-static void highlightRange(const LineRange &R, const SourceColumnMap &Map,
-                           std::string &CaretLine) {
-  // Pick the first non-whitespace column.
-  unsigned StartColNo = R.StartCol;
-  while (StartColNo < Map.getSourceLine().size() &&
-         (Map.getSourceLine()[StartColNo] == ' ' ||
-          Map.getSourceLine()[StartColNo] == '\t'))
-    StartColNo = Map.startOfNextColumn(StartColNo);
+  SourceLocation Begin = R.getBegin();
+  SourceLocation End = R.getEnd();
 
-  // Pick the last non-whitespace column.
-  unsigned EndColNo =
-      std::min(static_cast<size_t>(R.EndCol), Map.getSourceLine().size());
-  while (EndColNo && (Map.getSourceLine()[EndColNo - 1] == ' ' ||
-                      Map.getSourceLine()[EndColNo - 1] == '\t'))
-    EndColNo = Map.startOfPreviousColumn(EndColNo);
+  unsigned StartLineNo = SM.getExpansionLineNumber(Begin);
+  if (StartLineNo > LineNo || SM.getFileID(Begin) != FID)
+    return;  // No intersection.
 
-  // If the start/end passed each other, then we are trying to highlight a
-  // range that just exists in whitespace. That most likely means we have
-  // a multi-line highlighting range that covers a blank line.
-  if (StartColNo > EndColNo)
-    return;
+  unsigned EndLineNo = SM.getExpansionLineNumber(End);
+  if (EndLineNo < LineNo || SM.getFileID(End) != FID)
+    return;  // No intersection.
+
+  // Compute the column number of the start.
+  unsigned StartColNo = 0;
+  if (StartLineNo == LineNo) {
+    StartColNo = SM.getExpansionColumnNumber(Begin);
+    if (StartColNo) --StartColNo;  // Zero base the col #.
+  }
+
+  // Compute the column number of the end.
+  unsigned EndColNo = map.getSourceLine().size();
+  if (EndLineNo == LineNo) {
+    EndColNo = SM.getExpansionColumnNumber(End);
+    if (EndColNo) {
+      --EndColNo;  // Zero base the col #.
+
+      // Add in the length of the token, so that we cover multi-char tokens if
+      // this is a token range.
+      if (R.isTokenRange())
+        EndColNo += Lexer::MeasureTokenLength(End, SM, LangOpts);
+    } else {
+      EndColNo = CaretLine.size();
+    }
+  }
+
+  assert(StartColNo <= EndColNo && "Invalid range!");
+
+  // Check that a token range does not highlight only whitespace.
+  if (R.isTokenRange()) {
+    // Pick the first non-whitespace column.
+    while (StartColNo < map.getSourceLine().size() &&
+           (map.getSourceLine()[StartColNo] == ' ' ||
+            map.getSourceLine()[StartColNo] == '\t'))
+      StartColNo = map.startOfNextColumn(StartColNo);
+
+    // Pick the last non-whitespace column.
+    if (EndColNo > map.getSourceLine().size())
+      EndColNo = map.getSourceLine().size();
+    while (EndColNo &&
+           (map.getSourceLine()[EndColNo-1] == ' ' ||
+            map.getSourceLine()[EndColNo-1] == '\t'))
+      EndColNo = map.startOfPreviousColumn(EndColNo);
+
+    // If the start/end passed each other, then we are trying to highlight a
+    // range that just exists in whitespace. That most likely means we have
+    // a multi-line highlighting range that covers a blank line.
+    if (StartColNo > EndColNo) {
+      assert(StartLineNo != EndLineNo && "trying to highlight whitespace");
+      StartColNo = EndColNo;
+    }
+  }
+
+  assert(StartColNo <= map.getSourceLine().size() && "Invalid range!");
+  assert(EndColNo <= map.getSourceLine().size() && "Invalid range!");
 
   // Fill the range with ~'s.
-  StartColNo = Map.byteToContainingColumn(StartColNo);
-  EndColNo = Map.byteToContainingColumn(EndColNo);
+  StartColNo = map.byteToContainingColumn(StartColNo);
+  EndColNo = map.byteToContainingColumn(EndColNo);
 
   assert(StartColNo <= EndColNo && "Invalid range!");
   if (CaretLine.size() < EndColNo)
-    CaretLine.resize(EndColNo, ' ');
-  std::fill(CaretLine.begin() + StartColNo, CaretLine.begin() + EndColNo, '~');
+    CaretLine.resize(EndColNo,' ');
+  std::fill(CaretLine.begin()+StartColNo,CaretLine.begin()+EndColNo,'~');
 }
 
 static std::string buildFixItInsertionLine(FileID FID,
@@ -1001,116 +1066,57 @@ static std::string buildFixItInsertionLine(FileID FID,
     return FixItInsertionLine;
   unsigned PrevHintEndCol = 0;
 
-  for (const auto &H : Hints) {
-    if (H.CodeToInsert.empty())
-      continue;
+  for (ArrayRef<FixItHint>::iterator I = Hints.begin(), E = Hints.end();
+       I != E; ++I) {
+    if (!I->CodeToInsert.empty()) {
+      // We have an insertion hint. Determine whether the inserted
+      // code contains no newlines and is on the same line as the caret.
+      std::pair<FileID, unsigned> HintLocInfo
+        = SM.getDecomposedExpansionLoc(I->RemoveRange.getBegin());
+      if (FID == HintLocInfo.first &&
+          LineNo == SM.getLineNumber(HintLocInfo.first, HintLocInfo.second) &&
+          StringRef(I->CodeToInsert).find_first_of("\n\r") == StringRef::npos) {
+        // Insert the new code into the line just below the code
+        // that the user wrote.
+        // Note: When modifying this function, be very careful about what is a
+        // "column" (printed width, platform-dependent) and what is a
+        // "byte offset" (SourceManager "column").
+        unsigned HintByteOffset
+          = SM.getColumnNumber(HintLocInfo.first, HintLocInfo.second) - 1;
 
-    // We have an insertion hint. Determine whether the inserted
-    // code contains no newlines and is on the same line as the caret.
-    std::pair<FileID, unsigned> HintLocInfo =
-        SM.getDecomposedExpansionLoc(H.RemoveRange.getBegin());
-    if (FID == HintLocInfo.first &&
-        LineNo == SM.getLineNumber(HintLocInfo.first, HintLocInfo.second) &&
-        StringRef(H.CodeToInsert).find_first_of("\n\r") == StringRef::npos) {
-      // Insert the new code into the line just below the code
-      // that the user wrote.
-      // Note: When modifying this function, be very careful about what is a
-      // "column" (printed width, platform-dependent) and what is a
-      // "byte offset" (SourceManager "column").
-      unsigned HintByteOffset =
-          SM.getColumnNumber(HintLocInfo.first, HintLocInfo.second) - 1;
+        // The hint must start inside the source or right at the end
+        assert(HintByteOffset < static_cast<unsigned>(map.bytes())+1);
+        unsigned HintCol = map.byteToContainingColumn(HintByteOffset);
 
-      // The hint must start inside the source or right at the end
-      assert(HintByteOffset < static_cast<unsigned>(map.bytes()) + 1);
-      unsigned HintCol = map.byteToContainingColumn(HintByteOffset);
+        // If we inserted a long previous hint, push this one forwards, and add
+        // an extra space to show that this is not part of the previous
+        // completion. This is sort of the best we can do when two hints appear
+        // to overlap.
+        //
+        // Note that if this hint is located immediately after the previous
+        // hint, no space will be added, since the location is more important.
+        if (HintCol < PrevHintEndCol)
+          HintCol = PrevHintEndCol + 1;
 
-      // If we inserted a long previous hint, push this one forwards, and add
-      // an extra space to show that this is not part of the previous
-      // completion. This is sort of the best we can do when two hints appear
-      // to overlap.
-      //
-      // Note that if this hint is located immediately after the previous
-      // hint, no space will be added, since the location is more important.
-      if (HintCol < PrevHintEndCol)
-        HintCol = PrevHintEndCol + 1;
+        // This should NOT use HintByteOffset, because the source might have
+        // Unicode characters in earlier columns.
+        unsigned NewFixItLineSize = FixItInsertionLine.size() +
+          (HintCol - PrevHintEndCol) + I->CodeToInsert.size();
+        if (NewFixItLineSize > FixItInsertionLine.size())
+          FixItInsertionLine.resize(NewFixItLineSize, ' ');
 
-      // This should NOT use HintByteOffset, because the source might have
-      // Unicode characters in earlier columns.
-      unsigned NewFixItLineSize = FixItInsertionLine.size() +
-                                  (HintCol - PrevHintEndCol) +
-                                  H.CodeToInsert.size();
-      if (NewFixItLineSize > FixItInsertionLine.size())
-        FixItInsertionLine.resize(NewFixItLineSize, ' ');
+        std::copy(I->CodeToInsert.begin(), I->CodeToInsert.end(),
+                  FixItInsertionLine.end() - I->CodeToInsert.size());
 
-      std::copy(H.CodeToInsert.begin(), H.CodeToInsert.end(),
-                FixItInsertionLine.end() - H.CodeToInsert.size());
-
-      PrevHintEndCol = HintCol + llvm::sys::locale::columnWidth(H.CodeToInsert);
+        PrevHintEndCol =
+          HintCol + llvm::sys::locale::columnWidth(I->CodeToInsert);
+      }
     }
   }
 
   expandTabs(FixItInsertionLine, DiagOpts->TabStop);
 
   return FixItInsertionLine;
-}
-
-static unsigned getNumDisplayWidth(unsigned N) {
-  unsigned L = 1u, M = 10u;
-  while (M <= N && ++L != std::numeric_limits<unsigned>::digits10 + 1)
-    M *= 10u;
-
-  return L;
-}
-
-/// Filter out invalid ranges, ranges that don't fit into the window of
-/// source lines we will print, and ranges from other files.
-///
-/// For the remaining ranges, convert them to simple LineRange structs,
-/// which only cover one line at a time.
-static SmallVector<LineRange>
-prepareAndFilterRanges(const SmallVectorImpl<CharSourceRange> &Ranges,
-                       const SourceManager &SM,
-                       const std::pair<unsigned, unsigned> &Lines, FileID FID,
-                       const LangOptions &LangOpts) {
-  SmallVector<LineRange> LineRanges;
-
-  for (const CharSourceRange &R : Ranges) {
-    if (R.isInvalid())
-      continue;
-    SourceLocation Begin = R.getBegin();
-    SourceLocation End = R.getEnd();
-
-    unsigned StartLineNo = SM.getExpansionLineNumber(Begin);
-    if (StartLineNo > Lines.second || SM.getFileID(Begin) != FID)
-      continue;
-
-    unsigned EndLineNo = SM.getExpansionLineNumber(End);
-    if (EndLineNo < Lines.first || SM.getFileID(End) != FID)
-      continue;
-
-    unsigned StartColumn = SM.getExpansionColumnNumber(Begin);
-    unsigned EndColumn = SM.getExpansionColumnNumber(End);
-    if (R.isTokenRange())
-      EndColumn += Lexer::MeasureTokenLength(End, SM, LangOpts);
-
-    // Only a single line.
-    if (StartLineNo == EndLineNo) {
-      LineRanges.push_back({StartLineNo, StartColumn - 1, EndColumn - 1});
-      continue;
-    }
-
-    // Start line.
-    LineRanges.push_back({StartLineNo, StartColumn - 1, ~0u});
-
-    // Middle lines.
-    for (unsigned S = StartLineNo + 1; S != EndLineNo; ++S)
-      LineRanges.push_back({S, 0, ~0u});
-
-    // End line.
-    LineRanges.push_back({EndLineNo, 0, EndColumn - 1});
-  }
-
-  return LineRanges;
 }
 
 /// Emit a code snippet and caret line.
@@ -1138,7 +1144,9 @@ void TextDiagnostic::emitSnippetAndCaret(
       (LastLevel != DiagnosticsEngine::Note || Level == LastLevel))
     return;
 
-  FileID FID = Loc.getFileID();
+  // Decompose the location into a FID/Offset pair.
+  std::pair<FileID, unsigned> LocInfo = Loc.getDecomposedLoc();
+  FileID FID = LocInfo.first;
   const SourceManager &SM = Loc.getManager();
 
   // Get information about the buffer it points into.
@@ -1146,8 +1154,6 @@ void TextDiagnostic::emitSnippetAndCaret(
   StringRef BufData = Loc.getBufferData(&Invalid);
   if (Invalid)
     return;
-  const char *BufStart = BufData.data();
-  const char *BufEnd = BufStart + BufData.size();
 
   unsigned CaretLineNo = Loc.getLineNumber();
   unsigned CaretColNo = Loc.getColumnNumber();
@@ -1160,33 +1166,16 @@ void TextDiagnostic::emitSnippetAndCaret(
   // Find the set of lines to include.
   const unsigned MaxLines = DiagOpts->SnippetLineLimit;
   std::pair<unsigned, unsigned> Lines = {CaretLineNo, CaretLineNo};
-  unsigned DisplayLineNo = Loc.getPresumedLoc().getLine();
-  for (const auto &I : Ranges) {
-    if (auto OptionalRange = findLinesForRange(I, FID, SM))
+  for (SmallVectorImpl<CharSourceRange>::iterator I = Ranges.begin(),
+                                                  E = Ranges.end();
+       I != E; ++I)
+    if (auto OptionalRange = findLinesForRange(*I, FID, SM))
       Lines = maybeAddRange(Lines, *OptionalRange, MaxLines);
 
-    DisplayLineNo =
-        std::min(DisplayLineNo, SM.getPresumedLineNumber(I.getBegin()));
-  }
+  for (unsigned LineNo = Lines.first; LineNo != Lines.second + 1; ++LineNo) {
+    const char *BufStart = BufData.data();
+    const char *BufEnd = BufStart + BufData.size();
 
-  // Our line numbers look like:
-  // " [number] | "
-  // Where [number] is MaxLineNoDisplayWidth columns
-  // and the full thing is therefore MaxLineNoDisplayWidth + 4 columns.
-  unsigned MaxLineNoDisplayWidth =
-      DiagOpts->ShowLineNumbers
-          ? std::max(4u, getNumDisplayWidth(DisplayLineNo + MaxLines))
-          : 0;
-  auto indentForLineNumbers = [&] {
-    if (MaxLineNoDisplayWidth > 0)
-      OS.indent(MaxLineNoDisplayWidth + 2) << "| ";
-  };
-
-  SmallVector<LineRange> LineRanges =
-      prepareAndFilterRanges(Ranges, SM, Lines, FID, LangOpts);
-
-  for (unsigned LineNo = Lines.first; LineNo != Lines.second + 1;
-       ++LineNo, ++DisplayLineNo) {
     // Rewind from the current position to the start of the line.
     const char *LineStart =
         BufStart +
@@ -1204,28 +1193,34 @@ void TextDiagnostic::emitSnippetAndCaret(
     if (size_t(LineEnd - LineStart) > MaxLineLengthToPrint)
       return;
 
+    // Trim trailing null-bytes.
+    StringRef Line(LineStart, LineEnd - LineStart);
+    while (!Line.empty() && Line.back() == '\0' &&
+           (LineNo != CaretLineNo || Line.size() > CaretColNo))
+      Line = Line.drop_back();
+
     // Copy the line of code into an std::string for ease of manipulation.
-    std::string SourceLine(LineStart, LineEnd);
-    // Remove trailing null bytes.
-    while (!SourceLine.empty() && SourceLine.back() == '\0' &&
-           (LineNo != CaretLineNo || SourceLine.size() > CaretColNo))
-      SourceLine.pop_back();
+    std::string SourceLine(Line.begin(), Line.end());
 
     // Build the byte to column map.
     const SourceColumnMap sourceColMap(SourceLine, DiagOpts->TabStop);
 
-    std::string CaretLine;
+    // Create a line for the caret that is filled with spaces that is the same
+    // number of columns as the line of source code.
+    std::string CaretLine(sourceColMap.columns(), ' ');
+
     // Highlight all of the characters covered by Ranges with ~ characters.
-    for (const auto &LR : LineRanges) {
-      if (LR.LineNo == LineNo)
-        highlightRange(LR, sourceColMap, CaretLine);
-    }
+    for (SmallVectorImpl<CharSourceRange>::iterator I = Ranges.begin(),
+                                                    E = Ranges.end();
+         I != E; ++I)
+      highlightRange(*I, LineNo, FID, sourceColMap, CaretLine, SM, LangOpts);
 
     // Next, insert the caret itself.
     if (CaretLineNo == LineNo) {
-      size_t Col = sourceColMap.byteToContainingColumn(CaretColNo - 1);
-      CaretLine.resize(std::max(Col + 1, CaretLine.size()), ' ');
-      CaretLine[Col] = '^';
+      CaretColNo = sourceColMap.byteToContainingColumn(CaretColNo - 1);
+      if (CaretLine.size() < CaretColNo + 1)
+        CaretLine.resize(CaretColNo + 1, ' ');
+      CaretLine[CaretColNo] = '^';
     }
 
     std::string FixItInsertionLine = buildFixItInsertionLine(
@@ -1242,16 +1237,19 @@ void TextDiagnostic::emitSnippetAndCaret(
     // to produce easily machine parsable output.  Add a space before the
     // source line and the caret to make it trivial to tell the main diagnostic
     // line from what the user is intended to see.
-    if (DiagOpts->ShowSourceRanges && !SourceLine.empty()) {
+    if (DiagOpts->ShowSourceRanges) {
       SourceLine = ' ' + SourceLine;
       CaretLine = ' ' + CaretLine;
     }
 
+    // Finally, remove any blank spaces from the end of CaretLine.
+    while (!CaretLine.empty() && CaretLine[CaretLine.size() - 1] == ' ')
+      CaretLine.erase(CaretLine.end() - 1);
+
     // Emit what we have computed.
-    emitSnippet(SourceLine, MaxLineNoDisplayWidth, DisplayLineNo);
+    emitSnippet(SourceLine);
 
     if (!CaretLine.empty()) {
-      indentForLineNumbers();
       if (DiagOpts->ShowColors)
         OS.changeColor(caretColor, true);
       OS << CaretLine << '\n';
@@ -1260,7 +1258,6 @@ void TextDiagnostic::emitSnippetAndCaret(
     }
 
     if (!FixItInsertionLine.empty()) {
-      indentForLineNumbers();
       if (DiagOpts->ShowColors)
         // Print fixit line in color
         OS.changeColor(fixitColor, false);
@@ -1276,37 +1273,37 @@ void TextDiagnostic::emitSnippetAndCaret(
   emitParseableFixits(Hints, SM);
 }
 
-void TextDiagnostic::emitSnippet(StringRef SourceLine,
-                                 unsigned MaxLineNoDisplayWidth,
-                                 unsigned LineNo) {
-  // Emit line number.
-  if (MaxLineNoDisplayWidth > 0) {
-    unsigned LineNoDisplayWidth = getNumDisplayWidth(LineNo);
-    OS.indent(MaxLineNoDisplayWidth - LineNoDisplayWidth + 1)
-        << LineNo << " | ";
-  }
+void TextDiagnostic::emitSnippet(StringRef line) {
+  if (line.empty())
+    return;
 
-  // Print the source line one character at a time.
-  bool PrintReversed = false;
-  size_t I = 0;
-  while (I < SourceLine.size()) {
-    auto [Str, WasPrintable] =
-        printableTextForNextCharacter(SourceLine, &I, DiagOpts->TabStop);
+  size_t i = 0;
 
-    // Toggle inverted colors on or off for this character.
-    if (DiagOpts->ShowColors) {
-      if (WasPrintable == PrintReversed) {
-        PrintReversed = !PrintReversed;
-        if (PrintReversed)
-          OS.reverseColor();
-        else
-          OS.resetColor();
-      }
+  std::string to_print;
+  bool print_reversed = false;
+
+  while (i<line.size()) {
+    std::pair<SmallString<16>,bool> res
+        = printableTextForNextCharacter(line, &i, DiagOpts->TabStop);
+    bool was_printable = res.second;
+
+    if (DiagOpts->ShowColors && was_printable == print_reversed) {
+      if (print_reversed)
+        OS.reverseColor();
+      OS << to_print;
+      to_print.clear();
+      if (DiagOpts->ShowColors)
+        OS.resetColor();
     }
-    OS << Str;
+
+    print_reversed = !was_printable;
+    to_print += res.first.str();
   }
 
-  if (DiagOpts->ShowColors)
+  if (print_reversed && DiagOpts->ShowColors)
+    OS.reverseColor();
+  OS << to_print;
+  if (print_reversed && DiagOpts->ShowColors)
     OS.resetColor();
 
   OS << '\n';
@@ -1319,21 +1316,24 @@ void TextDiagnostic::emitParseableFixits(ArrayRef<FixItHint> Hints,
 
   // We follow FixItRewriter's example in not (yet) handling
   // fix-its in macros.
-  for (const auto &H : Hints) {
-    if (H.RemoveRange.isInvalid() || H.RemoveRange.getBegin().isMacroID() ||
-        H.RemoveRange.getEnd().isMacroID())
+  for (ArrayRef<FixItHint>::iterator I = Hints.begin(), E = Hints.end();
+       I != E; ++I) {
+    if (I->RemoveRange.isInvalid() ||
+        I->RemoveRange.getBegin().isMacroID() ||
+        I->RemoveRange.getEnd().isMacroID())
       return;
   }
 
-  for (const auto &H : Hints) {
-    SourceLocation BLoc = H.RemoveRange.getBegin();
-    SourceLocation ELoc = H.RemoveRange.getEnd();
+  for (ArrayRef<FixItHint>::iterator I = Hints.begin(), E = Hints.end();
+       I != E; ++I) {
+    SourceLocation BLoc = I->RemoveRange.getBegin();
+    SourceLocation ELoc = I->RemoveRange.getEnd();
 
     std::pair<FileID, unsigned> BInfo = SM.getDecomposedLoc(BLoc);
     std::pair<FileID, unsigned> EInfo = SM.getDecomposedLoc(ELoc);
 
     // Adjust for token ranges.
-    if (H.RemoveRange.isTokenRange())
+    if (I->RemoveRange.isTokenRange())
       EInfo.second += Lexer::MeasureTokenLength(ELoc, SM, LangOpts);
 
     // We specifically do not do word-wrapping or tab-expansion here,
@@ -1349,7 +1349,7 @@ void TextDiagnostic::emitParseableFixits(ArrayRef<FixItHint> Hints,
       << '-' << SM.getLineNumber(EInfo.first, EInfo.second)
       << ':' << SM.getColumnNumber(EInfo.first, EInfo.second)
       << "}:\"";
-    OS.write_escaped(H.CodeToInsert);
+    OS.write_escaped(I->CodeToInsert);
     OS << "\"\n";
   }
 }

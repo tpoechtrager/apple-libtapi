@@ -35,7 +35,6 @@
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include <cassert>
-#include <optional>
 
 using namespace llvm;
 
@@ -125,7 +124,7 @@ static unsigned adjustForEndian(const DataLayout &DL, unsigned VectorWidth,
 //  br label %else
 //
 // else:                                             ; preds = %0, %cond.load
-//  %res.phi.else = phi <16 x i32> [ %5, %cond.load ], [ poison, %0 ]
+//  %res.phi.else = phi <16 x i32> [ %5, %cond.load ], [ undef, %0 ]
 //  %6 = extractelement <16 x i1> %mask, i32 1
 //  br i1 %6, label %cond.load1, label %else2
 //
@@ -170,6 +169,10 @@ static void scalarizeMaskedLoad(const DataLayout &DL, CallInst *CI,
   // Adjust alignment for the scalar instruction.
   const Align AdjustedAlignVal =
       commonAlignment(AlignVal, EltTy->getPrimitiveSizeInBits() / 8);
+  // Bitcast %addr from i8* to EltTy*
+  Type *NewPtrType =
+      EltTy->getPointerTo(Ptr->getType()->getPointerAddressSpace());
+  Value *FirstEltPtr = Builder.CreateBitCast(Ptr, NewPtrType);
   unsigned VectorWidth = cast<FixedVectorType>(VecType)->getNumElements();
 
   // The result vector
@@ -179,7 +182,7 @@ static void scalarizeMaskedLoad(const DataLayout &DL, CallInst *CI,
     for (unsigned Idx = 0; Idx < VectorWidth; ++Idx) {
       if (cast<Constant>(Mask)->getAggregateElement(Idx)->isNullValue())
         continue;
-      Value *Gep = Builder.CreateConstInBoundsGEP1_32(EltTy, Ptr, Idx);
+      Value *Gep = Builder.CreateConstInBoundsGEP1_32(EltTy, FirstEltPtr, Idx);
       LoadInst *Load = Builder.CreateAlignedLoad(EltTy, Gep, AdjustedAlignVal);
       VResult = Builder.CreateInsertElement(VResult, Load, Idx);
     }
@@ -228,7 +231,7 @@ static void scalarizeMaskedLoad(const DataLayout &DL, CallInst *CI,
     CondBlock->setName("cond.load");
 
     Builder.SetInsertPoint(CondBlock->getTerminator());
-    Value *Gep = Builder.CreateConstInBoundsGEP1_32(EltTy, Ptr, Idx);
+    Value *Gep = Builder.CreateConstInBoundsGEP1_32(EltTy, FirstEltPtr, Idx);
     LoadInst *Load = Builder.CreateAlignedLoad(EltTy, Gep, AdjustedAlignVal);
     Value *NewVResult = Builder.CreateInsertElement(VResult, Load, Idx);
 
@@ -305,6 +308,10 @@ static void scalarizeMaskedStore(const DataLayout &DL, CallInst *CI,
   // Adjust alignment for the scalar instruction.
   const Align AdjustedAlignVal =
       commonAlignment(AlignVal, EltTy->getPrimitiveSizeInBits() / 8);
+  // Bitcast %addr from i8* to EltTy*
+  Type *NewPtrType =
+      EltTy->getPointerTo(Ptr->getType()->getPointerAddressSpace());
+  Value *FirstEltPtr = Builder.CreateBitCast(Ptr, NewPtrType);
   unsigned VectorWidth = cast<FixedVectorType>(VecType)->getNumElements();
 
   if (isConstantIntVector(Mask)) {
@@ -312,7 +319,7 @@ static void scalarizeMaskedStore(const DataLayout &DL, CallInst *CI,
       if (cast<Constant>(Mask)->getAggregateElement(Idx)->isNullValue())
         continue;
       Value *OneElt = Builder.CreateExtractElement(Src, Idx);
-      Value *Gep = Builder.CreateConstInBoundsGEP1_32(EltTy, Ptr, Idx);
+      Value *Gep = Builder.CreateConstInBoundsGEP1_32(EltTy, FirstEltPtr, Idx);
       Builder.CreateAlignedStore(OneElt, Gep, AdjustedAlignVal);
     }
     CI->eraseFromParent();
@@ -359,7 +366,7 @@ static void scalarizeMaskedStore(const DataLayout &DL, CallInst *CI,
 
     Builder.SetInsertPoint(CondBlock->getTerminator());
     Value *OneElt = Builder.CreateExtractElement(Src, Idx);
-    Value *Gep = Builder.CreateConstInBoundsGEP1_32(EltTy, Ptr, Idx);
+    Value *Gep = Builder.CreateConstInBoundsGEP1_32(EltTy, FirstEltPtr, Idx);
     Builder.CreateAlignedStore(OneElt, Gep, AdjustedAlignVal);
 
     // Create "else" block, fill it in the next iteration
@@ -386,11 +393,11 @@ static void scalarizeMaskedStore(const DataLayout &DL, CallInst *CI,
 // cond.load:
 // %Ptr0 = extractelement <16 x i32*> %Ptrs, i32 0
 // %Load0 = load i32, i32* %Ptr0, align 4
-// %Res0 = insertelement <16 x i32> poison, i32 %Load0, i32 0
+// %Res0 = insertelement <16 x i32> undef, i32 %Load0, i32 0
 // br label %else
 //
 // else:
-// %res.phi.else = phi <16 x i32>[%Res0, %cond.load], [poison, %0]
+// %res.phi.else = phi <16 x i32>[%Res0, %cond.load], [undef, %0]
 // %Mask1 = extractelement <16 x i1> %Mask, i32 1
 // br i1 %Mask1, label %cond.load1, label %else2
 //
@@ -645,16 +652,16 @@ static void scalarizeMaskedExpandLoad(const DataLayout &DL, CallInst *CI,
   Value *VResult = PassThru;
 
   // Shorten the way if the mask is a vector of constants.
-  // Create a build_vector pattern, with loads/poisons as necessary and then
+  // Create a build_vector pattern, with loads/undefs as necessary and then
   // shuffle blend with the pass through value.
   if (isConstantIntVector(Mask)) {
     unsigned MemIndex = 0;
-    VResult = PoisonValue::get(VecType);
-    SmallVector<int, 16> ShuffleMask(VectorWidth, PoisonMaskElem);
+    VResult = UndefValue::get(VecType);
+    SmallVector<int, 16> ShuffleMask(VectorWidth, UndefMaskElem);
     for (unsigned Idx = 0; Idx < VectorWidth; ++Idx) {
       Value *InsertElt;
       if (cast<Constant>(Mask)->getAggregateElement(Idx)->isNullValue()) {
-        InsertElt = PoisonValue::get(EltTy);
+        InsertElt = UndefValue::get(EltTy);
         ShuffleMask[Idx] = Idx + VectorWidth;
       } else {
         Value *NewPtr =
@@ -854,7 +861,7 @@ static void scalarizeMaskedCompressStore(const DataLayout &DL, CallInst *CI,
 
 static bool runImpl(Function &F, const TargetTransformInfo &TTI,
                     DominatorTree *DT) {
-  std::optional<DomTreeUpdater> DTU;
+  Optional<DomTreeUpdater> DTU;
   if (DT)
     DTU.emplace(DT, DomTreeUpdater::UpdateStrategy::Lazy);
 
@@ -866,7 +873,7 @@ static bool runImpl(Function &F, const TargetTransformInfo &TTI,
     for (BasicBlock &BB : llvm::make_early_inc_range(F)) {
       bool ModifiedDTOnIteration = false;
       MadeChange |= optimizeBlock(BB, ModifiedDTOnIteration, TTI, DL,
-                                  DTU ? &*DTU : nullptr);
+                                  DTU ? DTU.getPointer() : nullptr);
 
       // Restart BB iteration if the dominator tree of the Function was changed
       if (ModifiedDTOnIteration)

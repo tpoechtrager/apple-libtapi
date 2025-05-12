@@ -22,7 +22,7 @@ struct RelocAddrEntry {
   uint64_t SectionIndex;
   object::RelocationRef Reloc;
   uint64_t SymbolValue;
-  std::optional<object::RelocationRef> Reloc2;
+  Optional<object::RelocationRef> Reloc2;
   uint64_t SymbolValue2;
   object::RelocationResolver Resolver;
 };

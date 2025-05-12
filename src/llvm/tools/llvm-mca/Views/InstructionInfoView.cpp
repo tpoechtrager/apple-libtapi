@@ -55,7 +55,10 @@ void InstructionInfoView::printView(raw_ostream &OS) const {
     }
   }
 
-  for (const auto &[Index, IIVDEntry, Inst] : enumerate(IIVD, Source)) {
+  int Index = 0;
+  for (const auto &I : enumerate(zip(IIVD, Source))) {
+    const InstructionInfoViewData &IIVDEntry = std::get<0>(I.value());
+
     TempStream << ' ' << IIVDEntry.NumMicroOpcodes << "    ";
     if (IIVDEntry.NumMicroOpcodes < 10)
       TempStream << "  ";
@@ -68,7 +71,7 @@ void InstructionInfoView::printView(raw_ostream &OS) const {
       TempStream << ' ';
 
     if (IIVDEntry.RThroughput) {
-      double RT = *IIVDEntry.RThroughput;
+      double RT = IIVDEntry.RThroughput.value();
       TempStream << format("%.2f", RT) << ' ';
       if (RT < 10.0)
         TempStream << "  ";
@@ -89,7 +92,7 @@ void InstructionInfoView::printView(raw_ostream &OS) const {
     }
 
     if (PrintEncodings) {
-      StringRef Encoding(CE.getEncoding(Index));
+      StringRef Encoding(CE.getEncoding(I.index()));
       unsigned EncodingSize = Encoding.size();
       TempStream << " " << EncodingSize
                  << (EncodingSize < 10 ? "     " : "    ");
@@ -101,7 +104,9 @@ void InstructionInfoView::printView(raw_ostream &OS) const {
       FOS.flush();
     }
 
+    const MCInst &Inst = std::get<1>(I.value());
     TempStream << printInstructionString(Inst) << '\n';
+    ++Index;
   }
 
   TempStream.flush();
@@ -117,13 +122,8 @@ void InstructionInfoView::collectData(
     InstructionInfoViewData &IIVDEntry = std::get<1>(I);
     const MCInstrDesc &MCDesc = MCII.get(Inst.getOpcode());
 
-    // Obtain the scheduling class information from the instruction
-    // and instruments.
-    auto IVecIt = InstToInstruments.find(&Inst);
-    unsigned SchedClassID =
-        IVecIt == InstToInstruments.end()
-            ? MCDesc.getSchedClass()
-            : IM.getSchedClassID(MCII, Inst, IVecIt->second);
+    // Obtain the scheduling class information from the instruction.
+    unsigned SchedClassID = MCDesc.getSchedClass();
     unsigned CPUID = SM.getProcessorID();
 
     // Try to solve variant scheduling classes.

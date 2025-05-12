@@ -173,7 +173,7 @@ void renderBranchSummary(raw_ostream &OS, const FileCoverageSummary &Summary) {
 void renderFile(raw_ostream &OS, const coverage::CoverageMapping &Coverage,
                 const std::string &Filename,
                 const FileCoverageSummary &FileReport, bool ExportSummaryOnly,
-                bool SkipFunctions, bool SkipBranches) {
+                bool SkipFunctions) {
   OS << "SF:" << Filename << '\n';
 
   if (!ExportSummaryOnly && !SkipFunctions) {
@@ -185,11 +185,9 @@ void renderFile(raw_ostream &OS, const coverage::CoverageMapping &Coverage,
     // Calculate and render detailed coverage information for given file.
     auto FileCoverage = Coverage.getCoverageForFile(Filename);
     renderLineExecutionCounts(OS, FileCoverage);
-    if (!SkipBranches)
-      renderBranchExecutionCounts(OS, Coverage, FileCoverage);
+    renderBranchExecutionCounts(OS, Coverage, FileCoverage);
   }
-  if (!SkipBranches)
-    renderBranchSummary(OS, FileReport);
+  renderBranchSummary(OS, FileReport);
   renderLineSummary(OS, FileReport);
 
   OS << "end_of_record\n";
@@ -198,11 +196,10 @@ void renderFile(raw_ostream &OS, const coverage::CoverageMapping &Coverage,
 void renderFiles(raw_ostream &OS, const coverage::CoverageMapping &Coverage,
                  ArrayRef<std::string> SourceFiles,
                  ArrayRef<FileCoverageSummary> FileReports,
-                 bool ExportSummaryOnly, bool SkipFunctions,
-                 bool SkipBranches) {
+                 bool ExportSummaryOnly, bool SkipFunctions) {
   for (unsigned I = 0, E = SourceFiles.size(); I < E; ++I)
     renderFile(OS, Coverage, SourceFiles[I], FileReports[I], ExportSummaryOnly,
-               SkipFunctions, SkipBranches);
+               SkipFunctions);
 }
 
 } // end anonymous namespace
@@ -221,5 +218,5 @@ void CoverageExporterLcov::renderRoot(ArrayRef<std::string> SourceFiles) {
   auto FileReports = CoverageReport::prepareFileReports(Coverage, Totals,
                                                         SourceFiles, Options);
   renderFiles(OS, Coverage, SourceFiles, FileReports, Options.ExportSummaryOnly,
-              Options.SkipFunctions, Options.SkipBranches);
+              Options.SkipFunctions);
 }

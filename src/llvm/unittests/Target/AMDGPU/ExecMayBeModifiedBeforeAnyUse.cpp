@@ -7,16 +7,27 @@
 //===----------------------------------------------------------------------===//
 
 #include "AMDGPUTargetMachine.h"
-#include "AMDGPUUnitTests.h"
+#include "GCNSubtarget.h"
+#include "MCTargetDesc/AMDGPUMCTargetDesc.h"
 #include "llvm/CodeGen/MachineModuleInfo.h"
+#include "llvm/CodeGen/TargetSubtargetInfo.h"
+#include "llvm/MC/MCTargetOptions.h"
+#include "llvm/MC/TargetRegistry.h"
+#include "llvm/Support/TargetSelect.h"
+#include "llvm/Target/TargetMachine.h"
 #include "gtest/gtest.h"
+#include <thread>
 
 using namespace llvm;
 
-TEST(AMDGPU, ExecMayBeModifiedBeforeAnyUse) {
-  auto TM = createAMDGPUTargetMachine("amdgcn-amd-", "gfx906", "");
+// implementation is in the llvm/unittests/Target/AMDGPU/DwarfRegMappings.cpp
+std::unique_ptr<const GCNTargetMachine>
+createTargetMachine(std::string TStr, StringRef CPU, StringRef FS);
+
+TEST(AMDGPUExecMayBeModifiedBeforeAnyUse, TheTest) {
+  auto TM = createTargetMachine("amdgcn-amd-", "gfx906", "");
   if (!TM)
-    GTEST_SKIP();
+    return;
 
   GCNSubtarget ST(TM->getTargetTriple(), std::string(TM->getTargetCPU()),
                   std::string(TM->getTargetFeatureString()), *TM);

@@ -164,7 +164,7 @@ static MachineInstr *getVRegDefOrNull(MachineOperand *Op,
     return nullptr;
 
   Register Reg = Op->getReg();
-  if (!Reg.isVirtual())
+  if (!Register::isVirtualRegister(Reg))
     return nullptr;
 
   return MRI->getVRegDef(Reg);
@@ -193,7 +193,7 @@ static unsigned getKnownLeadingZeroCount(const unsigned Reg,
 
   if (Opcode == PPC::ANDI_rec) {
     uint16_t Imm = MI->getOperand(2).getImm();
-    return 48 + llvm::countl_zero(Imm);
+    return 48 + countLeadingZeros(Imm);
   }
 
   if (Opcode == PPC::CNTLZW || Opcode == PPC::CNTLZW_rec ||
@@ -218,20 +218,6 @@ static unsigned getKnownLeadingZeroCount(const unsigned Reg,
       Opcode == PPC::LBZU  || Opcode == PPC::LBZUX ||
       Opcode == PPC::LBZU8 || Opcode == PPC::LBZUX8)
     return 56;
-
-  if (Opcode == PPC::AND || Opcode == PPC::AND8 || Opcode == PPC::AND_rec ||
-      Opcode == PPC::AND8_rec)
-    return std::max(
-        getKnownLeadingZeroCount(MI->getOperand(1).getReg(), TII, MRI),
-        getKnownLeadingZeroCount(MI->getOperand(2).getReg(), TII, MRI));
-
-  if (Opcode == PPC::OR || Opcode == PPC::OR8 || Opcode == PPC::XOR ||
-      Opcode == PPC::XOR8 || Opcode == PPC::OR_rec ||
-      Opcode == PPC::OR8_rec || Opcode == PPC::XOR_rec ||
-      Opcode == PPC::XOR8_rec)
-    return std::min(
-        getKnownLeadingZeroCount(MI->getOperand(1).getReg(), TII, MRI),
-        getKnownLeadingZeroCount(MI->getOperand(2).getReg(), TII, MRI));
 
   if (TII->isZeroExtended(Reg, MRI))
     return 32;
@@ -307,7 +293,7 @@ static bool collectUnprimedAccPHIs(MachineRegisterInfo *MRI,
     for (unsigned PHIOp = 1, NumOps = VisitedPHI->getNumOperands();
          PHIOp != NumOps; PHIOp += 2) {
       Register RegOp = VisitedPHI->getOperand(PHIOp).getReg();
-      if (!RegOp.isVirtual())
+      if (!Register::isVirtualRegister(RegOp))
         return false;
       MachineInstr *Instr = MRI->getVRegDef(RegOp);
       // While collecting the PHI nodes, we check if they can be converted (i.e.
@@ -315,7 +301,8 @@ static bool collectUnprimedAccPHIs(MachineRegisterInfo *MRI,
       unsigned Opcode = Instr->getOpcode();
       if (Opcode == PPC::COPY) {
         Register Reg = Instr->getOperand(1).getReg();
-        if (!Reg.isVirtual() || MRI->getRegClass(Reg) != &PPC::ACCRCRegClass)
+        if (!Register::isVirtualRegister(Reg) ||
+            MRI->getRegClass(Reg) != &PPC::ACCRCRegClass)
           return false;
       } else if (Opcode != PPC::IMPLICIT_DEF && Opcode != PPC::PHI)
         return false;
@@ -393,10 +380,6 @@ static void convertUnprimedAccPHIs(const PPCInstrInfo *TII,
     for (auto RegMBB : PHIOps)
       NewPHI.add(RegMBB.first).add(RegMBB.second);
     ChangedPHIMap[PHI] = NewPHI.getInstr();
-    LLVM_DEBUG(dbgs() << "Converting PHI: ");
-    LLVM_DEBUG(PHI->dump());
-    LLVM_DEBUG(dbgs() << "To: ");
-    LLVM_DEBUG(NewPHI.getInstr()->dump());
   }
 }
 
@@ -442,8 +425,6 @@ bool PPCMIPeephole::simplifyCode() {
       // If the previous instruction was marked for elimination,
       // remove it now.
       if (ToErase) {
-        LLVM_DEBUG(dbgs() << "Deleting instruction: ");
-        LLVM_DEBUG(ToErase->dump());
         ToErase->eraseFromParent();
         ToErase = nullptr;
       }
@@ -467,7 +448,8 @@ bool PPCMIPeephole::simplifyCode() {
       case PPC::COPY: {
         Register Src = MI.getOperand(1).getReg();
         Register Dst = MI.getOperand(0).getReg();
-        if (!Src.isVirtual() || !Dst.isVirtual())
+        if (!Register::isVirtualRegister(Src) ||
+            !Register::isVirtualRegister(Dst))
           break;
         if (MRI->getRegClass(Src) != &PPC::UACCRCRegClass ||
             MRI->getRegClass(Dst) != &PPC::ACCRCRegClass)
@@ -545,7 +527,7 @@ bool PPCMIPeephole::simplifyCode() {
         Register TrueReg2 =
           TRI->lookThruCopyLike(MI.getOperand(2).getReg(), MRI);
 
-        if (!(TrueReg1 == TrueReg2 && TrueReg1.isVirtual()))
+        if (!(TrueReg1 == TrueReg2 && Register::isVirtualRegister(TrueReg1)))
           break;
 
         MachineInstr *DefMI = MRI->getVRegDef(TrueReg1);
@@ -564,7 +546,7 @@ bool PPCMIPeephole::simplifyCode() {
             return false;
           Register FeedReg1 =
             TRI->lookThruCopyLike(DefMI->getOperand(1).getReg(), MRI);
-          if (FeedReg1.isVirtual()) {
+          if (Register::isVirtualRegister(FeedReg1)) {
             MachineInstr *LoadMI = MRI->getVRegDef(FeedReg1);
             if (LoadMI && LoadMI->getOpcode() == PPC::LXVDSX)
               return true;
@@ -597,7 +579,8 @@ bool PPCMIPeephole::simplifyCode() {
             Register FeedReg1 = TRI->lookThruCopyLike(DefReg1, MRI);
             Register FeedReg2 = TRI->lookThruCopyLike(DefReg2, MRI);
 
-            if (!(FeedReg1 == FeedReg2 && FeedReg1.isVirtual()))
+            if (!(FeedReg1 == FeedReg2 &&
+                  Register::isVirtualRegister(FeedReg1)))
               break;
           }
 
@@ -655,34 +638,6 @@ bool PPCMIPeephole::simplifyCode() {
           DefMI->getOperand(0).setReg(MI.getOperand(0).getReg());
           LLVM_DEBUG(dbgs() << "Removing redundant splat: ");
           LLVM_DEBUG(MI.dump());
-        } else if (Immed == 2 &&
-                   (DefOpc == PPC::VSPLTB || DefOpc == PPC::VSPLTH ||
-                    DefOpc == PPC::VSPLTW || DefOpc == PPC::XXSPLTW ||
-                    DefOpc == PPC::VSPLTISB || DefOpc == PPC::VSPLTISH ||
-                    DefOpc == PPC::VSPLTISW)) {
-          // Swap of various vector splats, convert to copy.
-          ToErase = &MI;
-          Simplified = true;
-          LLVM_DEBUG(dbgs() << "Optimizing swap(vsplt(is)?[b|h|w]|xxspltw) => "
-                               "copy(vsplt(is)?[b|h|w]|xxspltw): ");
-          LLVM_DEBUG(MI.dump());
-          BuildMI(MBB, &MI, MI.getDebugLoc(), TII->get(PPC::COPY),
-                  MI.getOperand(0).getReg())
-              .add(MI.getOperand(1));
-        } else if ((Immed == 0 || Immed == 3 || Immed == 2) &&
-                   TII->isLoadFromConstantPool(DefMI)) {
-          const Constant *C = TII->getConstantFromConstantPool(DefMI);
-          if (C && C->getType()->isVectorTy() && C->getSplatValue()) {
-            ToErase = &MI;
-            Simplified = true;
-            LLVM_DEBUG(dbgs()
-                       << "Optimizing swap(splat pattern from constant-pool) "
-                          "=> copy(splat pattern from constant-pool): ");
-            LLVM_DEBUG(MI.dump());
-            BuildMI(MBB, &MI, MI.getDebugLoc(), TII->get(PPC::COPY),
-                    MI.getOperand(0).getReg())
-                .add(MI.getOperand(1));
-          }
         }
         break;
       }
@@ -693,7 +648,7 @@ bool PPCMIPeephole::simplifyCode() {
         unsigned OpNo = MyOpcode == PPC::XXSPLTW ? 1 : 2;
         Register TrueReg =
           TRI->lookThruCopyLike(MI.getOperand(OpNo).getReg(), MRI);
-        if (!TrueReg.isVirtual())
+        if (!Register::isVirtualRegister(TrueReg))
           break;
         MachineInstr *DefMI = MRI->getVRegDef(TrueReg);
         if (!DefMI)
@@ -703,7 +658,7 @@ bool PPCMIPeephole::simplifyCode() {
           if (DefOpcode != PPC::XVCVSPSXWS && DefOpcode != PPC::XVCVSPUXWS)
             return false;
           Register ConvReg = DefMI->getOperand(1).getReg();
-          if (!ConvReg.isVirtual())
+          if (!Register::isVirtualRegister(ConvReg))
             return false;
           MachineInstr *Splt = MRI->getVRegDef(ConvReg);
           return Splt && (Splt->getOpcode() == PPC::LXVWSX ||
@@ -757,7 +712,7 @@ bool PPCMIPeephole::simplifyCode() {
         // If this is a DP->SP conversion fed by an FRSP, the FRSP is redundant.
         Register TrueReg =
           TRI->lookThruCopyLike(MI.getOperand(1).getReg(), MRI);
-        if (!TrueReg.isVirtual())
+        if (!Register::isVirtualRegister(TrueReg))
           break;
         MachineInstr *DefMI = MRI->getVRegDef(TrueReg);
 
@@ -768,7 +723,8 @@ bool PPCMIPeephole::simplifyCode() {
             TRI->lookThruCopyLike(DefMI->getOperand(1).getReg(), MRI);
           Register DefsReg2 =
             TRI->lookThruCopyLike(DefMI->getOperand(2).getReg(), MRI);
-          if (!DefsReg1.isVirtual() || !DefsReg2.isVirtual())
+          if (!Register::isVirtualRegister(DefsReg1) ||
+              !Register::isVirtualRegister(DefsReg2))
             break;
           MachineInstr *P1 = MRI->getVRegDef(DefsReg1);
           MachineInstr *P2 = MRI->getVRegDef(DefsReg2);
@@ -818,7 +774,7 @@ bool PPCMIPeephole::simplifyCode() {
       case PPC::EXTSH8_32_64: {
         if (!EnableSExtElimination) break;
         Register NarrowReg = MI.getOperand(1).getReg();
-        if (!NarrowReg.isVirtual())
+        if (!Register::isVirtualRegister(NarrowReg))
           break;
 
         MachineInstr *SrcMI = MRI->getVRegDef(NarrowReg);
@@ -862,7 +818,7 @@ bool PPCMIPeephole::simplifyCode() {
       case PPC::EXTSW_32_64: {
         if (!EnableSExtElimination) break;
         Register NarrowReg = MI.getOperand(1).getReg();
-        if (!NarrowReg.isVirtual())
+        if (!Register::isVirtualRegister(NarrowReg))
           break;
 
         MachineInstr *SrcMI = MRI->getVRegDef(NarrowReg);
@@ -881,8 +837,7 @@ bool PPCMIPeephole::simplifyCode() {
           if (SrcMI->getOperand(1).isGlobal()) {
             const GlobalObject *GO =
                 dyn_cast<GlobalObject>(SrcMI->getOperand(1).getGlobal());
-            if (GO && GO->getAlign() && *GO->getAlign() >= 4 &&
-                (SrcMI->getOperand(1).getOffset() % 4 == 0))
+            if (GO && GO->getAlignment() >= 4)
               IsWordAligned = true;
           } else if (SrcMI->getOperand(1).isImm()) {
             int64_t Value = SrcMI->getOperand(1).getImm();
@@ -952,7 +907,7 @@ bool PPCMIPeephole::simplifyCode() {
           break;
 
         Register SrcReg = MI.getOperand(1).getReg();
-        if (!SrcReg.isVirtual())
+        if (!Register::isVirtualRegister(SrcReg))
           break;
 
         MachineInstr *SrcMI = MRI->getVRegDef(SrcReg);
@@ -968,7 +923,7 @@ bool PPCMIPeephole::simplifyCode() {
         SrcMI = SubRegMI;
         if (SubRegMI->getOpcode() == PPC::COPY) {
           Register CopyReg = SubRegMI->getOperand(1).getReg();
-          if (CopyReg.isVirtual())
+          if (Register::isVirtualRegister(CopyReg))
             SrcMI = MRI->getVRegDef(CopyReg);
         }
         if (!SrcMI->getOperand(0).isReg())
@@ -1282,7 +1237,7 @@ static bool eligibleForCompareElimination(MachineBasicBlock &MBB,
         (*BII).getOperand(1).isReg()) {
       // We optimize only if the condition code is used only by one BCC.
       Register CndReg = (*BII).getOperand(1).getReg();
-      if (!CndReg.isVirtual() || !MRI->hasOneNonDBGUse(CndReg))
+      if (!Register::isVirtualRegister(CndReg) || !MRI->hasOneNonDBGUse(CndReg))
         return false;
 
       MachineInstr *CMPI = MRI->getVRegDef(CndReg);
@@ -1292,7 +1247,7 @@ static bool eligibleForCompareElimination(MachineBasicBlock &MBB,
 
       // We skip this BB if a physical register is used in comparison.
       for (MachineOperand &MO : CMPI->operands())
-        if (MO.isReg() && !MO.getReg().isVirtual())
+        if (MO.isReg() && !Register::isVirtualRegister(MO.getReg()))
           return false;
 
       return true;
@@ -1331,16 +1286,13 @@ static bool eligibleForCompareElimination(MachineBasicBlock &MBB,
     if (isEligibleBB(*Pred1MBB) && isEligibleForMoveCmp(*Pred2MBB)) {
       // We assume Pred1MBB is the BB containing the compare to be merged and
       // Pred2MBB is the BB to which we will append a compare instruction.
-      // Proceed as is if Pred1MBB is different from MBB.
+      // Hence we can proceed as is.
     }
     else if (isEligibleBB(*Pred2MBB) && isEligibleForMoveCmp(*Pred1MBB)) {
       // We need to swap Pred1MBB and Pred2MBB to canonicalize.
       std::swap(Pred1MBB, Pred2MBB);
     }
     else return false;
-
-    if (Pred1MBB == &MBB)
-      return false;
 
     // Here, Pred2MBB is the BB to which we need to append a compare inst.
     // We cannot move the compare instruction if operands are not available
@@ -1669,7 +1621,7 @@ bool PPCMIPeephole::emitRLDICWhenLoweringJumpTables(MachineInstr &MI) {
     return false;
 
   Register SrcReg = MI.getOperand(1).getReg();
-  if (!SrcReg.isVirtual())
+  if (!Register::isVirtualRegister(SrcReg))
     return false;
 
   MachineInstr *SrcMI = MRI->getVRegDef(SrcReg);
@@ -1757,7 +1709,7 @@ bool PPCMIPeephole::combineSEXTAndSHL(MachineInstr &MI,
     return false;
 
   Register SrcReg = MI.getOperand(1).getReg();
-  if (!SrcReg.isVirtual())
+  if (!Register::isVirtualRegister(SrcReg))
     return false;
 
   MachineInstr *SrcMI = MRI->getVRegDef(SrcReg);
@@ -1773,7 +1725,7 @@ bool PPCMIPeephole::combineSEXTAndSHL(MachineInstr &MI,
   assert(SrcMI->getNumOperands() == 2 && "EXTSW should have 2 operands");
   assert(SrcMI->getOperand(1).isReg() &&
          "EXTSW's second operand should be a register");
-  if (!SrcMI->getOperand(1).getReg().isVirtual())
+  if (!Register::isVirtualRegister(SrcMI->getOperand(1).getReg()))
     return false;
 
   LLVM_DEBUG(dbgs() << "Combining pair: ");

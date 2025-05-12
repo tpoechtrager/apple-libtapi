@@ -156,10 +156,10 @@ void APValue::LValuePathEntry::Profile(llvm::FoldingSetNodeID &ID) const {
 
 APValue::LValuePathSerializationHelper::LValuePathSerializationHelper(
     ArrayRef<LValuePathEntry> Path, QualType ElemTy)
-    : Ty((const void *)ElemTy.getTypePtrOrNull()), Path(Path) {}
+    : ElemTy((const void *)ElemTy.getTypePtrOrNull()), Path(Path) {}
 
 QualType APValue::LValuePathSerializationHelper::getType() {
-  return QualType::getFromOpaquePtr(Ty);
+  return QualType::getFromOpaquePtr(ElemTy);
 }
 
 namespace {
@@ -984,7 +984,7 @@ bool APValue::hasLValuePath() const {
 ArrayRef<APValue::LValuePathEntry> APValue::getLValuePath() const {
   assert(isLValue() && hasLValuePath() && "Invalid accessor");
   const LV &LVal = *((const LV *)(const char *)&Data);
-  return llvm::ArrayRef(LVal.getPath(), LVal.PathLength);
+  return llvm::makeArrayRef(LVal.getPath(), LVal.PathLength);
 }
 
 unsigned APValue::getLValueCallIndex() const {
@@ -1062,7 +1062,7 @@ ArrayRef<const CXXRecordDecl*> APValue::getMemberPointerPath() const {
   assert(isMemberPointer() && "Invalid accessor");
   const MemberPointerData &MPD =
       *((const MemberPointerData *)(const char *)&Data);
-  return llvm::ArrayRef(MPD.getPath(), MPD.PathLength);
+  return llvm::makeArrayRef(MPD.getPath(), MPD.PathLength);
 }
 
 void APValue::MakeLValue() {

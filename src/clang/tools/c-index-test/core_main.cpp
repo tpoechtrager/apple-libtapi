@@ -58,10 +58,8 @@ enum class ActionType {
   AggregateAsJSON,
   ScanDeps,
   ScanDepsByModuleName,
-  UploadCachedJob,
   MaterializeCachedJob,
   ReplayCachedJob,
-  PruneCAS,
   WatchDir,
 };
 
@@ -86,13 +84,10 @@ Action(cl::desc("Action:"), cl::init(ActionType::None),
                      "Get file dependencies"),
           clEnumValN(ActionType::ScanDepsByModuleName, "scan-deps-by-mod-name",
                      "Get file dependencies by module name alone"),
-          clEnumValN(ActionType::UploadCachedJob, "upload-cached-job",
-                     "Upload cached compilation data to upstream CAS"),
           clEnumValN(ActionType::MaterializeCachedJob, "materialize-cached-job",
                      "Materialize cached compilation data from upstream CAS"),
           clEnumValN(ActionType::ReplayCachedJob, "replay-cached-job",
                      "Replay a cached compilation from the CAS"),
-          clEnumValN(ActionType::PruneCAS, "prune-cas", "Prune CAS data"),
           clEnumValN(ActionType::WatchDir,
                      "watch-dir", "Watch directory for file events")),
        cl::cat(IndexTestCoreCategory));
@@ -157,10 +152,6 @@ static cl::list<std::string> CASPluginOpts("fcas-plugin-option",
                                            cl::desc("Plugin CAS Options"));
 static llvm::cl::opt<std::string>
     WorkingDir("working-dir", llvm::cl::desc("Path for working directory"));
-static cl::opt<bool> TestCASCancellation(
-    "test-cas-cancellation",
-    cl::desc(
-        "perform extra CAS API invocation and cancel it for testing purposes"));
 }
 } // anonymous namespace
 
@@ -357,13 +348,11 @@ static bool printSourceSymbolsFromModule(StringRef modulePath,
     return true;
   }
 
-  auto HSOpts = std::make_shared<HeaderSearchOptions>();
-
   IntrusiveRefCntPtr<DiagnosticsEngine> Diags =
       CompilerInstance::createDiagnostics(new DiagnosticOptions());
   std::unique_ptr<ASTUnit> AU = ASTUnit::LoadFromASTFile(
       std::string(modulePath), *pchRdr, ASTUnit::LoadASTOnly, Diags,
-      FileSystemOpts, HSOpts,
+      FileSystemOpts, /*UseDebugInfo=*/false,
       /*OnlyLocalDecls=*/true, CaptureDiagsKind::None,
       /*AllowASTWithCompilerErrors=*/true,
       /*UserFilesAreVolatile=*/false);
@@ -493,7 +482,7 @@ static std::string findRecordNameForFile(indexstore::IndexStore &store,
 }
 
 static int printStoreFileRecord(StringRef storePath, StringRef filePath,
-                                std::optional<unsigned> lineStart, unsigned lineCount,
+                                Optional<unsigned> lineStart, unsigned lineCount,
                                 PathRemapper remapper, raw_ostream &OS) {
   std::string error;
   indexstore::IndexStore store(storePath, remapper, error);
@@ -705,7 +694,7 @@ static int scanDeps(ArrayRef<const char *> Args, std::string WorkingDirectory,
                     bool SerializeDiags, bool DependencyFile,
                     ArrayRef<std::string> DepTargets, std::string OutputPath,
                     CXCASDatabases DBs,
-                    std::optional<std::string> ModuleName = std::nullopt) {
+                    Optional<std::string> ModuleName = std::nullopt) {
   CXDependencyScannerServiceOptions Opts =
       clang_experimental_DependencyScannerServiceOptions_create();
   auto CleanupOpts = llvm::make_scope_exit([&] {
@@ -769,7 +758,7 @@ static int scanDeps(ArrayRef<const char *> Args, std::string WorkingDirectory,
       llvm::outs() << "    cache-key: " << CacheKey << "\n";
     llvm::outs() << "    module-deps:\n";
     for (const auto &ModuleName :
-         ArrayRef(ModuleDeps.Strings, ModuleDeps.Count))
+         llvm::makeArrayRef(ModuleDeps.Strings, ModuleDeps.Count))
       llvm::outs() << "      " << ModuleName << "\n";
     llvm::outs() << "    file-deps:\n";
     for (const auto &FileName : ArrayRef(FileDeps.Strings, FileDeps.Count))
@@ -872,117 +861,41 @@ static int scanDeps(ArrayRef<const char *> Args, std::string WorkingDirectory,
   return 1;
 }
 
-static int uploadCachedJob(std::string CacheKey, CXCASDatabases DBs) {
-  CXError Err = nullptr;
-  CXCASCachedCompilation CComp = clang_experimental_cas_getCachedCompilation(
-      DBs, CacheKey.c_str(), /*Globally*/ false, &Err);
-  auto CleanupCachedComp = llvm::make_scope_exit(
-      [&] { clang_experimental_cas_CachedCompilation_dispose(CComp); });
+static int materializeCachedJob(std::string CacheKey, CXCASDatabases DBs) {
+  struct CompResult {
+    CXCASCachedCompilation Comp = nullptr;
+    CXError Err = nullptr;
+  };
+  std::promise<CompResult> CompPromise;
+  auto CompFuture = CompPromise.get_future();
+  struct CompCall {
+    std::promise<CompResult> Promise;
+  };
+  CompCall *CallCtx = new CompCall{std::move(CompPromise)};
+  clang_experimental_cas_getCachedCompilation_async(
+      DBs, CacheKey.c_str(), /*Globally*/ true, CallCtx,
+      [](void *Ctx, CXCASCachedCompilation Comp, CXError Err) {
+        std::unique_ptr<CompCall> CallCtx(static_cast<CompCall *>(Ctx));
+        CallCtx->Promise.set_value(CompResult{Comp, Err});
+      },
+      /*cancelToken*/ nullptr);
+  CompResult Res = CompFuture.get();
+  CXCASCachedCompilation CComp = Res.Comp;
+
+  auto CleanupCachedComp = llvm::make_scope_exit([&] {
+    if (CComp)
+      clang_experimental_cas_CachedCompilation_dispose(CComp);
+    if (Res.Err)
+      clang_Error_dispose(Res.Err);
+  });
   if (!CComp) {
-    if (Err) {
-      llvm::errs() << clang_Error_getDescription(Err) << "\n";
-      clang_Error_dispose(Err);
+    if (Res.Err) {
+      llvm::errs() << clang_Error_getDescription(Res.Err) << "\n";
     } else {
       llvm::errs() << "cache key was not found\n";
     }
     return 1;
   }
-
-  /// \returns true of an error occurred.
-  auto invokeMakeGlobal = [&](bool Cancel) -> bool {
-    CXCASCancellationToken CancelToken = nullptr;
-    auto CleanupCancelTok = llvm::make_scope_exit([&] {
-      if (Cancel)
-        clang_experimental_cas_CancellationToken_dispose(CancelToken);
-    });
-
-    std::promise<CXError> CallPromise;
-    clang_experimental_cas_CachedCompilation_makeGlobal(
-        CComp, &CallPromise,
-        [](void *Ctx, CXError Err) {
-          static_cast<std::promise<CXError> *>(Ctx)->set_value(Err);
-        },
-        Cancel ? &CancelToken : nullptr);
-    if (Cancel) {
-      clang_experimental_cas_CancellationToken_cancel(CancelToken);
-    }
-    CXError CallRes = CallPromise.get_future().get();
-    if (CallRes) {
-      llvm::errs() << clang_Error_getDescription(CallRes) << "\n";
-      return true;
-    }
-    return false;
-  };
-
-  if (options::TestCASCancellation) {
-    // Cancel an invocation for testing purposes.
-    if (invokeMakeGlobal(/*Cancel=*/true))
-      return 1;
-  }
-  if (invokeMakeGlobal(/*Cancel=*/false))
-    return 1;
-
-  return 0;
-}
-
-static int materializeCachedJob(std::string CacheKey, CXCASDatabases DBs) {
-  /// \returns true of an error occurred.
-  auto invokeGetCachedCompilation =
-      [&](bool Cancel, CXCASCachedCompilation &OutComp) -> bool {
-    OutComp = nullptr;
-    CXCASCancellationToken CancelToken = nullptr;
-    auto CleanupCancelTok = llvm::make_scope_exit([&] {
-      if (Cancel)
-        clang_experimental_cas_CancellationToken_dispose(CancelToken);
-    });
-
-    struct CompResult {
-      CXCASCachedCompilation Comp = nullptr;
-      CXError Err = nullptr;
-    };
-    std::promise<CompResult> CompPromise;
-    auto CompFuture = CompPromise.get_future();
-    struct CompCall {
-      std::promise<CompResult> Promise;
-    };
-    CompCall *CallCtx = new CompCall{std::move(CompPromise)};
-    clang_experimental_cas_getCachedCompilation_async(
-        DBs, CacheKey.c_str(), /*Globally*/ true, CallCtx,
-        [](void *Ctx, CXCASCachedCompilation Comp, CXError Err) {
-          std::unique_ptr<CompCall> CallCtx(static_cast<CompCall *>(Ctx));
-          CallCtx->Promise.set_value(CompResult{Comp, Err});
-        },
-        Cancel ? &CancelToken : nullptr);
-    if (Cancel) {
-      clang_experimental_cas_CancellationToken_cancel(CancelToken);
-    }
-    CompResult Res = CompFuture.get();
-    OutComp = Res.Comp;
-    if (!OutComp && !Cancel) {
-      if (Res.Err) {
-        llvm::errs() << clang_Error_getDescription(Res.Err) << "\n";
-        clang_Error_dispose(Res.Err);
-      } else {
-        llvm::errs() << "cache key was not found\n";
-      }
-      return true;
-    }
-    return false;
-  };
-
-  CXCASCachedCompilation CComp = nullptr;
-  auto CleanupCachedComp = llvm::make_scope_exit([&] {
-    if (CComp)
-      clang_experimental_cas_CachedCompilation_dispose(CComp);
-  });
-
-  if (options::TestCASCancellation) {
-    // Cancel an invocation for testing purposes.
-    if (invokeGetCachedCompilation(/*Cancel=*/true, CComp))
-      return 1;
-  }
-  if (invokeGetCachedCompilation(/*Cancel=*/false, CComp))
-    return 1;
 
   for (unsigned
            I = 0,
@@ -995,63 +908,42 @@ static int materializeCachedJob(std::string CacheKey, CXCASDatabases DBs) {
     auto CleanupOutputID =
         llvm::make_scope_exit([&] { clang_disposeString(OutputID); });
 
-    /// \returns true of an error occurred.
-    auto invokeLoadObject = [&](bool Cancel, CXCASObject &OutObj) -> bool {
-      OutObj = nullptr;
-      CXCASCancellationToken CancelToken = nullptr;
-      auto CleanupCancelTok = llvm::make_scope_exit([&] {
-        if (Cancel)
-          clang_experimental_cas_CancellationToken_dispose(CancelToken);
-      });
-
-      struct LoadResult {
-        CXCASObject Obj = nullptr;
-        CXError Err = nullptr;
-      };
-      std::promise<LoadResult> LoadPromise;
-      auto LoadFuture = LoadPromise.get_future();
-      struct LoadCall {
-        std::promise<LoadResult> Promise;
-      };
-      LoadCall *CallCtx = new LoadCall{std::move(LoadPromise)};
-      clang_experimental_cas_loadObjectByString_async(
-          DBs, clang_getCString(OutputID), CallCtx,
-          [](void *Ctx, CXCASObject Obj, CXError Err) {
-            std::unique_ptr<LoadCall> CallCtx(static_cast<LoadCall *>(Ctx));
-            CallCtx->Promise.set_value(LoadResult{Obj, Err});
-          },
-          Cancel ? &CancelToken : nullptr);
-      if (Cancel) {
-        clang_experimental_cas_CancellationToken_cancel(CancelToken);
-      }
-      LoadResult Res = LoadFuture.get();
-      OutObj = Res.Obj;
-      if (!OutObj && !Cancel) {
-        if (Res.Err) {
-          llvm::errs() << clang_Error_getDescription(Res.Err) << "\n";
-          clang_Error_dispose(Res.Err);
-        } else {
-          llvm::errs() << "cache key was not found\n";
-        }
-        return true;
-      }
-      return false;
+    struct LoadResult {
+      CXCASObject Obj = nullptr;
+      CXError Err = nullptr;
     };
+    std::promise<LoadResult> LoadPromise;
+    auto LoadFuture = LoadPromise.get_future();
+    struct LoadCall {
+      std::promise<LoadResult> Promise;
+    };
+    LoadCall *CallCtx = new LoadCall{std::move(LoadPromise)};
+    clang_experimental_cas_loadObjectByString_async(
+        DBs, clang_getCString(OutputID), CallCtx,
+        [](void *Ctx, CXCASObject Obj, CXError Err) {
+          std::unique_ptr<LoadCall> CallCtx(static_cast<LoadCall *>(Ctx));
+          CallCtx->Promise.set_value(LoadResult{Obj, Err});
+        },
+        /*cancelToken*/ nullptr);
 
-    CXCASObject CASObj = nullptr;
+    LoadResult Res = LoadFuture.get();
+    CXCASObject CASObj = Res.Obj;
+
     auto CleanupLoadObj = llvm::make_scope_exit([&] {
       if (CASObj)
         clang_experimental_cas_CASObject_dispose(CASObj);
+      if (Res.Err)
+        clang_Error_dispose(Res.Err);
     });
 
-    if (options::TestCASCancellation) {
-      // Cancel an invocation for testing purposes.
-      if (invokeLoadObject(/*Cancel=*/true, CASObj))
-        return 1;
-    }
-    if (invokeLoadObject(/*Cancel=*/false, CASObj))
+    if (!CASObj) {
+      if (Res.Err) {
+        llvm::errs() << clang_Error_getDescription(Res.Err) << "\n";
+      } else {
+        llvm::errs() << "compilation output ID was not found\n";
+      }
       return 1;
-
+    }
     if (!clang_experimental_cas_CachedCompilation_isOutputMaterialized(CComp,
                                                                        I))
       report_fatal_error("output was not materialized?");
@@ -1093,43 +985,6 @@ static int replayCachedJob(ArrayRef<const char *> Args,
   CXString DiagText = clang_experimental_cas_ReplayResult_getStderr(ReplayRes);
   llvm::errs() << clang_getCString(DiagText);
   clang_disposeString(DiagText);
-  return 0;
-}
-
-static int pruneCAS(int64_t Limit, CXCASDatabases DBs) {
-  CXError Err = nullptr;
-  int64_t Size = clang_experimental_cas_Databases_get_storage_size(DBs, &Err);
-  if (Size == -2) {
-    llvm::errs() << "clang_experimental_cas_Databases_get_storage_size: "
-                 << clang_Error_getDescription(Err) << "\n";
-    clang_Error_dispose(Err);
-    return 1;
-  }
-  if (Size == -1) {
-    llvm::errs()
-        << "unsupported clang_experimental_cas_Databases_get_storage_size";
-    return 1;
-  }
-  if (Size == 0) {
-    llvm::errs()
-        << "clang_experimental_cas_Databases_get_storage_size returned 0";
-    return 1;
-  }
-
-  if (CXError Err =
-          clang_experimental_cas_Databases_set_size_limit(DBs, Limit)) {
-    llvm::errs() << "clang_experimental_cas_Databases_set_size_limit: "
-                 << clang_Error_getDescription(Err) << "\n";
-    clang_Error_dispose(Err);
-    return 1;
-  }
-  if (CXError Err = clang_experimental_cas_Databases_prune_ondisk_data(DBs)) {
-    llvm::errs() << "clang_experimental_cas_Databases_prune_ondisk_data: "
-                 << clang_Error_getDescription(Err) << "\n";
-    clang_Error_dispose(Err);
-    return 1;
-  }
-
   return 0;
 }
 
@@ -1297,7 +1152,7 @@ static int watchDirectory(StringRef dirPath) {
 
 bool deconstructPathAndRange(StringRef input,
                              std::string &filepath,
-                             std::optional<unsigned> &lineStart,
+                             Optional<unsigned> &lineStart,
                              unsigned &lineCount) {
   StringRef path, start, end;
   std::tie(path, end) = input.rsplit(':');
@@ -1376,7 +1231,7 @@ int indextest_core_main(int argc, const char **argv) {
   if (options::Action == ActionType::PrintRecord) {
     if (!options::FilePathAndRange.empty()) {
       std::string filepath;
-      std::optional<unsigned> lineStart;
+      Optional<unsigned> lineStart;
       unsigned lineCount;
       if (deconstructPathAndRange(options::FilePathAndRange,
                                   filepath, lineStart, lineCount))
@@ -1434,9 +1289,9 @@ int indextest_core_main(int argc, const char **argv) {
     return aggregateDataAsJSON(storePath, PathRemapper, OS);
   }
 
-  std::optional<std::string> CASPath = options::CASPath.empty()
+  Optional<std::string> CASPath = options::CASPath.empty()
                                       ? std::nullopt
-                                      : std::optional<std::string>(options::CASPath);
+                                      : Optional<std::string>(options::CASPath);
 
   CXCASOptions CASOpts = nullptr;
   CXCASDatabases DBs = nullptr;
@@ -1497,18 +1352,6 @@ int indextest_core_main(int argc, const char **argv) {
                     options::OutputDir, DBs, options::ModuleName);
   }
 
-  if (options::Action == ActionType::UploadCachedJob) {
-    if (options::InputFiles.empty()) {
-      errs() << "error: missing cache key\n";
-      return 1;
-    }
-    if (!DBs) {
-      errs() << "error: CAS was not configured\n";
-      return 1;
-    }
-    return uploadCachedJob(options::InputFiles[0], DBs);
-  }
-
   if (options::Action == ActionType::MaterializeCachedJob) {
     if (options::InputFiles.empty()) {
       errs() << "error: missing cache key\n";
@@ -1532,23 +1375,6 @@ int indextest_core_main(int argc, const char **argv) {
     }
     return replayCachedJob(CompArgs, options::WorkingDir,
                            options::InputFiles[0], DBs);
-  }
-
-  if (options::Action == ActionType::PruneCAS) {
-    if (options::InputFiles.empty()) {
-      errs() << "error: missing size limit\n";
-      return 1;
-    }
-    int64_t Limit;
-    if (StringRef(options::InputFiles[0]).getAsInteger(10, Limit)) {
-      errs() << "error: size limit not an integer\n";
-      return 1;
-    }
-    if (!DBs) {
-      errs() << "error: CAS was not configured\n";
-      return 1;
-    }
-    return pruneCAS(Limit, DBs);
   }
 
   if (options::Action == ActionType::WatchDir) {

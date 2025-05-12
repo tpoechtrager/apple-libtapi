@@ -43,10 +43,10 @@ public:
                                        IsReadOnly);
   }
 
-  void reserveAllocationSpace(uintptr_t CodeSize, Align CodeAlign,
-                              uintptr_t RODataSize, Align RODataAlign,
+  void reserveAllocationSpace(uintptr_t CodeSize, uint32_t CodeAlign,
+                              uintptr_t RODataSize, uint32_t RODataAlign,
                               uintptr_t RWDataSize,
-                              Align RWDataAlign) override {
+                              uint32_t RWDataAlign) override {
     MemMgr->reserveAllocationSpace(CodeSize, CodeAlign, RODataSize, RODataAlign,
                                    RWDataSize, RWDataAlign);
   }

@@ -23,8 +23,7 @@ EvalEmitter::EvalEmitter(Context &Ctx, Program &P, State &Parent,
                          InterpStack &Stk, APValue &Result)
     : Ctx(Ctx), P(P), S(Parent, P, Stk, Ctx, this), Result(Result) {
   // Create a dummy frame for the interpreter which does not have locals.
-  S.Current =
-      new InterpFrame(S, /*Func=*/nullptr, /*Caller=*/nullptr, CodePtr());
+  S.Current = new InterpFrame(S, nullptr, nullptr, CodePtr(), Pointer());
 }
 
 llvm::Expected<bool> EvalEmitter::interpretExpr(const Expr *E) {
@@ -54,16 +53,6 @@ Scope::Local EvalEmitter::createLocal(Descriptor *D) {
   auto Memory = std::make_unique<char[]>(sizeof(Block) + D->getAllocSize());
   auto *B = new (Memory.get()) Block(D, /*isStatic=*/false);
   B->invokeCtor();
-
-  // Initialize local variable inline descriptor.
-  InlineDescriptor &Desc = *reinterpret_cast<InlineDescriptor *>(B->rawData());
-  Desc.Desc = D;
-  Desc.Offset = sizeof(InlineDescriptor);
-  Desc.IsActive = true;
-  Desc.IsBase = false;
-  Desc.IsFieldMutable = false;
-  Desc.IsConst = false;
-  Desc.IsInitialized = false;
 
   // Register the local.
   unsigned Off = Locals.size();
@@ -113,6 +102,24 @@ template <PrimType OpType> bool EvalEmitter::emitRet(const SourceInfo &Info) {
   return ReturnValue<T>(S.Stk.pop<T>(), Result);
 }
 
+template <PrimType OpType>
+bool EvalEmitter::emitCall(const Function *Func, const SourceInfo &Info) {
+
+  S.Current =
+      new InterpFrame(S, const_cast<Function *>(Func), S.Current, {}, {});
+  // Result of call will be on the stack and needs to be handled by the caller.
+  return Interpret(S, Result);
+}
+
+bool EvalEmitter::emitCallVoid(const Function *Func, const SourceInfo &Info) {
+  APValue VoidResult;
+  S.Current =
+      new InterpFrame(S, const_cast<Function *>(Func), S.Current, {}, {});
+  bool Success = Interpret(S, VoidResult);
+  assert(VoidResult.isAbsent());
+  return Success;
+}
+
 bool EvalEmitter::emitRetVoid(const SourceInfo &Info) { return true; }
 
 bool EvalEmitter::emitRetValue(const SourceInfo &Info) {
@@ -123,7 +130,7 @@ bool EvalEmitter::emitRetValue(const SourceInfo &Info) {
       Ty = AT->getValueType();
 
     if (auto *RT = Ty->getAs<RecordType>()) {
-      const auto *Record = Ptr.getRecord();
+      auto *Record = Ptr.getRecord();
       assert(Record && "Missing record descriptor");
 
       bool Ok = true;
@@ -134,7 +141,7 @@ bool EvalEmitter::emitRetValue(const SourceInfo &Info) {
           const Pointer &FP = Ptr.atField(F.Offset);
           QualType FieldTy = F.Decl->getType();
           if (FP.isActive()) {
-            if (std::optional<PrimType> T = Ctx.classify(FieldTy)) {
+            if (llvm::Optional<PrimType> T = Ctx.classify(FieldTy)) {
               TYPE_SWITCH(*T, Ok &= ReturnValue<T>(FP.deref<T>(), Value));
             } else {
               Ok &= Composite(FieldTy, FP, Value);
@@ -156,7 +163,7 @@ bool EvalEmitter::emitRetValue(const SourceInfo &Info) {
           const Pointer &FP = Ptr.atField(FD->Offset);
           APValue &Value = R.getStructField(I);
 
-          if (std::optional<PrimType> T = Ctx.classify(FieldTy)) {
+          if (llvm::Optional<PrimType> T = Ctx.classify(FieldTy)) {
             TYPE_SWITCH(*T, Ok &= ReturnValue<T>(FP.deref<T>(), Value));
           } else {
             Ok &= Composite(FieldTy, FP, Value);
@@ -188,7 +195,7 @@ bool EvalEmitter::emitRetValue(const SourceInfo &Info) {
       for (unsigned I = 0; I < NumElems; ++I) {
         APValue &Slot = R.getArrayInitializedElt(I);
         const Pointer &EP = Ptr.atIndex(I);
-        if (std::optional<PrimType> T = Ctx.classify(ElemTy)) {
+        if (llvm::Optional<PrimType> T = Ctx.classify(ElemTy)) {
           TYPE_SWITCH(*T, Ok &= ReturnValue<T>(EP.deref<T>(), Slot));
         } else {
           Ok &= Composite(ElemTy, EP.narrow(), Slot);
@@ -208,8 +215,9 @@ bool EvalEmitter::emitGetPtrLocal(uint32_t I, const SourceInfo &Info) {
   if (!isActive())
     return true;
 
-  Block *B = getLocal(I);
-  S.Stk.push<Pointer>(B, sizeof(InlineDescriptor));
+  auto It = Locals.find(I);
+  assert(It != Locals.end() && "Missing local variable");
+  S.Stk.push<Pointer>(reinterpret_cast<Block *>(It->second.get()));
   return true;
 }
 
@@ -220,8 +228,10 @@ bool EvalEmitter::emitGetLocal(uint32_t I, const SourceInfo &Info) {
 
   using T = typename PrimConv<OpType>::T;
 
-  Block *B = getLocal(I);
-  S.Stk.push<T>(*reinterpret_cast<T *>(B->data()));
+  auto It = Locals.find(I);
+  assert(It != Locals.end() && "Missing local variable");
+  auto *B = reinterpret_cast<Block *>(It->second.get());
+  S.Stk.push<T>(*reinterpret_cast<T *>(B + 1));
   return true;
 }
 
@@ -232,11 +242,10 @@ bool EvalEmitter::emitSetLocal(uint32_t I, const SourceInfo &Info) {
 
   using T = typename PrimConv<OpType>::T;
 
-  Block *B = getLocal(I);
-  *reinterpret_cast<T *>(B->data()) = S.Stk.pop<T>();
-  InlineDescriptor &Desc = *reinterpret_cast<InlineDescriptor *>(B->rawData());
-  Desc.IsInitialized = true;
-
+  auto It = Locals.find(I);
+  assert(It != Locals.end() && "Missing local variable");
+  auto *B = reinterpret_cast<Block *>(It->second.get());
+  *reinterpret_cast<T *>(B + 1) = S.Stk.pop<T>();
   return true;
 }
 
@@ -245,8 +254,9 @@ bool EvalEmitter::emitDestroy(uint32_t I, const SourceInfo &Info) {
     return true;
 
   for (auto &Local : Descriptors[I]) {
-    Block *B = getLocal(Local.Offset);
-    S.deallocate(B);
+    auto It = Locals.find(Local.Offset);
+    assert(It != Locals.end() && "Missing local variable");
+    S.deallocate(reinterpret_cast<Block *>(It->second.get()));
   }
 
   return true;

@@ -50,7 +50,6 @@
 #include "llvm/CAS/OnDiskGraphDB.h"
 #include "OnDiskCommon.h"
 #include "llvm/ADT/DenseMap.h"
-#include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/Alignment.h"
 #include "llvm/Support/Errc.h"
 #include "llvm/Support/MemoryBuffer.h"

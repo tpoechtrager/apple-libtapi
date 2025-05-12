@@ -133,7 +133,8 @@ clang_experimental_DependencyScannerService_create_v0(CXDependencyMode Format) {
   IntrusiveRefCntPtr<llvm::cas::CachingOnDiskFileSystem> FS;
   return wrap(new DependencyScanningService(
       ScanningMode::DependencyDirectivesScan, unwrap(Format), CASOpts,
-      /*CAS=*/nullptr, /*ActionCache=*/nullptr, FS));
+      /*CAS=*/nullptr, /*ActionCache=*/nullptr, FS,
+      /*ReuseFilemanager=*/false));
 }
 
 ScanningOutputFormat DependencyScannerServiceOptions::getFormat() const {
@@ -171,7 +172,8 @@ clang_experimental_DependencyScannerService_create_v1(
   }
   return wrap(new DependencyScanningService(
       ScanningMode::DependencyDirectivesScan, Format, unwrap(Opts)->CASOpts,
-      std::move(CAS), std::move(Cache), std::move(FS)));
+      std::move(CAS), std::move(Cache), std::move(FS),
+      /*ReuseFilemanager=*/false));
 }
 
 void clang_experimental_DependencyScannerService_dispose_v0(
@@ -228,18 +230,16 @@ static CXErrorCode getFullDependencies(DependencyScanningWorker *Worker,
                                        void *Context, CXString *Error,
                                        DiagnosticConsumer *DiagConsumer,
                                        LookupModuleOutputCallback LookupOutput,
-                                       std::optional<StringRef> ModuleName,
+                                       llvm::Optional<StringRef> ModuleName,
                                        HandleTUDepsCallback HandleTUDeps) {
   llvm::DenseSet<ModuleID> AlreadySeen;
   FullDependencyConsumer DepConsumer(AlreadySeen);
   auto Controller = DependencyScanningTool::createActionController(
       *Worker, std::move(LookupOutput));
 
-#ifndef NDEBUG
   bool HasDiagConsumer = DiagConsumer;
   bool HasError = Error;
   assert(HasDiagConsumer ^ HasError && "Both DiagConsumer and Error provided");
-#endif
 
   if (DiagConsumer) {
     bool Result =
@@ -264,16 +264,16 @@ static CXErrorCode getFullDependencies(DependencyScanningWorker *Worker,
     MDS->Modules = new CXModuleDependency[MDS->Count];
     for (int I = 0; I < MDS->Count; ++I) {
       CXModuleDependency &M = MDS->Modules[I];
-      ModuleDeps &MD = TU.ModuleGraph[I];
+      const ModuleDeps &MD = TU.ModuleGraph[I];
       M.Name = cxstring::createDup(MD.ID.ModuleName);
       M.ContextHash = cxstring::createDup(MD.ID.ContextHash);
       M.ModuleMapPath = cxstring::createDup(MD.ClangModuleMapFile);
       M.FileDeps = cxstring::createSet(MD.FileDeps);
       std::vector<std::string> Modules;
-      for (ModuleID &MID : MD.ClangModuleDeps)
+      for (const ModuleID &MID : MD.ClangModuleDeps)
         Modules.push_back(MID.ModuleName + ":" + MID.ContextHash);
       M.ModuleDeps = cxstring::createSet(Modules);
-      M.BuildArguments = cxstring::createSet(MD.getBuildArguments());
+      M.BuildArguments = cxstring::createSet(MD.BuildArguments);
     }
     MDC(Context, MDS);
   }
@@ -289,7 +289,7 @@ static CXErrorCode getFileDependencies(CXDependencyScannerWorker W, int argc,
                                        void *Context, CXString *Error,
                                        DiagnosticConsumer *DiagConsumer,
                                        LookupModuleOutputCallback LookupOutput,
-                                       std::optional<StringRef> ModuleName,
+                                       llvm::Optional<StringRef> ModuleName,
                                        HandleTUDepsCallback HandleTUDeps) {
   if (!W || argc < 2 || !argv)
     return CXError_InvalidArguments;
@@ -322,37 +322,6 @@ private:
 };
 } // end anonymous namespace
 
-CXFileDependencies *
-clang_experimental_DependencyScannerWorker_getFileDependencies_v3(
-    CXDependencyScannerWorker W, int argc, const char *const *argv,
-    const char *ModuleName, const char *WorkingDirectory, void *MDCContext,
-    CXModuleDiscoveredCallback *MDC, void *MLOContext,
-    CXModuleLookupOutputCallback *MLO, unsigned, CXString *Error) {
-  OutputLookup OL(MLOContext, MLO);
-  auto LookupOutputs = [&](const ModuleID &ID, ModuleOutputKind MOK) {
-    return OL.lookupModuleOutput(ID, MOK);
-  };
-  CXFileDependencies *FDeps = nullptr;
-  CXErrorCode Result = getFileDependencies(
-      W, argc, argv, WorkingDirectory, MDC, MDCContext, Error, nullptr,
-      LookupOutputs,
-      ModuleName ? std::optional<StringRef>(ModuleName) : std::nullopt,
-      [&](TranslationUnitDeps TU) {
-        assert(!TU.DriverCommandLine.empty());
-        std::vector<std::string> Modules;
-        for (const ModuleID &MID : TU.ClangModuleDeps)
-          Modules.push_back(MID.ModuleName + ":" + MID.ContextHash);
-        FDeps = new CXFileDependencies;
-        FDeps->ContextHash = cxstring::createDup(TU.ID.ContextHash);
-        FDeps->FileDeps = cxstring::createSet(TU.FileDeps);
-        FDeps->ModuleDeps = cxstring::createSet(Modules);
-        FDeps->BuildArguments = cxstring::createSet(TU.DriverCommandLine);
-      });
-  assert(Result != CXError_Success || FDeps);
-  (void)Result;
-  return FDeps;
-}
-
 CXErrorCode clang_experimental_DependencyScannerWorker_getFileDependencies_v4(
     CXDependencyScannerWorker W, int argc, const char *const *argv,
     const char *ModuleName, const char *WorkingDirectory, void *MDCContext,
@@ -370,8 +339,7 @@ CXErrorCode clang_experimental_DependencyScannerWorker_getFileDependencies_v4(
 
   CXErrorCode Result = getFileDependencies(
       W, argc, argv, WorkingDirectory, MDC, MDCContext, Error, nullptr,
-      LookupOutputs,
-      ModuleName ? std::optional<StringRef>(ModuleName) : std::nullopt,
+      LookupOutputs, ModuleName ? Optional<StringRef>(ModuleName) : None,
       [&](TranslationUnitDeps TU) {
         assert(TU.DriverCommandLine.empty());
         std::vector<std::string> Modules;
@@ -527,7 +495,7 @@ enum CXErrorCode clang_experimental_DependencyScannerWorker_getDepGraph(
   CXErrorCode Result = getFileDependencies(
       W, argc, argv, WorkingDirectory, /*MDC=*/nullptr, /*MDCContext=*/nullptr,
       /*Error=*/nullptr, SerialDiagConsumer.get(), LookupOutputs,
-      ModuleName ? std::optional<StringRef>(ModuleName) : std::nullopt,
+      ModuleName ? Optional<StringRef>(ModuleName) : std::nullopt,
       [&](TranslationUnitDeps TU) { DepGraph->TUDeps = std::move(TU); });
 
   *Out = wrap(DepGraph);
@@ -592,8 +560,7 @@ clang_experimental_DepGraphModule_getModuleDeps(CXDepGraphModule CXDepMod) {
 CXCStringArray
 clang_experimental_DepGraphModule_getBuildArguments(CXDepGraphModule CXDepMod) {
   ModuleDeps &ModDeps = *unwrap(CXDepMod)->ModDeps;
-  return unwrap(CXDepMod)->StrMgr.createCStringsRef(
-      ModDeps.getBuildArguments());
+  return unwrap(CXDepMod)->StrMgr.createCStringsRef(ModDeps.BuildArguments);
 }
 
 const char *

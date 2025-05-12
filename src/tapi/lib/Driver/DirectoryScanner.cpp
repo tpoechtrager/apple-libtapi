@@ -384,12 +384,6 @@ bool DirectoryScanner::scanSwiftModules(Framework &framework,
   if (!_fm.isDirectory(path, /*CacheFailure=*/false))
     return false;
 
-  // Skip symlinked Swift module directory.
-  // Some frameworks also install a Framework.swiftmodule under /usr/lib/swift.
-  // We don't need to scan it again.
-  if (_fm.isSymlink(path))
-    return false;
-
   framework._swiftModules.emplace_back(path);
   auto &module = framework._swiftModules.back();
   std::error_code ec;

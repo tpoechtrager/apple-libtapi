@@ -50,7 +50,7 @@ using namespace llvm;
 // SelectionDAGISel::runOnMachineFunction.  We have to do it in two places
 // because we want to do it while building the selection DAG for uses of alloca,
 // but not all alloca instructions are used so we have to follow up afterwards.
-std::optional<unsigned>
+Optional<unsigned>
 WebAssemblyFrameLowering::getLocalForStackObject(MachineFunction &MF,
                                                  int FrameIndex) {
   MachineFrameInfo &MFI = MF.getFrameInfo();
@@ -63,7 +63,7 @@ WebAssemblyFrameLowering::getLocalForStackObject(MachineFunction &MF,
   // linear memory.
   const AllocaInst *AI = MFI.getObjectAllocation(FrameIndex);
   if (!AI || !WebAssembly::isWasmVarAddressSpace(AI->getAddressSpace()))
-    return std::nullopt;
+    return None;
 
   // Otherwise, allocate this object in the named value stack, outside of linear
   // memory.
@@ -130,15 +130,7 @@ bool WebAssemblyFrameLowering::hasReservedCallFrame(
 bool WebAssemblyFrameLowering::needsSPForLocalFrame(
     const MachineFunction &MF) const {
   auto &MFI = MF.getFrameInfo();
-  auto &MRI = MF.getRegInfo();
-  // llvm.stacksave can explicitly read SP register and it can appear without
-  // dynamic alloca.
-  bool HasExplicitSPUse =
-      any_of(MRI.use_operands(getSPReg(MF)),
-             [](MachineOperand &MO) { return !MO.isImplicit(); });
-
-  return MFI.getStackSize() || MFI.adjustsStack() || hasFP(MF) ||
-         HasExplicitSPUse;
+  return MFI.getStackSize() || MFI.adjustsStack() || hasFP(MF);
 }
 
 // In function with EH pads, we need to make a copy of the value of

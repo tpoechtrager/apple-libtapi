@@ -35,6 +35,7 @@
 #include "clang/Basic/Visibility.h"
 #include "llvm/ADT/APSInt.h"
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/PointerIntPair.h"
 #include "llvm/ADT/PointerUnion.h"
 #include "llvm/ADT/StringRef.h"
@@ -45,7 +46,6 @@
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
-#include <optional>
 #include <string>
 #include <utility>
 
@@ -395,7 +395,9 @@ public:
 
   /// Get the linkage from a semantic point of view. Entities in
   /// anonymous namespaces are external (in c++98).
-  Linkage getFormalLinkage() const;
+  Linkage getFormalLinkage() const {
+    return clang::getFormalLinkage(getLinkageInternal());
+  }
 
   /// True if this decl has external linkage.
   bool hasExternalFormalLinkage() const {
@@ -435,7 +437,7 @@ public:
 
   /// If visibility was explicitly specified for this
   /// declaration, return that visibility.
-  std::optional<Visibility>
+  Optional<Visibility>
   getExplicitVisibility(ExplicitVisibilityKind kind) const;
 
   /// True if the computed linkage is valid. Used for consistency
@@ -540,9 +542,6 @@ public:
 class NamespaceDecl : public NamedDecl, public DeclContext,
                       public Redeclarable<NamespaceDecl>
 {
-
-  enum Flags : unsigned { F_Inline = 1 << 0, F_Nested = 1 << 1 };
-
   /// The starting location of the source range, pointing
   /// to either the namespace or the inline keyword.
   SourceLocation LocStart;
@@ -554,12 +553,11 @@ class NamespaceDecl : public NamedDecl, public DeclContext,
   /// this namespace or to the first namespace in the chain (the latter case
   /// only when this is not the first in the chain), along with a
   /// boolean value indicating whether this is an inline namespace.
-  llvm::PointerIntPair<NamespaceDecl *, 2, unsigned>
-      AnonOrFirstNamespaceAndFlags;
+  llvm::PointerIntPair<NamespaceDecl *, 1, bool> AnonOrFirstNamespaceAndInline;
 
   NamespaceDecl(ASTContext &C, DeclContext *DC, bool Inline,
                 SourceLocation StartLoc, SourceLocation IdLoc,
-                IdentifierInfo *Id, NamespaceDecl *PrevDecl, bool Nested);
+                IdentifierInfo *Id, NamespaceDecl *PrevDecl);
 
   using redeclarable_base = Redeclarable<NamespaceDecl>;
 
@@ -571,10 +569,10 @@ public:
   friend class ASTDeclReader;
   friend class ASTDeclWriter;
 
-  static NamespaceDecl *Create(ASTContext &C, DeclContext *DC, bool Inline,
-                               SourceLocation StartLoc, SourceLocation IdLoc,
-                               IdentifierInfo *Id, NamespaceDecl *PrevDecl,
-                               bool Nested);
+  static NamespaceDecl *Create(ASTContext &C, DeclContext *DC,
+                               bool Inline, SourceLocation StartLoc,
+                               SourceLocation IdLoc, IdentifierInfo *Id,
+                               NamespaceDecl *PrevDecl);
 
   static NamespaceDecl *CreateDeserialized(ASTContext &C, unsigned ID);
 
@@ -603,33 +601,12 @@ public:
 
   /// Returns true if this is an inline namespace declaration.
   bool isInline() const {
-    return AnonOrFirstNamespaceAndFlags.getInt() & F_Inline;
+    return AnonOrFirstNamespaceAndInline.getInt();
   }
 
   /// Set whether this is an inline namespace declaration.
   void setInline(bool Inline) {
-    unsigned F = AnonOrFirstNamespaceAndFlags.getInt();
-    if (Inline)
-      AnonOrFirstNamespaceAndFlags.setInt(F | F_Inline);
-    else
-      AnonOrFirstNamespaceAndFlags.setInt(F & ~F_Inline);
-  }
-
-  /// Returns true if this is a nested namespace declaration.
-  /// \code
-  /// namespace outer::nested { }
-  /// \endcode
-  bool isNested() const {
-    return AnonOrFirstNamespaceAndFlags.getInt() & F_Nested;
-  }
-
-  /// Set whether this is a nested namespace declaration.
-  void setNested(bool Nested) {
-    unsigned F = AnonOrFirstNamespaceAndFlags.getInt();
-    if (Nested)
-      AnonOrFirstNamespaceAndFlags.setInt(F | F_Nested);
-    else
-      AnonOrFirstNamespaceAndFlags.setInt(F & ~F_Nested);
+    AnonOrFirstNamespaceAndInline.setInt(Inline);
   }
 
   /// Returns true if the inline qualifier for \c Name is redundant.
@@ -658,11 +635,11 @@ public:
   /// Retrieve the anonymous namespace nested inside this namespace,
   /// if any.
   NamespaceDecl *getAnonymousNamespace() const {
-    return getOriginalNamespace()->AnonOrFirstNamespaceAndFlags.getPointer();
+    return getOriginalNamespace()->AnonOrFirstNamespaceAndInline.getPointer();
   }
 
   void setAnonymousNamespace(NamespaceDecl *D) {
-    getOriginalNamespace()->AnonOrFirstNamespaceAndFlags.setPointer(D);
+    getOriginalNamespace()->AnonOrFirstNamespaceAndInline.setPointer(D);
   }
 
   /// Retrieves the canonical declaration of this namespace.
@@ -693,8 +670,6 @@ public:
   }
 };
 
-class VarDecl;
-
 /// Represent the declaration of a variable (in which case it is
 /// an lvalue) a function (in which case it is a function designator) or
 /// an enum constant.
@@ -720,13 +695,6 @@ public:
   /// Only VarDecl can be init captures, but both VarDecl and BindingDecl
   /// can be captured.
   bool isInitCapture() const;
-
-  // If this is a VarDecl, or a BindindDecl with an
-  // associated decomposed VarDecl, return that VarDecl.
-  VarDecl *getPotentiallyDecomposedVarDecl();
-  const VarDecl *getPotentiallyDecomposedVarDecl() const {
-    return const_cast<ValueDecl *>(this)->getPotentiallyDecomposedVarDecl();
-  }
 
   // Implement isa/cast/dyncast/etc.
   static bool classof(const Decl *D) { return classofKind(D->getKind()); }
@@ -900,7 +868,7 @@ struct EvaluatedStmt {
   bool HasICEInit : 1;
   bool CheckedForICEInit : 1;
 
-  LazyDeclStmtPtr Value;
+  Stmt *Value;
   APValue Evaluated;
 
   EvaluatedStmt()
@@ -921,10 +889,7 @@ public:
     CallInit,
 
     /// Direct list-initialization (C++11)
-    ListInit,
-
-    /// Parenthesized list-initialization (C++20)
-    ParenListInit
+    ListInit
   };
 
   /// Kinds of thread-local storage.
@@ -1898,8 +1863,7 @@ enum class MultiVersionKind {
   Target,
   CPUSpecific,
   CPUDispatch,
-  TargetClones,
-  TargetVersion
+  TargetClones
 };
 
 /// Represents a function declaration or definition.
@@ -2168,7 +2132,7 @@ public:
   /// declaration to the declaration that is a definition (if there is one).
   ///
   /// \param CheckForPendingFriendDefinition If \c true, also check for friend
-  ///        declarations that were instantiated from function definitions.
+  ///        declarations that were instantiataed from function definitions.
   ///        Such a declaration behaves as if it is a definition for the
   ///        purpose of redefinition checking, but isn't actually a "real"
   ///        definition until its body is instantiated.
@@ -2378,21 +2342,6 @@ public:
     return getConstexprKind() == ConstexprSpecKind::Consteval;
   }
 
-  void setBodyContainsImmediateEscalatingExpressions(bool Set) {
-    FunctionDeclBits.BodyContainsImmediateEscalatingExpression = Set;
-  }
-
-  bool BodyContainsImmediateEscalatingExpressions() const {
-    return FunctionDeclBits.BodyContainsImmediateEscalatingExpression;
-  }
-
-  bool isImmediateEscalating() const;
-
-  // The function is a C++ immediate function.
-  // This can be either a consteval function, or an immediate escalating
-  // function containing an immediate escalating expression.
-  bool isImmediateFunction() const;
-
   /// Whether the instantiation of this function is pending.
   /// This bit is set when the decision to instantiate this function is made
   /// and unset if and when the function body is created. That leaves out
@@ -2487,7 +2436,7 @@ public:
   /// If this function is an allocation/deallocation function that takes
   /// the `std::nothrow_t` tag, return true through IsNothrow,
   bool isReplaceableGlobalAllocationFunction(
-      std::optional<unsigned> *AlignmentParam = nullptr,
+      Optional<unsigned> *AlignmentParam = nullptr,
       bool *IsNothrow = nullptr) const;
 
   /// Determine if this function provides an inline implementation of a builtin.
@@ -2552,10 +2501,6 @@ public:
         ->FunctionDeclBits.FriendConstraintRefersToEnclosingTemplate;
   }
 
-  /// Determine whether a function is a friend function that cannot be
-  /// redeclared outside of its class, per C++ [temp.friend]p9.
-  bool isMemberLikeConstrainedFriend() const;
-
   /// Gets the kind of multiversioning attribute this declaration has. Note that
   /// this can return a value even if the function is not multiversion, such as
   /// the case of 'target'.
@@ -2573,17 +2518,9 @@ public:
   /// the target functionality.
   bool isTargetMultiVersion() const;
 
-  /// True if this function is the default version of a multiversioned dispatch
-  /// function as a part of the target functionality.
-  bool isTargetMultiVersionDefault() const;
-
   /// True if this function is a multiversioned dispatch function as a part of
   /// the target-clones functionality.
   bool isTargetClonesMultiVersion() const;
-
-  /// True if this function is a multiversioned dispatch function as a part of
-  /// the target-version functionality.
-  bool isTargetVersionMultiVersion() const;
 
   /// \brief Get the associated-constraints of this function declaration.
   /// Currently, this will either be a vector of size 1 containing the
@@ -2966,7 +2903,11 @@ public:
 
 /// Represents a member of a struct/union/class.
 class FieldDecl : public DeclaratorDecl, public Mergeable<FieldDecl> {
-  /// The kinds of value we can store in StorageKind.
+  unsigned BitField : 1;
+  unsigned Mutable : 1;
+  mutable unsigned CachedFieldIndex : 30;
+
+  /// The kinds of value we can store in InitializerOrBitWidth.
   ///
   /// Note that this is compatible with InClassInitStyle except for
   /// ISK_CapturedVLAType.
@@ -2989,15 +2930,10 @@ class FieldDecl : public DeclaratorDecl, public Mergeable<FieldDecl> {
     ISK_CapturedVLAType,
   };
 
-  unsigned BitField : 1;
-  unsigned Mutable : 1;
-  unsigned StorageKind : 2;
-  mutable unsigned CachedFieldIndex : 28;
-
   /// If this is a bitfield with a default member initializer, this
   /// structure is used to represent the two expressions.
-  struct InitAndBitWidthStorage {
-    LazyDeclStmtPtr Init;
+  struct InitAndBitWidth {
+    Expr *Init;
     Expr *BitWidth;
   };
 
@@ -3010,25 +2946,16 @@ class FieldDecl : public DeclaratorDecl, public Mergeable<FieldDecl> {
   /// and attached.
   // FIXME: Tail-allocate this to reduce the size of FieldDecl in the
   // overwhelmingly common case that we have none of these things.
-  union {
-    // Active member if ISK is not ISK_CapturedVLAType and BitField is false.
-    LazyDeclStmtPtr Init;
-    // Active member if ISK is ISK_NoInit and BitField is true.
-    Expr *BitWidth;
-    // Active member if ISK is ISK_InClass*Init and BitField is true.
-    InitAndBitWidthStorage *InitAndBitWidth;
-    // Active member if ISK is ISK_CapturedVLAType.
-    const VariableArrayType *CapturedVLAType;
-  };
+  llvm::PointerIntPair<void *, 2, InitStorageKind> InitStorage;
 
 protected:
   FieldDecl(Kind DK, DeclContext *DC, SourceLocation StartLoc,
-            SourceLocation IdLoc, IdentifierInfo *Id, QualType T,
-            TypeSourceInfo *TInfo, Expr *BW, bool Mutable,
+            SourceLocation IdLoc, IdentifierInfo *Id,
+            QualType T, TypeSourceInfo *TInfo, Expr *BW, bool Mutable,
             InClassInitStyle InitStyle)
-      : DeclaratorDecl(DK, DC, IdLoc, Id, T, TInfo, StartLoc), BitField(false),
-        Mutable(Mutable), StorageKind((InitStorageKind)InitStyle),
-        CachedFieldIndex(0), Init() {
+    : DeclaratorDecl(DK, DC, IdLoc, Id, T, TInfo, StartLoc),
+      BitField(false), Mutable(Mutable), CachedFieldIndex(0),
+      InitStorage(nullptr, (InitStorageKind) InitStyle) {
     if (BW)
       setBitWidth(BW);
   }
@@ -3067,7 +2994,10 @@ public:
   Expr *getBitWidth() const {
     if (!BitField)
       return nullptr;
-    return hasInClassInitializer() ? InitAndBitWidth->BitWidth : BitWidth;
+    void *Ptr = InitStorage.getPointer();
+    if (getInClassInitStyle())
+      return static_cast<InitAndBitWidth*>(Ptr)->BitWidth;
+    return static_cast<Expr*>(Ptr);
   }
 
   unsigned getBitWidthValue(const ASTContext &Ctx) const;
@@ -3078,11 +3008,11 @@ public:
     assert(!hasCapturedVLAType() && !BitField &&
            "bit width or captured type already set");
     assert(Width && "no bit width specified");
-    if (hasInClassInitializer())
-      InitAndBitWidth =
-          new (getASTContext()) InitAndBitWidthStorage{Init, Width};
-    else
-      BitWidth = Width;
+    InitStorage.setPointer(
+        InitStorage.getInt()
+            ? new (getASTContext())
+                  InitAndBitWidth{getInClassInitializer(), Width}
+            : static_cast<void*>(Width));
     BitField = true;
   }
 
@@ -3090,11 +3020,7 @@ public:
   // Note: used by some clients (i.e., do not remove it).
   void removeBitWidth() {
     assert(isBitField() && "no bitfield width to remove");
-    if (hasInClassInitializer()) {
-      // Read the old initializer before we change the active union member.
-      auto ExistingInit = InitAndBitWidth->Init;
-      Init = ExistingInit;
-    }
+    InitStorage.setPointer(getInClassInitializer());
     BitField = false;
   }
 
@@ -3108,14 +3034,11 @@ public:
   /// [[no_unique_address]] attribute.
   bool isZeroSize(const ASTContext &Ctx) const;
 
-  /// Determine if this field is of potentially-overlapping class type, that
-  /// is, subobject with the [[no_unique_address]] attribute
-  bool isPotentiallyOverlapping() const;
-
   /// Get the kind of (C++11) default member initializer that this field has.
   InClassInitStyle getInClassInitStyle() const {
-    return (StorageKind == ISK_CapturedVLAType ? ICIS_NoInit
-                                               : (InClassInitStyle)StorageKind);
+    InitStorageKind storageKind = InitStorage.getInt();
+    return (storageKind == ISK_CapturedVLAType
+              ? ICIS_NoInit : (InClassInitStyle) storageKind);
   }
 
   /// Determine whether this member has a C++11 default member initializer.
@@ -3123,44 +3046,44 @@ public:
     return getInClassInitStyle() != ICIS_NoInit;
   }
 
-  /// Determine whether getInClassInitializer() would return a non-null pointer
-  /// without deserializing the initializer.
-  bool hasNonNullInClassInitializer() const {
-    return hasInClassInitializer() && (BitField ? InitAndBitWidth->Init : Init);
-  }
-
   /// Get the C++11 default member initializer for this member, or null if one
   /// has not been set. If a valid declaration has a default member initializer,
   /// but this returns null, then we have not parsed and attached it yet.
-  Expr *getInClassInitializer() const;
+  Expr *getInClassInitializer() const {
+    if (!hasInClassInitializer())
+      return nullptr;
+    void *Ptr = InitStorage.getPointer();
+    if (BitField)
+      return static_cast<InitAndBitWidth*>(Ptr)->Init;
+    return static_cast<Expr*>(Ptr);
+  }
 
   /// Set the C++11 in-class initializer for this member.
-  void setInClassInitializer(Expr *NewInit);
+  void setInClassInitializer(Expr *Init) {
+    assert(hasInClassInitializer() && !getInClassInitializer());
+    if (BitField)
+      static_cast<InitAndBitWidth*>(InitStorage.getPointer())->Init = Init;
+    else
+      InitStorage.setPointer(Init);
+  }
 
-private:
-  void setLazyInClassInitializer(LazyDeclStmtPtr NewInit);
-
-public:
   /// Remove the C++11 in-class initializer from this member.
   void removeInClassInitializer() {
     assert(hasInClassInitializer() && "no initializer to remove");
-    StorageKind = ISK_NoInit;
-    if (BitField) {
-      // Read the bit width before we change the active union member.
-      Expr *ExistingBitWidth = InitAndBitWidth->BitWidth;
-      BitWidth = ExistingBitWidth;
-    }
+    InitStorage.setPointerAndInt(getBitWidth(), ISK_NoInit);
   }
 
   /// Determine whether this member captures the variable length array
   /// type.
   bool hasCapturedVLAType() const {
-    return StorageKind == ISK_CapturedVLAType;
+    return InitStorage.getInt() == ISK_CapturedVLAType;
   }
 
   /// Get the captured variable length array type.
   const VariableArrayType *getCapturedVLAType() const {
-    return hasCapturedVLAType() ? CapturedVLAType : nullptr;
+    return hasCapturedVLAType() ? static_cast<const VariableArrayType *>(
+                                      InitStorage.getPointer())
+                                : nullptr;
   }
 
   /// Set the captured variable length array type for this field.
@@ -3256,7 +3179,7 @@ public:
   using chain_iterator = ArrayRef<NamedDecl *>::const_iterator;
 
   ArrayRef<NamedDecl *> chain() const {
-    return llvm::ArrayRef(Chaining, ChainingSize);
+    return llvm::makeArrayRef(Chaining, ChainingSize);
   }
   chain_iterator chain_begin() const { return chain().begin(); }
   chain_iterator chain_end() const { return chain().end(); }
@@ -3733,7 +3656,6 @@ public:
     return getExtInfo()->TemplParamLists[i];
   }
 
-  using TypeDecl::printName;
   void printName(raw_ostream &OS, const PrintingPolicy &Policy) const override;
 
   void setTemplateParameterListsInfo(ASTContext &Context,
@@ -4338,41 +4260,6 @@ public:
   static bool classofKind(Kind K) { return K == FileScopeAsm; }
 };
 
-/// A declaration that models statements at global scope. This declaration
-/// supports incremental and interactive C/C++.
-///
-/// \note This is used in libInterpreter, clang -cc1 -fincremental-extensions
-/// and in tools such as clang-repl.
-class TopLevelStmtDecl : public Decl {
-  friend class ASTDeclReader;
-  friend class ASTDeclWriter;
-
-  Stmt *Statement = nullptr;
-  bool IsSemiMissing = false;
-
-  TopLevelStmtDecl(DeclContext *DC, SourceLocation L, Stmt *S)
-      : Decl(TopLevelStmt, DC, L), Statement(S) {}
-
-  virtual void anchor();
-
-public:
-  static TopLevelStmtDecl *Create(ASTContext &C, Stmt *Statement);
-  static TopLevelStmtDecl *CreateDeserialized(ASTContext &C, unsigned ID);
-
-  SourceRange getSourceRange() const override LLVM_READONLY;
-  Stmt *getStmt() { return Statement; }
-  const Stmt *getStmt() const { return Statement; }
-  void setStmt(Stmt *S) {
-    assert(IsSemiMissing && "Operation supported for printing values only!");
-    Statement = S;
-  }
-  bool isSemiMissing() const { return IsSemiMissing; }
-  void setSemiMissing(bool Missing = true) { IsSemiMissing = Missing; }
-
-  static bool classof(const Decl *D) { return classofKind(D->getKind()); }
-  static bool classofKind(Kind K) { return K == TopLevelStmt; }
-};
-
 /// Represents a block literal declaration, which is like an
 /// unnamed FunctionDecl.  For example:
 /// ^{ statement-body }   or   ^(int arg1, float arg2){ statement-body }
@@ -4754,7 +4641,7 @@ public:
   static bool classofKind(Kind K) { return K == Import; }
 };
 
-/// Represents a standard C++ module export declaration.
+/// Represents a C++ Modules TS module export declaration.
 ///
 /// For example:
 /// \code

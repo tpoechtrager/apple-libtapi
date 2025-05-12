@@ -56,8 +56,10 @@ public:
 
   BitVector getReservedRegs(const MachineFunction &MF) const override;
 
+  bool requiresRegisterScavenging(const MachineFunction &MF) const override;
+
   /// Stack Frame Processing Methods
-  bool eliminateFrameIndex(MachineBasicBlock::iterator II,
+  void eliminateFrameIndex(MachineBasicBlock::iterator II,
                            int SPAdj, unsigned FIOperandNum,
                            RegScavenger *RS = nullptr) const override;
 
@@ -69,8 +71,6 @@ public:
 
   /// Return GPR register class.
   virtual const TargetRegisterClass *intRegClass(unsigned Size) const = 0;
-
-  bool supportsBackwardScavenger() const override { return true; }
 
 private:
   virtual void eliminateFI(MachineBasicBlock::iterator II, unsigned OpNo,

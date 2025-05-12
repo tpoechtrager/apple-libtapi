@@ -153,10 +153,11 @@ static bool dominatesAllUsesOf(const MachineInstr *MI, unsigned VReg,
 
   assert(Register::isVirtualRegister(VReg) && "Expected virtual register!");
 
-  for (const MachineOperand &Use : MRI->use_nodbg_operands(VReg)) {
-    const MachineInstr *User = Use.getParent();
+  for (auto it = MRI->use_nodbg_begin(VReg), end = MRI->use_nodbg_end();
+       it != end; ++it) {
+    MachineInstr *User = it->getParent();
     if (User->isPHI()) {
-      unsigned BBOperandIdx = Use.getOperandNo() + 1;
+      unsigned BBOperandIdx = User->getOperandNo(&*it) + 1;
       MachineBasicBlock *MBB = User->getOperand(BBOperandIdx).getMBB();
       if (MBB->empty()) {
         const MachineBasicBlock *InstBB = MI->getParent();

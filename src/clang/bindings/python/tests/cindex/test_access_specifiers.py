@@ -1,8 +1,7 @@
 import os
 from clang.cindex import Config
-
-if "CLANG_LIBRARY_PATH" in os.environ:
-    Config.set_library_path(os.environ["CLANG_LIBRARY_PATH"])
+if 'CLANG_LIBRARY_PATH' in os.environ:
+    Config.set_library_path(os.environ['CLANG_LIBRARY_PATH'])
 
 from clang.cindex import AccessSpecifier
 from clang.cindex import Cursor
@@ -18,8 +17,7 @@ class TestAccessSpecifiers(unittest.TestCase):
     def test_access_specifiers(self):
         """Ensure that C++ access specifiers are available on cursors"""
 
-        tu = get_tu(
-            """
+        tu = get_tu("""
 class test_class {
 public:
   void public_member_function();
@@ -28,9 +26,7 @@ protected:
 private:
   void private_member_function();
 };
-""",
-            lang="cpp",
-        )
+""", lang = 'cpp')
 
         test_class = get_cursor(tu, "test_class")
         self.assertEqual(test_class.access_specifier, AccessSpecifier.INVALID)
