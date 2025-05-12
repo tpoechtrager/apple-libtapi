@@ -47,8 +47,8 @@ public:
 
   Error putImpl(ArrayRef<uint8_t> ActionKey, const CASID &Result,
                 bool Globally) final;
-  Expected<std::optional<CASID>> getImpl(ArrayRef<uint8_t> ActionKey,
-                                         bool Globally) const final;
+  Expected<Optional<CASID>> getImpl(ArrayRef<uint8_t> ActionKey,
+                                    bool Globally) const final;
 
 private:
   using DataT = CacheEntry<sizeof(HashType)>;
@@ -61,8 +61,8 @@ class OnDiskActionCache final : public ActionCache {
 public:
   Error putImpl(ArrayRef<uint8_t> ActionKey, const CASID &Result,
                 bool Globally) final;
-  Expected<std::optional<CASID>> getImpl(ArrayRef<uint8_t> ActionKey,
-                                         bool Globally) const final;
+  Expected<Optional<CASID>> getImpl(ArrayRef<uint8_t> ActionKey,
+                                    bool Globally) const final;
 
   static Expected<std::unique_ptr<OnDiskActionCache>> create(StringRef Path);
 
@@ -79,8 +79,8 @@ class UnifiedOnDiskActionCache final : public ActionCache {
 public:
   Error putImpl(ArrayRef<uint8_t> ActionKey, const CASID &Result,
                 bool Globally) final;
-  Expected<std::optional<CASID>> getImpl(ArrayRef<uint8_t> ActionKey,
-                                         bool Globally) const final;
+  Expected<Optional<CASID>> getImpl(ArrayRef<uint8_t> ActionKey,
+                                    bool Globally) const final;
 
   UnifiedOnDiskActionCache(std::shared_ptr<ondisk::UnifiedOnDiskCache> UniDB);
 
@@ -107,11 +107,11 @@ static Error createResultCachePoisonedError(StringRef Key,
                                Existing + "')");
 }
 
-Expected<std::optional<CASID>>
+Expected<Optional<CASID>>
 InMemoryActionCache::getImpl(ArrayRef<uint8_t> Key, bool /*Globally*/) const {
   auto Result = Cache.find(Key);
   if (!Result)
-    return std::nullopt;
+    return None;
   return CASID::create(&getContext(), toStringRef(Result->Data.getValue()));
 }
 
@@ -166,8 +166,8 @@ OnDiskActionCache::create(StringRef AbsPath) {
       new OnDiskActionCache(std::move(DB)));
 }
 
-Expected<std::optional<CASID>>
-OnDiskActionCache::getImpl(ArrayRef<uint8_t> Key, bool /*Globally*/) const {
+Expected<Optional<CASID>> OnDiskActionCache::getImpl(ArrayRef<uint8_t> Key,
+                                                     bool /*Globally*/) const {
   std::optional<ArrayRef<char>> Val;
   if (Error E = DB->get(Key).moveInto(Val))
     return std::move(E);
@@ -197,7 +197,7 @@ UnifiedOnDiskActionCache::UnifiedOnDiskActionCache(
     : ActionCache(builtin::BuiltinCASContext::getDefaultContext()),
       UniDB(std::move(UniDB)) {}
 
-Expected<std::optional<CASID>>
+Expected<Optional<CASID>>
 UnifiedOnDiskActionCache::getImpl(ArrayRef<uint8_t> Key,
                                   bool /*Globally*/) const {
   std::optional<ondisk::ObjectID> Val;

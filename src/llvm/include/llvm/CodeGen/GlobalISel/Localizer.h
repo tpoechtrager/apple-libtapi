@@ -51,9 +51,9 @@ private:
 
   /// MRI contains all the register class/bank information that this
   /// pass uses and updates.
-  MachineRegisterInfo *MRI = nullptr;
+  MachineRegisterInfo *MRI;
   /// TTI used for getting remat costs for instructions.
-  TargetTransformInfo *TTI = nullptr;
+  TargetTransformInfo *TTI;
 
   /// Check if \p MOUse is used in the same basic block as \p Def.
   /// If the use is in the same block, we say it is local.

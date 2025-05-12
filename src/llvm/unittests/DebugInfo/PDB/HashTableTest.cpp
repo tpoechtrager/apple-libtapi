@@ -8,7 +8,6 @@
 
 #include "llvm/DebugInfo/PDB/Native/HashTable.h"
 
-#include "llvm/ADT/StringExtras.h"
 #include "llvm/DebugInfo/PDB/Native/Hash.h"
 #include "llvm/DebugInfo/PDB/Native/NamedStreamMap.h"
 #include "llvm/Support/Allocator.h"

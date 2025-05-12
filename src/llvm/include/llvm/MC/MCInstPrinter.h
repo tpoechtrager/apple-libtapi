@@ -9,7 +9,6 @@
 #ifndef LLVM_MC_MCINSTPRINTER_H
 #define LLVM_MC_MCINSTPRINTER_H
 
-#include "llvm/Support/Compiler.h"
 #include "llvm/Support/Format.h"
 #include <cstdint>
 
@@ -17,14 +16,13 @@ namespace llvm {
 
 class MCAsmInfo;
 class MCInst;
-class MCInstrAnalysis;
-class MCInstrInfo;
 class MCOperand;
-class MCRegister;
+class MCInstrInfo;
+class MCInstrAnalysis;
 class MCRegisterInfo;
 class MCSubtargetInfo;
-class StringRef;
 class raw_ostream;
+class StringRef;
 
 /// Convert `Bytes' to a hex string and output to `OS'
 void dumpBytes(ArrayRef<uint8_t> Bytes, raw_ostream &OS);
@@ -56,9 +54,6 @@ protected:
   /// True if we are printing marked up assembly.
   bool UseMarkup = false;
 
-  /// True if we are printing colored assembly.
-  bool UseColor = false;
-
   /// True if we prefer aliases (e.g. nop) to raw mnemonics.
   bool PrintAliases = true;
 
@@ -89,35 +84,6 @@ public:
 
   virtual ~MCInstPrinter();
 
-  enum class Markup {
-    Immediate,
-    Register,
-    Target,
-    Memory,
-  };
-
-  class WithMarkup {
-  public:
-    LLVM_CTOR_NODISCARD WithMarkup(raw_ostream &OS, Markup M, bool EnableMarkup,
-                                   bool EnableColor);
-    ~WithMarkup();
-
-    template <typename T> WithMarkup &operator<<(T &O) {
-      OS << O;
-      return *this;
-    }
-
-    template <typename T> WithMarkup &operator<<(const T &O) {
-      OS << O;
-      return *this;
-    }
-
-  private:
-    raw_ostream &OS;
-    bool EnableMarkup;
-    bool EnableColor;
-  };
-
   /// Customize the printer according to a command line option.
   /// @return true if the option is recognized and applied.
   virtual bool applyTargetSpecificCLOption(StringRef Opt) { return false; }
@@ -144,15 +110,13 @@ public:
   StringRef getOpcodeName(unsigned Opcode) const;
 
   /// Print the assembler register name.
-  virtual void printRegName(raw_ostream &OS, MCRegister Reg) const;
+  virtual void printRegName(raw_ostream &OS, unsigned RegNo) const;
 
   bool getUseMarkup() const { return UseMarkup; }
   void setUseMarkup(bool Value) { UseMarkup = Value; }
 
-  bool getUseColor() const { return UseColor; }
-  void setUseColor(bool Value) { UseColor = Value; }
-
-  WithMarkup markup(raw_ostream &OS, Markup M) const;
+  /// Utility functions to make adding mark ups simpler.
+  StringRef markup(StringRef s) const;
 
   bool getPrintImmHex() const { return PrintImmHex; }
   void setPrintImmHex(bool Value) { PrintImmHex = Value; }

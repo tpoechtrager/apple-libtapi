@@ -217,19 +217,7 @@ public:
   unsigned ModulesValidateDiagnosticOptions : 1;
 
   /// Whether to entirely skip writing diagnostic options.
-  /// Primarily used to speed up deserialization during dependency scanning.
   unsigned ModulesSkipDiagnosticOptions : 1;
-
-  /// Whether to entirely skip writing header search paths.
-  /// Primarily used to speed up deserialization during dependency scanning.
-  unsigned ModulesSkipHeaderSearchPaths : 1;
-
-  /// Whether to entirely skip writing pragma diagnostic mappings.
-  /// Primarily used to speed up deserialization during dependency scanning.
-  unsigned ModulesSkipPragmaDiagnosticMappings : 1;
-
-  /// Whether to prune non-affecting module map files from PCM files.
-  unsigned ModulesPruneNonAffectingModuleMaps : 1;
 
   unsigned ModulesHashContent : 1;
 
@@ -239,9 +227,6 @@ public:
   /// This includes things like the full header search path, and enabled
   /// diagnostics.
   unsigned ModulesStrictContextHash : 1;
-
-  /// Whether to include ivfsoverlay usage information in written AST files.
-  unsigned ModulesIncludeVFSUsage : 1;
 
   HeaderSearchOptions(StringRef _Sysroot = "/")
       : Sysroot(_Sysroot), ModuleFormat("raw"), DisableModuleHash(false),
@@ -253,11 +238,8 @@ public:
         ModulesValidateSystemHeaders(false),
         ValidateASTInputFilesContent(false), UseDebugInfo(false),
         ModulesValidateDiagnosticOptions(true),
-        ModulesSkipDiagnosticOptions(false),
-        ModulesSkipHeaderSearchPaths(false),
-        ModulesSkipPragmaDiagnosticMappings(false),
-        ModulesPruneNonAffectingModuleMaps(true), ModulesHashContent(false),
-        ModulesStrictContextHash(false), ModulesIncludeVFSUsage(false) {}
+        ModulesSkipDiagnosticOptions(false), ModulesHashContent(false),
+        ModulesStrictContextHash(false) {}
 
   /// AddPath - Add the \p Path path to the specified \p Group list.
   void AddPath(StringRef Path, frontend::IncludeDirGroup Group,

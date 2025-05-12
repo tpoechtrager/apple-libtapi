@@ -149,7 +149,7 @@ public:
     if (auto EC = checkOffsetForWrite(Offset, Buffer.size()))
       return EC;
 
-    Buffer = ArrayRef(Data).slice(Offset, Size);
+    Buffer = makeArrayRef(Data).slice(Offset, Size);
     return Error::success();
   }
 
@@ -162,7 +162,7 @@ public:
     if (auto EC = checkOffsetForWrite(Offset, 1))
       return EC;
 
-    Buffer = ArrayRef(Data).slice(Offset);
+    Buffer = makeArrayRef(Data).slice(Offset);
     return Error::success();
   }
 

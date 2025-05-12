@@ -21,9 +21,8 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringSet.h"
+#include "llvm/ADT/Triple.h"
 #include "llvm/Support/Error.h"
-#include "llvm/TargetParser/Triple.h"
-#include "llvm/TextAPI/Platform.h"
 
 TAPI_NAMESPACE_INTERNAL_BEGIN
 
@@ -96,9 +95,6 @@ public:
 
   /// Compare two SDKDBs.
   void diagnoseDifferences(const SDKDB &baseline) const;
-
-  bool shouldDiagnoseProject(StringRef projectName) const;
-  bool shouldDiagnoseLibrary(StringRef installName) const;
 
   /// Helper function to add to frontendAPIs.
   EnumRecord *addEnum(const EnumRecord &record);
@@ -179,7 +175,7 @@ private:
   TypedefMapType typedefMap;
 
   /// get super class record.
-  ObjCInterfaceRecord *getSuperclass(const ObjCInterfaceRecord *record) const;
+  ObjCInterfaceRecord *getSuperclass(const ObjCInterfaceRecord *record);
 
   /// get objc method access.
   APIAccess getAccessForObjCMethod(APIAccess access, StringRef name,
@@ -210,13 +206,6 @@ private:
                                ObjCContainerKind kind,
                                StringRef fallbackInterfaceName = "");
 
-  /// Try to resolve a method given the selector and kind for an Objective-C
-  /// interface. This would be the equivalent API surface for this method on
-  /// this class.
-  ObjCMethodRecord const *
-  resolveMethod(StringRef name, bool isInstanceMethod,
-                const ObjCInterfaceRecord &interface) const;
-
   /// get objc runtime version.
   bool isObjC1() const { return triple.isMacOSX() && triple.isArch32Bit(); }
 
@@ -229,16 +218,6 @@ private:
 
   /// Map from install name to the contributing project name
   llvm::StringMap<StringRef> installNames;
-
-  /// Adjacent list DAG for dylib reexports. Edges go from reexported libraries
-  /// to reexporting libraries.
-  llvm::StringMap<SmallVector<StringRef, 3>> reexportGraph;
-
-  /// Check whether `installName` is eventually reexported by `reexportedBy`
-  bool isReexportedBy(StringRef installName, StringRef reexportedBy) const;
-
-  /// Check whether `installName` is eventually (re)exported in the public SDK.
-  bool isPubliclyExported(StringRef installName) const;
 
   std::set<CompareConfigFileReader::Change> const *expectedChanges = nullptr;
   bool isExpectedChange(const CompareConfigFileReader::Change &change) const {
@@ -301,13 +280,12 @@ public:
   void updateAPIRecord(APIRecord &base, const APIRecord &record);
   void updateGlobal(GlobalRecord &base, const GlobalRecord &record);
 
-  /// Update items inside an ObjCContainer (not the container record itself).
-  /// For categories, it need to pass interfaceName as a fallback for method
-  /// searching.
-  void updateObjCContainerItems(SDKDB &sdkdb, ObjCContainerRecord &base,
-                                const ObjCContainerRecord &record,
-                                SDKDB::ObjCContainerKind kind,
-                                StringRef fallbackInterfaceName = "");
+  /// Update ObjCContainer. For categories, it need to pass interfaceName
+  /// as a fallback for method searching.
+  void updateObjCContainer(SDKDB &sdkdb, ObjCContainerRecord &base,
+                           const ObjCContainerRecord &record,
+                           SDKDB::ObjCContainerKind kind,
+                           StringRef fallbackInterfaceName = "");
   void updateObjCInterface(SDKDB &sdkdb, ObjCInterfaceRecord &base,
                            const ObjCInterfaceRecord &record);
   void updateObjCCategory(SDKDB &sdkdb, ObjCCategoryRecord &base,
@@ -386,18 +364,6 @@ public:
   setCompareConfigFileReader(std::unique_ptr<CompareConfigFileReader> reader) {
     compareConfigFileReader = std::move(reader);
   }
-  CompareConfigFileReader *getCompareConfigFileReader() const {
-    return compareConfigFileReader.get();
-  }
-
-  bool setFilteredPlatforms(StringRef platform);
-
-  bool shouldDiagnoseTriple(llvm::Triple triple) {
-    // Only platform is checked.
-    if (filterPlatforms.empty())
-      return true;
-    return filterPlatforms.contains(llvm::MachO::mapToPlatformType(triple));
-  }
 
 private:
   DiagnosticsEngine &diag;
@@ -406,7 +372,6 @@ private:
   llvm::SmallVector<SDKDB, 4> databases;
   llvm::StringSet<> maybePublicSelector;
   llvm::StringSet<> maybePublicProperty;
-  llvm::MachO::PlatformSet filterPlatforms;
   // Projects that contributes to the SDKDB but has errors when scanning roots.
   std::vector<std::string> projectWithError;
   // Do not try to compare enums and typedefs by default.

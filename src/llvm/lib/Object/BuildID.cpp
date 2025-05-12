@@ -18,12 +18,13 @@
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Path.h"
 
-using namespace llvm;
-using namespace llvm::object;
+namespace llvm {
+namespace object {
 
 namespace {
 
-template <typename ELFT> BuildIDRef getBuildID(const ELFFile<ELFT> &Obj) {
+template <typename ELFT>
+Optional<BuildIDRef> getBuildID(const ELFFile<ELFT> &Obj) {
   auto PhdrsOrErr = Obj.program_headers();
   if (!PhdrsOrErr) {
     consumeError(PhdrsOrErr.takeError());
@@ -36,7 +37,7 @@ template <typename ELFT> BuildIDRef getBuildID(const ELFFile<ELFT> &Obj) {
     for (auto N : Obj.notes(P, Err))
       if (N.getType() == ELF::NT_GNU_BUILD_ID &&
           N.getName() == ELF::ELF_NOTE_GNU)
-        return N.getDesc(P.p_align);
+        return N.getDesc();
     consumeError(std::move(Err));
   }
   return {};
@@ -44,28 +45,19 @@ template <typename ELFT> BuildIDRef getBuildID(const ELFFile<ELFT> &Obj) {
 
 } // namespace
 
-BuildID llvm::object::parseBuildID(StringRef Str) {
-  std::string Bytes;
-  if (!tryGetFromHex(Str, Bytes))
-    return {};
-  ArrayRef<uint8_t> BuildID(reinterpret_cast<const uint8_t *>(Bytes.data()),
-                            Bytes.size());
-  return SmallVector<uint8_t>(BuildID.begin(), BuildID.end());
-}
-
-BuildIDRef llvm::object::getBuildID(const ObjectFile *Obj) {
+Optional<BuildIDRef> getBuildID(const ObjectFile *Obj) {
   if (auto *O = dyn_cast<ELFObjectFile<ELF32LE>>(Obj))
-    return ::getBuildID(O->getELFFile());
+    return getBuildID(O->getELFFile());
   if (auto *O = dyn_cast<ELFObjectFile<ELF32BE>>(Obj))
-    return ::getBuildID(O->getELFFile());
+    return getBuildID(O->getELFFile());
   if (auto *O = dyn_cast<ELFObjectFile<ELF64LE>>(Obj))
-    return ::getBuildID(O->getELFFile());
+    return getBuildID(O->getELFFile());
   if (auto *O = dyn_cast<ELFObjectFile<ELF64BE>>(Obj))
-    return ::getBuildID(O->getELFFile());
-  return std::nullopt;
+    return getBuildID(O->getELFFile());
+  return None;
 }
 
-std::optional<std::string> BuildIDFetcher::fetch(BuildIDRef BuildID) const {
+Optional<std::string> BuildIDFetcher::fetch(BuildIDRef BuildID) const {
   auto GetDebugPath = [&](StringRef Directory) {
     SmallString<128> Path{Directory};
     sys::path::append(Path, ".build-id",
@@ -94,5 +86,8 @@ std::optional<std::string> BuildIDFetcher::fetch(BuildIDRef BuildID) const {
         return std::string(Path);
     }
   }
-  return std::nullopt;
+  return None;
 }
+
+} // namespace object
+} // namespace llvm

@@ -44,6 +44,7 @@ public:
                     SanitizerMask NoSanitizeAttrMask = {},
                     bool IsDynInit = false);
   void disableSanitizerForGlobal(llvm::GlobalVariable *GV);
+  void disableSanitizerForInstruction(llvm::Instruction *I);
 };
 } // end namespace CodeGen
 } // end namespace clang

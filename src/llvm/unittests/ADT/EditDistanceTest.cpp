@@ -29,8 +29,8 @@ static Result editDistanceAndMaps(StringRef A, StringRef B,
     return X;
   };
   unsigned EditDist = llvm::ComputeMappedEditDistance(
-      ArrayRef(A.data(), A.size()), ArrayRef(B.data(), B.size()), TrackMaps,
-      true, MaxEditDistance);
+      makeArrayRef(A.data(), A.size()), makeArrayRef(B.data(), B.size()),
+      TrackMaps, true, MaxEditDistance);
   return {NumMaps, EditDist};
 }
 

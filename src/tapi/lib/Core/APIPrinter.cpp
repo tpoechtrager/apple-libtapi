@@ -364,7 +364,7 @@ void APIPrinter::visitObjCInterface(const ObjCInterfaceRecord &interface) {
   os << "  hasExceptionAttribute: ";
   if (hasColors)
     os.resetColor();
-  os << (interface.hasExceptionAttribute() ? "true" : "false") << "\n";
+  os << (interface.hasExceptionAttribute ? "true" : "false") << "\n";
 
   printLocation(os, interface.loc, hasColors);
   printAvailability(os, interface.availability, hasColors);

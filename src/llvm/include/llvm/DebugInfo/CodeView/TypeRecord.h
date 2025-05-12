@@ -11,6 +11,7 @@
 
 #include "llvm/ADT/APSInt.h"
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/DebugInfo/CodeView/CVRecord.h"
@@ -21,7 +22,6 @@
 #include "llvm/Support/Endian.h"
 #include <algorithm>
 #include <cstdint>
-#include <optional>
 #include <vector>
 
 namespace llvm {
@@ -347,7 +347,7 @@ public:
 
   TypeIndex ReferentType;
   uint32_t Attrs = 0;
-  std::optional<MemberPointerInfo> MemberInfo;
+  Optional<MemberPointerInfo> MemberInfo;
 
   void setAttrs(PointerKind PK, PointerMode PM, PointerOptions PO,
                 uint8_t Size) {
@@ -704,10 +704,10 @@ public:
   TypeIndex getCompleteClass() const { return CompleteClass; }
   TypeIndex getOverriddenVTable() const { return OverriddenVFTable; }
   uint32_t getVFPtrOffset() const { return VFPtrOffset; }
-  StringRef getName() const { return ArrayRef(MethodNames).front(); }
+  StringRef getName() const { return makeArrayRef(MethodNames).front(); }
 
   ArrayRef<StringRef> getMethodNames() const {
-    return ArrayRef(MethodNames).drop_front();
+    return makeArrayRef(MethodNames).drop_front();
   }
 
   TypeIndex CompleteClass;

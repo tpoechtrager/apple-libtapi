@@ -48,7 +48,7 @@ namespace {
 /// information provided by this pass is optional and not required by the
 /// aformentioned intrinsic to function.
 class StackMapLiveness : public MachineFunctionPass {
-  const TargetRegisterInfo *TRI = nullptr;
+  const TargetRegisterInfo *TRI;
   LivePhysRegs LiveRegs;
 
 public:

@@ -77,7 +77,7 @@ class TraversalKindScope {
   TraversalKind TK = TK_AsIs;
 
 public:
-  TraversalKindScope(ASTContext &ASTCtx, std::optional<TraversalKind> ScopeTK)
+  TraversalKindScope(ASTContext &ASTCtx, llvm::Optional<TraversalKind> ScopeTK)
       : Ctx(ASTCtx.getParentMapContext()) {
     TK = Ctx.getTraversalKind();
     if (ScopeTK)

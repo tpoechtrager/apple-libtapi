@@ -198,9 +198,7 @@ public:
 
   GlobalValue(const GlobalValue &) = delete;
 
-  unsigned getAddressSpace() const {
-    return getType()->getAddressSpace();
-  }
+  unsigned getAddressSpace() const;
 
   enum class UnnamedAddr {
     None,
@@ -636,8 +634,8 @@ public:
   bool isAbsoluteSymbolRef() const;
 
   /// If this is an absolute symbol reference, returns the range of the symbol,
-  /// otherwise returns std::nullopt.
-  std::optional<ConstantRange> getAbsoluteSymbolRange() const;
+  /// otherwise returns None.
+  Optional<ConstantRange> getAbsoluteSymbolRange() const;
 
   /// This method unlinks 'this' from the containing module, but does not delete
   /// it.

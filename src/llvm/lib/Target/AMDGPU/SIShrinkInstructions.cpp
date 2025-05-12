@@ -161,12 +161,14 @@ bool SIShrinkInstructions::shouldShrinkTrue16(MachineInstr &MI) const {
 
 bool SIShrinkInstructions::isKImmOperand(const MachineOperand &Src) const {
   return isInt<16>(Src.getImm()) &&
-         !TII->isInlineConstant(*Src.getParent(), Src.getOperandNo());
+    !TII->isInlineConstant(*Src.getParent(),
+                           Src.getParent()->getOperandNo(&Src));
 }
 
 bool SIShrinkInstructions::isKUImmOperand(const MachineOperand &Src) const {
   return isUInt<16>(Src.getImm()) &&
-         !TII->isInlineConstant(*Src.getParent(), Src.getOperandNo());
+    !TII->isInlineConstant(*Src.getParent(),
+                           Src.getParent()->getOperandNo(&Src));
 }
 
 bool SIShrinkInstructions::isKImmOrKUImmOperand(const MachineOperand &Src,
@@ -201,9 +203,8 @@ void SIShrinkInstructions::copyExtraImplicitOps(MachineInstr &NewMI,
                                                 MachineInstr &MI) const {
   MachineFunction &MF = *MI.getMF();
   for (unsigned i = MI.getDesc().getNumOperands() +
-                    MI.getDesc().implicit_uses().size() +
-                    MI.getDesc().implicit_defs().size(),
-                e = MI.getNumOperands();
+         MI.getDesc().getNumImplicitUses() +
+         MI.getDesc().getNumImplicitDefs(), e = MI.getNumOperands();
        i != e; ++i) {
     const MachineOperand &MO = MI.getOperand(i);
     if ((MO.isReg() && MO.isImplicit()) || MO.isRegMask())
@@ -291,14 +292,6 @@ void SIShrinkInstructions::shrinkMIMG(MachineInstr &MI) const {
     RC = &AMDGPU::VReg_224RegClass;
   } else if (Info->VAddrDwords == 8) {
     RC = &AMDGPU::VReg_256RegClass;
-  } else if (Info->VAddrDwords == 9) {
-    RC = &AMDGPU::VReg_288RegClass;
-  } else if (Info->VAddrDwords == 10) {
-    RC = &AMDGPU::VReg_320RegClass;
-  } else if (Info->VAddrDwords == 11) {
-    RC = &AMDGPU::VReg_352RegClass;
-  } else if (Info->VAddrDwords == 12) {
-    RC = &AMDGPU::VReg_384RegClass;
   } else {
     RC = &AMDGPU::VReg_512RegClass;
     NewAddrDwords = 16;
@@ -308,10 +301,7 @@ void SIShrinkInstructions::shrinkMIMG(MachineInstr &MI) const {
   unsigned NextVgpr = 0;
   bool IsUndef = true;
   bool IsKill = NewAddrDwords == Info->VAddrDwords;
-  const unsigned NSAMaxSize = ST->getNSAMaxSize();
-  const bool IsPartialNSA = NewAddrDwords > NSAMaxSize;
-  const unsigned EndVAddr = IsPartialNSA ? NSAMaxSize : Info->VAddrOperands;
-  for (unsigned Idx = 0; Idx < EndVAddr; ++Idx) {
+  for (unsigned Idx = 0; Idx < Info->VAddrOperands; ++Idx) {
     const MachineOperand &Op = MI.getOperand(VAddr0Idx + Idx);
     unsigned Vgpr = TRI->getHWRegIndex(Op.getReg());
     unsigned Dwords = TRI->getRegSizeInBits(Op.getReg(), *MRI) / 32;
@@ -364,13 +354,13 @@ void SIShrinkInstructions::shrinkMIMG(MachineInstr &MI) const {
   MI.getOperand(VAddr0Idx).setIsUndef(IsUndef);
   MI.getOperand(VAddr0Idx).setIsKill(IsKill);
 
-  for (unsigned i = 1; i < EndVAddr; ++i)
+  for (int i = 1; i < Info->VAddrOperands; ++i)
     MI.removeOperand(VAddr0Idx + 1);
 
   if (ToUntie >= 0) {
     MI.tieOperands(
         AMDGPU::getNamedOperandIdx(MI.getOpcode(), AMDGPU::OpName::vdata),
-        ToUntie - (EndVAddr - 1));
+        ToUntie - (Info->VAddrOperands - 1));
   }
 }
 
@@ -476,7 +466,7 @@ void SIShrinkInstructions::shrinkMadFma(MachineInstr &MI) const {
   }
 }
 
-/// Attempt to shrink AND/OR/XOR operations requiring non-inlineable literals.
+/// Attempt to shink AND/OR/XOR operations requiring non-inlineable literals.
 /// For AND or OR, try using S_BITSET{0,1} to clear or set bits.
 /// If the inverse of the immediate is legal, use ANDN2, ORN2 or
 /// XNOR (as a ^ b == ~(a ^ ~b)).
@@ -498,7 +488,7 @@ bool SIShrinkInstructions::shrinkScalarLogicOp(MachineInstr &MI) const {
 
   if (Opc == AMDGPU::S_AND_B32) {
     if (isPowerOf2_32(~Imm)) {
-      NewImm = llvm::countr_one(Imm);
+      NewImm = countTrailingOnes(Imm);
       Opc = AMDGPU::S_BITSET0_B32;
     } else if (AMDGPU::isInlinableLiteral32(~Imm, ST->hasInv2PiInlineImm())) {
       NewImm = ~Imm;
@@ -506,7 +496,7 @@ bool SIShrinkInstructions::shrinkScalarLogicOp(MachineInstr &MI) const {
     }
   } else if (Opc == AMDGPU::S_OR_B32) {
     if (isPowerOf2_32(Imm)) {
-      NewImm = llvm::countr_zero(Imm);
+      NewImm = countTrailingZeros(Imm);
       Opc = AMDGPU::S_BITSET1_B32;
     } else if (AMDGPU::isInlinableLiteral32(~Imm, ST->hasInv2PiInlineImm())) {
       NewImm = ~Imm;
@@ -597,9 +587,8 @@ SIShrinkInstructions::getSubRegForIndex(Register Reg, unsigned Sub,
 void SIShrinkInstructions::dropInstructionKeepingImpDefs(
     MachineInstr &MI) const {
   for (unsigned i = MI.getDesc().getNumOperands() +
-                    MI.getDesc().implicit_uses().size() +
-                    MI.getDesc().implicit_defs().size(),
-                e = MI.getNumOperands();
+         MI.getDesc().getNumImplicitUses() +
+         MI.getDesc().getNumImplicitDefs(), e = MI.getNumOperands();
        i != e; ++i) {
     const MachineOperand &Op = MI.getOperand(i);
     if (!Op.isDef())
@@ -648,6 +637,9 @@ MachineInstr *SIShrinkInstructions::matchSwap(MachineInstr &MovT) const {
   if (!TRI->isVGPR(*MRI, X))
     return nullptr;
 
+  if (MovT.hasRegisterImplicitUseOperand(AMDGPU::M0))
+    return nullptr;
+
   const unsigned SearchLimit = 16;
   unsigned Count = 0;
   bool KilledT = false;
@@ -662,7 +654,8 @@ MachineInstr *SIShrinkInstructions::matchSwap(MachineInstr &MovT) const {
          MovY->getOpcode() != AMDGPU::COPY) ||
         !MovY->getOperand(1).isReg()        ||
         MovY->getOperand(1).getReg() != T   ||
-        MovY->getOperand(1).getSubReg() != Tsub)
+        MovY->getOperand(1).getSubReg() != Tsub ||
+        MovY->hasRegisterImplicitUseOperand(AMDGPU::M0))
       continue;
 
     Register Y = MovY->getOperand(0).getReg();
@@ -695,6 +688,9 @@ MachineInstr *SIShrinkInstructions::matchSwap(MachineInstr &MovT) const {
         MovX = nullptr;
         break;
       }
+      // Implicit use of M0 is an indirect move.
+      if (I->hasRegisterImplicitUseOperand(AMDGPU::M0))
+        continue;
 
       if (Size > 1 && (I->getNumImplicitOperands() > (I->isCopy() ? 0U : 1U)))
         continue;

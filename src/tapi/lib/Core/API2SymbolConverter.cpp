@@ -13,13 +13,10 @@
 //===----------------------------------------------------------------------===//
 
 #include "tapi/Core/API2SymbolConverter.h"
-#include "tapi/Core/LLVM.h"
-#include "llvm/TextAPI/Symbol.h"
 
 #include "clang/AST/DeclObjC.h"
 
 using namespace llvm;
-using namespace llvm::MachO;
 using namespace clang;
 
 TAPI_NAMESPACE_INTERNAL_BEGIN
@@ -54,49 +51,27 @@ void API2SymbolConverter::visitGlobal(GlobalRecord &record) {
   if (!record.isExported()) {
     if (recordUndefs && record.isExternal()) {
       record.flags = getFlagsFromRecord(record);
-      symbolSet->addGlobal(EncodeKind::GlobalSymbol, record.name, record.flags,
+      symbolSet->addGlobal(SymbolKind::GlobalSymbol, record.name, record.flags,
                            target);
     }
     return;
   }
 
   auto sym = parseSymbol(record.name);
+  record.name = sym.name;
   record.flags = getFlagsFromRecord(record);
-  if (sym.ObjCInterfaceType == ObjCIFSymbolKind::None) {
-    symbolSet->addGlobal(sym.Kind, sym.Name, record.flags, target);
-    return;
-  }
-  // It is impossible to hold a complete ObjCInterface with a single
-  // GlobalRecord, so continue to treat this symbol a generic global.
-  symbolSet->addGlobal(EncodeKind::GlobalSymbol, record.name, record.flags,
-                       target);
+  symbolSet->addGlobal(sym.kind, record.name, record.flags, target);
 }
 
 void API2SymbolConverter::visitObjCInterface(ObjCInterfaceRecord &record) {
   if (record.isExported()) {
     record.flags = getFlagsFromRecord(record);
-    if (record.isCompleteInterface()) {
-      symbolSet->addGlobal(EncodeKind::ObjectiveCClass, record.name,
+    record.linkage = APILinkage::Exported;
+    symbolSet->addGlobal(SymbolKind::ObjectiveCClass, record.name, record.flags,
+                         target);
+    if (record.hasExceptionAttribute)
+      symbolSet->addGlobal(SymbolKind::ObjectiveCClassEHType, record.name,
                            record.flags, target);
-      if (record.hasExceptionAttribute())
-        symbolSet->addGlobal(EncodeKind::ObjectiveCClassEHType, record.name,
-                             record.flags, target);
-    } else {
-      // Because there is not a complete interface, visit individual symbols
-      // instead.
-      if (record.isExportedSymbol(ObjCIFSymbolKind::EHType))
-        symbolSet->addGlobal(EncodeKind::GlobalSymbol,
-                             (ObjC2EHTypePrefix + record.name).str(),
-                             record.flags, target);
-      if (record.isExportedSymbol(ObjCIFSymbolKind::Class))
-        symbolSet->addGlobal(EncodeKind::GlobalSymbol,
-                             (ObjC2ClassNamePrefix + record.name).str(),
-                             record.flags, target);
-      if (record.isExportedSymbol(ObjCIFSymbolKind::MetaClass))
-        symbolSet->addGlobal(EncodeKind::GlobalSymbol,
-                             (ObjC2MetaClassNamePrefix + record.name).str(),
-                             record.flags, target);
-    }
   }
 
   auto addIvars = [&](ArrayRef<ObjCInstanceVariableRecord *> ivars) {
@@ -111,7 +86,7 @@ void API2SymbolConverter::visitObjCInterface(ObjCInterfaceRecord &record) {
       std::string name =
           ObjCInstanceVariableRecord::createName(record.name, ivar->name);
       ivar->flags = getFlagsFromRecord(*ivar);
-      symbolSet->addGlobal(EncodeKind::ObjectiveCInstanceVariable, name,
+      symbolSet->addGlobal(SymbolKind::ObjectiveCInstanceVariable, name,
                            ivar->flags, target);
     }
   };
@@ -135,7 +110,7 @@ void API2SymbolConverter::visitObjCCategory(ObjCCategoryRecord &record) {
       std::string name =
           ObjCInstanceVariableRecord::createName(record.name, ivar->name);
       ivar->flags = getFlagsFromRecord(*ivar);
-      symbolSet->addGlobal(EncodeKind::ObjectiveCInstanceVariable, name,
+      symbolSet->addGlobal(SymbolKind::ObjectiveCInstanceVariable, name,
                            ivar->flags, target);
     }
   };

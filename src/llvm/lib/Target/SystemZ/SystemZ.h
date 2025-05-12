@@ -18,9 +18,9 @@
 #include "llvm/Support/CodeGen.h"
 
 namespace llvm {
+class SystemZTargetMachine;
 class FunctionPass;
 class PassRegistry;
-class SystemZTargetMachine;
 
 namespace SystemZ {
 // Condition-code mask values.
@@ -198,13 +198,12 @@ FunctionPass *createSystemZCopyPhysRegsPass(SystemZTargetMachine &TM);
 FunctionPass *createSystemZPostRewritePass(SystemZTargetMachine &TM);
 FunctionPass *createSystemZTDCPass();
 
-void initializeSystemZCopyPhysRegsPass(PassRegistry &);
-void initializeSystemZDAGToDAGISelPass(PassRegistry &);
 void initializeSystemZElimComparePass(PassRegistry &);
-void initializeSystemZLDCleanupPass(PassRegistry &);
-void initializeSystemZLongBranchPass(PassRegistry &);
-void initializeSystemZPostRewritePass(PassRegistry &);
 void initializeSystemZShortenInstPass(PassRegistry &);
+void initializeSystemZLongBranchPass(PassRegistry &);
+void initializeSystemZLDCleanupPass(PassRegistry &);
+void initializeSystemZCopyPhysRegsPass(PassRegistry &);
+void initializeSystemZPostRewritePass(PassRegistry &);
 void initializeSystemZTDCPassPass(PassRegistry &);
 
 } // end namespace llvm

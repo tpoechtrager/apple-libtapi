@@ -177,8 +177,9 @@ Expected<uint64_t> DWARFDebugAddrTable::getAddrEntry(uint32_t Index) const {
                            Index, Offset);
 }
 
-std::optional<uint64_t> DWARFDebugAddrTable::getFullLength() const {
+Optional<uint64_t> DWARFDebugAddrTable::getFullLength() const {
   if (Length == 0)
-    return std::nullopt;
+    return None;
   return Length + dwarf::getUnitLengthFieldByteSize(Format);
 }
+

@@ -10,6 +10,7 @@
 #define LLVM_SUPPORT_VIRTUALOUTPUTFILE_H
 
 #include "llvm/ADT/FunctionExtras.h"
+#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Error.h"

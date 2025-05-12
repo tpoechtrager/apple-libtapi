@@ -13,7 +13,7 @@
 
 #include "R600MCTargetDesc.h"
 #include "llvm/MC/MCInstrInfo.h"
-#include "llvm/TargetParser/SubtargetFeature.h"
+#include "llvm/MC/SubtargetFeature.h"
 
 using namespace llvm;
 

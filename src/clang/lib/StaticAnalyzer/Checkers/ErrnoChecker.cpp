@@ -22,7 +22,6 @@
 #include "clang/StaticAnalyzer/Core/PathSensitive/ProgramState.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/SVals.h"
 #include "llvm/ADT/STLExtras.h"
-#include <optional>
 
 using namespace clang;
 using namespace ento;
@@ -133,7 +132,7 @@ void ErrnoChecker::generateErrnoNotCheckedBug(
 
 void ErrnoChecker::checkLocation(SVal Loc, bool IsLoad, const Stmt *S,
                                  CheckerContext &C) const {
-  std::optional<ento::Loc> ErrnoLoc = getErrnoLoc(C.getState());
+  Optional<ento::Loc> ErrnoLoc = getErrnoLoc(C.getState());
   if (!ErrnoLoc)
     return;
 
@@ -207,7 +206,7 @@ void ErrnoChecker::checkPreCall(const CallEvent &Call,
       C.getSourceManager().isInSystemHeader(CallF->getLocation()) &&
       !isErrno(CallF)) {
     if (getErrnoState(C.getState()) == MustBeChecked) {
-      std::optional<ento::Loc> ErrnoLoc = getErrnoLoc(C.getState());
+      Optional<ento::Loc> ErrnoLoc = getErrnoLoc(C.getState());
       assert(ErrnoLoc && "ErrnoLoc should exist if an errno state is set.");
       generateErrnoNotCheckedBug(C, setErrnoStateIrrelevant(C.getState()),
                                  ErrnoLoc->getAsRegion(), &Call);
@@ -220,7 +219,7 @@ ProgramStateRef ErrnoChecker::checkRegionChanges(
     ArrayRef<const MemRegion *> ExplicitRegions,
     ArrayRef<const MemRegion *> Regions, const LocationContext *LCtx,
     const CallEvent *Call) const {
-  std::optional<ento::Loc> ErrnoLoc = getErrnoLoc(State);
+  Optional<ento::Loc> ErrnoLoc = getErrnoLoc(State);
   if (!ErrnoLoc)
     return State;
   const MemRegion *ErrnoRegion = ErrnoLoc->getAsRegion();
@@ -228,12 +227,12 @@ ProgramStateRef ErrnoChecker::checkRegionChanges(
   // If 'errno' is invalidated we can not know if it is checked or written into,
   // allow read and write without bug reports.
   if (llvm::is_contained(Regions, ErrnoRegion))
-    return clearErrnoState(State);
+    return setErrnoStateIrrelevant(State);
 
   // Always reset errno state when the system memory space is invalidated.
   // The ErrnoRegion is not always found in the list in this case.
   if (llvm::is_contained(Regions, ErrnoRegion->getMemorySpace()))
-    return clearErrnoState(State);
+    return setErrnoStateIrrelevant(State);
 
   return State;
 }

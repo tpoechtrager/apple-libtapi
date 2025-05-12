@@ -42,8 +42,8 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/ErrorOr.h"
 #include "llvm/Support/FileUtilities.h"
+#include "llvm/Support/Host.h"
 #include "llvm/Support/InitLLVM.h"
-#include "llvm/Support/LLVMDriver.h"
 #include "llvm/Support/Memory.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Process.h"
@@ -51,7 +51,6 @@
 #include "llvm/Support/StringSaver.h"
 #include "llvm/Support/WithColor.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/TargetParser/Host.h"
 #include <algorithm>
 #include <cassert>
 #include <cstdlib>
@@ -224,7 +223,7 @@ static Error executeObjcopy(ConfigManager &ConfigMgr) {
   return Error::success();
 }
 
-int llvm_objcopy_main(int argc, char **argv, const llvm::ToolContext &) {
+int llvm_objcopy_main(int argc, char **argv) {
   InitLLVM X(argc, argv);
   ToolName = argv[0];
 
@@ -241,7 +240,7 @@ int llvm_objcopy_main(int argc, char **argv, const llvm::ToolContext &) {
                               : cl::TokenizeGNUCommandLine,
                           NewArgv);
 
-  auto Args = ArrayRef(NewArgv).drop_front();
+  auto Args = makeArrayRef(NewArgv).drop_front();
   Expected<DriverConfig> DriverConfig = getDriverConfig(Args);
 
   if (!DriverConfig) {

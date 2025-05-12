@@ -7,19 +7,18 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/WindowsDriver/MSVCPaths.h"
+#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
-#include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/ADT/Triple.h"
 #include "llvm/ADT/Twine.h"
+#include "llvm/Support/Host.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Process.h"
 #include "llvm/Support/Program.h"
 #include "llvm/Support/VersionTuple.h"
 #include "llvm/Support/VirtualFileSystem.h"
-#include "llvm/TargetParser/Host.h"
-#include "llvm/TargetParser/Triple.h"
-#include <optional>
 #include <string>
 
 #ifdef _WIN32
@@ -95,9 +94,9 @@ static bool getWindows10SDKVersionFromPath(llvm::vfs::FileSystem &VFS,
 }
 
 static bool getWindowsSDKDirViaCommandLine(
-    llvm::vfs::FileSystem &VFS, std::optional<llvm::StringRef> WinSdkDir,
-    std::optional<llvm::StringRef> WinSdkVersion,
-    std::optional<llvm::StringRef> WinSysRoot, std::string &Path, int &Major,
+    llvm::vfs::FileSystem &VFS, llvm::Optional<llvm::StringRef> WinSdkDir,
+    llvm::Optional<llvm::StringRef> WinSdkVersion,
+    llvm::Optional<llvm::StringRef> WinSysRoot, std::string &Path, int &Major,
     std::string &Version) {
   if (WinSdkDir || WinSysRoot) {
     // Don't validate the input; trust the value supplied by the user.
@@ -394,9 +393,9 @@ bool useUniversalCRT(ToolsetLayout VSLayout, const std::string &VCToolChainPath,
   return !VFS.exists(TestPath);
 }
 
-bool getWindowsSDKDir(vfs::FileSystem &VFS, std::optional<StringRef> WinSdkDir,
-                      std::optional<StringRef> WinSdkVersion,
-                      std::optional<StringRef> WinSysRoot, std::string &Path,
+bool getWindowsSDKDir(vfs::FileSystem &VFS, Optional<StringRef> WinSdkDir,
+                      Optional<StringRef> WinSdkVersion,
+                      Optional<StringRef> WinSysRoot, std::string &Path,
                       int &Major, std::string &WindowsSDKIncludeVersion,
                       std::string &WindowsSDKLibVersion) {
   // Trust /winsdkdir and /winsdkversion if present.
@@ -449,11 +448,10 @@ bool getWindowsSDKDir(vfs::FileSystem &VFS, std::optional<StringRef> WinSdkDir,
   return false;
 }
 
-bool getUniversalCRTSdkDir(vfs::FileSystem &VFS,
-                           std::optional<StringRef> WinSdkDir,
-                           std::optional<StringRef> WinSdkVersion,
-                           std::optional<StringRef> WinSysRoot,
-                           std::string &Path, std::string &UCRTVersion) {
+bool getUniversalCRTSdkDir(vfs::FileSystem &VFS, Optional<StringRef> WinSdkDir,
+                           Optional<StringRef> WinSdkVersion,
+                           Optional<StringRef> WinSysRoot, std::string &Path,
+                           std::string &UCRTVersion) {
   // If /winsdkdir is passed, use it as location for the UCRT too.
   // FIXME: Should there be a dedicated /ucrtdir to override /winsdkdir?
   int Major;
@@ -475,9 +473,9 @@ bool getUniversalCRTSdkDir(vfs::FileSystem &VFS,
 }
 
 bool findVCToolChainViaCommandLine(vfs::FileSystem &VFS,
-                                   std::optional<StringRef> VCToolsDir,
-                                   std::optional<StringRef> VCToolsVersion,
-                                   std::optional<StringRef> WinSysRoot,
+                                   Optional<StringRef> VCToolsDir,
+                                   Optional<StringRef> VCToolsVersion,
+                                   Optional<StringRef> WinSysRoot,
                                    std::string &Path, ToolsetLayout &VSLayout) {
   // Don't validate the input; trust the value supplied by the user.
   // The primary motivation is to prevent unnecessary file and registry access.
@@ -505,7 +503,7 @@ bool findVCToolChainViaEnvironment(vfs::FileSystem &VFS, std::string &Path,
                                    ToolsetLayout &VSLayout) {
   // These variables are typically set by vcvarsall.bat
   // when launching a developer command prompt.
-  if (std::optional<std::string> VCToolsInstallDir =
+  if (Optional<std::string> VCToolsInstallDir =
           sys::Process::GetEnv("VCToolsInstallDir")) {
     // This is only set by newer Visual Studios, and it leads straight to
     // the toolchain directory.
@@ -513,7 +511,7 @@ bool findVCToolChainViaEnvironment(vfs::FileSystem &VFS, std::string &Path,
     VSLayout = ToolsetLayout::VS2017OrNewer;
     return true;
   }
-  if (std::optional<std::string> VCInstallDir =
+  if (Optional<std::string> VCInstallDir =
           sys::Process::GetEnv("VCINSTALLDIR")) {
     // If the previous variable isn't set but this one is, then we've found
     // an older Visual Studio. This variable is set by newer Visual Studios too,
@@ -527,7 +525,7 @@ bool findVCToolChainViaEnvironment(vfs::FileSystem &VFS, std::string &Path,
   // We couldn't find any VC environment variables. Let's walk through PATH and
   // see if it leads us to a VC toolchain bin directory. If it does, pick the
   // first one that we find.
-  if (std::optional<std::string> PathEnv = sys::Process::GetEnv("PATH")) {
+  if (Optional<std::string> PathEnv = sys::Process::GetEnv("PATH")) {
     SmallVector<StringRef, 8> PathEntries;
     StringRef(*PathEnv).split(PathEntries, sys::EnvPathSeparator);
     for (StringRef PathEntry : PathEntries) {
@@ -587,7 +585,7 @@ bool findVCToolChainViaEnvironment(vfs::FileSystem &VFS, std::string &Path,
         for (StringRef Prefix : ExpectedPrefixes) {
           if (It == End)
             goto NotAToolChain;
-          if (!It->starts_with_insensitive(Prefix))
+          if (!It->startswith_insensitive(Prefix))
             goto NotAToolChain;
           ++It;
         }
@@ -611,7 +609,7 @@ bool findVCToolChainViaEnvironment(vfs::FileSystem &VFS, std::string &Path,
 }
 
 bool findVCToolChainViaSetupConfig(vfs::FileSystem &VFS,
-                                   std::optional<StringRef> VCToolsVersion,
+                                   Optional<StringRef> VCToolsVersion,
                                    std::string &Path, ToolsetLayout &VSLayout) {
 #if !defined(USE_MSVC_SETUP_API)
   return false;
@@ -652,7 +650,7 @@ bool findVCToolChainViaSetupConfig(vfs::FileSystem &VFS,
     return false;
 
   ISetupInstancePtr NewestInstance;
-  std::optional<uint64_t> NewestVersionNum;
+  Optional<uint64_t> NewestVersionNum;
   do {
     bstr_t VersionString;
     uint64_t VersionNum;
@@ -694,7 +692,6 @@ bool findVCToolChainViaSetupConfig(vfs::FileSystem &VFS,
     ToolsVersion = ToolsVersionFile->get()->getBuffer().rtrim();
   }
 
-
   SmallString<256> ToolchainPath(VCRootPath);
   sys::path::append(ToolchainPath, "Tools", "MSVC", ToolsVersion);
   auto Status = VFS.status(ToolchainPath);
@@ -714,10 +711,8 @@ bool findVCToolChainViaRegistry(std::string &Path, ToolsetLayout &VSLayout) {
       getSystemRegistryString(R"(SOFTWARE\Microsoft\VCExpress\$VERSION)",
                               "InstallDir", VSInstallPath, nullptr)) {
     if (!VSInstallPath.empty()) {
-      auto pos = VSInstallPath.find(R"(\Common7\IDE)");
-      if (pos == std::string::npos)
-        return false;
-      SmallString<256> VCPath(StringRef(VSInstallPath.c_str(), pos));
+      SmallString<256> VCPath(StringRef(VSInstallPath.c_str(),
+                                        VSInstallPath.find(R"(\Common7\IDE)")));
       sys::path::append(VCPath, "VC");
 
       Path = std::string(VCPath.str());

@@ -27,24 +27,18 @@ public:
   Use *PtrUse;
   bool IsWrite;
   Type *OpType;
-  TypeSize TypeStoreSize = TypeSize::Fixed(0);
+  uint64_t TypeSize;
   MaybeAlign Alignment;
   // The mask Value, if we're looking at a masked load/store.
   Value *MaybeMask;
-  // The EVL Value, if we're looking at a vp intrinsic.
-  Value *MaybeEVL;
-  // The Stride Value, if we're looking at a strided load/store.
-  Value *MaybeStride;
 
   InterestingMemoryOperand(Instruction *I, unsigned OperandNo, bool IsWrite,
                            class Type *OpType, MaybeAlign Alignment,
-                           Value *MaybeMask = nullptr,
-                           Value *MaybeEVL = nullptr,
-                           Value *MaybeStride = nullptr)
+                           Value *MaybeMask = nullptr)
       : IsWrite(IsWrite), OpType(OpType), Alignment(Alignment),
-        MaybeMask(MaybeMask), MaybeEVL(MaybeEVL), MaybeStride(MaybeStride) {
+        MaybeMask(MaybeMask) {
     const DataLayout &DL = I->getModule()->getDataLayout();
-    TypeStoreSize = DL.getTypeStoreSizeInBits(OpType);
+    TypeSize = DL.getTypeStoreSizeInBits(OpType);
     PtrUse = &I->getOperandUse(OperandNo);
   }
 

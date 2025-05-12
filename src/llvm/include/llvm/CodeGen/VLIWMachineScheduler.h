@@ -48,8 +48,7 @@ protected:
 
 public:
   VLIWResourceModel(const TargetSubtargetInfo &STI, const TargetSchedModel *SM);
-  VLIWResourceModel &operator=(const VLIWResourceModel &other) = delete;
-  VLIWResourceModel(const VLIWResourceModel &other) = delete;
+
   virtual ~VLIWResourceModel();
 
   virtual void reset();
@@ -152,8 +151,6 @@ protected:
           Pending(ID << ConvergingVLIWScheduler::LogMaxQID, Name + ".P") {}
 
     ~VLIWSchedBoundary();
-    VLIWSchedBoundary &operator=(const VLIWSchedBoundary &other) = delete;
-    VLIWSchedBoundary(const VLIWSchedBoundary &other) = delete;
 
     void init(VLIWMachineScheduler *dag, const TargetSchedModel *smodel) {
       DAG = dag;
@@ -263,6 +260,8 @@ protected:
                              SchedCandidate &Candidate, ReadyQueue &Q);
 #endif
 };
+
+ScheduleDAGMILive *createVLIWSched(MachineSchedContext *C);
 
 } // end namespace llvm
 

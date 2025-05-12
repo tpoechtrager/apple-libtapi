@@ -16,8 +16,9 @@
 #define LLVM_IR_INTRINSICS_H
 
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/None.h"
+#include "llvm/ADT/Optional.h"
 #include "llvm/Support/TypeSize.h"
-#include <optional>
 #include <string>
 
 namespace llvm {
@@ -74,10 +75,15 @@ namespace Intrinsic {
 
   /// Return the function type for an intrinsic.
   FunctionType *getType(LLVMContext &Context, ID id,
-                        ArrayRef<Type *> Tys = std::nullopt);
+                        ArrayRef<Type*> Tys = None);
 
   /// Returns true if the intrinsic can be overloaded.
   bool isOverloaded(ID id);
+
+  /// Returns true if the intrinsic is a leaf, i.e. it does not make any calls
+  /// itself.  Most intrinsics are leafs, the exceptions being the patchpoint
+  /// and statepoint intrinsics. These call (or invoke) their "target" argument.
+  bool isLeaf(ID id);
 
   /// Return the attributes for an intrinsic.
   AttributeList getAttributes(LLVMContext &C, ID id);
@@ -89,8 +95,7 @@ namespace Intrinsic {
   /// using iAny, fAny, vAny, or iPTRAny).  For a declaration of an overloaded
   /// intrinsic, Tys must provide exactly one type for each overloaded type in
   /// the intrinsic.
-  Function *getDeclaration(Module *M, ID id,
-                           ArrayRef<Type *> Tys = std::nullopt);
+  Function *getDeclaration(Module *M, ID id, ArrayRef<Type*> Tys = None);
 
   /// Looks up Name in NameTable via binary search. NameTable must be sorted
   /// and all entries must start with "llvm.".  If NameTable contains an exact
@@ -128,6 +133,8 @@ namespace Intrinsic {
       TruncArgument,
       HalfVecArgument,
       SameVecWidthArgument,
+      PtrToArgument,
+      PtrToElt,
       VecOfAnyPtrsToElt,
       VecElementArgument,
       Subdivide2Argument,
@@ -135,7 +142,7 @@ namespace Intrinsic {
       VecOfBitcastsToInt,
       AMX,
       PPCQuad,
-      AArch64Svcount,
+      AnyPtrToElt,
     } Kind;
 
     union {
@@ -147,17 +154,20 @@ namespace Intrinsic {
       ElementCount Vector_Width;
     };
 
-    // AK_% : Defined in Intrinsics.td
     enum ArgKind {
-#define GET_INTRINSIC_ARGKIND
-#include "llvm/IR/IntrinsicEnums.inc"
-#undef GET_INTRINSIC_ARGKIND
+      AK_Any,
+      AK_AnyInteger,
+      AK_AnyFloat,
+      AK_AnyVector,
+      AK_AnyPointer,
+      AK_MatchType = 7
     };
 
     unsigned getArgumentNumber() const {
       assert(Kind == Argument || Kind == ExtendArgument ||
              Kind == TruncArgument || Kind == HalfVecArgument ||
-             Kind == SameVecWidthArgument || Kind == VecElementArgument ||
+             Kind == SameVecWidthArgument || Kind == PtrToArgument ||
+             Kind == PtrToElt || Kind == VecElementArgument ||
              Kind == Subdivide2Argument || Kind == Subdivide4Argument ||
              Kind == VecOfBitcastsToInt);
       return Argument_Info >> 3;
@@ -165,20 +175,21 @@ namespace Intrinsic {
     ArgKind getArgumentKind() const {
       assert(Kind == Argument || Kind == ExtendArgument ||
              Kind == TruncArgument || Kind == HalfVecArgument ||
-             Kind == SameVecWidthArgument ||
+             Kind == SameVecWidthArgument || Kind == PtrToArgument ||
              Kind == VecElementArgument || Kind == Subdivide2Argument ||
              Kind == Subdivide4Argument || Kind == VecOfBitcastsToInt);
       return (ArgKind)(Argument_Info & 7);
     }
 
-    // VecOfAnyPtrsToElt uses both an overloaded argument (for address space)
-    // and a reference argument (for matching vector width and element types)
+    // VecOfAnyPtrsToElt and AnyPtrToElt uses both an overloaded argument (for
+    // address space) and a reference argument (for matching vector width and
+    // element types)
     unsigned getOverloadArgNumber() const {
-      assert(Kind == VecOfAnyPtrsToElt);
+      assert(Kind == VecOfAnyPtrsToElt || Kind == AnyPtrToElt);
       return Argument_Info >> 16;
     }
     unsigned getRefArgNumber() const {
-      assert(Kind == VecOfAnyPtrsToElt);
+      assert(Kind == VecOfAnyPtrsToElt || Kind == AnyPtrToElt);
       return Argument_Info & 0xFFFF;
     }
 
@@ -238,7 +249,7 @@ namespace Intrinsic {
   // returns the declaration with the same signature and remangled name.
   // An existing GlobalValue with the wanted name but with a wrong prototype
   // or of the wrong kind will be renamed by adding ".renamed" to the name.
-  std::optional<Function *> remangleIntrinsicFunction(Function *F);
+  llvm::Optional<Function*> remangleIntrinsicFunction(Function *F);
 
 } // End Intrinsic namespace
 

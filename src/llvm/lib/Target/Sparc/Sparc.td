@@ -34,7 +34,7 @@ def FeatureV9
   : SubtargetFeature<"v9", "IsV9", "true",
                      "Enable SPARC-V9 instructions">;
 def FeatureV8Deprecated
-  : SubtargetFeature<"deprecated-v8", "UseV8DeprecatedInsts", "true",
+  : SubtargetFeature<"deprecated-v8", "V8DeprecatedInsts", "true",
                      "Enable deprecated V8 instructions in V9 mode">;
 def FeatureVIS
   : SubtargetFeature<"vis", "IsVIS", "true",
@@ -74,7 +74,9 @@ include "SparcCallingConv.td"
 include "SparcSchedule.td"
 include "SparcInstrInfo.td"
 
-def SparcInstrInfo : InstrInfo;
+def SparcInstrInfo : InstrInfo {
+  let useDeprecatedPositionallyEncodedOperands = 1;
+}
 
 def SparcAsmParser : AsmParser {
   bit ShouldEmitMatchRegisterName = 0;

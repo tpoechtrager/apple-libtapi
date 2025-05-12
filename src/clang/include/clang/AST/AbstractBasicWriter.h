@@ -11,18 +11,20 @@
 
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/DeclTemplate.h"
-#include <optional>
 
 namespace clang {
 namespace serialization {
 
 template <class T>
-inline std::optional<T> makeOptionalFromNullable(const T &value) {
-  return (value.isNull() ? std::optional<T>() : std::optional<T>(value));
+inline llvm::Optional<T> makeOptionalFromNullable(const T &value) {
+  return (value.isNull()
+            ? llvm::Optional<T>()
+            : llvm::Optional<T>(value));
 }
 
-template <class T> inline std::optional<T *> makeOptionalFromPointer(T *value) {
-  return (value ? std::optional<T *>(value) : std::optional<T *>());
+template <class T>
+inline llvm::Optional<T*> makeOptionalFromPointer(T *value) {
+  return (value ? llvm::Optional<T*>(value) : llvm::Optional<T*>());
 }
 
 // PropertyWriter is a class concept that requires the following method:
@@ -49,7 +51,7 @@ template <class T> inline std::optional<T *> makeOptionalFromPointer(T *value) {
 //     type-specific writers for all the enum types.
 //
 //   template <class ValueType>
-//   void writeOptional(std::optional<ValueType> value);
+//   void writeOptional(Optional<ValueType> value);
 //
 //     Writes an optional value as the current property.
 //
@@ -146,7 +148,8 @@ public:
     }
   }
 
-  template <class T> void writeOptional(std::optional<T> value) {
+  template <class T>
+  void writeOptional(llvm::Optional<T> value) {
     WriteDispatcher<T>::write(asImpl(), PackOptionalValue<T>::pack(value));
   }
 

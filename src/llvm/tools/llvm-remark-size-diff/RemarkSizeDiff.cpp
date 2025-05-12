@@ -15,6 +15,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm-c/Remarks.h"
+#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/Remarks/Remark.h"

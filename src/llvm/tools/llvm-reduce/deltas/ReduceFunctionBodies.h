@@ -18,7 +18,6 @@
 
 namespace llvm {
 void reduceFunctionBodiesDeltaPass(TestRunner &Test);
-void reduceFunctionDataDeltaPass(TestRunner &Test);
 } // namespace llvm
 
 #endif

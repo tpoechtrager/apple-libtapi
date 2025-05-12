@@ -8,18 +8,16 @@
 
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringSet.h"
+#include "llvm/ADT/Triple.h"
 #include "llvm/DebugInfo/DIContext.h"
 #include "llvm/DebugInfo/DWARF/DWARFContext.h"
 #include "llvm/Object/Archive.h"
 #include "llvm/Object/ELFObjectFile.h"
 #include "llvm/Object/MachOUniversal.h"
 #include "llvm/Object/ObjectFile.h"
-#include "llvm/Option/ArgList.h"
-#include "llvm/Option/Option.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Format.h"
-#include "llvm/Support/LLVMDriver.h"
 #include "llvm/Support/ManagedStatic.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/PrettyStackTrace.h"
@@ -27,13 +25,11 @@
 #include "llvm/Support/Signals.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/TargetParser/Triple.h"
 #include <algorithm>
 #include <cstring>
 #include <inttypes.h>
 #include <iostream>
 #include <map>
-#include <optional>
 #include <string>
 #include <system_error>
 #include <vector>
@@ -45,7 +41,6 @@
 #include "llvm/DebugInfo/GSYM/InlineInfo.h"
 #include "llvm/DebugInfo/GSYM/LookupResult.h"
 #include "llvm/DebugInfo/GSYM/ObjectFileTransformer.h"
-#include <optional>
 
 using namespace llvm;
 using namespace gsym;
@@ -55,124 +50,78 @@ using namespace object;
 /// Command line options.
 /// @{
 
-using namespace llvm::opt;
-enum ID {
-  OPT_INVALID = 0, // This is not an option ID.
-#define OPTION(...) LLVM_MAKE_OPT_ID(__VA_ARGS__),
-#include "Opts.inc"
-#undef OPTION
-};
+namespace {
+using namespace cl;
 
-#define PREFIX(NAME, VALUE)                                                    \
-  constexpr llvm::StringLiteral NAME##_init[] = VALUE;                         \
-  constexpr llvm::ArrayRef<llvm::StringLiteral> NAME(                          \
-      NAME##_init, std::size(NAME##_init) - 1);
-#include "Opts.inc"
-#undef PREFIX
+OptionCategory GeneralOptions("Options");
+OptionCategory ConversionOptions("Conversion Options");
+OptionCategory LookupOptions("Lookup Options");
 
-const opt::OptTable::Info InfoTable[] = {
-#define OPTION(...) LLVM_CONSTRUCT_OPT_INFO(__VA_ARGS__),
-#include "Opts.inc"
-#undef OPTION
-};
+static opt<bool> Help("h", desc("Alias for -help"), Hidden,
+                      cat(GeneralOptions));
 
-class GSYMUtilOptTable : public llvm::opt::GenericOptTable {
-public:
-  GSYMUtilOptTable() : GenericOptTable(InfoTable) {
-    setGroupedShortOptions(true);
-  }
-};
+static opt<bool> Verbose("verbose",
+                         desc("Enable verbose logging and encoding details."),
+                         cat(GeneralOptions));
 
-static bool Verbose;
-static std::vector<std::string> InputFilenames;
-static std::string ConvertFilename;
-static std::vector<std::string> ArchFilters;
-static std::string OutputFilename;
-static bool Verify;
-static unsigned NumThreads;
-static uint64_t SegmentSize;
-static bool Quiet;
-static std::vector<uint64_t> LookupAddresses;
-static bool LookupAddressesFromStdin;
+static list<std::string> InputFilenames(Positional, desc("<input GSYM files>"),
+                                        cat(GeneralOptions));
 
-static void parseArgs(int argc, char **argv) {
-  GSYMUtilOptTable Tbl;
-  llvm::StringRef ToolName = argv[0];
-  llvm::BumpPtrAllocator A;
-  llvm::StringSaver Saver{A};
-  llvm::opt::InputArgList Args =
-      Tbl.parseArgs(argc, argv, OPT_UNKNOWN, Saver, [&](StringRef Msg) {
-        llvm::errs() << Msg << '\n';
-        std::exit(1);
-      });
-  if (Args.hasArg(OPT_help)) {
-    const char *Overview =
-        "A tool for dumping, searching and creating GSYM files.\n\n"
-        "Specify one or more GSYM paths as arguments to dump all of the "
-        "information in each GSYM file.\n"
-        "Specify a single GSYM file along with one or more --lookup options to "
-        "lookup addresses within that GSYM file.\n"
-        "Use the --convert option to specify a file with option --out-file "
-        "option to convert to GSYM format.\n";
+static opt<std::string>
+    ConvertFilename("convert", cl::init(""),
+                    cl::desc("Convert the specified file to the GSYM format.\n"
+                             "Supported files include ELF and mach-o files "
+                             "that will have their debug info (DWARF) and "
+                             "symbol table converted."),
+                    cl::value_desc("path"), cat(ConversionOptions));
 
-    Tbl.printHelp(llvm::outs(), "llvm-gsymutil [options] <input GSYM files>",
-                  Overview);
-    std::exit(0);
-  }
-  if (Args.hasArg(OPT_version)) {
-    llvm::outs() << ToolName << '\n';
-    cl::PrintVersionMessage();
-    std::exit(0);
-  }
+static list<std::string>
+    ArchFilters("arch",
+                desc("Process debug information for the specified CPU "
+                     "architecture only.\nArchitectures may be specified by "
+                     "name or by number.\nThis option can be specified "
+                     "multiple times, once for each desired architecture."),
+                cl::value_desc("arch"), cat(ConversionOptions));
 
-  Verbose = Args.hasArg(OPT_verbose);
+static opt<std::string>
+    OutputFilename("out-file", cl::init(""),
+                   cl::desc("Specify the path where the converted GSYM file "
+                            "will be saved.\nWhen not specified, a '.gsym' "
+                            "extension will be appended to the file name "
+                            "specified in the --convert option."),
+                   cl::value_desc("path"), cat(ConversionOptions));
+static alias OutputFilenameAlias("o", desc("Alias for -out-file."),
+                                 aliasopt(OutputFilename),
+                                 cat(ConversionOptions));
 
-  for (const llvm::opt::Arg *A : Args.filtered(OPT_INPUT))
-    InputFilenames.emplace_back(A->getValue());
+static opt<bool> Verify("verify",
+                        desc("Verify the generated GSYM file against the "
+                             "information in the file that was converted."),
+                        cat(ConversionOptions));
 
-  if (const llvm::opt::Arg *A = Args.getLastArg(OPT_convert_EQ))
-    ConvertFilename = A->getValue();
+static opt<unsigned>
+    NumThreads("num-threads",
+               desc("Specify the maximum number (n) of simultaneous threads "
+                    "to use when converting files to GSYM.\nDefaults to the "
+                    "number of cores on the current machine."),
+               cl::value_desc("n"), cat(ConversionOptions));
 
-  for (const llvm::opt::Arg *A : Args.filtered(OPT_arch_EQ))
-    ArchFilters.emplace_back(A->getValue());
+static opt<bool>
+    Quiet("quiet", desc("Do not output warnings about the debug information"),
+          cat(ConversionOptions));
 
-  if (const llvm::opt::Arg *A = Args.getLastArg(OPT_out_file_EQ))
-    OutputFilename = A->getValue();
+static list<uint64_t> LookupAddresses("address",
+                                      desc("Lookup an address in a GSYM file"),
+                                      cl::value_desc("addr"),
+                                      cat(LookupOptions));
 
-  Verify = Args.hasArg(OPT_verify);
+static opt<bool> LookupAddressesFromStdin(
+    "addresses-from-stdin",
+    desc("Lookup addresses in a GSYM file that are read from stdin\nEach input "
+         "line is expected to be of the following format: <addr> <gsym-path>"),
+    cat(LookupOptions));
 
-  if (const llvm::opt::Arg *A = Args.getLastArg(OPT_num_threads_EQ)) {
-    StringRef S{A->getValue()};
-    if (!llvm::to_integer(S, NumThreads, 0)) {
-      llvm::errs() << ToolName << ": for the --num-threads option: '" << S
-                   << "' value invalid for uint argument!\n";
-      std::exit(1);
-    }
-  }
-
-  if (const llvm::opt::Arg *A = Args.getLastArg(OPT_segment_size_EQ)) {
-    StringRef S{A->getValue()};
-    if (!llvm::to_integer(S, SegmentSize, 0)) {
-      llvm::errs() << ToolName << ": for the --segment-size option: '" << S
-                   << "' value invalid for uint argument!\n";
-      std::exit(1);
-    }
-  }
-
-  Quiet = Args.hasArg(OPT_quiet);
-
-  for (const llvm::opt::Arg *A : Args.filtered(OPT_address_EQ)) {
-    StringRef S{A->getValue()};
-    if (!llvm::to_integer(S, LookupAddresses.emplace_back(), 0)) {
-      llvm::errs() << ToolName << ": for the --address option: '" << S
-                   << "' value invalid for uint argument!\n";
-      std::exit(1);
-    }
-  }
-
-  LookupAddressesFromStdin = Args.hasArg(OPT_addresses_from_stdin);
-}
-
+} // namespace
 /// @}
 //===----------------------------------------------------------------------===//
 
@@ -213,14 +162,14 @@ static bool filterArch(MachOObjectFile &Obj) {
   Triple ObjTriple(Obj.getArchTriple());
   StringRef ObjArch = ObjTriple.getArchName();
 
-  for (StringRef Arch : ArchFilters) {
+  for (auto Arch : ArchFilters) {
     // Match name.
     if (Arch == ObjArch)
       return true;
 
     // Match architecture number.
     unsigned Value;
-    if (!Arch.getAsInteger(0, Value))
+    if (!StringRef(Arch).getAsInteger(0, Value))
       if (Value == getCPUType(Obj))
         return true;
   }
@@ -237,17 +186,17 @@ static bool filterArch(MachOObjectFile &Obj) {
 ///
 /// \returns A valid image base address if we are able to extract one.
 template <class ELFT>
-static std::optional<uint64_t>
+static llvm::Optional<uint64_t>
 getImageBaseAddress(const object::ELFFile<ELFT> &ELFFile) {
   auto PhdrRangeOrErr = ELFFile.program_headers();
   if (!PhdrRangeOrErr) {
     consumeError(PhdrRangeOrErr.takeError());
-    return std::nullopt;
+    return llvm::None;
   }
   for (const typename ELFT::Phdr &Phdr : *PhdrRangeOrErr)
     if (Phdr.p_type == ELF::PT_LOAD)
       return (uint64_t)Phdr.p_vaddr;
-  return std::nullopt;
+  return llvm::None;
 }
 
 /// Determine the virtual address that is considered the base address of mach-o
@@ -258,7 +207,7 @@ getImageBaseAddress(const object::ELFFile<ELFT> &ELFFile) {
 /// \param MachO A mach-o object file we will search.
 ///
 /// \returns A valid image base address if we are able to extract one.
-static std::optional<uint64_t>
+static llvm::Optional<uint64_t>
 getImageBaseAddress(const object::MachOObjectFile *MachO) {
   for (const auto &Command : MachO->load_commands()) {
     if (Command.C.cmd == MachO::LC_SEGMENT) {
@@ -273,7 +222,7 @@ getImageBaseAddress(const object::MachOObjectFile *MachO) {
         return SLC.vmaddr;
     }
   }
-  return std::nullopt;
+  return llvm::None;
 }
 
 /// Determine the virtual address that is considered the base address of an
@@ -288,7 +237,7 @@ getImageBaseAddress(const object::MachOObjectFile *MachO) {
 /// \param Obj An object file we will search.
 ///
 /// \returns A valid image base address if we are able to extract one.
-static std::optional<uint64_t> getImageBaseAddress(object::ObjectFile &Obj) {
+static llvm::Optional<uint64_t> getImageBaseAddress(object::ObjectFile &Obj) {
   if (const auto *MachO = dyn_cast<object::MachOObjectFile>(&Obj))
     return getImageBaseAddress(MachO);
   else if (const auto *ELFObj = dyn_cast<object::ELF32LEObjectFile>(&Obj))
@@ -299,7 +248,7 @@ static std::optional<uint64_t> getImageBaseAddress(object::ObjectFile &Obj) {
     return getImageBaseAddress(ELFObj->getELFFile());
   else if (const auto *ELFObj = dyn_cast<object::ELF64BEObjectFile>(&Obj))
     return getImageBaseAddress(ELFObj->getELFFile());
-  return std::nullopt;
+  return llvm::None;
 }
 
 static llvm::Error handleObjectFile(ObjectFile &Obj,
@@ -336,6 +285,7 @@ static llvm::Error handleObjectFile(ObjectFile &Obj,
   if (!DICtx)
     return createStringError(std::errc::invalid_argument,
                              "unable to create DWARF context");
+  logAllUnhandledErrors(DICtx->loadRegisterInfo(Obj), OS, "DwarfTransformer: ");
 
   // Make a DWARF transformer object and populate the ranges of the code
   // so we don't end up adding invalid functions to GSYM data.
@@ -360,11 +310,7 @@ static llvm::Error handleObjectFile(ObjectFile &Obj,
   // Save the GSYM file to disk.
   support::endianness Endian =
       Obj.makeTriple().isLittleEndian() ? support::little : support::big;
-
-  std::optional<uint64_t> OptSegmentSize;
-  if (SegmentSize > 0)
-    OptSegmentSize = SegmentSize;
-  if (auto Err = Gsym.save(OutFile, Endian, OptSegmentSize))
+  if (auto Err = Gsym.save(OutFile, Endian))
     return Err;
 
   // Verify the DWARF if requested. This will ensure all the info in the DWARF
@@ -457,9 +403,10 @@ static llvm::Error convertFileToGSYM(raw_ostream &OS) {
     error(DsymObjectsOrErr.takeError());
   }
 
-  for (StringRef Object : Objects)
-    if (Error Err = handleFileConversionToGSYM(Object, OutFile))
+  for (auto Object : Objects) {
+    if (auto Err = handleFileConversionToGSYM(Object, OutFile))
       return Err;
+  }
   return Error::success();
 }
 
@@ -484,7 +431,7 @@ static void doLookup(GsymReader &Gsym, uint64_t Addr, raw_ostream &OS) {
     OS << "\n";
 }
 
-int llvm_gsymutil_main(int argc, char **argv, const llvm::ToolContext &) {
+int main(int argc, char const *argv[]) {
   // Print a stack trace if we signal out.
   sys::PrintStackTraceOnErrorSignal(argv[0]);
   PrettyStackTraceProgram X(argc, argv);
@@ -492,7 +439,21 @@ int llvm_gsymutil_main(int argc, char **argv, const llvm::ToolContext &) {
 
   llvm::InitializeAllTargets();
 
-  parseArgs(argc, argv);
+  const char *Overview =
+      "A tool for dumping, searching and creating GSYM files.\n\n"
+      "Specify one or more GSYM paths as arguments to dump all of the "
+      "information in each GSYM file.\n"
+      "Specify a single GSYM file along with one or more --lookup options to "
+      "lookup addresses within that GSYM file.\n"
+      "Use the --convert option to specify a file with option --out-file "
+      "option to convert to GSYM format.\n";
+  HideUnrelatedOptions({&GeneralOptions, &ConversionOptions, &LookupOptions});
+  cl::ParseCommandLineOptions(argc, argv, Overview);
+
+  if (Help) {
+    PrintHelpMessage(/*Hidden =*/false, /*Categorized =*/true);
+    return 0;
+  }
 
   raw_ostream &OS = outs();
 
@@ -519,7 +480,7 @@ int llvm_gsymutil_main(int argc, char **argv, const llvm::ToolContext &) {
 
     std::string InputLine;
     std::string CurrentGSYMPath;
-    std::optional<Expected<GsymReader>> CurrentGsym;
+    llvm::Optional<Expected<GsymReader>> CurrentGsym;
 
     while (std::getline(std::cin, InputLine)) {
       // Strip newline characters.

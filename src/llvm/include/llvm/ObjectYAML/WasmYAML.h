@@ -189,7 +189,6 @@ struct Section {
 
   SectionType Type;
   std::vector<Relocation> Relocations;
-  std::optional<uint8_t> HeaderSecSizeEncodingLen;
 };
 
 struct CustomSection : Section {

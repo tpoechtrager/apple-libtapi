@@ -14,12 +14,10 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Casting.h"
 #include <atomic>
-#include <optional>
 
 namespace llvm {
 
 class MemoryBuffer;
-class raw_ostream;
 
 namespace cas {
 
@@ -94,8 +92,8 @@ protected:
 
   ThreadSafeHashMappedTrieBase(size_t ContentAllocSize,
                                size_t ContentAllocAlign, size_t ContentOffset,
-                               std::optional<size_t> NumRootBits = std::nullopt,
-                               std::optional<size_t> NumSubtrieBits = std::nullopt);
+                               Optional<size_t> NumRootBits = None,
+                               Optional<size_t> NumSubtrieBits = None);
 
   /// Destructor, which asserts if there's anything to do. Subclasses should
   /// call \a destroyImpl().
@@ -320,8 +318,8 @@ public:
     return ThreadSafeHashMappedTrieBase::find(Hash);
   }
 
-  ThreadSafeHashMappedTrie(std::optional<size_t> NumRootBits = std::nullopt,
-                           std::optional<size_t> NumSubtrieBits = std::nullopt)
+  ThreadSafeHashMappedTrie(Optional<size_t> NumRootBits = None,
+                           Optional<size_t> NumSubtrieBits = None)
       : ThreadSafeHashMappedTrieBase(getContentAllocSize<value_type>(),
                                      getContentAllocAlign<value_type>(),
                                      getContentOffset<value_type>(),

@@ -161,32 +161,16 @@ static const struct ThunkNameRegMode {
     {"__llvm_slsblr_thunk_thumb_pc", ARM::PC, true},
 };
 
-// An enum for tracking whether Arm and Thumb thunks have been inserted into the
-// current module so far.
-enum ArmInsertedThunks { ArmThunk = 1, ThumbThunk = 2 };
-
-inline ArmInsertedThunks &operator|=(ArmInsertedThunks &X,
-                                     ArmInsertedThunks Y) {
-  return X = static_cast<ArmInsertedThunks>(X | Y);
-}
-
 namespace {
-struct SLSBLRThunkInserter
-    : ThunkInserter<SLSBLRThunkInserter, ArmInsertedThunks> {
+struct SLSBLRThunkInserter : ThunkInserter<SLSBLRThunkInserter> {
   const char *getThunkPrefix() { return SLSBLRNamePrefix; }
-  bool mayUseThunk(const MachineFunction &MF,
-                   ArmInsertedThunks InsertedThunks) {
-    if ((InsertedThunks & ArmThunk &&
-         !MF.getSubtarget<ARMSubtarget>().isThumb()) ||
-        (InsertedThunks & ThumbThunk &&
-         MF.getSubtarget<ARMSubtarget>().isThumb()))
-      return false;
+  bool mayUseThunk(const MachineFunction &MF) {
     ComdatThunks &= !MF.getSubtarget<ARMSubtarget>().hardenSlsNoComdat();
     // FIXME: This could also check if there are any indirect calls in the
     // function to more accurately reflect if a thunk will be needed.
     return MF.getSubtarget<ARMSubtarget>().hardenSlsBlr();
   }
-  ArmInsertedThunks insertThunks(MachineModuleInfo &MMI, MachineFunction &MF);
+  void insertThunks(MachineModuleInfo &MMI);
   void populateThunk(MachineFunction &MF);
 
 private:
@@ -194,17 +178,12 @@ private:
 };
 } // namespace
 
-ArmInsertedThunks SLSBLRThunkInserter::insertThunks(MachineModuleInfo &MMI,
-                                                    MachineFunction &MF) {
+void SLSBLRThunkInserter::insertThunks(MachineModuleInfo &MMI) {
   // FIXME: It probably would be possible to filter which thunks to produce
   // based on which registers are actually used in indirect calls in this
   // function. But would that be a worthwhile optimization?
-  const ARMSubtarget *ST = &MF.getSubtarget<ARMSubtarget>();
   for (auto T : SLSBLRThunks)
-    if (ST->isThumb() == T.isThumb)
-      createThunkFunction(MMI, T.Name, ComdatThunks,
-                          T.isThumb ? "+thumb-mode" : "");
-  return ST->isThumb() ? ThumbThunk : ArmThunk;
+    createThunkFunction(MMI, T.Name, ComdatThunks);
 }
 
 void SLSBLRThunkInserter::populateThunk(MachineFunction &MF) {

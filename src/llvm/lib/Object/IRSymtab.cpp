@@ -13,6 +13,7 @@
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/ADT/Triple.h"
 #include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/Config/llvm-config.h"
 #include "llvm/IR/Comdat.h"
@@ -32,7 +33,6 @@
 #include "llvm/Support/StringSaver.h"
 #include "llvm/Support/VCSRevision.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/TargetParser/Triple.h"
 #include <cassert>
 #include <string>
 #include <utility>
@@ -41,8 +41,8 @@
 using namespace llvm;
 using namespace irsymtab;
 
-static cl::opt<bool> DisableBitcodeVersionUpgrade(
-    "disable-bitcode-version-upgrade", cl::Hidden,
+cl::opt<bool> DisableBitcodeVersionUpgrade(
+    "disable-bitcode-version-upgrade", cl::init(false), cl::Hidden,
     cl::desc("Disable automatic bitcode upgrade for version mismatch"));
 
 static const char *PreservedSymbols[] = {
@@ -259,7 +259,7 @@ Error Builder::addSymbol(const ModuleSymbolTable &Msymtab,
     Sym.Flags |= 1 << storage::Symbol::FB_executable;
 
   Sym.ComdatIndex = -1;
-  auto *GV = dyn_cast_if_present<GlobalValue *>(Msym);
+  auto *GV = Msym.dyn_cast<GlobalValue *>();
   if (!GV) {
     // Undefined module asm symbols act as GC roots and are implicitly used.
     if (Flags & object::BasicSymbolRef::SF_Undefined)
@@ -289,7 +289,7 @@ Error Builder::addSymbol(const ModuleSymbolTable &Msymtab,
                                      inconvertibleErrorCode());
     Uncommon().CommonSize =
         GV->getParent()->getDataLayout().getTypeAllocSize(GV->getValueType());
-    Uncommon().CommonAlign = GVar->getAlign() ? GVar->getAlign()->value() : 0;
+    Uncommon().CommonAlign = GVar->getAlignment();
   }
 
   const GlobalObject *GO = GV->getAliaseeObject();

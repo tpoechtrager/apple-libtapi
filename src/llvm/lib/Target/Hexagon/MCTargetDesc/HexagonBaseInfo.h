@@ -125,52 +125,43 @@ namespace HexagonII {
     RestrictNoSlot1StoreMask = 0x1,
 
     // Addressing mode for load/store instructions.
-    AddrModePos = 40,
+    AddrModePos = 42,
     AddrModeMask = 0x7,
     // Access size for load/store instructions.
-    MemAccessSizePos = 43,
+    MemAccessSizePos = 45,
     MemAccesSizeMask = 0xf,
 
     // Branch predicted taken.
-    TakenPos = 47,
+    TakenPos = 49,
     TakenMask = 0x1,
 
     // Floating-point instructions.
-    FPPos = 48,
+    FPPos = 50,
     FPMask = 0x1,
 
     // New-Value producer-2 instructions.
-    hasNewValuePos2 = 50,
+    hasNewValuePos2 = 52,
     hasNewValueMask2 = 0x1,
     // Which operand consumes or produces a new value.
-    NewValueOpPos2 = 51,
+    NewValueOpPos2 = 53,
     NewValueOpMask2 = 0x7,
 
     // Accumulator instructions.
-    AccumulatorPos = 54,
+    AccumulatorPos = 56,
     AccumulatorMask = 0x1,
 
     // Complex XU, prevent xu competition by preferring slot3
-    PrefersSlot3Pos = 55,
+    PrefersSlot3Pos = 57,
     PrefersSlot3Mask = 0x1,
 
-    HasHvxTmpPos = 56,
+    HasHvxTmpPos = 60,
     HasHvxTmpMask = 0x1,
 
-    CVINewPos = 58,
+    CVINewPos = 62,
     CVINewMask = 0x1,
 
-    isCVIPos = 59,
+    isCVIPos = 63,
     isCVIMask = 0x1,
-
-    isHVXALUPos = 60,
-    isHVXALUMask = 0x1,
-
-    isHVXALU2SRCPos = 61,
-    isHVXALU2SRCMask = 0x1,
-
-    hasUnaryRestrictionPos = 62,
-    hasUnaryRestrictionMask = 0x1,
   };
 
   // *** The code above must match HexagonInstrFormat*.td *** //

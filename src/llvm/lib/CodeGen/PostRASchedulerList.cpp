@@ -182,7 +182,7 @@ namespace {
 
   private:
     /// Apply each ScheduleDAGMutation step in order.
-    void postProcessDAG();
+    void postprocessDAG();
 
     void ReleaseSucc(SUnit *SU, SDep *SuccEdge);
     void ReleaseSuccessors(SUnit *SU);
@@ -407,7 +407,7 @@ void SchedulePostRATDList::schedule() {
     }
   }
 
-  postProcessDAG();
+  postprocessDAG();
 
   LLVM_DEBUG(dbgs() << "********** List Scheduling **********\n");
   LLVM_DEBUG(dump());
@@ -436,7 +436,7 @@ void SchedulePostRATDList::finishBlock() {
 }
 
 /// Apply each ScheduleDAGMutation step in order.
-void SchedulePostRATDList::postProcessDAG() {
+void SchedulePostRATDList::postprocessDAG() {
   for (auto &M : Mutations)
     M->apply(this);
 }

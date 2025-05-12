@@ -15,26 +15,15 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/TableGen/Main.h"
-#include "TGLexer.h"
 #include "TGParser.h"
-#include "llvm/ADT/StringRef.h"
-#include "llvm/ADT/Twine.h"
 #include "llvm/Support/CommandLine.h"
-#include "llvm/Support/ErrorOr.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/MemoryBuffer.h"
-#include "llvm/Support/SMLoc.h"
-#include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/ToolOutputFile.h"
-#include "llvm/Support/raw_ostream.h"
 #include "llvm/TableGen/Error.h"
 #include "llvm/TableGen/Record.h"
-#include "llvm/TableGen/TableGenBackend.h"
-#include <memory>
-#include <string>
+#include <algorithm>
 #include <system_error>
-#include <utility>
-#include <vector>
 using namespace llvm;
 
 static cl::opt<std::string>
@@ -96,8 +85,7 @@ static int createDependencyFile(const TGParser &Parser, const char *argv0) {
   return 0;
 }
 
-int llvm::TableGenMain(const char *argv0,
-                       std::function<TableGenMainFn> MainFn) {
+int llvm::TableGenMain(const char *argv0, TableGenMainFn *MainFn) {
   RecordKeeper Records;
 
   if (TimePhases)
@@ -131,14 +119,7 @@ int llvm::TableGenMain(const char *argv0,
   Records.startBackendTimer("Backend overall");
   std::string OutString;
   raw_string_ostream Out(OutString);
-  unsigned status = 0;
-  TableGen::Emitter::FnT ActionFn = TableGen::Emitter::Action->getValue();
-  if (ActionFn)
-    ActionFn(Records, Out);
-  else if (MainFn)
-    status = MainFn(Out, Records);
-  else
-    return 1;
+  unsigned status = MainFn(Out, Records);
   Records.stopBackendTimer();
   if (status)
     return 1;

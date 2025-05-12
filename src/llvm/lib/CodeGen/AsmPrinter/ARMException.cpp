@@ -48,12 +48,6 @@ void ARMException::beginFunction(const MachineFunction *MF) {
   }
 }
 
-void ARMException::markFunctionEnd() {
-  if (shouldEmitCFI)
-    Asm->OutStreamer->emitCFIEndProc();
-  DwarfCFIExceptionBase::markFunctionEnd();
-}
-
 /// endFunction - Gather and emit post-function exception information.
 ///
 void ARMException::endFunction(const MachineFunction *MF) {

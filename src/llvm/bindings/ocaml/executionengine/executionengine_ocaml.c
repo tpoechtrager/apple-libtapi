@@ -15,19 +15,16 @@
 |*                                                                            *|
 \*===----------------------------------------------------------------------===*/
 
-#include "caml/alloc.h"
-#include "caml/callback.h"
-#include "caml/custom.h"
-#include "caml/fail.h"
-#include "caml/memory.h"
-#include "llvm_ocaml.h"
+#include <string.h>
+#include <assert.h>
 #include "llvm-c/Core.h"
 #include "llvm-c/ExecutionEngine.h"
 #include "llvm-c/Target.h"
-#include <assert.h>
-#include <string.h>
-
-#define ExecutionEngine_val(v) ((LLVMExecutionEngineRef)from_val(v))
+#include "caml/alloc.h"
+#include "caml/custom.h"
+#include "caml/fail.h"
+#include "caml/memory.h"
+#include "caml/callback.h"
 
 void llvm_raise(value Prototype, char *Message);
 
@@ -40,15 +37,16 @@ value llvm_ee_initialize(value Unit) {
                   !LLVMInitializeNativeAsmPrinter());
 }
 
-/* llcompileroption -> llmodule -> ExecutionEngine.t */
-value llvm_ee_create(value OptRecordOpt, value M) {
+/* llmodule -> llcompileroption -> ExecutionEngine.t */
+LLVMExecutionEngineRef llvm_ee_create(value OptRecordOpt, LLVMModuleRef M) {
+  value OptRecord;
   LLVMExecutionEngineRef MCJIT;
   char *Error;
   struct LLVMMCJITCompilerOptions Options;
 
   LLVMInitializeMCJITCompilerOptions(&Options, sizeof(Options));
   if (OptRecordOpt != Val_int(0)) {
-    value OptRecord = Field(OptRecordOpt, 0);
+    OptRecord = Field(OptRecordOpt, 0);
     Options.OptLevel = Int_val(Field(OptRecord, 0));
     Options.CodeModel = Int_val(Field(OptRecord, 1));
     Options.NoFramePointerElim = Int_val(Field(OptRecord, 2));
@@ -56,55 +54,54 @@ value llvm_ee_create(value OptRecordOpt, value M) {
     Options.MCJMM = NULL;
   }
 
-  if (LLVMCreateMCJITCompilerForModule(&MCJIT, Module_val(M), &Options,
-                                       sizeof(Options), &Error))
+  if (LLVMCreateMCJITCompilerForModule(&MCJIT, M, &Options, sizeof(Options),
+                                       &Error))
     llvm_raise(*caml_named_value("Llvm_executionengine.Error"), Error);
-  return to_val(MCJIT);
+  return MCJIT;
 }
 
 /* ExecutionEngine.t -> unit */
-value llvm_ee_dispose(value EE) {
-  LLVMDisposeExecutionEngine(ExecutionEngine_val(EE));
+value llvm_ee_dispose(LLVMExecutionEngineRef EE) {
+  LLVMDisposeExecutionEngine(EE);
   return Val_unit;
 }
 
 /* llmodule -> ExecutionEngine.t -> unit */
-value llvm_ee_add_module(value M, value EE) {
-  LLVMAddModule(ExecutionEngine_val(EE), Module_val(M));
+value llvm_ee_add_module(LLVMModuleRef M, LLVMExecutionEngineRef EE) {
+  LLVMAddModule(EE, M);
   return Val_unit;
 }
 
 /* llmodule -> ExecutionEngine.t -> llmodule */
-value llvm_ee_remove_module(value M, value EE) {
+value llvm_ee_remove_module(LLVMModuleRef M, LLVMExecutionEngineRef EE) {
   LLVMModuleRef RemovedModule;
   char *Error;
-  if (LLVMRemoveModule(ExecutionEngine_val(EE), Module_val(M), &RemovedModule,
-                       &Error))
+  if (LLVMRemoveModule(EE, M, &RemovedModule, &Error))
     llvm_raise(*caml_named_value("Llvm_executionengine.Error"), Error);
   return Val_unit;
 }
 
 /* ExecutionEngine.t -> unit */
-value llvm_ee_run_static_ctors(value EE) {
-  LLVMRunStaticConstructors(ExecutionEngine_val(EE));
+value llvm_ee_run_static_ctors(LLVMExecutionEngineRef EE) {
+  LLVMRunStaticConstructors(EE);
   return Val_unit;
 }
 
 /* ExecutionEngine.t -> unit */
-value llvm_ee_run_static_dtors(value EE) {
-  LLVMRunStaticDestructors(ExecutionEngine_val(EE));
+value llvm_ee_run_static_dtors(LLVMExecutionEngineRef EE) {
+  LLVMRunStaticDestructors(EE);
   return Val_unit;
 }
 
 extern value llvm_alloc_data_layout(LLVMTargetDataRef TargetData);
 
 /* ExecutionEngine.t -> Llvm_target.DataLayout.t */
-value llvm_ee_get_data_layout(value EE) {
+value llvm_ee_get_data_layout(LLVMExecutionEngineRef EE) {
   value DataLayout;
   LLVMTargetDataRef OrigDataLayout;
   char *TargetDataCStr;
 
-  OrigDataLayout = LLVMGetExecutionEngineTargetData(ExecutionEngine_val(EE));
+  OrigDataLayout = LLVMGetExecutionEngineTargetData(EE);
   TargetDataCStr = LLVMCopyStringRepOfTargetData(OrigDataLayout);
   DataLayout = llvm_alloc_data_layout(LLVMCreateTargetData(TargetDataCStr));
   LLVMDisposeMessage(TargetDataCStr);
@@ -113,18 +110,17 @@ value llvm_ee_get_data_layout(value EE) {
 }
 
 /* Llvm.llvalue -> int64 -> llexecutionengine -> unit */
-value llvm_ee_add_global_mapping(value Global, value Ptr, value EE) {
-  LLVMAddGlobalMapping(ExecutionEngine_val(EE), Value_val(Global),
-                       (void *)(Int64_val(Ptr)));
+value llvm_ee_add_global_mapping(LLVMValueRef Global, value Ptr,
+                                 LLVMExecutionEngineRef EE) {
+  LLVMAddGlobalMapping(EE, Global, (void *)(Int64_val(Ptr)));
   return Val_unit;
 }
 
-value llvm_ee_get_global_value_address(value Name, value EE) {
-  return caml_copy_int64((int64_t)LLVMGetGlobalValueAddress(
-      ExecutionEngine_val(EE), String_val(Name)));
+value llvm_ee_get_global_value_address(value Name, LLVMExecutionEngineRef EE) {
+  return caml_copy_int64(
+      (int64_t)LLVMGetGlobalValueAddress(EE, String_val(Name)));
 }
 
-value llvm_ee_get_function_address(value Name, value EE) {
-  return caml_copy_int64((int64_t)LLVMGetFunctionAddress(
-      ExecutionEngine_val(EE), String_val(Name)));
+value llvm_ee_get_function_address(value Name, LLVMExecutionEngineRef EE) {
+  return caml_copy_int64((int64_t)LLVMGetFunctionAddress(EE, String_val(Name)));
 }

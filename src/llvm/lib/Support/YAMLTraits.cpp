@@ -397,23 +397,17 @@ void Input::reportWarning(const SMRange &range, const Twine &message) {
 
 std::unique_ptr<Input::HNode> Input::createHNodes(Node *N) {
   SmallString<128> StringStorage;
-  switch (N->getType()) {
-  case Node::NK_Scalar: {
-    ScalarNode *SN = dyn_cast<ScalarNode>(N);
+  if (ScalarNode *SN = dyn_cast<ScalarNode>(N)) {
     StringRef KeyStr = SN->getValue(StringStorage);
     if (!StringStorage.empty()) {
       // Copy string to permanent storage
       KeyStr = StringStorage.str().copy(StringAllocator);
     }
     return std::make_unique<ScalarHNode>(N, KeyStr);
-  }
-  case Node::NK_BlockScalar: {
-    BlockScalarNode *BSN = dyn_cast<BlockScalarNode>(N);
+  } else if (BlockScalarNode *BSN = dyn_cast<BlockScalarNode>(N)) {
     StringRef ValueCopy = BSN->getValue().copy(StringAllocator);
     return std::make_unique<ScalarHNode>(N, ValueCopy);
-  }
-  case Node::NK_Sequence: {
-    SequenceNode *SQ = dyn_cast<SequenceNode>(N);
+  } else if (SequenceNode *SQ = dyn_cast<SequenceNode>(N)) {
     auto SQHNode = std::make_unique<SequenceHNode>(N);
     for (Node &SN : *SQ) {
       auto Entry = createHNodes(&SN);
@@ -422,9 +416,7 @@ std::unique_ptr<Input::HNode> Input::createHNodes(Node *N) {
       SQHNode->Entries.push_back(std::move(Entry));
     }
     return std::move(SQHNode);
-  }
-  case Node::NK_Mapping: {
-    MappingNode *Map = dyn_cast<MappingNode>(N);
+  } else if (MappingNode *Map = dyn_cast<MappingNode>(N)) {
     auto mapHNode = std::make_unique<MapHNode>(N);
     for (KeyValueNode &KVN : *Map) {
       Node *KeyNode = KVN.getKey();
@@ -443,11 +435,6 @@ std::unique_ptr<Input::HNode> Input::createHNodes(Node *N) {
         // Copy string to permanent storage
         KeyStr = StringStorage.str().copy(StringAllocator);
       }
-      if (mapHNode->Mapping.count(KeyStr))
-        // From YAML spec: "The content of a mapping node is an unordered set of
-        // key/value node pairs, with the restriction that each of the keys is
-        // unique."
-        setError(KeyNode, Twine("duplicated mapping key '") + KeyStr + "'");
       auto ValueHNode = createHNodes(Value);
       if (EC)
         break;
@@ -455,10 +442,9 @@ std::unique_ptr<Input::HNode> Input::createHNodes(Node *N) {
           std::make_pair(std::move(ValueHNode), KeyNode->getSourceRange());
     }
     return std::move(mapHNode);
-  }
-  case Node::NK_Null:
+  } else if (isa<NullNode>(N)) {
     return std::make_unique<EmptyHNode>(N);
-  default:
+  } else {
     setError(N, "unknown node kind");
     return nullptr;
   }
@@ -900,7 +886,7 @@ void ScalarTraits<bool>::output(const bool &Val, void *, raw_ostream &Out) {
 }
 
 StringRef ScalarTraits<bool>::input(StringRef Scalar, void *, bool &Val) {
-  if (std::optional<bool> Parsed = parseBool(Scalar)) {
+  if (llvm::Optional<bool> Parsed = parseBool(Scalar)) {
     Val = *Parsed;
     return StringRef();
   }

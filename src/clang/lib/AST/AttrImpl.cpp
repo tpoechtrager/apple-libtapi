@@ -14,7 +14,6 @@
 #include "clang/AST/Attr.h"
 #include "clang/AST/Expr.h"
 #include "clang/AST/Type.h"
-#include <optional>
 using namespace clang;
 
 void LoopHintAttr::printPrettyPragma(raw_ostream &OS,
@@ -138,7 +137,7 @@ void OMPDeclareTargetDeclAttr::printPrettyPragma(
   // Use fake syntax because it is for testing and debugging purpose only.
   if (getDevType() != DT_Any)
     OS << " device_type(" << ConvertDevTypeTyToStr(getDevType()) << ")";
-  if (getMapType() != MT_To && getMapType() != MT_Enter)
+  if (getMapType() != MT_To)
     OS << ' ' << ConvertMapTypeTyToStr(getMapType());
   if (Expr *E = getIndirectExpr()) {
     OS << " indirect(";
@@ -149,47 +148,45 @@ void OMPDeclareTargetDeclAttr::printPrettyPragma(
   }
 }
 
-std::optional<OMPDeclareTargetDeclAttr *>
+llvm::Optional<OMPDeclareTargetDeclAttr *>
 OMPDeclareTargetDeclAttr::getActiveAttr(const ValueDecl *VD) {
-  if (llvm::all_of(VD->redecls(), [](const Decl *D) { return !D->hasAttrs(); }))
-    return std::nullopt;
+  if (!VD->hasAttrs())
+    return llvm::None;
   unsigned Level = 0;
   OMPDeclareTargetDeclAttr *FoundAttr = nullptr;
-  for (const Decl *D : VD->redecls()) {
-    for (auto *Attr : D->specific_attrs<OMPDeclareTargetDeclAttr>()) {
-      if (Level <= Attr->getLevel()) {
-        Level = Attr->getLevel();
-        FoundAttr = Attr;
-      }
+  for (auto *Attr : VD->specific_attrs<OMPDeclareTargetDeclAttr>()) {
+    if (Level <= Attr->getLevel()) {
+      Level = Attr->getLevel();
+      FoundAttr = Attr;
     }
   }
   if (FoundAttr)
     return FoundAttr;
-  return std::nullopt;
+  return llvm::None;
 }
 
-std::optional<OMPDeclareTargetDeclAttr::MapTypeTy>
+llvm::Optional<OMPDeclareTargetDeclAttr::MapTypeTy>
 OMPDeclareTargetDeclAttr::isDeclareTargetDeclaration(const ValueDecl *VD) {
-  std::optional<OMPDeclareTargetDeclAttr *> ActiveAttr = getActiveAttr(VD);
+  llvm::Optional<OMPDeclareTargetDeclAttr *> ActiveAttr = getActiveAttr(VD);
   if (ActiveAttr)
-    return (*ActiveAttr)->getMapType();
-  return std::nullopt;
+    return ActiveAttr.value()->getMapType();
+  return llvm::None;
 }
 
-std::optional<OMPDeclareTargetDeclAttr::DevTypeTy>
+llvm::Optional<OMPDeclareTargetDeclAttr::DevTypeTy>
 OMPDeclareTargetDeclAttr::getDeviceType(const ValueDecl *VD) {
-  std::optional<OMPDeclareTargetDeclAttr *> ActiveAttr = getActiveAttr(VD);
+  llvm::Optional<OMPDeclareTargetDeclAttr *> ActiveAttr = getActiveAttr(VD);
   if (ActiveAttr)
-    return (*ActiveAttr)->getDevType();
-  return std::nullopt;
+    return ActiveAttr.value()->getDevType();
+  return llvm::None;
 }
 
-std::optional<SourceLocation>
+llvm::Optional<SourceLocation>
 OMPDeclareTargetDeclAttr::getLocation(const ValueDecl *VD) {
-  std::optional<OMPDeclareTargetDeclAttr *> ActiveAttr = getActiveAttr(VD);
+  llvm::Optional<OMPDeclareTargetDeclAttr *> ActiveAttr = getActiveAttr(VD);
   if (ActiveAttr)
-    return (*ActiveAttr)->getRange().getBegin();
-  return std::nullopt;
+    return ActiveAttr.value()->getRange().getBegin();
+  return llvm::None;
 }
 
 namespace clang {
@@ -239,35 +236,6 @@ void OMPDeclareVariantAttr::printPrettyPragma(
     PrintInteropInfo(appendArgs_begin(), appendArgs_end());
     OS << ")";
   }
-}
-
-unsigned AlignedAttr::getAlignment(ASTContext &Ctx) const {
-  assert(!isAlignmentDependent());
-  if (getCachedAlignmentValue())
-    return *getCachedAlignmentValue();
-
-  // Handle alignmentType case.
-  if (!isAlignmentExpr()) {
-    QualType T = getAlignmentType()->getType();
-
-    // C++ [expr.alignof]p3:
-    //     When alignof is applied to a reference type, the result is the
-    //     alignment of the referenced type.
-    T = T.getNonReferenceType();
-
-    if (T.getQualifiers().hasUnaligned())
-      return Ctx.getCharWidth();
-
-    return Ctx.getTypeAlignInChars(T.getTypePtr()).getQuantity() *
-           Ctx.getCharWidth();
-  }
-
-  // Handle alignmentExpr case.
-  if (alignmentExpr)
-    return alignmentExpr->EvaluateKnownConstInt(Ctx).getZExtValue() *
-           Ctx.getCharWidth();
-
-  return Ctx.getTargetDefaultAlignForAttributeAligned();
 }
 
 #include "clang/AST/AttrImpl.inc"

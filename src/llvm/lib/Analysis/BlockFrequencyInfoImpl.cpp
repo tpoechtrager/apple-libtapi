@@ -13,8 +13,8 @@
 #include "llvm/Analysis/BlockFrequencyInfoImpl.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/None.h"
 #include "llvm/ADT/SCCIterator.h"
-#include "llvm/ADT/SmallString.h"
 #include "llvm/Config/llvm-config.h"
 #include "llvm/IR/Function.h"
 #include "llvm/Support/BlockFrequency.h"
@@ -31,7 +31,6 @@
 #include <iterator>
 #include <list>
 #include <numeric>
-#include <optional>
 #include <utility>
 #include <vector>
 
@@ -60,7 +59,7 @@ cl::opt<double> IterativeBFIPrecision(
     "iterative-bfi-precision", cl::init(1e-12), cl::Hidden,
     cl::desc("Iterative inference: delta convergence precision; smaller values "
              "typically lead to better results at the cost of worsen runtime"));
-} // namespace llvm
+}
 
 ScaledNumber<uint64_t> BlockMass::toScaled() const {
   if (isFull())
@@ -257,7 +256,7 @@ void Distribution::normalize() {
   if (DidOverflow)
     Shift = 33;
   else if (Total > UINT32_MAX)
-    Shift = 33 - llvm::countl_zero(Total);
+    Shift = 33 - countLeadingZeros(Total);
 
   // Early exit if nothing needs to be scaled.
   if (!Shift) {
@@ -586,7 +585,7 @@ BlockFrequencyInfoImplBase::getBlockFreq(const BlockNode &Node) const {
   return Freqs[Node.Index].Integer;
 }
 
-std::optional<uint64_t>
+Optional<uint64_t>
 BlockFrequencyInfoImplBase::getBlockProfileCount(const Function &F,
                                                  const BlockNode &Node,
                                                  bool AllowSynthetic) const {
@@ -594,13 +593,13 @@ BlockFrequencyInfoImplBase::getBlockProfileCount(const Function &F,
                                  AllowSynthetic);
 }
 
-std::optional<uint64_t>
+Optional<uint64_t>
 BlockFrequencyInfoImplBase::getProfileCountFromFreq(const Function &F,
                                                     uint64_t Freq,
                                                     bool AllowSynthetic) const {
   auto EntryCount = F.getEntryCount(AllowSynthetic);
   if (!EntryCount)
-    return std::nullopt;
+    return None;
   // Use 128 bit APInt to do the arithmetic to avoid overflow.
   APInt BlockCount(128, EntryCount->getCount());
   APInt BlockFreq(128, Freq);

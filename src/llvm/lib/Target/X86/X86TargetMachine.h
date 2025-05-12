@@ -14,11 +14,11 @@
 #define LLVM_LIB_TARGET_X86_X86TARGETMACHINE_H
 
 #include "X86Subtarget.h"
+#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/Support/CodeGen.h"
 #include "llvm/Target/TargetMachine.h"
 #include <memory>
-#include <optional>
 
 namespace llvm {
 
@@ -34,9 +34,8 @@ class X86TargetMachine final : public LLVMTargetMachine {
 public:
   X86TargetMachine(const Target &T, const Triple &TT, StringRef CPU,
                    StringRef FS, const TargetOptions &Options,
-                   std::optional<Reloc::Model> RM,
-                   std::optional<CodeModel::Model> CM, CodeGenOpt::Level OL,
-                   bool JIT);
+                   Optional<Reloc::Model> RM, Optional<CodeModel::Model> CM,
+                   CodeGenOpt::Level OL, bool JIT);
   ~X86TargetMachine() override;
 
   const X86Subtarget *getSubtargetImpl(const Function &F) const override;
@@ -53,10 +52,6 @@ public:
   TargetLoweringObjectFile *getObjFileLowering() const override {
     return TLOF.get();
   }
-
-  MachineFunctionInfo *
-  createMachineFunctionInfo(BumpPtrAllocator &Allocator, const Function &F,
-                            const TargetSubtargetInfo *STI) const override;
 
   bool isJIT() const { return IsJIT; }
 

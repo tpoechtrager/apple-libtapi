@@ -179,7 +179,7 @@ static bool IsLegalOffset(const CSKYInstrInfo *TII, MachineInstr *MI,
   return false;
 }
 
-bool CSKYRegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
+void CSKYRegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
                                            int SPAdj, unsigned FIOperandNum,
                                            RegScavenger *RS) const {
   assert(SPAdj == 0 && "Unexpected non-zero SPAdj value");
@@ -287,5 +287,4 @@ bool CSKYRegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
         .ChangeToRegister(FrameReg, false, false, FrameRegIsKill);
     MI->getOperand(FIOperandNum + 1).ChangeToImmediate(Offset);
   }
-  return false;
 }

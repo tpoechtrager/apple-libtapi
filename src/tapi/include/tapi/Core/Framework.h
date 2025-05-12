@@ -76,7 +76,9 @@ struct Framework {
 
   void addModuleMap(StringRef path) { _moduleMaps.emplace_back(path); }
 
-  void addDynamicLibraryFile(StringRef path);
+  void addDynamicLibraryFile(StringRef path) {
+    _dynamicLibraryFiles.emplace_back(path);
+  }
 
   bool empty() {
     return _subFrameworks.empty() && _headerFiles.empty() &&

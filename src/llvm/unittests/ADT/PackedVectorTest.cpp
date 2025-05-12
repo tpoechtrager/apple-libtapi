@@ -8,7 +8,7 @@
 
 // BitVectorTest tests fail on PowerPC for unknown reasons, so disable this
 // as well since it depends on a BitVector.
-#ifndef __powerpc__
+#ifndef __ppc__
 
 #include "llvm/ADT/PackedVector.h"
 #include "gtest/gtest.h"

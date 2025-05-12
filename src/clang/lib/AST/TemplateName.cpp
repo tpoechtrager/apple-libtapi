@@ -29,74 +29,37 @@
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cassert>
-#include <optional>
 #include <string>
 
 using namespace clang;
 
 TemplateArgument
 SubstTemplateTemplateParmPackStorage::getArgumentPack() const {
-  return TemplateArgument(llvm::ArrayRef(Arguments, Bits.Data));
-}
-
-TemplateTemplateParmDecl *
-SubstTemplateTemplateParmPackStorage::getParameterPack() const {
-  return cast<TemplateTemplateParmDecl>(
-      getReplacedTemplateParameterList(getAssociatedDecl())
-          ->asArray()[Bits.Index]);
-}
-
-TemplateTemplateParmDecl *
-SubstTemplateTemplateParmStorage::getParameter() const {
-  return cast<TemplateTemplateParmDecl>(
-      getReplacedTemplateParameterList(getAssociatedDecl())
-          ->asArray()[Bits.Index]);
+  return TemplateArgument(llvm::makeArrayRef(Arguments, size()));
 }
 
 void SubstTemplateTemplateParmStorage::Profile(llvm::FoldingSetNodeID &ID) {
-  Profile(ID, Replacement, getAssociatedDecl(), getIndex(), getPackIndex());
+  Profile(ID, Parameter, Replacement);
 }
 
-void SubstTemplateTemplateParmStorage::Profile(
-    llvm::FoldingSetNodeID &ID, TemplateName Replacement, Decl *AssociatedDecl,
-    unsigned Index, std::optional<unsigned> PackIndex) {
-  Replacement.Profile(ID);
-  ID.AddPointer(AssociatedDecl);
-  ID.AddInteger(Index);
-  ID.AddInteger(PackIndex ? *PackIndex + 1 : 0);
-}
-
-SubstTemplateTemplateParmPackStorage::SubstTemplateTemplateParmPackStorage(
-    ArrayRef<TemplateArgument> ArgPack, Decl *AssociatedDecl, unsigned Index,
-    bool Final)
-    : UncommonTemplateNameStorage(SubstTemplateTemplateParmPack, Index,
-                                  ArgPack.size()),
-      Arguments(ArgPack.data()), AssociatedDeclAndFinal(AssociatedDecl, Final) {
-  assert(AssociatedDecl != nullptr);
+void SubstTemplateTemplateParmStorage::Profile(llvm::FoldingSetNodeID &ID,
+                                           TemplateTemplateParmDecl *parameter,
+                                               TemplateName replacement) {
+  ID.AddPointer(parameter);
+  ID.AddPointer(replacement.getAsVoidPointer());
 }
 
 void SubstTemplateTemplateParmPackStorage::Profile(llvm::FoldingSetNodeID &ID,
                                                    ASTContext &Context) {
-  Profile(ID, Context, getArgumentPack(), getAssociatedDecl(), getIndex(),
-          getFinal());
+  Profile(ID, Context, Parameter, getArgumentPack());
 }
 
-Decl *SubstTemplateTemplateParmPackStorage::getAssociatedDecl() const {
-  return AssociatedDeclAndFinal.getPointer();
-}
-
-bool SubstTemplateTemplateParmPackStorage::getFinal() const {
-  return AssociatedDeclAndFinal.getInt();
-}
-
-void SubstTemplateTemplateParmPackStorage::Profile(
-    llvm::FoldingSetNodeID &ID, ASTContext &Context,
-    const TemplateArgument &ArgPack, Decl *AssociatedDecl, unsigned Index,
-    bool Final) {
+void SubstTemplateTemplateParmPackStorage::Profile(llvm::FoldingSetNodeID &ID,
+                                                   ASTContext &Context,
+                                           TemplateTemplateParmDecl *Parameter,
+                                             const TemplateArgument &ArgPack) {
+  ID.AddPointer(Parameter);
   ArgPack.Profile(ID, Context);
-  ID.AddPointer(AssociatedDecl);
-  ID.AddInteger(Index);
-  ID.AddBoolean(Final);
 }
 
 TemplateName::TemplateName(void *Ptr) {
@@ -279,15 +242,6 @@ bool TemplateName::isInstantiationDependent() const {
 
 bool TemplateName::containsUnexpandedParameterPack() const {
   return getDependence() & TemplateNameDependence::UnexpandedPack;
-}
-
-void TemplateName::Profile(llvm::FoldingSetNodeID &ID) {
-  if (const auto* USD = getAsUsingShadowDecl())
-    ID.AddPointer(USD->getCanonicalDecl());
-  else if (const auto *TD = getAsTemplateDecl())
-    ID.AddPointer(TD->getCanonicalDecl());
-  else
-    ID.AddPointer(Storage.getOpaqueValue());
 }
 
 void TemplateName::print(raw_ostream &OS, const PrintingPolicy &Policy,

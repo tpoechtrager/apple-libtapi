@@ -8,7 +8,7 @@
 
 #include "MCTargetDesc/X86BaseInfo.h"
 #include "MCTargetDesc/X86FixupKinds.h"
-#include "MCTargetDesc/X86EncodingOptimization.h"
+#include "MCTargetDesc/X86InstrRelaxTables.h"
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/BinaryFormat/ELF.h"
 #include "llvm/BinaryFormat/MachO.h"
@@ -127,7 +127,7 @@ class X86AsmBackend : public MCAsmBackend {
   MCInst PrevInst;
   MCBoundaryAlignFragment *PendingBA = nullptr;
   std::pair<MCFragment *, size_t> PrevInstPosition;
-  bool CanPadInst = false;
+  bool CanPadInst;
 
   uint8_t determinePaddingPrefix(const MCInst &Inst) const;
   bool isMacroFused(const MCInst &Cmp, const MCInst &Jcc) const;
@@ -144,7 +144,7 @@ public:
       // jumps, and (unfused) conditional jumps with nops.  Both the
       // instructions aligned and the alignment method (nop vs prefix) may
       // change in the future.
-      AlignBoundary = assumeAligned(32);
+      AlignBoundary = assumeAligned(32);;
       AlignBranchType.addKind(X86::AlignBranchFused);
       AlignBranchType.addKind(X86::AlignBranchJcc);
       AlignBranchType.addKind(X86::AlignBranchJmp);
@@ -168,7 +168,7 @@ public:
     return X86::NumTargetFixupKinds;
   }
 
-  std::optional<MCFixupKind> getFixupKind(StringRef Name) const override;
+  Optional<MCFixupKind> getFixupKind(StringRef Name) const override;
 
   const MCFixupKindInfo &getFixupKindInfo(MCFixupKind Kind) const override;
 
@@ -209,15 +209,11 @@ public:
 };
 } // end anonymous namespace
 
-static bool isRelaxableBranch(unsigned Opcode) {
-  return Opcode == X86::JCC_1 || Opcode == X86::JMP_1;
-}
-
-static unsigned getRelaxedOpcodeBranch(unsigned Opcode,
-                                       bool Is16BitMode = false) {
-  switch (Opcode) {
+static unsigned getRelaxedOpcodeBranch(const MCInst &Inst, bool Is16BitMode) {
+  unsigned Op = Inst.getOpcode();
+  switch (Op) {
   default:
-    llvm_unreachable("invalid opcode for branch");
+    return Op;
   case X86::JCC_1:
     return (Is16BitMode) ? X86::JCC_2 : X86::JCC_4;
   case X86::JMP_1:
@@ -225,10 +221,16 @@ static unsigned getRelaxedOpcodeBranch(unsigned Opcode,
   }
 }
 
-static unsigned getRelaxedOpcode(const MCInst &MI, bool Is16BitMode) {
-  unsigned Opcode = MI.getOpcode();
-  return isRelaxableBranch(Opcode) ? getRelaxedOpcodeBranch(Opcode, Is16BitMode)
-                                   : X86::getOpcodeForLongImmediateForm(Opcode);
+static unsigned getRelaxedOpcodeArith(const MCInst &Inst) {
+  unsigned Op = Inst.getOpcode();
+  return X86::getRelaxedOpcodeArith(Op);
+}
+
+static unsigned getRelaxedOpcode(const MCInst &Inst, bool Is16BitMode) {
+  unsigned R = getRelaxedOpcodeArith(Inst);
+  if (R != Inst.getOpcode())
+    return R;
+  return getRelaxedOpcodeBranch(Inst, Is16BitMode);
 }
 
 static X86::CondCode getCondFromBranch(const MCInst &MI,
@@ -582,10 +584,11 @@ void X86AsmBackend::emitInstructionEnd(MCObjectStreamer &OS, const MCInst &Inst)
 
   // Update the maximum alignment on the current section if necessary.
   MCSection *Sec = OS.getCurrentSectionOnly();
-  Sec->ensureMinAlignment(AlignBoundary);
+  if (AlignBoundary.value() > Sec->getAlignment())
+    Sec->setAlignment(AlignBoundary);
 }
 
-std::optional<MCFixupKind> X86AsmBackend::getFixupKind(StringRef Name) const {
+Optional<MCFixupKind> X86AsmBackend::getFixupKind(StringRef Name) const {
   if (STI.getTargetTriple().isOSBinFormatELF()) {
     unsigned Type;
     if (STI.getTargetTriple().getArch() == Triple::x86_64) {
@@ -611,7 +614,7 @@ std::optional<MCFixupKind> X86AsmBackend::getFixupKind(StringRef Name) const {
                  .Default(-1u);
     }
     if (Type == -1u)
-      return std::nullopt;
+      return None;
     return static_cast<MCFixupKind>(FirstLiteralRelocationKind + Type);
   }
   return MCAsmBackend::getFixupKind(Name);
@@ -719,12 +722,24 @@ void X86AsmBackend::applyFixup(const MCAssembler &Asm, const MCFixup &Fixup,
     Data[Fixup.getOffset() + i] = uint8_t(Value >> (i * 8));
 }
 
-bool X86AsmBackend::mayNeedRelaxation(const MCInst &MI,
+bool X86AsmBackend::mayNeedRelaxation(const MCInst &Inst,
                                       const MCSubtargetInfo &STI) const {
-  unsigned Opcode = MI.getOpcode();
-  return isRelaxableBranch(Opcode) ||
-         (X86::getOpcodeForLongImmediateForm(Opcode) != Opcode &&
-          MI.getOperand(MI.getNumOperands() - 1).isExpr());
+  // Branches can always be relaxed in either mode.
+  if (getRelaxedOpcodeBranch(Inst, false) != Inst.getOpcode())
+    return true;
+
+  // Check if this instruction is ever relaxable.
+  if (getRelaxedOpcodeArith(Inst) == Inst.getOpcode())
+    return false;
+
+
+  // Check if the relaxable operand has an expression. For the current set of
+  // relaxable instructions, the relaxable operand is always the last operand.
+  unsigned RelaxableOp = Inst.getNumOperands() - 1;
+  if (Inst.getOperand(RelaxableOp).isExpr())
+    return true;
+
+  return false;
 }
 
 bool X86AsmBackend::fixupNeedsRelaxation(const MCFixup &Fixup,
@@ -740,7 +755,7 @@ bool X86AsmBackend::fixupNeedsRelaxation(const MCFixup &Fixup,
 void X86AsmBackend::relaxInstruction(MCInst &Inst,
                                      const MCSubtargetInfo &STI) const {
   // The only relaxations X86 does is from a 1byte pcrel to a 4byte pcrel.
-  bool Is16BitMode = STI.hasFeature(X86::Is16Bit);
+  bool Is16BitMode = STI.getFeatureBits()[X86::Is16Bit];
   unsigned RelaxedOp = getRelaxedOpcode(Inst, Is16BitMode);
 
   if (RelaxedOp == Inst.getOpcode()) {
@@ -754,6 +769,15 @@ void X86AsmBackend::relaxInstruction(MCInst &Inst,
   Inst.setOpcode(RelaxedOp);
 }
 
+/// Return true if this instruction has been fully relaxed into it's most
+/// general available form.
+static bool isFullyRelaxed(const MCRelaxableFragment &RF) {
+  auto &Inst = RF.getInst();
+  auto &STI = *RF.getSubtargetInfo();
+  bool Is16BitMode = STI.getFeatureBits()[X86::Is16Bit];
+  return getRelaxedOpcode(Inst, Is16BitMode) == Inst.getOpcode();
+}
+
 bool X86AsmBackend::padInstructionViaPrefix(MCRelaxableFragment &RF,
                                             MCCodeEmitter &Emitter,
                                             unsigned &RemainingSize) const {
@@ -763,7 +787,7 @@ bool X86AsmBackend::padInstructionViaPrefix(MCRelaxableFragment &RF,
   // larger value for one of the fixups then can be encoded.  The outer loop
   // will also catch this before moving to the next instruction, but we need to
   // prevent padding this single instruction as well.
-  if (mayNeedRelaxation(RF.getInst(), *RF.getSubtargetInfo()))
+  if (!isFullyRelaxed(RF))
     return false;
 
   const unsigned OldSize = RF.getContents().size();
@@ -773,7 +797,8 @@ bool X86AsmBackend::padInstructionViaPrefix(MCRelaxableFragment &RF,
   const unsigned MaxPossiblePad = std::min(15 - OldSize, RemainingSize);
   const unsigned RemainingPrefixSize = [&]() -> unsigned {
     SmallString<15> Code;
-    Emitter.emitPrefix(RF.getInst(), Code, STI);
+    raw_svector_ostream VecOS(Code);
+    Emitter.emitPrefix(RF.getInst(), VecOS, STI);
     assert(Code.size() < 15 && "The number of prefixes must be less than 15.");
 
     // TODO: It turns out we need a decent amount of plumbing for the target
@@ -810,7 +835,7 @@ bool X86AsmBackend::padInstructionViaPrefix(MCRelaxableFragment &RF,
 bool X86AsmBackend::padInstructionViaRelaxation(MCRelaxableFragment &RF,
                                                 MCCodeEmitter &Emitter,
                                                 unsigned &RemainingSize) const {
-  if (!mayNeedRelaxation(RF.getInst(), *RF.getSubtargetInfo()))
+  if (isFullyRelaxed(RF))
     // TODO: There are lots of other tricks we could apply for increasing
     // encoding size without impacting performance.
     return false;
@@ -820,7 +845,8 @@ bool X86AsmBackend::padInstructionViaRelaxation(MCRelaxableFragment &RF,
 
   SmallVector<MCFixup, 4> Fixups;
   SmallString<15> Code;
-  Emitter.encodeInstruction(Relaxed, Code, Fixups, *RF.getSubtargetInfo());
+  raw_svector_ostream VecOS(Code);
+  Emitter.encodeInstruction(Relaxed, VecOS, Fixups, *RF.getSubtargetInfo());
   const unsigned OldSize = RF.getContents().size();
   const unsigned NewSize = Code.size();
   assert(NewSize >= OldSize && "size decrease during relaxation?");
@@ -926,7 +952,7 @@ void X86AsmBackend::finishLayout(MCAssembler const &Asm,
         // We don't need to worry about larger positive offsets as none of the
         // possible offsets between this and our align are visible, and the
         // ones afterwards aren't changing.
-        if (mayNeedRelaxation(RF.getInst(), *RF.getSubtargetInfo()))
+        if (!isFullyRelaxed(RF))
           break;
       }
       Relaxable.clear();
@@ -976,11 +1002,11 @@ unsigned X86AsmBackend::getMaximumNopSize(const MCSubtargetInfo &STI) const {
     return 4;
   if (!STI.hasFeature(X86::FeatureNOPL) && !STI.hasFeature(X86::Is64Bit))
     return 1;
-  if (STI.hasFeature(X86::TuningFast7ByteNOP))
+  if (STI.getFeatureBits()[X86::TuningFast7ByteNOP])
     return 7;
-  if (STI.hasFeature(X86::TuningFast15ByteNOP))
+  if (STI.getFeatureBits()[X86::TuningFast15ByteNOP])
     return 15;
-  if (STI.hasFeature(X86::TuningFast11ByteNOP))
+  if (STI.getFeatureBits()[X86::TuningFast11ByteNOP])
     return 11;
   // FIXME: handle 32-bit mode
   // 15-bytes is the longest single NOP instruction, but 10-bytes is
@@ -1029,7 +1055,7 @@ bool X86AsmBackend::writeNopData(raw_ostream &OS, uint64_t Count,
   };
 
   const char(*Nops)[11] =
-      STI->hasFeature(X86::Is16Bit) ? Nops16Bit : Nops32Bit;
+      STI->getFeatureBits()[X86::Is16Bit] ? Nops16Bit : Nops32Bit;
 
   uint64_t MaxNopLength = (uint64_t)getMaximumNopSize(*STI);
 
@@ -1120,8 +1146,8 @@ public:
     , Is64Bit(is64Bit) {
   }
 
-  std::optional<MCFixupKind> getFixupKind(StringRef Name) const override {
-    return StringSwitch<std::optional<MCFixupKind>>(Name)
+  Optional<MCFixupKind> getFixupKind(StringRef Name) const override {
+    return StringSwitch<Optional<MCFixupKind>>(Name)
         .Case("dir32", FK_Data_4)
         .Case("secrel32", FK_SecRel_4)
         .Case("secidx", FK_SecRel_2)
@@ -1327,13 +1353,9 @@ public:
 
   /// Implementation of algorithm to generate the compact unwind encoding
   /// for the CFI instructions.
-  uint32_t generateCompactUnwindEncoding(const MCDwarfFrameInfo *FI,
-                                         const MCContext *Ctxt) const override {
-    ArrayRef<MCCFIInstruction> Instrs = FI->Instructions;
+  uint32_t
+  generateCompactUnwindEncoding(ArrayRef<MCCFIInstruction> Instrs) const override {
     if (Instrs.empty()) return 0;
-    if (!isDarwinCanonicalPersonality(FI->Personality) &&
-        !Ctxt->emitCompactUnwindNonCanonical())
-      return CU::UNWIND_MODE_DWARF;
 
     // Reset the saved registers.
     unsigned SavedRegIdx = 0;
@@ -1519,12 +1541,6 @@ MCAsmBackend *llvm::createX86_64AsmBackend(const Target &T,
 
   if (TheTriple.isOSWindows() && TheTriple.isOSBinFormatCOFF())
     return new WindowsX86AsmBackend(T, true, STI);
-
-  if (TheTriple.isUEFI()) {
-    assert(TheTriple.isOSBinFormatCOFF() &&
-         "Only COFF format is supported in UEFI environment.");
-    return new WindowsX86AsmBackend(T, true, STI);
-  }
 
   uint8_t OSABI = MCELFObjectTargetWriter::getOSABI(TheTriple.getOS());
 

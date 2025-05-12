@@ -13,11 +13,11 @@
 
 #include "tapi/SDKDB/CompareConfigFileReader.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/Triple.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/StringSaver.h"
-#include "llvm/TargetParser/Triple.h"
 #include <set>
 
 using namespace llvm;
@@ -33,8 +33,8 @@ private:
   Expected<EntryType> parseType(const Object *obj);
   Expected<ChangeType> parseChangeType(const Object *obj);
   Expected<std::vector<llvm::Triple>> parseTargets(const Object *obj);
-  std::optional<StringRef> parseContainer(const Object *obj);
-  std::optional<StringRef> parseInstallName(const Object *obj);
+  Optional<StringRef> parseContainer(const Object *obj);
+  Optional<StringRef> parseInstallName(const Object *obj);
   Error parseExpectedChanges(const Array *changes);
 
   BumpPtrAllocator allocator;
@@ -45,7 +45,6 @@ public:
   std::unique_ptr<MemoryBuffer> inputBuffer;
   unsigned version;
   StringMap<std::set<Change>> expectedChanges;
-  std::set<StringRef> ignoredLibraries;
 
   Error parse(StringRef input);
 };
@@ -74,16 +73,14 @@ CompareConfigFileReader::Implementation::parseType(const Object *obj) {
   if (!typeStr)
     return typeStr.takeError();
 
-  auto type = StringSwitch<std::optional<EntryType>>(typeStr.get())
+  auto type = StringSwitch<Optional<EntryType>>(typeStr.get())
                   .Case("library", EntryType::Library)
                   .Case("global", EntryType::Global)
                   .Case("interface", EntryType::Interface)
                   .Case("protocol", EntryType::Protocol)
                   .Case("category", EntryType::Category)
                   .Case("selector", EntryType::Selector)
-                  .Case("instance method", EntryType::InstanceMethod)
-                  .Case("class method", EntryType::ClassMethod)
-                  .Default(std::nullopt);
+                  .Default(None);
 
   if (!type)
     return make_error<StringError>("unsupported entry type",
@@ -99,11 +96,11 @@ CompareConfigFileReader::Implementation::parseChangeType(const Object *obj) {
   if (!changeStr)
     return changeStr.takeError();
 
-  auto change = StringSwitch<std::optional<ChangeType>>(changeStr.get())
+  auto change = StringSwitch<Optional<ChangeType>>(changeStr.get())
                     .Case("remove", ChangeType::Remove)
                     .Case("updateAccess", ChangeType::UpdateAccess)
                     .Case("add", ChangeType::Add)
-                    .Default(std::nullopt);
+                    .Default(None);
 
   if (!change)
     return make_error<StringError>("unsupported change type",
@@ -130,12 +127,12 @@ CompareConfigFileReader::Implementation::parseTargets(const Object *obj) {
   return targets;
 }
 
-std::optional<StringRef>
+Optional<StringRef>
 CompareConfigFileReader::Implementation::parseContainer(const Object *obj) {
   return obj->getString("container");
 }
 
-std::optional<StringRef>
+Optional<StringRef>
 CompareConfigFileReader::Implementation::parseInstallName(const Object *obj) {
   return obj->getString("installName");
 }
@@ -162,9 +159,9 @@ Error CompareConfigFileReader::Implementation::parseExpectedChanges(
       return targets.takeError();
 
     auto container = parseContainer(obj);
-    if (isSelectorType(*type) && !container)
+    if (*type == EntryType::Selector && !container)
       return make_error<StringError>(
-          "method entry must have a 'container' field",
+          "selector entry must have a 'container' field",
           inconvertibleErrorCode());
 
     auto installName = parseInstallName(obj);
@@ -207,23 +204,12 @@ Error CompareConfigFileReader::Implementation::parse(StringRef input) {
 
   // Not specifying any change is odd, but valid.
   const auto *changes = root->getArray("expectedChanges");
-  if (changes) {
-    auto error = parseExpectedChanges(changes);
-    if (error)
-      return error;
-  }
+  if (!changes)
+    return Error::success();
 
-  const auto *libraries = root->getArray("ignoredLibraries");
-  if (libraries) {
-    for (const auto &library : *libraries) {
-      auto installName = library.getAsString();
-      if (!installName)
-        return make_error<StringError>(
-            "invalid install name in 'ignoredLibraries'",
-            inconvertibleErrorCode());
-      ignoredLibraries.emplace(strings.save(*installName));
-    }
-  }
+  auto error = parseExpectedChanges(changes);
+  if (error)
+    return error;
 
   return Error::success();
 }
@@ -253,13 +239,8 @@ CompareConfigFileReader::~CompareConfigFileReader() { delete &impl; }
 int CompareConfigFileReader::getVersion() const { return impl.version; }
 
 const std::set<CompareConfigFileReader::Change> &
-CompareConfigFileReader::expectedChanges(const llvm::Triple triple) const {
+CompareConfigFileReader::getExpectedChanges(const llvm::Triple triple) const {
   return impl.expectedChanges[triple.str()];
-}
-
-const std::set<StringRef> &
-CompareConfigFileReader::ignoredLibraries() const {
-  return impl.ignoredLibraries;
 }
 
 TAPI_NAMESPACE_INTERNAL_END

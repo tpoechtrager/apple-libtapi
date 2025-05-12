@@ -14,26 +14,28 @@
 ///
 //===----------------------------------------------------------------------===//
 
-#include "clang/Driver/OffloadBundler.h"
 #include "clang/Basic/Cuda.h"
 #include "clang/Basic/TargetID.h"
 #include "clang/Basic/Version.h"
+#include "clang/Driver/OffloadBundler.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/ADT/Triple.h"
 #include "llvm/Object/Archive.h"
 #include "llvm/Object/ArchiveWriter.h"
 #include "llvm/Object/Binary.h"
 #include "llvm/Object/ObjectFile.h"
 #include "llvm/Support/Casting.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/EndianStream.h"
 #include "llvm/Support/Errc.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/ErrorOr.h"
 #include "llvm/Support/FileSystem.h"
+#include "llvm/Support/Host.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Program.h"
@@ -41,8 +43,6 @@
 #include "llvm/Support/StringSaver.h"
 #include "llvm/Support/WithColor.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/TargetParser/Host.h"
-#include "llvm/TargetParser/Triple.h"
 #include <algorithm>
 #include <cassert>
 #include <cstddef>
@@ -63,31 +63,22 @@ using namespace clang;
 
 OffloadTargetInfo::OffloadTargetInfo(const StringRef Target,
                                      const OffloadBundlerConfig &BC)
-    : BundlerConfig(BC) {
+                                     : BundlerConfig(BC) {
 
   // TODO: Add error checking from ClangOffloadBundler.cpp
   auto TargetFeatures = Target.split(':');
   auto TripleOrGPU = TargetFeatures.first.rsplit('-');
 
-  if (clang::StringToCudaArch(TripleOrGPU.second) != clang::CudaArch::UNKNOWN) {
+  if (clang::StringToCudaArch(TripleOrGPU.second) !=
+      clang::CudaArch::UNKNOWN) {
     auto KindTriple = TripleOrGPU.first.split('-');
     this->OffloadKind = KindTriple.first;
-
-    // Enforce optional env field to standardize bundles
-    llvm::Triple t = llvm::Triple(KindTriple.second);
-    this->Triple = llvm::Triple(t.getArchName(), t.getVendorName(),
-                                t.getOSName(), t.getEnvironmentName());
-
+    this->Triple = llvm::Triple(KindTriple.second);
     this->TargetID = Target.substr(Target.find(TripleOrGPU.second));
   } else {
     auto KindTriple = TargetFeatures.first.split('-');
     this->OffloadKind = KindTriple.first;
-
-    // Enforce optional env field to standardize bundles
-    llvm::Triple t = llvm::Triple(KindTriple.second);
-    this->Triple = llvm::Triple(t.getArchName(), t.getVendorName(),
-                                t.getOSName(), t.getEnvironmentName());
-
+    this->Triple = llvm::Triple(KindTriple.second);
     this->TargetID = "";
   }
 }
@@ -98,19 +89,20 @@ bool OffloadTargetInfo::hasHostKind() const {
 
 bool OffloadTargetInfo::isOffloadKindValid() const {
   return OffloadKind == "host" || OffloadKind == "openmp" ||
-         OffloadKind == "hip" || OffloadKind == "hipv4";
+    OffloadKind == "hip" || OffloadKind == "hipv4";
 }
 
 bool OffloadTargetInfo::isOffloadKindCompatible(
-    const StringRef TargetOffloadKind) const {
+  const StringRef TargetOffloadKind) const {
   if (OffloadKind == TargetOffloadKind)
     return true;
   if (BundlerConfig.HipOpenmpCompatible) {
-    bool HIPCompatibleWithOpenMP = OffloadKind.starts_with_insensitive("hip") &&
-                                   TargetOffloadKind == "openmp";
+    bool HIPCompatibleWithOpenMP =
+      OffloadKind.startswith_insensitive("hip") &&
+      TargetOffloadKind == "openmp";
     bool OpenMPCompatibleWithHIP =
-        OffloadKind == "openmp" &&
-        TargetOffloadKind.starts_with_insensitive("hip");
+      OffloadKind == "openmp" &&
+      TargetOffloadKind.startswith_insensitive("hip");
     return HIPCompatibleWithOpenMP || OpenMPCompatibleWithHIP;
   }
   return false;
@@ -194,7 +186,6 @@ bool isCodeObjectCompatible(const OffloadTargetInfo &CodeObjectInfo,
   return true;
 }
 
-namespace {
 /// Generic file handler interface.
 class FileHandler {
 public:
@@ -211,9 +202,9 @@ public:
   virtual Error ReadHeader(MemoryBuffer &Input) = 0;
 
   /// Read the marker of the next bundled to be read in the file. The bundle
-  /// name is returned if there is one in the file, or `std::nullopt` if there
-  /// are no more bundles to be read.
-  virtual Expected<std::optional<StringRef>>
+  /// name is returned if there is one in the file, or `None` if there are no
+  /// more bundles to be read.
+  virtual Expected<Optional<StringRef>>
   ReadBundleStart(MemoryBuffer &Input) = 0;
 
   /// Read the marker that closes the current bundle.
@@ -256,8 +247,7 @@ public:
   Error forEachBundle(MemoryBuffer &Input,
                       std::function<Error(const BundleInfo &)> Func) {
     while (true) {
-      Expected<std::optional<StringRef>> CurTripleOrErr =
-          ReadBundleStart(Input);
+      Expected<Optional<StringRef>> CurTripleOrErr = ReadBundleStart(Input);
       if (!CurTripleOrErr)
         return CurTripleOrErr.takeError();
 
@@ -307,12 +297,24 @@ protected:
 
 /// Read 8-byte integers from a buffer in little-endian format.
 static uint64_t Read8byteIntegerFromBuffer(StringRef Buffer, size_t pos) {
-  return llvm::support::endian::read64le(Buffer.data() + pos);
+  uint64_t Res = 0;
+  const char *Data = Buffer.data();
+
+  for (unsigned i = 0; i < 8; ++i) {
+    Res <<= 8;
+    uint64_t Char = (uint64_t)Data[pos + 7 - i];
+    Res |= 0xffu & Char;
+  }
+  return Res;
 }
 
 /// Write 8-byte integers to a buffer in little-endian format.
 static void Write8byteIntegerToBuffer(raw_fd_ostream &OS, uint64_t Val) {
-  llvm::support::endian::write(OS, Val, llvm::support::little);
+  for (unsigned i = 0; i < 8; ++i) {
+    char Char = (char)(Val & 0xffu);
+    OS.write(&Char, 1);
+    Val >>= 8;
+  }
 }
 
 class BinaryFileHandler final : public FileHandler {
@@ -405,7 +407,8 @@ public:
       if (!Offset || Offset + Size > FC.size())
         return Error::success();
 
-      assert(!BundlesInfo.contains(Triple) && "Triple is duplicated??");
+      assert(BundlesInfo.find(Triple) == BundlesInfo.end() &&
+             "Triple is duplicated??");
       BundlesInfo[Triple] = BinaryBundleInfo(Size, Offset);
     }
     // Set the iterator to where we will start to read.
@@ -414,10 +417,9 @@ public:
     return Error::success();
   }
 
-  Expected<std::optional<StringRef>>
-  ReadBundleStart(MemoryBuffer &Input) final {
+  Expected<Optional<StringRef>> ReadBundleStart(MemoryBuffer &Input) final {
     if (NextBundleInfo == BundlesInfo.end())
-      return std::nullopt;
+      return None;
     CurBundleInfo = NextBundleInfo++;
     return CurBundleInfo->first();
   }
@@ -489,6 +491,8 @@ public:
   }
 };
 
+namespace {
+
 // This class implements a list of temporary files that are removed upon
 // object destruction.
 class TempFileHandlerRAII {
@@ -499,7 +503,7 @@ public:
   }
 
   // Creates temporary file with given contents.
-  Expected<StringRef> Create(std::optional<ArrayRef<char>> Contents) {
+  Expected<StringRef> Create(Optional<ArrayRef<char>> Contents) {
     SmallString<128u> File;
     if (std::error_code EC =
             sys::fs::createTemporaryFile("clang-offload-bundler", "tmp", File))
@@ -520,6 +524,8 @@ private:
   std::forward_list<SmallString<128u>> Files;
 };
 
+} // end anonymous namespace
+
 /// Handler for object files. The bundles are organized by sections with a
 /// designated name.
 ///
@@ -534,15 +540,14 @@ class ObjectFileHandler final : public FileHandler {
 
   /// Return bundle name (<kind>-<triple>) if the provided section is an offload
   /// section.
-  static Expected<std::optional<StringRef>>
-  IsOffloadSection(SectionRef CurSection) {
+  static Expected<Optional<StringRef>> IsOffloadSection(SectionRef CurSection) {
     Expected<StringRef> NameOrErr = CurSection.getName();
     if (!NameOrErr)
       return NameOrErr.takeError();
 
     // If it does not start with the reserved suffix, just skip this section.
     if (!NameOrErr->startswith(OFFLOAD_BUNDLER_MAGIC_STR))
-      return std::nullopt;
+      return None;
 
     // Return the triple that is right after the reserved prefix.
     return NameOrErr->substr(sizeof(OFFLOAD_BUNDLER_MAGIC_STR) - 1);
@@ -573,22 +578,21 @@ public:
 
   Error ReadHeader(MemoryBuffer &Input) final { return Error::success(); }
 
-  Expected<std::optional<StringRef>>
-  ReadBundleStart(MemoryBuffer &Input) final {
+  Expected<Optional<StringRef>> ReadBundleStart(MemoryBuffer &Input) final {
     while (NextSection != Obj->section_end()) {
       CurrentSection = NextSection;
       ++NextSection;
 
       // Check if the current section name starts with the reserved prefix. If
       // so, return the triple.
-      Expected<std::optional<StringRef>> TripleOrErr =
+      Expected<Optional<StringRef>> TripleOrErr =
           IsOffloadSection(*CurrentSection);
       if (!TripleOrErr)
         return TripleOrErr.takeError();
       if (*TripleOrErr)
         return **TripleOrErr;
     }
-    return std::nullopt;
+    return None;
   }
 
   Error ReadBundleEnd(MemoryBuffer &Input) final { return Error::success(); }
@@ -666,16 +670,18 @@ public:
         InputFile = *TempFileOrErr;
       }
 
-      ObjcopyArgs.push_back(
-          SS.save(Twine("--add-section=") + OFFLOAD_BUNDLER_MAGIC_STR +
-                  BundlerConfig.TargetNames[I] + "=" + InputFile));
-      ObjcopyArgs.push_back(
-          SS.save(Twine("--set-section-flags=") + OFFLOAD_BUNDLER_MAGIC_STR +
-                  BundlerConfig.TargetNames[I] + "=readonly,exclude"));
+      ObjcopyArgs.push_back(SS.save(Twine("--add-section=") +
+                                    OFFLOAD_BUNDLER_MAGIC_STR +
+                                    BundlerConfig.TargetNames[I] +
+                                    "=" + InputFile));
+      ObjcopyArgs.push_back(SS.save(Twine("--set-section-flags=") +
+                                    OFFLOAD_BUNDLER_MAGIC_STR +
+                                    BundlerConfig.TargetNames[I] +
+                                    "=readonly,exclude"));
     }
     ObjcopyArgs.push_back("--");
     ObjcopyArgs.push_back(
-        BundlerConfig.InputFileNames[BundlerConfig.HostInputIndex]);
+      BundlerConfig.InputFileNames[BundlerConfig.HostInputIndex]);
     ObjcopyArgs.push_back(BundlerConfig.OutputFileNames.front());
 
     if (Error Err = executeObjcopy(BundlerConfig.ObjcopyPath, ObjcopyArgs))
@@ -731,14 +737,13 @@ class TextFileHandler final : public FileHandler {
 protected:
   Error ReadHeader(MemoryBuffer &Input) final { return Error::success(); }
 
-  Expected<std::optional<StringRef>>
-  ReadBundleStart(MemoryBuffer &Input) final {
+  Expected<Optional<StringRef>> ReadBundleStart(MemoryBuffer &Input) final {
     StringRef FC = Input.getBuffer();
 
     // Find start of the bundle.
     ReadChars = FC.find(BundleStartString, ReadChars);
     if (ReadChars == FC.npos)
-      return std::nullopt;
+      return None;
 
     // Get position of the triple.
     size_t TripleStart = ReadChars = ReadChars + BundleStartString.size();
@@ -746,7 +751,7 @@ protected:
     // Get position that closes the triple.
     size_t TripleEnd = ReadChars = FC.find("\n", ReadChars);
     if (TripleEnd == FC.npos)
-      return std::nullopt;
+      return None;
 
     // Next time we read after the new line.
     ++ReadChars;
@@ -821,7 +826,6 @@ public:
     return Error::success();
   }
 };
-} // namespace
 
 /// Return an appropriate object file handler. We use the specific object
 /// handler if we know how to deal with that format, otherwise we use a default
@@ -856,8 +860,6 @@ CreateFileHandler(MemoryBuffer &FirstInput,
     return std::make_unique<TextFileHandler>(/*Comment=*/"//");
   if (FilesType == "cui")
     return std::make_unique<TextFileHandler>(/*Comment=*/"//");
-  if (FilesType == "hipi")
-    return std::make_unique<TextFileHandler>(/*Comment=*/"//");
   // TODO: `.d` should be eventually removed once `-M` and its variants are
   // handled properly in offload compilation.
   if (FilesType == "d")
@@ -882,8 +884,8 @@ CreateFileHandler(MemoryBuffer &FirstInput,
 }
 
 // List bundle IDs. Return true if an error was found.
-Error OffloadBundler::ListBundleIDsInFile(
-    StringRef InputFileName, const OffloadBundlerConfig &BundlerConfig) {
+Error OffloadBundler::ListBundleIDsInFile(StringRef InputFileName,
+                          const OffloadBundlerConfig &BundlerConfig) {
   // Open Input file.
   ErrorOr<std::unique_ptr<MemoryBuffer>> CodeOrErr =
       MemoryBuffer::getFileOrSTDIN(InputFileName);
@@ -908,8 +910,8 @@ Error OffloadBundler::BundleFiles() {
   std::error_code EC;
 
   // Create output file.
-  raw_fd_ostream OutputFile(BundlerConfig.OutputFileNames.front(), EC,
-                            sys::fs::OF_None);
+  raw_fd_ostream OutputFile(BundlerConfig.OutputFileNames.front(),
+                            EC, sys::fs::OF_None);
   if (EC)
     return createFileError(BundlerConfig.OutputFileNames.front(), EC);
 
@@ -927,10 +929,10 @@ Error OffloadBundler::BundleFiles() {
   // Get the file handler. We use the host buffer as reference.
   assert((BundlerConfig.HostInputIndex != ~0u || BundlerConfig.AllowNoHost) &&
          "Host input index undefined??");
-  Expected<std::unique_ptr<FileHandler>> FileHandlerOrErr = CreateFileHandler(
-      *InputBuffers[BundlerConfig.AllowNoHost ? 0
-                                              : BundlerConfig.HostInputIndex],
-      BundlerConfig);
+  Expected<std::unique_ptr<FileHandler>> FileHandlerOrErr =
+      CreateFileHandler(*InputBuffers[BundlerConfig.AllowNoHost ? 0
+                        : BundlerConfig.HostInputIndex],
+                        BundlerConfig);
   if (!FileHandlerOrErr)
     return FileHandlerOrErr.takeError();
 
@@ -991,8 +993,7 @@ Error OffloadBundler::UnbundleFiles() {
   // assume the file is meant for the host target.
   bool FoundHostBundle = false;
   while (!Worklist.empty()) {
-    Expected<std::optional<StringRef>> CurTripleOrErr =
-        FH->ReadBundleStart(Input);
+    Expected<Optional<StringRef>> CurTripleOrErr = FH->ReadBundleStart(Input);
     if (!CurTripleOrErr)
       return CurTripleOrErr.takeError();
 
@@ -1069,8 +1070,7 @@ Error OffloadBundler::UnbundleFiles() {
 
   // If we found elements, we emit an error if none of those were for the host
   // in case host bundle name was provided in command line.
-  if (!(FoundHostBundle || BundlerConfig.HostInputIndex == ~0u ||
-        BundlerConfig.AllowMissingBundles))
+  if (!FoundHostBundle && BundlerConfig.HostInputIndex != ~0u)
     return createStringError(inconvertibleErrorCode(),
                              "Can't find bundle for the host target");
 
@@ -1181,15 +1181,15 @@ Error OffloadBundler::UnbundleArchive() {
     assert(FileHandler &&
            "FileHandle creation failed for file in the archive!");
 
-    if (Error ReadErr = FileHandler->ReadHeader(*CodeObjectBuffer))
+    if (Error ReadErr = FileHandler.get()->ReadHeader(*CodeObjectBuffer))
       return ReadErr;
 
-    Expected<std::optional<StringRef>> CurBundleIDOrErr =
+    Expected<Optional<StringRef>> CurBundleIDOrErr =
         FileHandler->ReadBundleStart(*CodeObjectBuffer);
     if (!CurBundleIDOrErr)
       return CurBundleIDOrErr.takeError();
 
-    std::optional<StringRef> OptionalCurBundleID = *CurBundleIDOrErr;
+    Optional<StringRef> OptionalCurBundleID = *CurBundleIDOrErr;
     // No device code in this child, skip.
     if (!OptionalCurBundleID)
       continue;
@@ -1202,11 +1202,13 @@ Error OffloadBundler::UnbundleArchive() {
       auto CodeObjectInfo = OffloadTargetInfo(CodeObject, BundlerConfig);
       if (CodeObjectInfo.hasHostKind()) {
         // Do nothing, we don't extract host code yet.
-      } else if (getCompatibleOffloadTargets(CodeObjectInfo, CompatibleTargets,
+      } else if (getCompatibleOffloadTargets(CodeObjectInfo,
+                                             CompatibleTargets,
                                              BundlerConfig)) {
         std::string BundleData;
         raw_string_ostream DataStream(BundleData);
-        if (Error Err = FileHandler->ReadBundle(DataStream, *CodeObjectBuffer))
+        if (Error Err =
+                FileHandler.get()->ReadBundle(DataStream, *CodeObjectBuffer))
           return Err;
 
         for (auto &CompatibleTarget : CompatibleTargets) {
@@ -1231,7 +1233,8 @@ Error OffloadBundler::UnbundleArchive() {
 
           // For inserting <CompatibleTarget, list<CodeObject>> entry in
           // OutputArchivesMap.
-          if (!OutputArchivesMap.contains(CompatibleTarget)) {
+          if (OutputArchivesMap.find(CompatibleTarget) ==
+              OutputArchivesMap.end()) {
 
             std::vector<NewArchiveMember> ArchiveMembers;
             ArchiveMembers.push_back(NewArchiveMember(MemBufRef));
@@ -1244,10 +1247,10 @@ Error OffloadBundler::UnbundleArchive() {
         }
       }
 
-      if (Error Err = FileHandler->ReadBundleEnd(*CodeObjectBuffer))
+      if (Error Err = FileHandler.get()->ReadBundleEnd(*CodeObjectBuffer))
         return Err;
 
-      Expected<std::optional<StringRef>> NextTripleOrErr =
+      Expected<Optional<StringRef>> NextTripleOrErr =
           FileHandler->ReadBundleStart(*CodeObjectBuffer);
       if (!NextTripleOrErr)
         return NextTripleOrErr.takeError();

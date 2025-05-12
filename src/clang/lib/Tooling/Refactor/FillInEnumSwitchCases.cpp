@@ -49,7 +49,7 @@ clang::tooling::initiateFillInEnumSwitchCasesOperation(
   if (SelectionRange.isValid()) {
     auto SelectedSet = Slice.getSelectedStmtSet();
     if (!SelectedSet)
-      return std::nullopt;
+      return None;
     Switch = dyn_cast_or_null<SwitchStmt>(SelectedSet->containsSelectionRange);
     // FIXME: Improve the interface for this to make it similar to SelectedStmt
     if (SelectedSet->containsSelectionRange)
@@ -58,12 +58,12 @@ clang::tooling::initiateFillInEnumSwitchCasesOperation(
   } else {
     auto SelectedStmt = Slice.nearestSelectedStmt(Stmt::SwitchStmtClass);
     if (!SelectedStmt)
-      return std::nullopt;
+      return None;
     Switch = cast<SwitchStmt>(SelectedStmt->getStmt());
     ParentDecl = SelectedStmt->getParentDecl();
   }
   if (!Switch)
-    return std::nullopt;
+    return None;
 
   // Ensure that the type is an enum.
   const Expr *Cond = Switch->getCond()->IgnoreImpCasts();

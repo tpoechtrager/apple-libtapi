@@ -2,7 +2,7 @@
 
 set -e
 
-TAPI_VERSION=1600.0.11.8
+TAPI_VERSION=1500.0.12.3
 
 pushd "${0%/*}" &>/dev/null
 source tools/tools.sh
@@ -42,6 +42,9 @@ cmake -G "$cmakegen" ../src/llvm \
  -DCMAKE_SHARED_LINKER_FLAGS="$CMAKE_SHARED_LINKER_FLAGS" \
  -DCMAKE_EXE_LINKER_FLAGS="$CMAKE_EXE_LINKER_FLAGS" \
  -DLLVM_INCLUDE_TESTS=OFF \
+ -DLLVM_INCLUDE_DOCS=OFF \
+ -DLLVM_INCLUDE_EXAMPLES=OFF \
+ -DLLVM_INCLUDE_BENCHMARKS=OFF \
  -DCMAKE_BUILD_TYPE=RELEASE \
  -DLLVM_ENABLE_PROJECTS="tapi;clang" \
  -DCMAKE_INSTALL_PREFIX="$INSTALLPREFIX" \
@@ -50,10 +53,10 @@ cmake -G "$cmakegen" ../src/llvm \
  $CMAKE_EXTRA_ARGS
 
 echo ""
-echo "## Building clangBasic and vt_gen ##"
+echo "## Building clangBasic ##"
 echo ""
 
-$MAKE clangBasic vt_gen -j $JOBS
+$MAKE clangBasic -j $JOBS
 
 echo ""
 echo "## Building libtapi ##"

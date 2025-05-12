@@ -12,7 +12,6 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/StringRef.h"
-#include <optional>
 #include <vector>
 
 namespace llvm {
@@ -28,7 +27,7 @@ struct MachOConfig {
   DenseSet<StringRef> RPathsToRemove;
 
   // install-name-tool's id option
-  std::optional<StringRef> SharedLibId;
+  Optional<StringRef> SharedLibId;
 
   // Segments to remove if they are empty
   DenseSet<StringRef> EmptySegmentsToRemove;

@@ -28,9 +28,9 @@ static bool parseAssemblyInto(MemoryBufferRef F, Module *M,
   std::unique_ptr<MemoryBuffer> Buf = MemoryBuffer::getMemBuffer(F);
   SM.AddNewSourceBuffer(std::move(Buf), SMLoc());
 
-  std::optional<LLVMContext> OptContext;
+  LLVMContext Context;
   return LLParser(F.getBuffer(), SM, Err, M, Index,
-                  M ? M->getContext() : OptContext.emplace(), Slots)
+                  M ? M->getContext() : Context, Slots)
       .Run(UpgradeDebugInfo, DataLayoutCallback);
 }
 
@@ -91,10 +91,9 @@ ParsedModuleAndIndex llvm::parseAssemblyWithIndex(MemoryBufferRef F,
                                                   SMDiagnostic &Err,
                                                   LLVMContext &Context,
                                                   SlotMapping *Slots) {
-  return ::parseAssemblyWithIndex(
-      F, Err, Context, Slots,
-      /*UpgradeDebugInfo*/ true,
-      [](StringRef, StringRef) { return std::nullopt; });
+  return ::parseAssemblyWithIndex(F, Err, Context, Slots,
+                                  /*UpgradeDebugInfo*/ true,
+                                  [](StringRef) { return None; });
 }
 
 static ParsedModuleAndIndex
@@ -151,7 +150,7 @@ static bool parseSummaryIndexAssemblyInto(MemoryBufferRef F,
   // index, but we need to initialize it.
   LLVMContext unusedContext;
   return LLParser(F.getBuffer(), SM, Err, nullptr, &Index, unusedContext)
-      .Run(true, [](StringRef, StringRef) { return std::nullopt; });
+      .Run(true, [](StringRef) { return None; });
 }
 
 std::unique_ptr<ModuleSummaryIndex>
@@ -176,12 +175,6 @@ llvm::parseSummaryIndexAssemblyFile(StringRef Filename, SMDiagnostic &Err) {
   }
 
   return parseSummaryIndexAssembly(FileOrErr.get()->getMemBufferRef(), Err);
-}
-
-std::unique_ptr<ModuleSummaryIndex>
-llvm::parseSummaryIndexAssemblyString(StringRef AsmString, SMDiagnostic &Err) {
-  MemoryBufferRef F(AsmString, "<string>");
-  return parseSummaryIndexAssembly(F, Err);
 }
 
 Constant *llvm::parseConstantValue(StringRef Asm, SMDiagnostic &Err,

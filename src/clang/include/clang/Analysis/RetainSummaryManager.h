@@ -25,7 +25,6 @@
 #include "clang/Analysis/AnyCall.h"
 #include "clang/Analysis/SelectorExtras.h"
 #include "llvm/ADT/STLExtras.h"
-#include <optional>
 
 using namespace clang;
 
@@ -649,9 +648,8 @@ public:
     IdentityOrZero
   };
 
-  std::optional<BehaviorSummary>
-  canEval(const CallExpr *CE, const FunctionDecl *FD,
-          bool &hasTrustedImplementationAnnotation);
+  Optional<BehaviorSummary> canEval(const CallExpr *CE, const FunctionDecl *FD,
+                                    bool &hasTrustedImplementationAnnotation);
 
   /// \return Whether the type corresponds to a known smart pointer
   /// implementation (that is, everything about it is inlineable).
@@ -688,8 +686,8 @@ private:
                                                 Selector S, QualType RetTy);
 
   /// Determine if there is a special return effect for this function or method.
-  std::optional<RetEffect> getRetEffectFromAnnotations(QualType RetTy,
-                                                       const Decl *D);
+  Optional<RetEffect> getRetEffectFromAnnotations(QualType RetTy,
+                                                  const Decl *D);
 
   void updateSummaryFromAnnotations(const RetainSummary *&Summ,
                                     const ObjCMethodDecl *MD);
@@ -721,14 +719,14 @@ private:
   /// type for functions/methods) @c QT has any of the given attributes,
   /// provided they pass necessary validation checks AND tracking the given
   /// attribute is enabled.
-  /// Returns the object kind corresponding to the present attribute, or
-  /// std::nullopt, if none of the specified attributes are present.
+  /// Returns the object kind corresponding to the present attribute, or None,
+  /// if none of the specified attributes are present.
   /// Crashes if passed an attribute which is not explicitly handled.
   template <class T>
-  std::optional<ObjKind> hasAnyEnabledAttrOf(const Decl *D, QualType QT);
+  Optional<ObjKind> hasAnyEnabledAttrOf(const Decl *D, QualType QT);
 
   template <class T1, class T2, class... Others>
-  std::optional<ObjKind> hasAnyEnabledAttrOf(const Decl *D, QualType QT);
+  Optional<ObjKind> hasAnyEnabledAttrOf(const Decl *D, QualType QT);
 
   friend class RetainSummaryTemplate;
 };

@@ -17,8 +17,6 @@
 #include "llvm/CodeGen/GlobalISel/Combiner.h"
 #include "llvm/CodeGen/GlobalISel/CombinerHelper.h"
 #include "llvm/CodeGen/GlobalISel/CombinerInfo.h"
-#include "llvm/CodeGen/GlobalISel/GIMatchTableExecutor.h"
-#include "llvm/CodeGen/GlobalISel/GIMatchTableExecutorImpl.h"
 #include "llvm/CodeGen/GlobalISel/GISelKnownBits.h"
 #include "llvm/CodeGen/GlobalISel/MIPatternMatch.h"
 #include "llvm/CodeGen/GlobalISel/MachineIRBuilder.h"
@@ -30,24 +28,15 @@
 #include "llvm/IR/Instructions.h"
 #include "llvm/Support/Debug.h"
 
-#define GET_GICOMBINER_DEPS
-#include "AArch64GenPreLegalizeGICombiner.inc"
-#undef GET_GICOMBINER_DEPS
-
 #define DEBUG_TYPE "aarch64-prelegalizer-combiner"
 
 using namespace llvm;
 using namespace MIPatternMatch;
 
-namespace {
-
-#define GET_GICOMBINER_TYPES
-#include "AArch64GenPreLegalizeGICombiner.inc"
-#undef GET_GICOMBINER_TYPES
-
 /// Return true if a G_FCONSTANT instruction is known to be better-represented
 /// as a G_CONSTANT.
-bool matchFConstantToConstant(MachineInstr &MI, MachineRegisterInfo &MRI) {
+static bool matchFConstantToConstant(MachineInstr &MI,
+                                     MachineRegisterInfo &MRI) {
   assert(MI.getOpcode() == TargetOpcode::G_FCONSTANT);
   Register DstReg = MI.getOperand(0).getReg();
   const unsigned DstSize = MRI.getType(DstReg).getSizeInBits();
@@ -62,7 +51,7 @@ bool matchFConstantToConstant(MachineInstr &MI, MachineRegisterInfo &MRI) {
 }
 
 /// Change a G_FCONSTANT into a G_CONSTANT.
-void applyFConstantToConstant(MachineInstr &MI) {
+static void applyFConstantToConstant(MachineInstr &MI) {
   assert(MI.getOpcode() == TargetOpcode::G_FCONSTANT);
   MachineIRBuilder MIB(MI);
   const APFloat &ImmValAPF = MI.getOperand(1).getFPImm()->getValueAPF();
@@ -73,8 +62,8 @@ void applyFConstantToConstant(MachineInstr &MI) {
 /// Try to match a G_ICMP of a G_TRUNC with zero, in which the truncated bits
 /// are sign bits. In this case, we can transform the G_ICMP to directly compare
 /// the wide value with a zero.
-bool matchICmpRedundantTrunc(MachineInstr &MI, MachineRegisterInfo &MRI,
-                             GISelKnownBits *KB, Register &MatchInfo) {
+static bool matchICmpRedundantTrunc(MachineInstr &MI, MachineRegisterInfo &MRI,
+                                    GISelKnownBits *KB, Register &MatchInfo) {
   assert(MI.getOpcode() == TargetOpcode::G_ICMP && KB);
 
   auto Pred = (CmpInst::Predicate)MI.getOperand(1).getPredicate();
@@ -102,9 +91,10 @@ bool matchICmpRedundantTrunc(MachineInstr &MI, MachineRegisterInfo &MRI,
   return true;
 }
 
-void applyICmpRedundantTrunc(MachineInstr &MI, MachineRegisterInfo &MRI,
-                             MachineIRBuilder &Builder,
-                             GISelChangeObserver &Observer, Register &WideReg) {
+static bool applyICmpRedundantTrunc(MachineInstr &MI, MachineRegisterInfo &MRI,
+                                    MachineIRBuilder &Builder,
+                                    GISelChangeObserver &Observer,
+                                    Register &WideReg) {
   assert(MI.getOpcode() == TargetOpcode::G_ICMP);
 
   LLT WideTy = MRI.getType(WideReg);
@@ -116,6 +106,7 @@ void applyICmpRedundantTrunc(MachineInstr &MI, MachineRegisterInfo &MRI,
   MI.getOperand(2).setReg(WideReg);
   MI.getOperand(3).setReg(WideZero.getReg(0));
   Observer.changedInstr(MI);
+  return true;
 }
 
 /// \returns true if it is possible to fold a constant into a G_GLOBAL_VALUE.
@@ -123,8 +114,8 @@ void applyICmpRedundantTrunc(MachineInstr &MI, MachineRegisterInfo &MRI,
 /// e.g.
 ///
 /// %g = G_GLOBAL_VALUE @x -> %g = G_GLOBAL_VALUE @x + cst
-bool matchFoldGlobalOffset(MachineInstr &MI, MachineRegisterInfo &MRI,
-                           std::pair<uint64_t, uint64_t> &MatchInfo) {
+static bool matchFoldGlobalOffset(MachineInstr &MI, MachineRegisterInfo &MRI,
+                                  std::pair<uint64_t, uint64_t> &MatchInfo) {
   assert(MI.getOpcode() == TargetOpcode::G_GLOBAL_VALUE);
   MachineFunction &MF = *MI.getMF();
   auto &GlobalOp = MI.getOperand(1);
@@ -190,9 +181,10 @@ bool matchFoldGlobalOffset(MachineInstr &MI, MachineRegisterInfo &MRI,
   return true;
 }
 
-void applyFoldGlobalOffset(MachineInstr &MI, MachineRegisterInfo &MRI,
-                           MachineIRBuilder &B, GISelChangeObserver &Observer,
-                           std::pair<uint64_t, uint64_t> &MatchInfo) {
+static bool applyFoldGlobalOffset(MachineInstr &MI, MachineRegisterInfo &MRI,
+                                  MachineIRBuilder &B,
+                                  GISelChangeObserver &Observer,
+                                  std::pair<uint64_t, uint64_t> &MatchInfo) {
   // Change:
   //
   //  %g = G_GLOBAL_VALUE @x
@@ -227,10 +219,12 @@ void applyFoldGlobalOffset(MachineInstr &MI, MachineRegisterInfo &MRI,
   B.buildPtrAdd(
       Dst, NewGVDst,
       B.buildConstant(LLT::scalar(64), -static_cast<int64_t>(MinOffset)));
+  return true;
 }
 
-bool tryToSimplifyUADDO(MachineInstr &MI, MachineIRBuilder &B,
-                        CombinerHelper &Helper, GISelChangeObserver &Observer) {
+static bool tryToSimplifyUADDO(MachineInstr &MI, MachineIRBuilder &B,
+                               CombinerHelper &Helper,
+                               GISelChangeObserver &Observer) {
   // Try simplify G_UADDO with 8 or 16 bit operands to wide G_ADD and TBNZ if
   // result is only used in the no-overflow case. It is restricted to cases
   // where we know that the high-bits of the operands are 0. If there's an
@@ -343,54 +337,28 @@ bool tryToSimplifyUADDO(MachineInstr &MI, MachineIRBuilder &B,
   return true;
 }
 
-class AArch64PreLegalizerCombinerImpl : public GIMatchTableExecutor {
+class AArch64PreLegalizerCombinerHelperState {
 protected:
   CombinerHelper &Helper;
-  const AArch64PreLegalizerCombinerImplRuleConfig &RuleConfig;
-
-  const AArch64Subtarget &STI;
-  GISelChangeObserver &Observer;
-  MachineIRBuilder &B;
-  MachineFunction &MF;
-
-  MachineRegisterInfo &MRI;
 
 public:
-  AArch64PreLegalizerCombinerImpl(
-      const AArch64PreLegalizerCombinerImplRuleConfig &RuleConfig,
-      const AArch64Subtarget &STI, GISelChangeObserver &Observer,
-      MachineIRBuilder &B, CombinerHelper &Helper);
-
-  static const char *getName() { return "AArch6400PreLegalizerCombiner"; }
-
-  bool tryCombineAll(MachineInstr &I) const;
-
-private:
-#define GET_GICOMBINER_CLASS_MEMBERS
-#include "AArch64GenPreLegalizeGICombiner.inc"
-#undef GET_GICOMBINER_CLASS_MEMBERS
+  AArch64PreLegalizerCombinerHelperState(CombinerHelper &Helper)
+      : Helper(Helper) {}
 };
 
-#define GET_GICOMBINER_IMPL
+#define AARCH64PRELEGALIZERCOMBINERHELPER_GENCOMBINERHELPER_DEPS
 #include "AArch64GenPreLegalizeGICombiner.inc"
-#undef GET_GICOMBINER_IMPL
+#undef AARCH64PRELEGALIZERCOMBINERHELPER_GENCOMBINERHELPER_DEPS
 
-AArch64PreLegalizerCombinerImpl::AArch64PreLegalizerCombinerImpl(
-    const AArch64PreLegalizerCombinerImplRuleConfig &RuleConfig,
-    const AArch64Subtarget &STI, GISelChangeObserver &Observer,
-    MachineIRBuilder &B, CombinerHelper &Helper)
-    : Helper(Helper), RuleConfig(RuleConfig), STI(STI), Observer(Observer),
-      B(B), MF(B.getMF()), MRI(*B.getMRI()),
-#define GET_GICOMBINER_CONSTRUCTOR_INITS
+namespace {
+#define AARCH64PRELEGALIZERCOMBINERHELPER_GENCOMBINERHELPER_H
 #include "AArch64GenPreLegalizeGICombiner.inc"
-#undef GET_GICOMBINER_CONSTRUCTOR_INITS
-{
-}
+#undef AARCH64PRELEGALIZERCOMBINERHELPER_GENCOMBINERHELPER_H
 
 class AArch64PreLegalizerCombinerInfo : public CombinerInfo {
   GISelKnownBits *KB;
   MachineDominatorTree *MDT;
-  AArch64PreLegalizerCombinerImplRuleConfig RuleConfig;
+  AArch64GenPreLegalizerCombinerHelperRuleConfig GeneratedRuleCfg;
 
 public:
   AArch64PreLegalizerCombinerInfo(bool EnableOpt, bool OptSize, bool MinSize,
@@ -398,7 +366,7 @@ public:
       : CombinerInfo(/*AllowIllegalOps*/ true, /*ShouldLegalizeIllegal*/ false,
                      /*LegalizerInfo*/ nullptr, EnableOpt, OptSize, MinSize),
         KB(KB), MDT(MDT) {
-    if (!RuleConfig.parseCommandLineOption())
+    if (!GeneratedRuleCfg.parseCommandLineOption())
       report_fatal_error("Invalid rule identifier");
   }
 
@@ -409,13 +377,11 @@ public:
 bool AArch64PreLegalizerCombinerInfo::combine(GISelChangeObserver &Observer,
                                               MachineInstr &MI,
                                               MachineIRBuilder &B) const {
-  const auto &STI = MI.getMF()->getSubtarget<AArch64Subtarget>();
-  const auto *LI = STI.getLegalizerInfo();
+  const auto *LI = MI.getMF()->getSubtarget().getLegalizerInfo();
   CombinerHelper Helper(Observer, B, /* IsPreLegalize*/ true, KB, MDT, LI);
-  AArch64PreLegalizerCombinerImpl Impl(RuleConfig, STI, Observer, B, Helper);
-  Impl.setupMF(*MI.getMF(), KB);
+  AArch64GenPreLegalizerCombinerHelper Generated(GeneratedRuleCfg, Helper);
 
-  if (Impl.tryCombineAll(MI))
+  if (Generated.tryCombineAll(Observer, MI, B))
     return true;
 
   unsigned Opc = MI.getOpcode();
@@ -446,6 +412,10 @@ bool AArch64PreLegalizerCombinerInfo::combine(GISelChangeObserver &Observer,
   return false;
 }
 
+#define AARCH64PRELEGALIZERCOMBINERHELPER_GENCOMBINERHELPER_CPP
+#include "AArch64GenPreLegalizeGICombiner.inc"
+#undef AARCH64PRELEGALIZERCOMBINERHELPER_GENCOMBINERHELPER_CPP
+
 // Pass boilerplate
 // ================
 
@@ -455,9 +425,7 @@ public:
 
   AArch64PreLegalizerCombiner();
 
-  StringRef getPassName() const override {
-    return "AArch64PreLegalizerCombiner";
-  }
+  StringRef getPassName() const override { return "AArch64PreLegalizerCombiner"; }
 
   bool runOnMachineFunction(MachineFunction &MF) override;
 
@@ -515,6 +483,7 @@ INITIALIZE_PASS_DEPENDENCY(GISelCSEAnalysisWrapperPass)
 INITIALIZE_PASS_END(AArch64PreLegalizerCombiner, DEBUG_TYPE,
                     "Combine AArch64 machine instrs before legalization", false,
                     false)
+
 
 namespace llvm {
 FunctionPass *createAArch64PreLegalizerCombiner() {

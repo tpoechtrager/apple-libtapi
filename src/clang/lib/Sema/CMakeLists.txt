@@ -1,10 +1,8 @@
 set(LLVM_LINK_COMPONENTS
   Core
-  FrontendHLSL
   FrontendOpenMP
   MC
   Support
-  TargetParser
   )
 
 clang_tablegen(OpenCLBuiltins.inc -gen-clang-opencl-builtins

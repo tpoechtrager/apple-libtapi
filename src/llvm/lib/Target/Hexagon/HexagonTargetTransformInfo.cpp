@@ -110,7 +110,7 @@ unsigned HexagonTTIImpl::getNumberOfRegisters(bool Vector) const {
   return 32;
 }
 
-unsigned HexagonTTIImpl::getMaxInterleaveFactor(ElementCount VF) {
+unsigned HexagonTTIImpl::getMaxInterleaveFactor(unsigned VF) {
   return useHVX() ? 2 : 1;
 }
 
@@ -139,17 +139,14 @@ ElementCount HexagonTTIImpl::getMinimumVF(unsigned ElemWidth,
 }
 
 InstructionCost HexagonTTIImpl::getScalarizationOverhead(
-    VectorType *Ty, const APInt &DemandedElts, bool Insert, bool Extract,
-    TTI::TargetCostKind CostKind) {
-  return BaseT::getScalarizationOverhead(Ty, DemandedElts, Insert, Extract,
-                                         CostKind);
+    VectorType *Ty, const APInt &DemandedElts, bool Insert, bool Extract) {
+  return BaseT::getScalarizationOverhead(Ty, DemandedElts, Insert, Extract);
 }
 
 InstructionCost
 HexagonTTIImpl::getOperandsScalarizationOverhead(ArrayRef<const Value *> Args,
-                                                 ArrayRef<Type *> Tys,
-                                                 TTI::TargetCostKind CostKind) {
-  return BaseT::getOperandsScalarizationOverhead(Args, Tys, CostKind);
+                                                 ArrayRef<Type *> Tys) {
+  return BaseT::getOperandsScalarizationOverhead(Args, Tys);
 }
 
 InstructionCost HexagonTTIImpl::getCallInstrCost(Function *F, Type *RetTy,
@@ -192,11 +189,11 @@ InstructionCost HexagonTTIImpl::getMemoryOpCost(unsigned Opcode, Type *Src,
 
   if (Src->isVectorTy()) {
     VectorType *VecTy = cast<VectorType>(Src);
-    unsigned VecWidth = VecTy->getPrimitiveSizeInBits().getFixedValue();
+    unsigned VecWidth = VecTy->getPrimitiveSizeInBits().getFixedSize();
     if (isHVXVectorType(VecTy)) {
       unsigned RegWidth =
           getRegisterBitWidth(TargetTransformInfo::RGK_FixedWidthVector)
-              .getFixedValue();
+              .getFixedSize();
       assert(RegWidth && "Non-zero vector register width expected");
       // Cost of HVX loads.
       if (VecWidth % RegWidth == 0)
@@ -332,9 +329,7 @@ InstructionCost HexagonTTIImpl::getCastInstrCost(unsigned Opcode, Type *DstTy,
 }
 
 InstructionCost HexagonTTIImpl::getVectorInstrCost(unsigned Opcode, Type *Val,
-                                                   TTI::TargetCostKind CostKind,
-                                                   unsigned Index, Value *Op0,
-                                                   Value *Op1) {
+                                                   unsigned Index) {
   Type *ElemTy = Val->isVectorTy() ? cast<VectorType>(Val)->getElementType()
                                    : Val;
   if (Opcode == Instruction::InsertElement) {
@@ -343,8 +338,7 @@ InstructionCost HexagonTTIImpl::getVectorInstrCost(unsigned Opcode, Type *Val,
     if (ElemTy->isIntegerTy(32))
       return Cost;
     // If it's not a 32-bit value, there will need to be an extract.
-    return Cost + getVectorInstrCost(Instruction::ExtractElement, Val, CostKind,
-                                     Index, Op0, Op1);
+    return Cost + getVectorInstrCost(Instruction::ExtractElement, Val, Index);
   }
 
   if (Opcode == Instruction::ExtractElement)

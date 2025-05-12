@@ -7,14 +7,11 @@ set(LLVM_LINK_COMPONENTS
   )
 
 add_llvm_unittest(ProfileDataTests
-  BPFunctionNodeTest.cpp
   CoverageMappingTest.cpp
   InstrProfDataTest.cpp
   InstrProfTest.cpp
-  ItaniumManglingCanonicalizerTest.cpp
-  MemProfTest.cpp
   SampleProfTest.cpp
-  SymbolRemappingReaderTest.cpp
+  MemProfTest.cpp
   )
 
 target_link_libraries(ProfileDataTests PRIVATE LLVMTestingSupport)

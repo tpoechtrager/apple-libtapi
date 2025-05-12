@@ -10,6 +10,7 @@
 #include "IndexDataStoreUtils.h"
 #include "BitstreamVisitor.h"
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Bitstream/BitstreamReader.h"
@@ -459,7 +460,7 @@ IndexUnitReader::createWithFilePath(StringRef FilePath,
   return Reader;
 }
 
-std::optional<sys::TimePoint<>>
+Optional<sys::TimePoint<>>
 IndexUnitReader::getModificationTimeForUnit(StringRef UnitFilename,
                                             StringRef StorePath,
                                             std::string &Error) {
@@ -471,7 +472,7 @@ IndexUnitReader::getModificationTimeForUnit(StringRef UnitFilename,
   std::error_code EC = sys::fs::status(PathBuf.str(), FileStat);
   if (EC) {
     Error = EC.message();
-    return std::nullopt;
+    return None;
   }
   return FileStat.getLastModificationTime();
 }

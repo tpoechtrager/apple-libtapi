@@ -18,13 +18,9 @@
 namespace llvm {
 
 class Module;
-class TargetMachine;
 
 struct PreISelIntrinsicLoweringPass
     : PassInfoMixin<PreISelIntrinsicLoweringPass> {
-  const TargetMachine &TM;
-
-  PreISelIntrinsicLoweringPass(const TargetMachine &TM) : TM(TM) {}
   PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM);
 };
 

@@ -12,6 +12,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm-c/Target.h"
+#include "llvm-c/Initialization.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/LLVMContext.h"
@@ -37,6 +38,10 @@ inline LLVMTargetLibraryInfoRef wrap(const TargetLibraryInfoImpl *P) {
 void llvm::initializeTarget(PassRegistry &Registry) {
   initializeTargetLibraryInfoWrapperPassPass(Registry);
   initializeTargetTransformInfoWrapperPassPass(Registry);
+}
+
+void LLVMInitializeTarget(LLVMPassRegistryRef R) {
+  initializeTarget(*unwrap(R));
 }
 
 LLVMTargetDataRef LLVMGetModuleDataLayout(LLVMModuleRef M) {
@@ -114,7 +119,7 @@ unsigned LLVMCallFrameAlignmentOfType(LLVMTargetDataRef TD, LLVMTypeRef Ty) {
 }
 
 unsigned LLVMPreferredAlignmentOfType(LLVMTargetDataRef TD, LLVMTypeRef Ty) {
-  return unwrap(TD)->getPrefTypeAlign(unwrap(Ty)).value();
+  return unwrap(TD)->getPrefTypeAlignment(unwrap(Ty));
 }
 
 unsigned LLVMPreferredAlignmentOfGlobal(LLVMTargetDataRef TD,

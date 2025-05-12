@@ -276,13 +276,10 @@ static bool rewrite(Function &F) {
 
       // Note: There are many more sources of documented UB, but this pass only
       // attempts to find UB triggered by propagation of poison.
-      SmallVector<const Value *, 4> NonPoisonOps;
-      SmallPtrSet<const Value *, 4> SeenNonPoisonOps;
+      SmallPtrSet<const Value *, 4> NonPoisonOps;
       getGuaranteedNonPoisonOps(&I, NonPoisonOps);
       for (const Value *Op : NonPoisonOps)
-        if (SeenNonPoisonOps.insert(Op).second)
-          CreateAssertNot(B,
-                          getPoisonFor(ValToPoison, const_cast<Value *>(Op)));
+        CreateAssertNot(B, getPoisonFor(ValToPoison, const_cast<Value *>(Op)));
 
       if (LocalCheck)
         if (auto *RI = dyn_cast<ReturnInst>(&I))

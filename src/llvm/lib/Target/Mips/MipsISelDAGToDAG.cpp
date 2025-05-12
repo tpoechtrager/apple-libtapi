@@ -36,7 +36,6 @@
 using namespace llvm;
 
 #define DEBUG_TYPE "mips-isel"
-#define PASS_NAME "MIPS DAG->DAG Pattern Instruction Selection"
 
 //===----------------------------------------------------------------------===//
 // Instruction Selector Implementation
@@ -297,8 +296,8 @@ void MipsDAGToDAGISel::Select(SDNode *Node) {
   case ISD::LOAD:
   case ISD::STORE:
     assert((Subtarget->systemSupportsUnalignedAccess() ||
-            cast<MemSDNode>(Node)->getAlign() >=
-                cast<MemSDNode>(Node)->getMemoryVT().getStoreSize()) &&
+            cast<MemSDNode>(Node)->getMemoryVT().getSizeInBits() / 8 <=
+            cast<MemSDNode>(Node)->getAlignment()) &&
            "Unexpected unaligned loads/stores.");
     break;
 #endif
@@ -323,7 +322,3 @@ SelectInlineAsmMemoryOperand(const SDValue &Op, unsigned ConstraintID,
   }
   return true;
 }
-
-char MipsDAGToDAGISel::ID = 0;
-
-INITIALIZE_PASS(MipsDAGToDAGISel, DEBUG_TYPE, PASS_NAME, false, false)

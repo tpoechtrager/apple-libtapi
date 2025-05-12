@@ -17,10 +17,11 @@ namespace llvm {
 
 class Target;
 
-/// The target for R600 GPUs.
-Target &getTheR600Target();
+/// The target which supports all AMD GPUs.  This will eventually
+///         be deprecated and there will be a R600 target and a GCN target.
+Target &getTheAMDGPUTarget();
 
-/// The target for GCN GPUs.
+/// The target for GCN GPUs
 Target &getTheGCNTarget();
 
 }

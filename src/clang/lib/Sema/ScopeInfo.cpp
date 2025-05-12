@@ -39,7 +39,6 @@ void FunctionScopeInfo::Clear() {
   FirstReturnLoc = SourceLocation();
   FirstCXXOrObjCTryLoc = SourceLocation();
   FirstSEHTryLoc = SourceLocation();
-  FoundImmediateEscalatingExpression = false;
 
   // Coroutine state
   FirstCoroutineStmtLoc = SourceLocation();
@@ -57,7 +56,6 @@ void FunctionScopeInfo::Clear() {
   ModifiedNonNullParams.clear();
   Blocks.clear();
   ByrefBlockVars.clear();
-  AddrLabels.clear();
 }
 
 static const NamedDecl *getBestPropertyDecl(const ObjCPropertyRefExpr *PropE) {
@@ -233,14 +231,14 @@ bool CapturingScopeInfo::isVLATypeCaptured(const VariableArrayType *VAT) const {
 }
 
 void LambdaScopeInfo::visitPotentialCaptures(
-    llvm::function_ref<void(ValueDecl *, Expr *)> Callback) const {
+    llvm::function_ref<void(VarDecl *, Expr *)> Callback) const {
   for (Expr *E : PotentiallyCapturingExprs) {
     if (auto *DRE = dyn_cast<DeclRefExpr>(E)) {
-      Callback(cast<ValueDecl>(DRE->getFoundDecl()), E);
+      Callback(cast<VarDecl>(DRE->getFoundDecl()), E);
     } else if (auto *ME = dyn_cast<MemberExpr>(E)) {
-      Callback(cast<ValueDecl>(ME->getMemberDecl()), E);
+      Callback(cast<VarDecl>(ME->getMemberDecl()), E);
     } else if (auto *FP = dyn_cast<FunctionParmPackExpr>(E)) {
-      for (ValueDecl *VD : *FP)
+      for (VarDecl *VD : *FP)
         Callback(VD, E);
     } else {
       llvm_unreachable("unexpected expression in potential captures list");

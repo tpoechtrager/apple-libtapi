@@ -1,4 +1,4 @@
-import("//third-party/unittest/unittest.gni")
+import("//llvm/utils/unittest/unittest.gni")
 
 unittest("IRTests") {
   deps = [
@@ -18,7 +18,6 @@ unittest("IRTests") {
     "CFGBuilder.cpp",
     "ConstantRangeTest.cpp",
     "ConstantsTest.cpp",
-    "CoreBindings.cpp",
     "DataLayoutTest.cpp",
     "DebugInfoTest.cpp",
     "DebugTypeODRUniquingTest.cpp",
@@ -33,12 +32,10 @@ unittest("IRTests") {
     "MDBuilderTest.cpp",
     "ManglerTest.cpp",
     "MetadataTest.cpp",
-    "ModuleSummaryIndexTest.cpp",
     "ModuleTest.cpp",
     "PassBuilderCallbacksTest.cpp",
     "PassManagerTest.cpp",
     "PatternMatch.cpp",
-    "StructuralHashTest.cpp",
     "ShuffleVectorInstTest.cpp",
     "TimePassesTest.cpp",
     "TypesTest.cpp",

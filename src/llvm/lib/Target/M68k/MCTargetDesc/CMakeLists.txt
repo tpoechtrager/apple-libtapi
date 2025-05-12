@@ -10,7 +10,6 @@ add_llvm_component_library(LLVMM68kDesc
   MC
   MCDisassembler
   Support
-  TargetParser
   M68kInfo
 
   ADD_TO_COMPONENT

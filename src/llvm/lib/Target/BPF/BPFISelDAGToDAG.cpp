@@ -34,7 +34,6 @@
 using namespace llvm;
 
 #define DEBUG_TYPE "bpf-isel"
-#define PASS_NAME "BPF DAG->DAG Pattern Instruction Selection"
 
 // Instruction Selector Implementation
 namespace {
@@ -46,12 +45,12 @@ class BPFDAGToDAGISel : public SelectionDAGISel {
   const BPFSubtarget *Subtarget;
 
 public:
-  static char ID;
-
-  BPFDAGToDAGISel() = delete;
-
   explicit BPFDAGToDAGISel(BPFTargetMachine &TM)
-      : SelectionDAGISel(ID, TM), Subtarget(nullptr) {}
+      : SelectionDAGISel(TM), Subtarget(nullptr) {}
+
+  StringRef getPassName() const override {
+    return "BPF DAG->DAG Pattern Instruction Selection";
+  }
 
   bool runOnMachineFunction(MachineFunction &MF) override {
     // Reset the subtarget each time through.
@@ -77,6 +76,7 @@ private:
 
   // Node preprocessing cases
   void PreprocessLoad(SDNode *Node, SelectionDAG::allnodes_iterator &I);
+  void PreprocessCopyToReg(SDNode *Node);
   void PreprocessTrunc(SDNode *Node, SelectionDAG::allnodes_iterator &I);
 
   // Find constants from a constant structure
@@ -95,10 +95,6 @@ private:
   std::map<const void *, val_vec_type> cs_vals_;
 };
 } // namespace
-
-char BPFDAGToDAGISel::ID = 0;
-
-INITIALIZE_PASS(BPFDAGToDAGISel, DEBUG_TYPE, PASS_NAME, false, false)
 
 // ComplexPattern used on BPF Load/Store instructions
 bool BPFDAGToDAGISel::SelectAddr(SDValue Addr, SDValue &Base, SDValue &Offset) {
@@ -171,7 +167,7 @@ bool BPFDAGToDAGISel::SelectInlineAsmMemoryOperand(
   }
 
   SDLoc DL(Op);
-  SDValue AluOp = CurDAG->getTargetConstant(ISD::ADD, DL, MVT::i32);
+  SDValue AluOp = CurDAG->getTargetConstant(ISD::ADD, DL, MVT::i32);;
   OutOps.push_back(Op0);
   OutOps.push_back(Op1);
   OutOps.push_back(AluOp);

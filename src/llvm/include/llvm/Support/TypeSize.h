@@ -16,7 +16,6 @@
 #define LLVM_SUPPORT_TYPESIZE_H
 
 #include "llvm/ADT/ArrayRef.h"
-#include "llvm/Support/Compiler.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -32,161 +31,292 @@ namespace llvm {
 /// done on a scalable vector. This function may not return.
 void reportInvalidSizeRequest(const char *Msg);
 
-/// StackOffset holds a fixed and a scalable offset in bytes.
-class StackOffset {
-  int64_t Fixed = 0;
-  int64_t Scalable = 0;
+template <typename LeafTy> struct LinearPolyBaseTypeTraits {};
 
-  StackOffset(int64_t Fixed, int64_t Scalable)
-      : Fixed(Fixed), Scalable(Scalable) {}
+//===----------------------------------------------------------------------===//
+// LinearPolyBase - a base class for linear polynomials with multiple
+// dimensions. This can e.g. be used to describe offsets that are have both a
+// fixed and scalable component.
+//===----------------------------------------------------------------------===//
 
+/// LinearPolyBase describes a linear polynomial:
+///  c0 * scale0 + c1 * scale1 + ... + cK * scaleK
+/// where the scale is implicit, so only the coefficients are encoded.
+template <typename LeafTy>
+class LinearPolyBase {
 public:
-  StackOffset() = default;
-  static StackOffset getFixed(int64_t Fixed) { return {Fixed, 0}; }
-  static StackOffset getScalable(int64_t Scalable) { return {0, Scalable}; }
-  static StackOffset get(int64_t Fixed, int64_t Scalable) {
-    return {Fixed, Scalable};
-  }
+  using ScalarTy = typename LinearPolyBaseTypeTraits<LeafTy>::ScalarTy;
+  static constexpr auto Dimensions = LinearPolyBaseTypeTraits<LeafTy>::Dimensions;
+  static_assert(Dimensions != std::numeric_limits<unsigned>::max(),
+                "Dimensions out of range");
 
-  /// Returns the fixed component of the stack.
-  int64_t getFixed() const { return Fixed; }
-
-  /// Returns the scalable component of the stack.
-  int64_t getScalable() const { return Scalable; }
-
-  // Arithmetic operations.
-  StackOffset operator+(const StackOffset &RHS) const {
-    return {Fixed + RHS.Fixed, Scalable + RHS.Scalable};
-  }
-  StackOffset operator-(const StackOffset &RHS) const {
-    return {Fixed - RHS.Fixed, Scalable - RHS.Scalable};
-  }
-  StackOffset &operator+=(const StackOffset &RHS) {
-    Fixed += RHS.Fixed;
-    Scalable += RHS.Scalable;
-    return *this;
-  }
-  StackOffset &operator-=(const StackOffset &RHS) {
-    Fixed -= RHS.Fixed;
-    Scalable -= RHS.Scalable;
-    return *this;
-  }
-  StackOffset operator-() const { return {-Fixed, -Scalable}; }
-
-  // Equality comparisons.
-  bool operator==(const StackOffset &RHS) const {
-    return Fixed == RHS.Fixed && Scalable == RHS.Scalable;
-  }
-  bool operator!=(const StackOffset &RHS) const {
-    return Fixed != RHS.Fixed || Scalable != RHS.Scalable;
-  }
-
-  // The bool operator returns true iff any of the components is non zero.
-  explicit operator bool() const { return Fixed != 0 || Scalable != 0; }
-};
-
-namespace details {
-
-// Base class for ElementCount and TypeSize below.
-template <typename LeafTy, typename ValueTy> class FixedOrScalableQuantity {
-public:
-  using ScalarTy = ValueTy;
+private:
+  std::array<ScalarTy, Dimensions> Coefficients;
 
 protected:
-  ScalarTy Quantity = 0;
-  bool Scalable = false;
+  LinearPolyBase(ArrayRef<ScalarTy> Values) {
+    std::copy(Values.begin(), Values.end(), Coefficients.begin());
+  }
 
-  constexpr FixedOrScalableQuantity() = default;
-  constexpr FixedOrScalableQuantity(ScalarTy Quantity, bool Scalable)
-      : Quantity(Quantity), Scalable(Scalable) {}
-
-  friend constexpr LeafTy &operator+=(LeafTy &LHS, const LeafTy &RHS) {
-    assert(LHS.Scalable == RHS.Scalable && "Incompatible types");
-    LHS.Quantity += RHS.Quantity;
+public:
+  friend LeafTy &operator+=(LeafTy &LHS, const LeafTy &RHS) {
+    for (unsigned I=0; I<Dimensions; ++I)
+      LHS.Coefficients[I] += RHS.Coefficients[I];
     return LHS;
   }
 
-  friend constexpr LeafTy &operator-=(LeafTy &LHS, const LeafTy &RHS) {
-    assert(LHS.Scalable == RHS.Scalable && "Incompatible types");
-    LHS.Quantity -= RHS.Quantity;
+  friend LeafTy &operator-=(LeafTy &LHS, const LeafTy &RHS) {
+    for (unsigned I=0; I<Dimensions; ++I)
+      LHS.Coefficients[I] -= RHS.Coefficients[I];
     return LHS;
   }
 
-  friend constexpr LeafTy &operator*=(LeafTy &LHS, ScalarTy RHS) {
-    LHS.Quantity *= RHS;
+  friend LeafTy &operator*=(LeafTy &LHS, ScalarTy RHS) {
+    for (auto &C : LHS.Coefficients)
+      C *= RHS;
     return LHS;
   }
 
-  friend constexpr LeafTy operator+(const LeafTy &LHS, const LeafTy &RHS) {
+  friend LeafTy operator+(const LeafTy &LHS, const LeafTy &RHS) {
     LeafTy Copy = LHS;
     return Copy += RHS;
   }
 
-  friend constexpr LeafTy operator-(const LeafTy &LHS, const LeafTy &RHS) {
+  friend LeafTy operator-(const LeafTy &LHS, const LeafTy &RHS) {
     LeafTy Copy = LHS;
     return Copy -= RHS;
   }
 
-  friend constexpr LeafTy operator*(const LeafTy &LHS, ScalarTy RHS) {
+  friend LeafTy operator*(const LeafTy &LHS, ScalarTy RHS) {
     LeafTy Copy = LHS;
     return Copy *= RHS;
   }
 
   template <typename U = ScalarTy>
-  friend constexpr std::enable_if_t<std::is_signed_v<U>, LeafTy>
+  friend typename std::enable_if_t<std::is_signed<U>::value, LeafTy>
+  operator-(const LeafTy &LHS) {
+    LeafTy Copy = LHS;
+    return Copy *= -1;
+  }
+
+  bool operator==(const LinearPolyBase &RHS) const {
+    return std::equal(Coefficients.begin(), Coefficients.end(),
+                      RHS.Coefficients.begin());
+  }
+
+  bool operator!=(const LinearPolyBase &RHS) const {
+    return !(*this == RHS);
+  }
+
+  bool isZero() const {
+    return all_of(Coefficients, [](const ScalarTy &C) { return C == 0; });
+  }
+  bool isNonZero() const { return !isZero(); }
+  explicit operator bool() const { return isNonZero(); }
+
+  ScalarTy getValue(unsigned Dim) const { return Coefficients[Dim]; }
+};
+
+//===----------------------------------------------------------------------===//
+// StackOffset - Represent an offset with named fixed and scalable components.
+//===----------------------------------------------------------------------===//
+
+class StackOffset;
+template <> struct LinearPolyBaseTypeTraits<StackOffset> {
+  using ScalarTy = int64_t;
+  static constexpr unsigned Dimensions = 2;
+};
+
+/// StackOffset is a class to represent an offset with 2 dimensions,
+/// named fixed and scalable, respectively. This class allows a value for both
+/// dimensions to depict e.g. "8 bytes and 16 scalable bytes", which is needed
+/// to represent stack offsets.
+class StackOffset : public LinearPolyBase<StackOffset> {
+protected:
+  StackOffset(ScalarTy Fixed, ScalarTy Scalable)
+      : LinearPolyBase<StackOffset>({Fixed, Scalable}) {}
+
+public:
+  StackOffset() : StackOffset({0, 0}) {}
+  StackOffset(const LinearPolyBase<StackOffset> &Other)
+      : LinearPolyBase<StackOffset>(Other) {}
+  static StackOffset getFixed(ScalarTy Fixed) { return {Fixed, 0}; }
+  static StackOffset getScalable(ScalarTy Scalable) { return {0, Scalable}; }
+  static StackOffset get(ScalarTy Fixed, ScalarTy Scalable) {
+    return {Fixed, Scalable};
+  }
+
+  ScalarTy getFixed() const { return this->getValue(0); }
+  ScalarTy getScalable() const { return this->getValue(1); }
+};
+
+//===----------------------------------------------------------------------===//
+// UnivariateLinearPolyBase - a base class for linear polynomials with multiple
+// dimensions, but where only one dimension can be set at any time.
+// This can e.g. be used to describe sizes that are either fixed or scalable.
+//===----------------------------------------------------------------------===//
+
+/// UnivariateLinearPolyBase is a base class for ElementCount and TypeSize.
+/// Like LinearPolyBase it tries to represent a linear polynomial
+/// where only one dimension can be set at any time, e.g.
+///   0 * scale0 + 0 * scale1 + ... + cJ * scaleJ + ... + 0 * scaleK
+/// The dimension that is set is the univariate dimension.
+template <typename LeafTy>
+class UnivariateLinearPolyBase {
+public:
+  using ScalarTy = typename LinearPolyBaseTypeTraits<LeafTy>::ScalarTy;
+  static constexpr auto Dimensions = LinearPolyBaseTypeTraits<LeafTy>::Dimensions;
+  static_assert(Dimensions != std::numeric_limits<unsigned>::max(),
+                "Dimensions out of range");
+
+protected:
+  ScalarTy Value;         // The value at the univeriate dimension.
+  unsigned UnivariateDim; // The univeriate dimension.
+
+  UnivariateLinearPolyBase(ScalarTy Val, unsigned UnivariateDim)
+      : Value(Val), UnivariateDim(UnivariateDim) {
+    assert(UnivariateDim < Dimensions && "Dimension out of range");
+  }
+
+  friend LeafTy &operator+=(LeafTy &LHS, const LeafTy &RHS) {
+    assert(LHS.UnivariateDim == RHS.UnivariateDim && "Invalid dimensions");
+    LHS.Value += RHS.Value;
+    return LHS;
+  }
+
+  friend LeafTy &operator-=(LeafTy &LHS, const LeafTy &RHS) {
+    assert(LHS.UnivariateDim == RHS.UnivariateDim && "Invalid dimensions");
+    LHS.Value -= RHS.Value;
+    return LHS;
+  }
+
+  friend LeafTy &operator*=(LeafTy &LHS, ScalarTy RHS) {
+    LHS.Value *= RHS;
+    return LHS;
+  }
+
+  friend LeafTy operator+(const LeafTy &LHS, const LeafTy &RHS) {
+    LeafTy Copy = LHS;
+    return Copy += RHS;
+  }
+
+  friend LeafTy operator-(const LeafTy &LHS, const LeafTy &RHS) {
+    LeafTy Copy = LHS;
+    return Copy -= RHS;
+  }
+
+  friend LeafTy operator*(const LeafTy &LHS, ScalarTy RHS) {
+    LeafTy Copy = LHS;
+    return Copy *= RHS;
+  }
+
+  template <typename U = ScalarTy>
+  friend std::enable_if_t<std::is_signed<U>::value, LeafTy>
   operator-(const LeafTy &LHS) {
     LeafTy Copy = LHS;
     return Copy *= -1;
   }
 
 public:
-  constexpr bool operator==(const FixedOrScalableQuantity &RHS) const {
-    return Quantity == RHS.Quantity && Scalable == RHS.Scalable;
+  bool operator==(const UnivariateLinearPolyBase &RHS) const {
+    return Value == RHS.Value && UnivariateDim == RHS.UnivariateDim;
   }
 
-  constexpr bool operator!=(const FixedOrScalableQuantity &RHS) const {
-    return Quantity != RHS.Quantity || Scalable != RHS.Scalable;
+  bool operator!=(const UnivariateLinearPolyBase &RHS) const {
+    return !(*this == RHS);
   }
 
-  constexpr bool isZero() const { return Quantity == 0; }
-
-  constexpr bool isNonZero() const { return Quantity != 0; }
-
+  bool isZero() const { return !Value; }
+  bool isNonZero() const { return !isZero(); }
   explicit operator bool() const { return isNonZero(); }
-
-  /// Add \p RHS to the underlying quantity.
-  constexpr LeafTy getWithIncrement(ScalarTy RHS) const {
-    return LeafTy::get(Quantity + RHS, Scalable);
+  ScalarTy getValue(unsigned Dim) const {
+    return Dim == UnivariateDim ? Value : 0;
   }
 
-  /// Returns the minimum value this quantity can represent.
-  constexpr ScalarTy getKnownMinValue() const { return Quantity; }
+  /// Add \p RHS to the value at the univariate dimension.
+  LeafTy getWithIncrement(ScalarTy RHS) const {
+    return static_cast<LeafTy>(
+        UnivariateLinearPolyBase(Value + RHS, UnivariateDim));
+  }
 
-  /// Returns whether the quantity is scaled by a runtime quantity (vscale).
-  constexpr bool isScalable() const { return Scalable; }
+  /// Subtract \p RHS from the value at the univariate dimension.
+  LeafTy getWithDecrement(ScalarTy RHS) const {
+    return static_cast<LeafTy>(
+        UnivariateLinearPolyBase(Value - RHS, UnivariateDim));
+  }
+};
 
+
+//===----------------------------------------------------------------------===//
+// LinearPolySize - base class for fixed- or scalable sizes.
+//  ^  ^
+//  |  |
+//  |  +----- ElementCount - Leaf class to represent an element count
+//  |                        (vscale x unsigned)
+//  |
+//  +-------- TypeSize - Leaf class to represent a type size
+//                       (vscale x uint64_t)
+//===----------------------------------------------------------------------===//
+
+/// LinearPolySize is a base class to represent sizes. It is either
+/// fixed-sized or it is scalable-sized, but it cannot be both.
+template <typename LeafTy>
+class LinearPolySize : public UnivariateLinearPolyBase<LeafTy> {
+  // Make the parent class a friend, so that it can access the protected
+  // conversion/copy-constructor for UnivariatePolyBase<LeafTy> ->
+  // LinearPolySize<LeafTy>.
+  friend class UnivariateLinearPolyBase<LeafTy>;
+
+public:
+  using ScalarTy = typename UnivariateLinearPolyBase<LeafTy>::ScalarTy;
+  enum Dims : unsigned { FixedDim = 0, ScalableDim = 1 };
+
+protected:
+  LinearPolySize(ScalarTy MinVal, Dims D)
+      : UnivariateLinearPolyBase<LeafTy>(MinVal, D) {}
+
+  LinearPolySize(const UnivariateLinearPolyBase<LeafTy> &V)
+      : UnivariateLinearPolyBase<LeafTy>(V) {}
+
+public:
+
+  static LeafTy getFixed(ScalarTy MinVal) {
+    return static_cast<LeafTy>(LinearPolySize(MinVal, FixedDim));
+  }
+  static LeafTy getScalable(ScalarTy MinVal) {
+    return static_cast<LeafTy>(LinearPolySize(MinVal, ScalableDim));
+  }
+  static LeafTy get(ScalarTy MinVal, bool Scalable) {
+    return static_cast<LeafTy>(
+        LinearPolySize(MinVal, Scalable ? ScalableDim : FixedDim));
+  }
+  static LeafTy getNull() { return get(0, false); }
+
+  /// Returns the minimum value this size can represent.
+  ScalarTy getKnownMinValue() const { return this->Value; }
+  /// Returns whether the size is scaled by a runtime quantity (vscale).
+  bool isScalable() const { return this->UnivariateDim == ScalableDim; }
   /// A return value of true indicates we know at compile time that the number
   /// of elements (vscale * Min) is definitely even. However, returning false
   /// does not guarantee that the total number of elements is odd.
-  constexpr bool isKnownEven() const { return (getKnownMinValue() & 0x1) == 0; }
-
+  bool isKnownEven() const { return (getKnownMinValue() & 0x1) == 0; }
   /// This function tells the caller whether the element count is known at
   /// compile time to be a multiple of the scalar value RHS.
-  constexpr bool isKnownMultipleOf(ScalarTy RHS) const {
+  bool isKnownMultipleOf(ScalarTy RHS) const {
     return getKnownMinValue() % RHS == 0;
   }
 
   // Return the minimum value with the assumption that the count is exact.
   // Use in places where a scalable count doesn't make sense (e.g. non-vector
   // types, or vectors in backends which don't support scalable vectors).
-  constexpr ScalarTy getFixedValue() const {
+  ScalarTy getFixedValue() const {
     assert(!isScalable() &&
            "Request for a fixed element count on a scalable object");
     return getKnownMinValue();
   }
 
-  // For some cases, quantity ordering between scalable and fixed quantity types
-  // cannot be determined at compile time, so such comparisons aren't allowed.
+  // For some cases, size ordering between scalable and fixed size types cannot
+  // be determined at compile time, so such comparisons aren't allowed.
   //
   // e.g. <vscale x 2 x i16> could be bigger than <4 x i32> with a runtime
   // vscale >= 5, equal sized with a vscale of 4, and smaller with
@@ -195,29 +325,25 @@ public:
   // All the functions below make use of the fact vscale is always >= 1, which
   // means that <vscale x 4 x i32> is guaranteed to be >= <4 x i32>, etc.
 
-  static constexpr bool isKnownLT(const FixedOrScalableQuantity &LHS,
-                                  const FixedOrScalableQuantity &RHS) {
+  static bool isKnownLT(const LinearPolySize &LHS, const LinearPolySize &RHS) {
     if (!LHS.isScalable() || RHS.isScalable())
       return LHS.getKnownMinValue() < RHS.getKnownMinValue();
     return false;
   }
 
-  static constexpr bool isKnownGT(const FixedOrScalableQuantity &LHS,
-                                  const FixedOrScalableQuantity &RHS) {
+  static bool isKnownGT(const LinearPolySize &LHS, const LinearPolySize &RHS) {
     if (LHS.isScalable() || !RHS.isScalable())
       return LHS.getKnownMinValue() > RHS.getKnownMinValue();
     return false;
   }
 
-  static constexpr bool isKnownLE(const FixedOrScalableQuantity &LHS,
-                                  const FixedOrScalableQuantity &RHS) {
+  static bool isKnownLE(const LinearPolySize &LHS, const LinearPolySize &RHS) {
     if (!LHS.isScalable() || RHS.isScalable())
       return LHS.getKnownMinValue() <= RHS.getKnownMinValue();
     return false;
   }
 
-  static constexpr bool isKnownGE(const FixedOrScalableQuantity &LHS,
-                                  const FixedOrScalableQuantity &RHS) {
+  static bool isKnownGE(const LinearPolySize &LHS, const LinearPolySize &RHS) {
     if (LHS.isScalable() || !RHS.isScalable())
       return LHS.getKnownMinValue() >= RHS.getKnownMinValue();
     return false;
@@ -231,32 +357,32 @@ public:
   /// The caller is recommended to use this function in combination with
   /// isKnownMultipleOf(RHS), which lets the caller know if it's possible to
   /// perform a lossless divide by RHS.
-  constexpr LeafTy divideCoefficientBy(ScalarTy RHS) const {
-    return LeafTy::get(getKnownMinValue() / RHS, isScalable());
+  LeafTy divideCoefficientBy(ScalarTy RHS) const {
+    return static_cast<LeafTy>(
+        LinearPolySize::get(getKnownMinValue() / RHS, isScalable()));
   }
 
-  constexpr LeafTy multiplyCoefficientBy(ScalarTy RHS) const {
-    return LeafTy::get(getKnownMinValue() * RHS, isScalable());
+  LeafTy multiplyCoefficientBy(ScalarTy RHS) const {
+    return static_cast<LeafTy>(
+        LinearPolySize::get(getKnownMinValue() * RHS, isScalable()));
   }
 
-  constexpr LeafTy coefficientNextPowerOf2() const {
-    return LeafTy::get(
+  LeafTy coefficientNextPowerOf2() const {
+    return static_cast<LeafTy>(LinearPolySize::get(
         static_cast<ScalarTy>(llvm::NextPowerOf2(getKnownMinValue())),
-        isScalable());
+        isScalable()));
   }
 
   /// Returns true if there exists a value X where RHS.multiplyCoefficientBy(X)
-  /// will result in a value whose quantity matches our own.
-  constexpr bool
-  hasKnownScalarFactor(const FixedOrScalableQuantity &RHS) const {
+  /// will result in a value whose size matches our own.
+  bool hasKnownScalarFactor(const LinearPolySize &RHS) const {
     return isScalable() == RHS.isScalable() &&
            getKnownMinValue() % RHS.getKnownMinValue() == 0;
   }
 
   /// Returns a value X where RHS.multiplyCoefficientBy(X) will result in a
-  /// value whose quantity matches our own.
-  constexpr ScalarTy
-  getKnownScalarFactor(const FixedOrScalableQuantity &RHS) const {
+  /// value whose size matches our own.
+  ScalarTy getKnownScalarFactor(const LinearPolySize &RHS) const {
     assert(hasKnownScalarFactor(RHS) && "Expected RHS to be a known factor!");
     return getKnownMinValue() / RHS.getKnownMinValue();
   }
@@ -269,77 +395,54 @@ public:
   }
 };
 
-} // namespace details
-
-// Stores the number of elements for a type and whether this type is fixed
-// (N-Elements) or scalable (e.g., SVE).
-//  - ElementCount::getFixed(1) : A scalar value.
-//  - ElementCount::getFixed(2) : A vector type holding 2 values.
-//  - ElementCount::getScalable(4) : A scalable vector type holding 4 values.
-class ElementCount
-    : public details::FixedOrScalableQuantity<ElementCount, unsigned> {
-  constexpr ElementCount(ScalarTy MinVal, bool Scalable)
-      : FixedOrScalableQuantity(MinVal, Scalable) {}
-
-  constexpr ElementCount(
-      const FixedOrScalableQuantity<ElementCount, unsigned> &V)
-      : FixedOrScalableQuantity(V) {}
-
-public:
-  constexpr ElementCount() : FixedOrScalableQuantity() {}
-
-  static constexpr ElementCount getFixed(ScalarTy MinVal) {
-    return ElementCount(MinVal, false);
-  }
-  static constexpr ElementCount getScalable(ScalarTy MinVal) {
-    return ElementCount(MinVal, true);
-  }
-  static constexpr ElementCount get(ScalarTy MinVal, bool Scalable) {
-    return ElementCount(MinVal, Scalable);
-  }
-
-  /// Exactly one element.
-  constexpr bool isScalar() const {
-    return !isScalable() && getKnownMinValue() == 1;
-  }
-  /// One or more elements.
-  constexpr bool isVector() const {
-    return (isScalable() && getKnownMinValue() != 0) || getKnownMinValue() > 1;
-  }
+class ElementCount;
+template <> struct LinearPolyBaseTypeTraits<ElementCount> {
+  using ScalarTy = unsigned;
+  static constexpr unsigned Dimensions = 2;
 };
 
-// Stores the size of a type. If the type is of fixed size, it will represent
-// the exact size. If the type is a scalable vector, it will represent the known
-// minimum size.
-class TypeSize : public details::FixedOrScalableQuantity<TypeSize, uint64_t> {
-  TypeSize(const FixedOrScalableQuantity<TypeSize, uint64_t> &V)
-      : FixedOrScalableQuantity(V) {}
-
+class ElementCount : public LinearPolySize<ElementCount> {
 public:
-  constexpr TypeSize(ScalarTy Quantity, bool Scalable)
-      : FixedOrScalableQuantity(Quantity, Scalable) {}
+  ElementCount() : LinearPolySize(LinearPolySize::getNull()) {}
 
-  static constexpr TypeSize getFixed(ScalarTy ExactSize) {
-    return TypeSize(ExactSize, false);
-  }
-  static constexpr TypeSize getScalable(ScalarTy MinimumSize) {
-    return TypeSize(MinimumSize, true);
-  }
-  static constexpr TypeSize get(ScalarTy Quantity, bool Scalable) {
-    return TypeSize(Quantity, Scalable);
-  }
-  static constexpr TypeSize Fixed(ScalarTy ExactSize) {
-    return TypeSize(ExactSize, false);
-  }
-  static constexpr TypeSize Scalable(ScalarTy MinimumSize) {
-    return TypeSize(MinimumSize, true);
-  }
+  ElementCount(const LinearPolySize<ElementCount> &V) : LinearPolySize(V) {}
 
-  LLVM_DEPRECATED("Use getFixedValue() instead", "getFixedValue")
-  constexpr ScalarTy getFixedSize() const { return getFixedValue(); }
-  
-  LLVM_DEPRECATED("Use getKnownMinValue() instead", "getKnownMinValue")
-  constexpr ScalarTy getKnownMinSize() const { return getKnownMinValue(); }
+  /// Counting predicates.
+  ///
+  ///@{ Number of elements..
+  /// Exactly one element.
+  bool isScalar() const { return !isScalable() && getKnownMinValue() == 1; }
+  /// One or more elements.
+  bool isVector() const {
+    return (isScalable() && getKnownMinValue() != 0) || getKnownMinValue() > 1;
+  }
+  ///@}
+};
+
+// This class is used to represent the size of types. If the type is of fixed
+class TypeSize;
+template <> struct LinearPolyBaseTypeTraits<TypeSize> {
+  using ScalarTy = uint64_t;
+  static constexpr unsigned Dimensions = 2;
+};
+
+// TODO: Most functionality in this class will gradually be phased out
+// so it will resemble LinearPolySize as much as possible.
+//
+// TypeSize is used to represent the size of types. If the type is of fixed
+// size, it will represent the exact size. If the type is a scalable vector,
+// it will represent the known minimum size.
+class TypeSize : public LinearPolySize<TypeSize> {
+public:
+  TypeSize(const LinearPolySize<TypeSize> &V) : LinearPolySize(V) {}
+  TypeSize(ScalarTy MinVal, bool IsScalable)
+      : LinearPolySize(LinearPolySize::get(MinVal, IsScalable)) {}
+
+  static TypeSize Fixed(ScalarTy MinVal) { return TypeSize(MinVal, false); }
+  static TypeSize Scalable(ScalarTy MinVal) { return TypeSize(MinVal, true); }
+
+  ScalarTy getFixedSize() const { return getFixedValue(); }
+  ScalarTy getKnownMinSize() const { return getKnownMinValue(); }
 
   // All code for this class below this point is needed because of the
   // temporary implicit conversion to uint64_t. The operator overloads are
@@ -369,25 +472,25 @@ public:
 
   // Additional operators needed to avoid ambiguous parses
   // because of the implicit conversion hack.
-  friend constexpr TypeSize operator*(const TypeSize &LHS, const int RHS) {
+  friend TypeSize operator*(const TypeSize &LHS, const int RHS) {
     return LHS * (ScalarTy)RHS;
   }
-  friend constexpr TypeSize operator*(const TypeSize &LHS, const unsigned RHS) {
+  friend TypeSize operator*(const TypeSize &LHS, const unsigned RHS) {
     return LHS * (ScalarTy)RHS;
   }
-  friend constexpr TypeSize operator*(const TypeSize &LHS, const int64_t RHS) {
+  friend TypeSize operator*(const TypeSize &LHS, const int64_t RHS) {
     return LHS * (ScalarTy)RHS;
   }
-  friend constexpr TypeSize operator*(const int LHS, const TypeSize &RHS) {
+  friend TypeSize operator*(const int LHS, const TypeSize &RHS) {
     return RHS * LHS;
   }
-  friend constexpr TypeSize operator*(const unsigned LHS, const TypeSize &RHS) {
+  friend TypeSize operator*(const unsigned LHS, const TypeSize &RHS) {
     return RHS * LHS;
   }
-  friend constexpr TypeSize operator*(const int64_t LHS, const TypeSize &RHS) {
+  friend TypeSize operator*(const int64_t LHS, const TypeSize &RHS) {
     return RHS * LHS;
   }
-  friend constexpr TypeSize operator*(const uint64_t LHS, const TypeSize &RHS) {
+  friend TypeSize operator*(const uint64_t LHS, const TypeSize &RHS) {
     return RHS * LHS;
   }
 };
@@ -397,21 +500,20 @@ public:
 //===----------------------------------------------------------------------===//
 
 /// Returns a TypeSize with a known minimum size that is the next integer
-/// (mod 2**64) that is greater than or equal to \p Quantity and is a multiple
+/// (mod 2**64) that is greater than or equal to \p Value and is a multiple
 /// of \p Align. \p Align must be non-zero.
 ///
 /// Similar to the alignTo functions in MathExtras.h
-inline constexpr TypeSize alignTo(TypeSize Size, uint64_t Align) {
+inline TypeSize alignTo(TypeSize Size, uint64_t Align) {
   assert(Align != 0u && "Align must be non-zero");
   return {(Size.getKnownMinValue() + Align - 1) / Align * Align,
           Size.isScalable()};
 }
 
-/// Stream operator function for `FixedOrScalableQuantity`.
-template <typename LeafTy, typename ScalarTy>
-inline raw_ostream &
-operator<<(raw_ostream &OS,
-           const details::FixedOrScalableQuantity<LeafTy, ScalarTy> &PS) {
+/// Stream operator function for `LinearPolySize`.
+template <typename LeafTy>
+inline raw_ostream &operator<<(raw_ostream &OS,
+                               const LinearPolySize<LeafTy> &PS) {
   PS.print(OS);
   return OS;
 }
@@ -430,6 +532,7 @@ template <> struct DenseMapInfo<ElementCount, void> {
 
     return HashVal;
   }
+
   static bool isEqual(const ElementCount &LHS, const ElementCount &RHS) {
     return LHS == RHS;
   }

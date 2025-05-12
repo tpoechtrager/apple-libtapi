@@ -14,13 +14,13 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "clang/StaticAnalyzer/Checkers/BuiltinCheckerRegistration.h"
 #include "clang/AST/Attr.h"
 #include "clang/AST/Decl.h"
 #include "clang/AST/DeclObjC.h"
 #include "clang/AST/RecursiveASTVisitor.h"
 #include "clang/AST/StmtVisitor.h"
 #include "clang/Lex/Lexer.h"
-#include "clang/StaticAnalyzer/Checkers/BuiltinCheckerRegistration.h"
 #include "clang/StaticAnalyzer/Core/BugReporter/BugReporter.h"
 #include "clang/StaticAnalyzer/Core/BugReporter/BugType.h"
 #include "clang/StaticAnalyzer/Core/Checker.h"
@@ -28,9 +28,7 @@
 #include "clang/StaticAnalyzer/Core/PathSensitive/CallEvent.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/CheckerContext.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/ExprEngine.h"
-#include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/Unicode.h"
-#include <optional>
 
 using namespace clang;
 using namespace ento;
@@ -848,9 +846,10 @@ void NonLocalizedStringChecker::checkPreObjCMessage(const ObjCMethodCall &msg,
   if (argumentNumber < 0) { // There was no match in UIMethods
     if (const Decl *D = msg.getDecl()) {
       if (const ObjCMethodDecl *OMD = dyn_cast_or_null<ObjCMethodDecl>(D)) {
-        for (auto [Idx, FormalParam] : llvm::enumerate(OMD->parameters())) {
-          if (isAnnotatedAsTakingLocalized(FormalParam)) {
-            argumentNumber = Idx;
+        auto formals = OMD->parameters();
+        for (unsigned i = 0, ei = formals.size(); i != ei; ++i) {
+          if (isAnnotatedAsTakingLocalized(formals[i])) {
+            argumentNumber = i;
             break;
           }
         }
@@ -1005,7 +1004,7 @@ NonLocalizedStringBRVisitor::VisitNode(const ExplodedNode *Succ,
   if (Satisfied)
     return nullptr;
 
-  std::optional<StmtPoint> Point = Succ->getLocation().getAs<StmtPoint>();
+  Optional<StmtPoint> Point = Succ->getLocation().getAs<StmtPoint>();
   if (!Point)
     return nullptr;
 
@@ -1142,7 +1141,7 @@ void EmptyLocalizationContextChecker::MethodCrawler::VisitObjCMessageExpr(
     SE = Mgr.getSourceManager().getSLocEntry(SLInfo.first);
   }
 
-  std::optional<llvm::MemoryBufferRef> BF =
+  llvm::Optional<llvm::MemoryBufferRef> BF =
       Mgr.getSourceManager().getBufferOrNone(SLInfo.first, SL);
   if (!BF)
     return;

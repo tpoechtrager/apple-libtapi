@@ -22,7 +22,6 @@ extern const char *const CXXObjectLifecycle;
 extern const char *const CXXMoveSemantics;
 extern const char *const SecurityError;
 extern const char *const UnusedCode;
-extern const char *const TaintedData;
 } // namespace categories
 } // namespace ento
 } // namespace clang

@@ -14,7 +14,6 @@
 #include "clang/StaticAnalyzer/Core/BugReporter/BugReporter.h"
 #include "clang/StaticAnalyzer/Core/BugReporter/BugType.h"
 #include "clang/StaticAnalyzer/Core/Checker.h"
-#include <optional>
 
 using namespace clang;
 using namespace ento;
@@ -77,53 +76,15 @@ public:
               (AccSpec == AS_none && RD->isClass()))
             return false;
 
-          auto hasRefInBase = clang::hasPublicMethodInBase(Base, "ref");
-          auto hasDerefInBase = clang::hasPublicMethodInBase(Base, "deref");
-
-          bool hasRef = hasRefInBase && *hasRefInBase != nullptr;
-          bool hasDeref = hasDerefInBase && *hasDerefInBase != nullptr;
-
-          QualType T = Base->getType();
-          if (T.isNull())
+          llvm::Optional<const CXXRecordDecl *> RefCntblBaseRD =
+              isRefCountable(Base);
+          if (!RefCntblBaseRD || !(*RefCntblBaseRD))
             return false;
 
-          const CXXRecordDecl *C = T->getAsCXXRecordDecl();
-          if (!C)
-            return false;
-          bool AnyInconclusiveBase = false;
-          const auto hasPublicRefInBase =
-              [&AnyInconclusiveBase](const CXXBaseSpecifier *Base,
-                                     CXXBasePath &) {
-                auto hasRefInBase = clang::hasPublicMethodInBase(Base, "ref");
-                if (!hasRefInBase) {
-                  AnyInconclusiveBase = true;
-                  return false;
-                }
-                return (*hasRefInBase) != nullptr;
-              };
-          const auto hasPublicDerefInBase = [&AnyInconclusiveBase](
-                                                const CXXBaseSpecifier *Base,
-                                                CXXBasePath &) {
-            auto hasDerefInBase = clang::hasPublicMethodInBase(Base, "deref");
-            if (!hasDerefInBase) {
-              AnyInconclusiveBase = true;
-              return false;
-            }
-            return (*hasDerefInBase) != nullptr;
-          };
-          CXXBasePaths Paths;
-          Paths.setOrigin(C);
-          hasRef = hasRef || C->lookupInBases(hasPublicRefInBase, Paths,
-                                              /*LookupInDependent =*/true);
-          hasDeref = hasDeref || C->lookupInBases(hasPublicDerefInBase, Paths,
-                                                  /*LookupInDependent =*/true);
-          if (AnyInconclusiveBase || !hasRef || !hasDeref)
-            return false;
-
-          const auto *Dtor = C->getDestructor();
+          const auto *Dtor = (*RefCntblBaseRD)->getDestructor();
           if (!Dtor || !Dtor->isVirtual()) {
             ProblematicBaseSpecifier = Base;
-            ProblematicBaseClass = C;
+            ProblematicBaseClass = *RefCntblBaseRD;
             return true;
           }
 

@@ -22,6 +22,7 @@
 #include "clang/AST/Decl.h"
 #include "clang/AST/Expr.h"
 #include "clang/AST/StmtVisitor.h"
+#include "llvm/ADT/Optional.h"
 
 namespace clang {
 namespace interp {
@@ -35,7 +36,7 @@ template <class Emitter>
 class ByteCodeStmtGen final : public ByteCodeExprGen<Emitter> {
   using LabelTy = typename Emitter::LabelTy;
   using AddrTy = typename Emitter::AddrTy;
-  using OptLabelTy = std::optional<LabelTy>;
+  using OptLabelTy = llvm::Optional<LabelTy>;
   using CaseMap = llvm::DenseMap<const SwitchCase *, LabelTy>;
 
 public:
@@ -54,22 +55,16 @@ private:
   // Statement visitors.
   bool visitStmt(const Stmt *S);
   bool visitCompoundStmt(const CompoundStmt *S);
-  bool visitLoopBody(const Stmt *S);
   bool visitDeclStmt(const DeclStmt *DS);
   bool visitReturnStmt(const ReturnStmt *RS);
   bool visitIfStmt(const IfStmt *IS);
-  bool visitWhileStmt(const WhileStmt *S);
-  bool visitDoStmt(const DoStmt *S);
-  bool visitForStmt(const ForStmt *S);
-  bool visitCXXForRangeStmt(const CXXForRangeStmt *S);
-  bool visitBreakStmt(const BreakStmt *S);
-  bool visitContinueStmt(const ContinueStmt *S);
-  bool visitSwitchStmt(const SwitchStmt *S);
-  bool visitCaseStmt(const CaseStmt *S);
-  bool visitDefaultStmt(const DefaultStmt *S);
 
+  /// Compiles a variable declaration.
+  bool visitVarDecl(const VarDecl *VD);
+
+private:
   /// Type of the expression returned by the function.
-  std::optional<PrimType> ReturnType;
+  llvm::Optional<PrimType> ReturnType;
 
   /// Switch case mapping.
   CaseMap CaseLabels;

@@ -54,6 +54,7 @@
 
 #include "llvm/ADT/StringMap.h"
 #include "llvm/Support/Regex.h"
+#include "llvm/Support/TrigramIndex.h"
 #include <memory>
 #include <string>
 #include <vector>
@@ -127,6 +128,7 @@ protected:
 
   private:
     StringMap<unsigned> Strings;
+    TrigramIndex Trigrams;
     std::vector<std::pair<std::unique_ptr<Regex>, unsigned>> RegExes;
   };
 
@@ -153,4 +155,5 @@ protected:
 
 }  // namespace llvm
 
-#endif // LLVM_SUPPORT_SPECIALCASELIST_H
+#endif  // LLVM_SUPPORT_SPECIALCASELIST_H
+

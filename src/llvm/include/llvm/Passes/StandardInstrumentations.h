@@ -52,8 +52,6 @@ private:
 
   bool shouldPrintBeforePass(StringRef PassID);
   bool shouldPrintAfterPass(StringRef PassID);
-  bool shouldPrintPassNumbers();
-  bool shouldPrintAtPassNumber();
 
   using PrintModuleDesc = std::tuple<const Module *, std::string, StringRef>;
 
@@ -64,9 +62,6 @@ private:
   /// Stack of Module description, enough to print the module after a given
   /// pass.
   SmallVector<PrintModuleDesc, 2> ModuleDescStack;
-
-  /// Used for print-at-pass-number
-  unsigned CurrentPassNumber = 0;
 };
 
 class OptNoneInstrumentation {
@@ -79,12 +74,11 @@ private:
   bool shouldRun(StringRef PassID, Any IR);
 };
 
-class OptPassGateInstrumentation {
-  LLVMContext &Context;
+class OptBisectInstrumentation {
   bool HasWrittenIR = false;
+
 public:
-  OptPassGateInstrumentation(LLVMContext &Context) : Context(Context) {}
-  bool shouldRun(StringRef PassName, Any IR);
+  OptBisectInstrumentation() = default;
   void registerCallbacks(PassInstrumentationCallbacks &PIC);
 };
 
@@ -132,7 +126,7 @@ public:
   // in the Graph (BBGuard). That is if any of the block is deleted or RAUWed
   // then the CFG is treated poisoned and no block pointer of the Graph is used.
   struct CFG {
-    std::optional<DenseMap<intptr_t, BBGuard>> BBGuards;
+    Optional<DenseMap<intptr_t, BBGuard>> BBGuards;
     DenseMap<const BasicBlock *, DenseMap<const BasicBlock *, unsigned>> Graph;
 
     CFG(const Function *F, bool TrackBBLifetime);
@@ -157,8 +151,9 @@ public:
   SmallVector<StringRef, 8> PassStack;
 #endif
 
+  static cl::opt<bool> VerifyPreservedCFG;
   void registerCallbacks(PassInstrumentationCallbacks &PIC,
-                         ModuleAnalysisManager &MAM);
+                         FunctionAnalysisManager &FAM);
 };
 
 // Base class for classes that report changes to the IR.
@@ -261,32 +256,6 @@ protected:
   void generateIRRepresentation(Any IR, StringRef PassID,
                                 std::string &Output) override;
   // Called when an interesting IR has changed.
-  void handleAfter(StringRef PassID, std::string &Name,
-                   const std::string &Before, const std::string &After,
-                   Any) override;
-};
-
-class IRChangedTester : public IRChangedPrinter {
-public:
-  IRChangedTester() : IRChangedPrinter(true) {}
-  ~IRChangedTester() override;
-  void registerCallbacks(PassInstrumentationCallbacks &PIC);
-
-protected:
-  void handleIR(const std::string &IR, StringRef PassID);
-
-  // Check initial IR
-  void handleInitialIR(Any IR) override;
-  // Do nothing.
-  void omitAfter(StringRef PassID, std::string &Name) override;
-  // Do nothing.
-  void handleInvalidated(StringRef PassID) override;
-  // Do nothing.
-  void handleFiltered(StringRef PassID, std::string &Name) override;
-  // Do nothing.
-  void handleIgnored(StringRef PassID, std::string &Name) override;
-
-  // Call test as interesting IR has changed.
   void handleAfter(StringRef PassID, std::string &Name,
                    const std::string &Before, const std::string &After,
                    Any) override;
@@ -559,27 +528,25 @@ class StandardInstrumentations {
   TimePassesHandler TimePasses;
   TimeProfilingPassesHandler TimeProfilingPasses;
   OptNoneInstrumentation OptNone;
-  OptPassGateInstrumentation OptPassGate;
+  OptBisectInstrumentation OptBisect;
   PreservedCFGCheckerInstrumentation PreservedCFGChecker;
   IRChangedPrinter PrintChangedIR;
   PseudoProbeVerifier PseudoProbeVerification;
   InLineChangePrinter PrintChangedDiff;
   DotCfgChangeReporter WebsiteChangeReporter;
   PrintCrashIRInstrumentation PrintCrashIR;
-  IRChangedTester ChangeTester;
   VerifyInstrumentation Verify;
 
   bool VerifyEach;
 
 public:
-  StandardInstrumentations(LLVMContext &Context, bool DebugLogging,
-                           bool VerifyEach = false,
+  StandardInstrumentations(bool DebugLogging, bool VerifyEach = false,
                            PrintPassOptions PrintPassOpts = PrintPassOptions());
 
   // Register all the standard instrumentation callbacks. If \p FAM is nullptr
   // then PreservedCFGChecker is not enabled.
   void registerCallbacks(PassInstrumentationCallbacks &PIC,
-                         ModuleAnalysisManager *MAM = nullptr);
+                         FunctionAnalysisManager *FAM = nullptr);
 
   TimePassesHandler &getTimePasses() { return TimePasses; }
 };

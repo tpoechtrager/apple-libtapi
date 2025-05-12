@@ -31,7 +31,6 @@ static_library("AST") {
     "//llvm/lib/BinaryFormat",
     "//llvm/lib/Frontend/OpenMP",
     "//llvm/lib/Support",
-    "//llvm/lib/TargetParser",
   ]
 
   # Generated files used in public headers should be in public_deps, the rest
@@ -99,12 +98,10 @@ static_library("AST") {
     "Interp/Descriptor.cpp",
     "Interp/Disasm.cpp",
     "Interp/EvalEmitter.cpp",
-    "Interp/Floating.cpp",
     "Interp/Frame.cpp",
     "Interp/Function.cpp",
     "Interp/Interp.cpp",
     "Interp/InterpBlock.cpp",
-    "Interp/InterpBuiltin.cpp",
     "Interp/InterpFrame.cpp",
     "Interp/InterpStack.cpp",
     "Interp/InterpState.cpp",

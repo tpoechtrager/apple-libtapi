@@ -3,7 +3,7 @@ source_set("X86") {
   testonly = true
   deps = [
     "//llvm/lib/Target/X86",
-    "//third-party/unittest:gtest",
+    "//llvm/utils/unittest:gtest",
 
     # This test target reaches inside the Target/X86 tablegen internals and must
     # depend on this Target/X86-internal build target.

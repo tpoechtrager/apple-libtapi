@@ -17,7 +17,7 @@
 #ifndef LLVM_UTILS_TABLEGEN_X86MODRMFILTERS_H
 #define LLVM_UTILS_TABLEGEN_X86MODRMFILTERS_H
 
-#include <cstdint>
+#include "llvm/Support/DataTypes.h"
 
 namespace llvm {
 

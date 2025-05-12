@@ -102,7 +102,7 @@ static void insertCSRSaves(MachineBasicBlock &SaveBlock,
       // range.
       const bool IsLiveIn = MRI.isLiveIn(Reg);
       TII.storeRegToStackSlot(SaveBlock, I, Reg, !IsLiveIn, CS.getFrameIdx(),
-                              RC, TRI, Register());
+                              RC, TRI);
 
       if (Indexes) {
         assert(std::distance(MIS.begin(), I) == 1);
@@ -137,8 +137,7 @@ static void insertCSRRestores(MachineBasicBlock &RestoreBlock,
       const TargetRegisterClass *RC = TRI->getMinimalPhysRegClass(
           Reg, Reg == RI->getReturnAddressReg(MF) ? MVT::i64 : MVT::i32);
 
-      TII.loadRegFromStackSlot(RestoreBlock, I, Reg, CI.getFrameIdx(), RC, TRI,
-                               Register());
+      TII.loadRegFromStackSlot(RestoreBlock, I, Reg, CI.getFrameIdx(), RC, TRI);
       assert(I != RestoreBlock.begin() &&
              "loadRegFromStackSlot didn't insert any code!");
       // Insert in reverse order.  loadRegFromStackSlot can insert
@@ -297,7 +296,7 @@ bool SILowerSGPRSpills::runOnMachineFunction(MachineFunction &MF) {
 
         int FI = TII->getNamedOperand(MI, AMDGPU::OpName::addr)->getIndex();
         assert(MFI.getStackID(FI) == TargetStackID::SGPRSpill);
-        if (FuncInfo->allocateSGPRSpillToVGPRLane(MF, FI)) {
+        if (FuncInfo->allocateSGPRSpillToVGPR(MF, FI)) {
           NewReservedRegs = true;
           bool Spilled = TRI->eliminateSGPRToVGPRSpillFrameIndex(
               MI, FI, nullptr, Indexes, LIS);
@@ -310,8 +309,8 @@ bool SILowerSGPRSpills::runOnMachineFunction(MachineFunction &MF) {
 
     // FIXME: Adding to live-ins redundant with reserving registers.
     for (MachineBasicBlock &MBB : MF) {
-      for (auto Reg : FuncInfo->getSGPRSpillVGPRs())
-        MBB.addLiveIn(Reg);
+      for (auto SSpill : FuncInfo->getSGPRSpillVGPRs())
+        MBB.addLiveIn(SSpill.VGPR);
       MBB.sortUniqueLiveIns();
 
       // FIXME: The dead frame indices are replaced with a null register from
@@ -320,7 +319,6 @@ bool SILowerSGPRSpills::runOnMachineFunction(MachineFunction &MF) {
       // adequate to lower the DIExpression. It should be worked out later.
       for (MachineInstr &MI : MBB) {
         if (MI.isDebugValue() && MI.getOperand(0).isFI() &&
-            !MFI.isFixedObjectIndex(MI.getOperand(0).getIndex()) &&
             SpillFIs[MI.getOperand(0).getIndex()]) {
           MI.getOperand(0).ChangeToRegister(Register(), false /*isDef*/);
         }
@@ -334,20 +332,7 @@ bool SILowerSGPRSpills::runOnMachineFunction(MachineFunction &MF) {
     // lane".
     FuncInfo->removeDeadFrameIndices(MFI, /*ResetSGPRSpillStackIDs*/ false);
 
-    const TargetRegisterClass *RC = TRI->getWaveMaskRegClass();
-    // Shift back the reserved SGPR for EXEC copy into the lowest range.
-    // This SGPR is reserved to handle the whole-wave spill/copy operations
-    // that might get inserted during vgpr regalloc.
-    Register UnusedLowSGPR = TRI->findUnusedRegister(MRI, RC, MF);
-    if (UnusedLowSGPR && TRI->getHWRegIndex(UnusedLowSGPR) <
-                             TRI->getHWRegIndex(FuncInfo->getSGPRForEXECCopy()))
-      FuncInfo->setSGPRForEXECCopy(UnusedLowSGPR);
-
     MadeChange = true;
-  } else {
-    // No SGPR spills and hence there won't be any WWM spills/copies. Reset the
-    // SGPR reserved for EXEC copy.
-    FuncInfo->setSGPRForEXECCopy(AMDGPU::NoRegister);
   }
 
   SaveBlocks.clear();

@@ -159,6 +159,7 @@ svfloat32_t svdup_neonq_f32(float32x4_t);
 __ai __attribute__((__clang_arm_builtin_alias(__builtin_sve_svdup_neonq_f64)))
 svfloat64_t svdup_neonq_f64(float64x2_t);
 
+#if defined(__ARM_FEATURE_SVE_BF16)
 __aio __attribute__((__clang_arm_builtin_alias(__builtin_sve_svset_neonq_bf16)))
 svbfloat16_t svset_neonq(svbfloat16_t, bfloat16x8_t);
 __ai __attribute__((__clang_arm_builtin_alias(__builtin_sve_svset_neonq_bf16)))
@@ -171,6 +172,7 @@ __aio __attribute__((__clang_arm_builtin_alias(__builtin_sve_svdup_neonq_bf16)))
 svbfloat16_t svdup_neonq(bfloat16x8_t);
 __ai __attribute__((__clang_arm_builtin_alias(__builtin_sve_svdup_neonq_bf16)))
 svbfloat16_t svdup_neonq_bf16(bfloat16x8_t);
+#endif // defined(__ARM_FEATURE_SVE_BF16)
 
 #undef __ai
 #undef __aio

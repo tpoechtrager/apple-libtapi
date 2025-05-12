@@ -15,14 +15,15 @@
 
 #include "clang/Basic/TargetInfo.h"
 #include "clang/Basic/TargetOptions.h"
+#include "llvm/ADT/Triple.h"
 #include "llvm/Support/Compiler.h"
-#include "llvm/TargetParser/Triple.h"
 
 namespace clang {
 namespace targets {
 
 class LLVM_LIBRARY_VISIBILITY SystemZTargetInfo : public TargetInfo {
 
+  static const Builtin::Info BuiltinInfo[];
   static const char *const GCCRegNames[];
   std::string CPU;
   int ISARevision;
@@ -36,6 +37,7 @@ public:
         HasTransactionalExecution(false), HasVector(false), SoftFloat(false) {
     IntMaxType = SignedLong;
     Int64Type = SignedLong;
+    TLSSupported = true;
     IntWidth = IntAlign = 32;
     LongWidth = LongLongWidth = LongAlign = LongLongAlign = 64;
     Int128Align = 64;
@@ -46,20 +48,16 @@ public:
     DefaultAlignForAttributeAligned = 64;
     MinGlobalAlign = 16;
     if (Triple.isOSzOS()) {
-      TLSSupported = false;
       // All vector types are default aligned on an 8-byte boundary, even if the
       // vector facility is not available. That is different from Linux.
       MaxVectorAlign = 64;
-      // Compared to Linux/ELF, the data layout differs only in some details:
-      // - name mangling is GOFF.
-      // - 32 bit pointers, either as default or special address space
-      resetDataLayout("E-m:l-i1:8:16-i8:8:16-i64:64-f128:64-v128:64-"
-                      "a:8:16-n32:64");
-    } else {
-      TLSSupported = true;
+      // Compared to Linux/ELF, the data layout differs only in that name
+      // mangling is GOFF.
+      resetDataLayout(
+          "E-m:l-i1:8:16-i8:8:16-i64:64-f128:64-v128:64-a:8:16-n32:64");
+    } else
       resetDataLayout("E-m:e-i1:8:16-i8:8:16-i64:64-f128:64"
                       "-v128:64-a:8:16-n32:64");
-    }
     MaxAtomicPromoteWidth = MaxAtomicInlineWidth = 64;
     HasStrictFP = true;
   }
@@ -73,7 +71,7 @@ public:
 
   ArrayRef<TargetInfo::GCCRegAlias> getGCCRegAliases() const override {
     // No aliases.
-    return std::nullopt;
+    return None;
   }
 
   ArrayRef<TargetInfo::AddlRegName> getGCCAddlRegNames() const override;
@@ -109,7 +107,7 @@ public:
     return TargetInfo::convertConstraint(Constraint);
   }
 
-  std::string_view getClobbers() const override {
+  const char *getClobbers() const override {
     // FIXME: Is this really right?
     return "";
   }

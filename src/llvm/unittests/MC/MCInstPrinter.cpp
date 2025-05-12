@@ -61,7 +61,7 @@ public:
 
 TEST_F(MCInstPrinterTest, formatHex) {
   if (!Printer)
-    GTEST_SKIP();
+    return;
 
   EXPECT_EQ("0x1", formatHex<int64_t>(1));
   EXPECT_EQ("0x7fffffffffffffff",

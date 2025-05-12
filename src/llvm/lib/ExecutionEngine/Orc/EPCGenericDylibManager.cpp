@@ -73,7 +73,7 @@ EPCGenericDylibManager::CreateWithDefaultBootstrapSymbols(
 
 Expected<tpctypes::DylibHandle> EPCGenericDylibManager::open(StringRef Path,
                                                              uint64_t Mode) {
-  Expected<tpctypes::DylibHandle> H((ExecutorAddr()));
+  Expected<tpctypes::DylibHandle> H(0);
   if (auto Err =
           EPC.callSPSWrapper<rt::SPSSimpleExecutorDylibManagerOpenSignature>(
               SAs.Open, H, SAs.Instance, Path, Mode))

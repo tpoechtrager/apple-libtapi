@@ -9,7 +9,6 @@
 #include "TestVisitor.h"
 #include "clang/Basic/SourceManager.h"
 #include "clang/Tooling/Refactoring/ASTSelection.h"
-#include <optional>
 
 using namespace clang;
 using namespace tooling;
@@ -28,17 +27,17 @@ using FileRange = std::pair<FileLocation, FileLocation>;
 
 class SelectionFinderVisitor : public TestVisitor<SelectionFinderVisitor> {
   FileLocation Location;
-  std::optional<FileRange> SelectionRange;
+  Optional<FileRange> SelectionRange;
   llvm::function_ref<void(SourceRange SelectionRange,
-                          std::optional<SelectedASTNode>)>
+                          Optional<SelectedASTNode>)>
       Consumer;
 
 public:
-  SelectionFinderVisitor(
-      FileLocation Location, std::optional<FileRange> SelectionRange,
-      llvm::function_ref<void(SourceRange SelectionRange,
-                              std::optional<SelectedASTNode>)>
-          Consumer)
+  SelectionFinderVisitor(FileLocation Location,
+                         Optional<FileRange> SelectionRange,
+                         llvm::function_ref<void(SourceRange SelectionRange,
+                                                 Optional<SelectedASTNode>)>
+                             Consumer)
       : Location(Location), SelectionRange(SelectionRange), Consumer(Consumer) {
   }
 
@@ -65,10 +64,9 @@ public:
 /// A location roughly corresponds to a cursor location in an editor, while
 /// the optional range corresponds to the selection range in an editor.
 void findSelectedASTNodesWithRange(
-    StringRef Source, FileLocation Location,
-    std::optional<FileRange> SelectionRange,
+    StringRef Source, FileLocation Location, Optional<FileRange> SelectionRange,
     llvm::function_ref<void(SourceRange SelectionRange,
-                            std::optional<SelectedASTNode>)>
+                            Optional<SelectedASTNode>)>
         Consumer,
     SelectionFinderVisitor::Language Language =
         SelectionFinderVisitor::Lang_CXX11) {
@@ -77,14 +75,13 @@ void findSelectedASTNodesWithRange(
 }
 
 void findSelectedASTNodes(
-    StringRef Source, FileLocation Location,
-    std::optional<FileRange> SelectionRange,
-    llvm::function_ref<void(std::optional<SelectedASTNode>)> Consumer,
+    StringRef Source, FileLocation Location, Optional<FileRange> SelectionRange,
+    llvm::function_ref<void(Optional<SelectedASTNode>)> Consumer,
     SelectionFinderVisitor::Language Language =
         SelectionFinderVisitor::Lang_CXX11) {
   findSelectedASTNodesWithRange(
       Source, Location, SelectionRange,
-      [&](SourceRange, std::optional<SelectedASTNode> Selection) {
+      [&](SourceRange, Optional<SelectedASTNode> Selection) {
         Consumer(std::move(Selection));
       },
       Language);
@@ -104,22 +101,22 @@ void checkDeclName(const SelectedASTNode &Node, StringRef Name) {
 }
 
 template <typename T>
-const SelectedASTNode &
-checkNode(const SelectedASTNode &StmtNode, SourceSelectionKind SelectionKind,
-          unsigned NumChildren = 0,
-          std::enable_if_t<std::is_base_of_v<Stmt, T>, T> *StmtOverloadChecker =
-              nullptr) {
+const SelectedASTNode &checkNode(
+    const SelectedASTNode &StmtNode, SourceSelectionKind SelectionKind,
+    unsigned NumChildren = 0,
+    std::enable_if_t<std::is_base_of<Stmt, T>::value, T> *StmtOverloadChecker =
+        nullptr) {
   checkNodeImpl(isa<T>(StmtNode.Node.get<Stmt>()), StmtNode, SelectionKind,
                 NumChildren);
   return StmtNode;
 }
 
 template <typename T>
-const SelectedASTNode &
-checkNode(const SelectedASTNode &DeclNode, SourceSelectionKind SelectionKind,
-          unsigned NumChildren = 0, StringRef Name = "",
-          std::enable_if_t<std::is_base_of_v<Decl, T>, T> *DeclOverloadChecker =
-              nullptr) {
+const SelectedASTNode &checkNode(
+    const SelectedASTNode &DeclNode, SourceSelectionKind SelectionKind,
+    unsigned NumChildren = 0, StringRef Name = "",
+    std::enable_if_t<std::is_base_of<Decl, T>::value, T> *DeclOverloadChecker =
+        nullptr) {
   checkNodeImpl(isa<T>(DeclNode.Node.get<Decl>()), DeclNode, SelectionKind,
                 NumChildren);
   if (!Name.empty())
@@ -152,14 +149,13 @@ ForAllChildrenOf allChildrenOf(const SelectedASTNode &Node) {
 
 TEST(ASTSelectionFinder, CursorNoSelection) {
   findSelectedASTNodes(
-      " void f() { }", {1, 1}, std::nullopt,
-      [](std::optional<SelectedASTNode> Node) { EXPECT_FALSE(Node); });
+      " void f() { }", {1, 1}, None,
+      [](Optional<SelectedASTNode> Node) { EXPECT_FALSE(Node); });
 }
 
 TEST(ASTSelectionFinder, CursorAtStartOfFunction) {
   findSelectedASTNodes(
-      "void f() { }", {1, 1}, std::nullopt,
-      [](std::optional<SelectedASTNode> Node) {
+      "void f() { }", {1, 1}, None, [](Optional<SelectedASTNode> Node) {
         EXPECT_TRUE(Node);
         checkNode<TranslationUnitDecl>(*Node, SourceSelectionKind::None,
                                        /*NumChildren=*/1);
@@ -178,15 +174,15 @@ TEST(ASTSelectionFinder, CursorAtStartOfFunction) {
 TEST(ASTSelectionFinder, RangeNoSelection) {
   findSelectedASTNodes(
       " void f() { }", {1, 1}, FileRange{{1, 1}, {1, 1}},
-      [](std::optional<SelectedASTNode> Node) { EXPECT_FALSE(Node); });
+      [](Optional<SelectedASTNode> Node) { EXPECT_FALSE(Node); });
   findSelectedASTNodes(
       "  void f() { }", {1, 1}, FileRange{{1, 1}, {1, 2}},
-      [](std::optional<SelectedASTNode> Node) { EXPECT_FALSE(Node); });
+      [](Optional<SelectedASTNode> Node) { EXPECT_FALSE(Node); });
 }
 
 TEST(ASTSelectionFinder, EmptyRangeFallbackToCursor) {
   findSelectedASTNodes("void f() { }", {1, 1}, FileRange{{1, 1}, {1, 1}},
-                       [](std::optional<SelectedASTNode> Node) {
+                       [](Optional<SelectedASTNode> Node) {
                          EXPECT_TRUE(Node);
                          checkNode<FunctionDecl>(
                              Node->Children[0],
@@ -201,7 +197,7 @@ TEST(ASTSelectionFinder, WholeFunctionSelection) {
 
   findSelectedASTNodes(
       Source, {1, 1}, FileRange{{1, 1}, {2, 2}},
-      [](std::optional<SelectedASTNode> Node) {
+      [](Optional<SelectedASTNode> Node) {
         EXPECT_TRUE(Node);
         EXPECT_EQ(Node->Children.size(), 1u);
         const auto &Fn = checkNode<FunctionDecl>(
@@ -225,7 +221,7 @@ TEST(ASTSelectionFinder, WholeFunctionSelection) {
   // From 'int' until just before '}':
   findSelectedASTNodes(
       Source, {2, 1}, FileRange{{1, 1}, {2, 1}},
-      [](std::optional<SelectedASTNode> Node) {
+      [](Optional<SelectedASTNode> Node) {
         EXPECT_TRUE(Node);
         EXPECT_EQ(Node->Children.size(), 1u);
         const auto &Fn = checkNode<FunctionDecl>(
@@ -241,7 +237,7 @@ TEST(ASTSelectionFinder, WholeFunctionSelection) {
   // From '{' until just after '}':
   findSelectedASTNodes(
       Source, {1, 14}, FileRange{{1, 14}, {2, 2}},
-      [](std::optional<SelectedASTNode> Node) {
+      [](Optional<SelectedASTNode> Node) {
         EXPECT_TRUE(Node);
         EXPECT_EQ(Node->Children.size(), 1u);
         const auto &Fn = checkNode<FunctionDecl>(
@@ -257,7 +253,7 @@ TEST(ASTSelectionFinder, WholeFunctionSelection) {
   // From 'x' until just after '}':
   findSelectedASTNodes(
       Source, {2, 2}, FileRange{{1, 11}, {2, 2}},
-      [](std::optional<SelectedASTNode> Node) {
+      [](Optional<SelectedASTNode> Node) {
         EXPECT_TRUE(Node);
         EXPECT_EQ(Node->Children.size(), 1u);
         const auto &Fn = checkNode<FunctionDecl>(
@@ -281,7 +277,7 @@ void f1() { }
 void f2() { }
 void f3() { }
 )";
-  auto SelectedF1F2 = [](std::optional<SelectedASTNode> Node) {
+  auto SelectedF1F2 = [](Optional<SelectedASTNode> Node) {
     EXPECT_TRUE(Node);
     EXPECT_EQ(Node->Children.size(), 2u);
     checkNode<FunctionDecl>(Node->Children[0],
@@ -311,7 +307,7 @@ TEST(ASTSelectionFinder, MultipleStatementSelection) {
   // From 'f(2,3)' until just before 'x = 1;':
   findSelectedASTNodes(
       Source, {3, 2}, FileRange{{3, 2}, {7, 1}},
-      [](std::optional<SelectedASTNode> Node) {
+      [](Optional<SelectedASTNode> Node) {
         EXPECT_TRUE(Node);
         EXPECT_EQ(Node->Children.size(), 1u);
         const auto &Fn = checkNode<FunctionDecl>(
@@ -332,7 +328,7 @@ TEST(ASTSelectionFinder, MultipleStatementSelection) {
   // From 'f(2,3)' until just before ';' in 'x = 1;':
   findSelectedASTNodes(
       Source, {3, 2}, FileRange{{3, 2}, {7, 8}},
-      [](std::optional<SelectedASTNode> Node) {
+      [](Optional<SelectedASTNode> Node) {
         EXPECT_TRUE(Node);
         EXPECT_EQ(Node->Children.size(), 1u);
         const auto &Fn = checkNode<FunctionDecl>(
@@ -354,7 +350,7 @@ TEST(ASTSelectionFinder, MultipleStatementSelection) {
   // From the middle of 'int z = 3' until the middle of 'x = 1;':
   findSelectedASTNodes(
       Source, {2, 10}, FileRange{{2, 10}, {7, 5}},
-      [](std::optional<SelectedASTNode> Node) {
+      [](Optional<SelectedASTNode> Node) {
         EXPECT_TRUE(Node);
         EXPECT_EQ(Node->Children.size(), 1u);
         const auto &Fn = checkNode<FunctionDecl>(
@@ -402,7 +398,7 @@ void outerFunction() { }
   // Just the 'x' expression in 'selected':
   findSelectedASTNodes(
       Source, {9, 10}, FileRange{{9, 10}, {9, 11}},
-      [](std::optional<SelectedASTNode> Node) {
+      [](Optional<SelectedASTNode> Node) {
         EXPECT_TRUE(Node);
         EXPECT_EQ(Node->Children.size(), 1u);
         const auto &Impl = checkNode<ObjCImplementationDecl>(
@@ -418,7 +414,7 @@ void outerFunction() { }
   // The entire 'catF':
   findSelectedASTNodes(
       Source, {15, 1}, FileRange{{15, 1}, {15, 16}},
-      [](std::optional<SelectedASTNode> Node) {
+      [](Optional<SelectedASTNode> Node) {
         EXPECT_TRUE(Node);
         EXPECT_EQ(Node->Children.size(), 1u);
         const auto &Impl = checkNode<ObjCCategoryImplDecl>(
@@ -434,7 +430,7 @@ void outerFunction() { }
   // From the line before 'selected' to the line after 'catF':
   findSelectedASTNodes(
       Source, {16, 1}, FileRange{{7, 1}, {16, 1}},
-      [](std::optional<SelectedASTNode> Node) {
+      [](Optional<SelectedASTNode> Node) {
         EXPECT_TRUE(Node);
         EXPECT_EQ(Node->Children.size(), 2u);
         const auto &Impl = checkNode<ObjCImplementationDecl>(
@@ -456,16 +452,16 @@ void outerFunction() { }
       },
       SelectionFinderVisitor::Lang_OBJC);
   // Just the 'outer' function:
-  findSelectedASTNodes(
-      Source, {19, 1}, FileRange{{19, 1}, {19, 25}},
-      [](std::optional<SelectedASTNode> Node) {
-        EXPECT_TRUE(Node);
-        EXPECT_EQ(Node->Children.size(), 1u);
-        checkNode<FunctionDecl>(Node->Children[0],
-                                SourceSelectionKind::ContainsSelection,
-                                /*NumChildren=*/1, /*Name=*/"outerFunction");
-      },
-      SelectionFinderVisitor::Lang_OBJC);
+  findSelectedASTNodes(Source, {19, 1}, FileRange{{19, 1}, {19, 25}},
+                       [](Optional<SelectedASTNode> Node) {
+                         EXPECT_TRUE(Node);
+                         EXPECT_EQ(Node->Children.size(), 1u);
+                         checkNode<FunctionDecl>(
+                             Node->Children[0],
+                             SourceSelectionKind::ContainsSelection,
+                             /*NumChildren=*/1, /*Name=*/"outerFunction");
+                       },
+                       SelectionFinderVisitor::Lang_OBJC);
 }
 
 TEST(ASTSelectionFinder, FunctionInObjCImplementationCarefulWithEarlyExit) {
@@ -484,7 +480,7 @@ void selected() {
   // Just 'selected'
   findSelectedASTNodes(
       Source, {6, 1}, FileRange{{6, 1}, {7, 2}},
-      [](std::optional<SelectedASTNode> Node) {
+      [](Optional<SelectedASTNode> Node) {
         EXPECT_TRUE(Node);
         EXPECT_EQ(Node->Children.size(), 1u);
         const auto &Impl = checkNode<ObjCImplementationDecl>(
@@ -510,7 +506,7 @@ void foo() {
   // The entire struct 'Copy':
   findSelectedASTNodes(
       Source, {2, 1}, FileRange{{2, 1}, {4, 3}},
-      [](std::optional<SelectedASTNode> Node) {
+      [](Optional<SelectedASTNode> Node) {
         EXPECT_TRUE(Node);
         EXPECT_EQ(Node->Children.size(), 1u);
         const auto &Record = checkNode<CXXRecordDecl>(
@@ -529,18 +525,18 @@ TEST(ASTSelectionFinder, CorrectEndForObjectiveCImplementation) {
 @ end
 )";
   // Just after '@ end'
-  findSelectedASTNodes(
-      Source, {5, 6}, std::nullopt,
-      [](std::optional<SelectedASTNode> Node) {
-        EXPECT_TRUE(Node);
-        EXPECT_EQ(Node->Children.size(), 1u);
-        checkNode<ObjCImplementationDecl>(
-            Node->Children[0], SourceSelectionKind::ContainsSelection);
-      },
-      SelectionFinderVisitor::Lang_OBJC);
+  findSelectedASTNodes(Source, {5, 6}, None,
+                       [](Optional<SelectedASTNode> Node) {
+                         EXPECT_TRUE(Node);
+                         EXPECT_EQ(Node->Children.size(), 1u);
+                         checkNode<ObjCImplementationDecl>(
+                             Node->Children[0],
+                             SourceSelectionKind::ContainsSelection);
+                       },
+                       SelectionFinderVisitor::Lang_OBJC);
 }
 
-const SelectedASTNode &checkFnBody(const std::optional<SelectedASTNode> &Node,
+const SelectedASTNode &checkFnBody(const Optional<SelectedASTNode> &Node,
                                    StringRef Name) {
   EXPECT_TRUE(Node);
   EXPECT_EQ(Node->Children.size(), 1u);
@@ -576,7 +572,7 @@ void selectSubscript(NSMutableArray *array, I *i) {
   // Just 'i.prop'.
   findSelectedASTNodes(
       Source, {6, 7}, FileRange{{6, 7}, {6, 13}},
-      [](std::optional<SelectedASTNode> Node) {
+      [](Optional<SelectedASTNode> Node) {
         const auto &CS = checkFnBody(Node, /*Name=*/"selectProp");
         const auto &CCast = checkNode<CStyleCastExpr>(
             CS.Children[0], SourceSelectionKind::ContainsSelection,
@@ -597,7 +593,7 @@ void selectSubscript(NSMutableArray *array, I *i) {
   // Just 'i.prop = 21'
   findSelectedASTNodes(
       Source, {7, 1}, FileRange{{7, 1}, {7, 12}},
-      [](std::optional<SelectedASTNode> Node) {
+      [](Optional<SelectedASTNode> Node) {
         const auto &CS = checkFnBody(Node, /*Name=*/"selectProp");
         const auto &POE = checkNode<PseudoObjectExpr>(
             CS.Children[0], SourceSelectionKind::ContainsSelection,
@@ -620,7 +616,7 @@ void selectSubscript(NSMutableArray *array, I *i) {
   // Just 'array[10]'
   findSelectedASTNodes(
       Source, {17, 9}, FileRange{{17, 9}, {17, 18}},
-      [](std::optional<SelectedASTNode> Node) {
+      [](Optional<SelectedASTNode> Node) {
         const auto &CS = checkFnBody(Node, /*Name=*/"selectSubscript");
         const auto &CCast = checkNode<CStyleCastExpr>(
             CS.Children[0], SourceSelectionKind::ContainsSelection,
@@ -643,7 +639,7 @@ void selectSubscript(NSMutableArray *array, I *i) {
   // Just 'array[i.prop] = array'
   findSelectedASTNodes(
       Source, {18, 3}, FileRange{{18, 3}, {18, 20}},
-      [](std::optional<SelectedASTNode> Node) {
+      [](Optional<SelectedASTNode> Node) {
         const auto &CS = checkFnBody(Node, /*Name=*/"selectSubscript");
         const auto &POE = checkNode<PseudoObjectExpr>(
             CS.Children[0], SourceSelectionKind::ContainsSelection,
@@ -692,36 +688,36 @@ void f2() {
 )";
   // No selection range.
   findSelectedASTNodesWithRange(
-      Source, {2, 2}, std::nullopt,
-      [](SourceRange SelectionRange, std::optional<SelectedASTNode> Node) {
+      Source, {2, 2}, None,
+      [](SourceRange SelectionRange, Optional<SelectedASTNode> Node) {
         EXPECT_TRUE(Node);
-        std::optional<CodeRangeASTSelection> SelectedCode =
+        Optional<CodeRangeASTSelection> SelectedCode =
             CodeRangeASTSelection::create(SelectionRange, std::move(*Node));
         EXPECT_FALSE(SelectedCode);
       });
   findSelectedASTNodesWithRange(
       Source, {2, 2}, FileRange{{2, 2}, {2, 2}},
-      [](SourceRange SelectionRange, std::optional<SelectedASTNode> Node) {
+      [](SourceRange SelectionRange, Optional<SelectedASTNode> Node) {
         EXPECT_TRUE(Node);
-        std::optional<CodeRangeASTSelection> SelectedCode =
+        Optional<CodeRangeASTSelection> SelectedCode =
             CodeRangeASTSelection::create(SelectionRange, std::move(*Node));
         EXPECT_FALSE(SelectedCode);
       });
   // Range that spans multiple functions is an invalid code range.
   findSelectedASTNodesWithRange(
       Source, {2, 2}, FileRange{{7, 2}, {12, 1}},
-      [](SourceRange SelectionRange, std::optional<SelectedASTNode> Node) {
+      [](SourceRange SelectionRange, Optional<SelectedASTNode> Node) {
         EXPECT_TRUE(Node);
-        std::optional<CodeRangeASTSelection> SelectedCode =
+        Optional<CodeRangeASTSelection> SelectedCode =
             CodeRangeASTSelection::create(SelectionRange, std::move(*Node));
         EXPECT_FALSE(SelectedCode);
       });
   // Just 'z = x;':
   findSelectedASTNodesWithRange(
       Source, {2, 2}, FileRange{{2, 2}, {2, 13}},
-      [](SourceRange SelectionRange, std::optional<SelectedASTNode> Node) {
+      [](SourceRange SelectionRange, Optional<SelectedASTNode> Node) {
         EXPECT_TRUE(Node);
-        std::optional<CodeRangeASTSelection> SelectedCode =
+        Optional<CodeRangeASTSelection> SelectedCode =
             CodeRangeASTSelection::create(SelectionRange, std::move(*Node));
         EXPECT_TRUE(SelectedCode);
         EXPECT_EQ(SelectedCode->size(), 1u);
@@ -739,9 +735,9 @@ void f2() {
   // From 'f(2,3)' until just before 'x = 1;':
   findSelectedASTNodesWithRange(
       Source, {3, 2}, FileRange{{3, 2}, {7, 1}},
-      [](SourceRange SelectionRange, std::optional<SelectedASTNode> Node) {
+      [](SourceRange SelectionRange, Optional<SelectedASTNode> Node) {
         EXPECT_TRUE(Node);
-        std::optional<CodeRangeASTSelection> SelectedCode =
+        Optional<CodeRangeASTSelection> SelectedCode =
             CodeRangeASTSelection::create(SelectionRange, std::move(*Node));
         EXPECT_TRUE(SelectedCode);
         EXPECT_EQ(SelectedCode->size(), 2u);
@@ -760,9 +756,9 @@ void f2() {
   // From 'f(2,3)' until just before ';' in 'x = 1;':
   findSelectedASTNodesWithRange(
       Source, {3, 2}, FileRange{{3, 2}, {7, 8}},
-      [](SourceRange SelectionRange, std::optional<SelectedASTNode> Node) {
+      [](SourceRange SelectionRange, Optional<SelectedASTNode> Node) {
         EXPECT_TRUE(Node);
-        std::optional<CodeRangeASTSelection> SelectedCode =
+        Optional<CodeRangeASTSelection> SelectedCode =
             CodeRangeASTSelection::create(SelectionRange, std::move(*Node));
         EXPECT_TRUE(SelectedCode);
         EXPECT_EQ(SelectedCode->size(), 3u);
@@ -773,10 +769,10 @@ void f2() {
   // From the middle of 'int z = 3' until the middle of 'x = 1;':
   findSelectedASTNodesWithRange(
       Source, {2, 10}, FileRange{{2, 10}, {7, 5}},
-      [](SourceRange SelectionRange, std::optional<SelectedASTNode> Node) {
+      [](SourceRange SelectionRange, Optional<SelectedASTNode> Node) {
         EXPECT_TRUE(Node);
         EXPECT_TRUE(Node);
-        std::optional<CodeRangeASTSelection> SelectedCode =
+        Optional<CodeRangeASTSelection> SelectedCode =
             CodeRangeASTSelection::create(SelectionRange, std::move(*Node));
         EXPECT_TRUE(SelectedCode);
         EXPECT_EQ(SelectedCode->size(), 4u);
@@ -794,9 +790,9 @@ int codeRange = 2 + 3;
   // '2+3' expression.
   findSelectedASTNodesWithRange(
       Source, {2, 17}, FileRange{{2, 17}, {2, 22}},
-      [](SourceRange SelectionRange, std::optional<SelectedASTNode> Node) {
+      [](SourceRange SelectionRange, Optional<SelectedASTNode> Node) {
         EXPECT_TRUE(Node);
-        std::optional<CodeRangeASTSelection> SelectedCode =
+        Optional<CodeRangeASTSelection> SelectedCode =
             CodeRangeASTSelection::create(SelectionRange, std::move(*Node));
         EXPECT_TRUE(SelectedCode);
         EXPECT_EQ(SelectedCode->size(), 1u);
@@ -822,9 +818,9 @@ void f() {
   // 'int a'
   findSelectedASTNodesWithRange(
       Source, {4, 8}, FileRange{{4, 8}, {4, 14}},
-      [](SourceRange SelectionRange, std::optional<SelectedASTNode> Node) {
+      [](SourceRange SelectionRange, Optional<SelectedASTNode> Node) {
         EXPECT_TRUE(Node);
-        std::optional<CodeRangeASTSelection> SelectedCode =
+        Optional<CodeRangeASTSelection> SelectedCode =
             CodeRangeASTSelection::create(SelectionRange, std::move(*Node));
         EXPECT_TRUE(SelectedCode);
         EXPECT_EQ(SelectedCode->size(), 1u);
@@ -852,9 +848,9 @@ void f(int x, int y) {
   // 'int a = x * y'
   findSelectedASTNodesWithRange(
       Source, {3, 4}, FileRange{{3, 4}, {3, 17}},
-      [](SourceRange SelectionRange, std::optional<SelectedASTNode> Node) {
+      [](SourceRange SelectionRange, Optional<SelectedASTNode> Node) {
         EXPECT_TRUE(Node);
-        std::optional<CodeRangeASTSelection> SelectedCode =
+        Optional<CodeRangeASTSelection> SelectedCode =
             CodeRangeASTSelection::create(SelectionRange, std::move(*Node));
         EXPECT_TRUE(SelectedCode);
         EXPECT_EQ(SelectedCode->size(), 1u);
@@ -880,9 +876,9 @@ void f(int x, int y) {
   // 'b = x - y'
   findSelectedASTNodesWithRange(
       Source, {3, 19}, FileRange{{3, 19}, {3, 28}},
-      [](SourceRange SelectionRange, std::optional<SelectedASTNode> Node) {
+      [](SourceRange SelectionRange, Optional<SelectedASTNode> Node) {
         EXPECT_TRUE(Node);
-        std::optional<CodeRangeASTSelection> SelectedCode =
+        Optional<CodeRangeASTSelection> SelectedCode =
             CodeRangeASTSelection::create(SelectionRange, std::move(*Node));
         EXPECT_TRUE(SelectedCode);
         EXPECT_EQ(SelectedCode->size(), 1u);
@@ -919,9 +915,9 @@ TEST(ASTSelectionFinder, SimpleCodeRangeASTSelectionInObjCMethod) {
   // Range that spans multiple methods is an invalid code range.
   findSelectedASTNodesWithRange(
       Source, {9, 2}, FileRange{{9, 2}, {13, 1}},
-      [](SourceRange SelectionRange, std::optional<SelectedASTNode> Node) {
+      [](SourceRange SelectionRange, Optional<SelectedASTNode> Node) {
         EXPECT_TRUE(Node);
-        std::optional<CodeRangeASTSelection> SelectedCode =
+        Optional<CodeRangeASTSelection> SelectedCode =
             CodeRangeASTSelection::create(SelectionRange, std::move(*Node));
         EXPECT_FALSE(SelectedCode);
       },
@@ -929,9 +925,9 @@ TEST(ASTSelectionFinder, SimpleCodeRangeASTSelectionInObjCMethod) {
   // Just 'z = x;':
   findSelectedASTNodesWithRange(
       Source, {4, 2}, FileRange{{4, 2}, {4, 13}},
-      [](SourceRange SelectionRange, std::optional<SelectedASTNode> Node) {
+      [](SourceRange SelectionRange, Optional<SelectedASTNode> Node) {
         EXPECT_TRUE(Node);
-        std::optional<CodeRangeASTSelection> SelectedCode =
+        Optional<CodeRangeASTSelection> SelectedCode =
             CodeRangeASTSelection::create(SelectionRange, std::move(*Node));
         EXPECT_TRUE(SelectedCode);
         EXPECT_EQ(SelectedCode->size(), 1u);
@@ -952,9 +948,9 @@ TEST(ASTSelectionFinder, SimpleCodeRangeASTSelectionInObjCMethod) {
   // From '[self f: 2 with: 3]' until just before 'x = 1;':
   findSelectedASTNodesWithRange(
       Source, {5, 2}, FileRange{{5, 2}, {9, 1}},
-      [](SourceRange SelectionRange, std::optional<SelectedASTNode> Node) {
+      [](SourceRange SelectionRange, Optional<SelectedASTNode> Node) {
         EXPECT_TRUE(Node);
-        std::optional<CodeRangeASTSelection> SelectedCode =
+        Optional<CodeRangeASTSelection> SelectedCode =
             CodeRangeASTSelection::create(SelectionRange, std::move(*Node));
         EXPECT_TRUE(SelectedCode);
         EXPECT_EQ(SelectedCode->size(), 2u);
@@ -984,9 +980,9 @@ void foo() {
   // Just '"test"':
   findSelectedASTNodesWithRange(
       Source, {3, 10}, FileRange{{3, 10}, {3, 16}},
-      [](SourceRange SelectionRange, std::optional<SelectedASTNode> Node) {
+      [](SourceRange SelectionRange, Optional<SelectedASTNode> Node) {
         EXPECT_TRUE(Node);
-        std::optional<CodeRangeASTSelection> SelectedCode =
+        Optional<CodeRangeASTSelection> SelectedCode =
             CodeRangeASTSelection::create(SelectionRange, std::move(*Node));
         EXPECT_TRUE(SelectedCode);
         EXPECT_EQ(SelectedCode->size(), 1u);
@@ -996,9 +992,9 @@ void foo() {
   // Just 'test':
   findSelectedASTNodesWithRange(
       Source, {3, 11}, FileRange{{3, 11}, {3, 15}},
-      [](SourceRange SelectionRange, std::optional<SelectedASTNode> Node) {
+      [](SourceRange SelectionRange, Optional<SelectedASTNode> Node) {
         EXPECT_TRUE(Node);
-        std::optional<CodeRangeASTSelection> SelectedCode =
+        Optional<CodeRangeASTSelection> SelectedCode =
             CodeRangeASTSelection::create(SelectionRange, std::move(*Node));
         EXPECT_TRUE(SelectedCode);
         EXPECT_EQ(SelectedCode->size(), 1u);
@@ -1027,9 +1023,9 @@ void dontSelectArgument(AClass &a) {
   // Just 'method' with implicit 'this':
   findSelectedASTNodesWithRange(
       Source, {6, 5}, FileRange{{6, 5}, {6, 11}},
-      [](SourceRange SelectionRange, std::optional<SelectedASTNode> Node) {
+      [](SourceRange SelectionRange, Optional<SelectedASTNode> Node) {
         EXPECT_TRUE(Node);
-        std::optional<CodeRangeASTSelection> SelectedCode =
+        Optional<CodeRangeASTSelection> SelectedCode =
             CodeRangeASTSelection::create(SelectionRange, std::move(*Node));
         EXPECT_TRUE(SelectedCode);
         EXPECT_EQ(SelectedCode->size(), 1u);
@@ -1038,9 +1034,9 @@ void dontSelectArgument(AClass &a) {
   // Just 'method':
   findSelectedASTNodesWithRange(
       Source, {11, 5}, FileRange{{11, 5}, {11, 11}},
-      [](SourceRange SelectionRange, std::optional<SelectedASTNode> Node) {
+      [](SourceRange SelectionRange, Optional<SelectedASTNode> Node) {
         EXPECT_TRUE(Node);
-        std::optional<CodeRangeASTSelection> SelectedCode =
+        Optional<CodeRangeASTSelection> SelectedCode =
             CodeRangeASTSelection::create(SelectionRange, std::move(*Node));
         EXPECT_TRUE(SelectedCode);
         EXPECT_EQ(SelectedCode->size(), 1u);
@@ -1049,9 +1045,9 @@ void dontSelectArgument(AClass &a) {
   // Just 'afield', which should not select the call.
   findSelectedASTNodesWithRange(
       Source, {14, 5}, FileRange{{14, 45}, {14, 51}},
-      [](SourceRange SelectionRange, std::optional<SelectedASTNode> Node) {
+      [](SourceRange SelectionRange, Optional<SelectedASTNode> Node) {
         EXPECT_TRUE(Node);
-        std::optional<CodeRangeASTSelection> SelectedCode =
+        Optional<CodeRangeASTSelection> SelectedCode =
             CodeRangeASTSelection::create(SelectionRange, std::move(*Node));
         EXPECT_TRUE(SelectedCode);
         EXPECT_EQ(SelectedCode->size(), 1u);
@@ -1070,10 +1066,10 @@ void test() {
   // Just 'function':
   findSelectedASTNodesWithRange(
       Source, {5, 3}, FileRange{{5, 3}, {5, 11}},
-      [](SourceRange SelectionRange, std::optional<SelectedASTNode> Node) {
+      [](SourceRange SelectionRange, Optional<SelectedASTNode> Node) {
         EXPECT_TRUE(Node);
         Node->dump();
-        std::optional<CodeRangeASTSelection> SelectedCode =
+        Optional<CodeRangeASTSelection> SelectedCode =
             CodeRangeASTSelection::create(SelectionRange, std::move(*Node));
         EXPECT_TRUE(SelectedCode);
         EXPECT_EQ(SelectedCode->size(), 1u);

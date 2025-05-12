@@ -17,7 +17,6 @@
 #include "llvm/Remarks/RemarkParser.h"
 #include "llvm/Remarks/RemarkSerializer.h"
 #include "llvm/Support/Error.h"
-#include <optional>
 
 using namespace llvm;
 using namespace llvm::remarks;
@@ -35,7 +34,7 @@ getRemarksSectionName(const object::ObjectFile &Obj) {
                            "Unsupported file format.");
 }
 
-Expected<std::optional<StringRef>>
+Expected<Optional<StringRef>>
 llvm::remarks::getRemarksSectionContents(const object::ObjectFile &Obj) {
   Expected<StringRef> SectionName = getRemarksSectionName(Obj);
   if (!SectionName)
@@ -53,7 +52,7 @@ llvm::remarks::getRemarksSectionContents(const object::ObjectFile &Obj) {
     else
       return Contents.takeError();
   }
-  return std::optional<StringRef>{};
+  return Optional<StringRef>{};
 }
 
 Remark &RemarkLinker::keep(std::unique_ptr<Remark> Remark) {
@@ -66,7 +65,10 @@ void RemarkLinker::setExternalFilePrependPath(StringRef PrependPathIn) {
   PrependPath = std::string(PrependPathIn);
 }
 
-Error RemarkLinker::link(StringRef Buffer, std::optional<Format> RemarkFormat) {
+// Discard remarks with no source location.
+static bool shouldKeepRemark(const Remark &R) { return R.Loc.has_value(); }
+
+Error RemarkLinker::link(StringRef Buffer, Optional<Format> RemarkFormat) {
   if (!RemarkFormat) {
     Expected<Format> ParserFormat = magicToFormat(Buffer);
     if (!ParserFormat)
@@ -76,9 +78,9 @@ Error RemarkLinker::link(StringRef Buffer, std::optional<Format> RemarkFormat) {
 
   Expected<std::unique_ptr<RemarkParser>> MaybeParser =
       createRemarkParserFromMeta(
-          *RemarkFormat, Buffer, /*StrTab=*/std::nullopt,
-          PrependPath ? std::optional<StringRef>(StringRef(*PrependPath))
-                      : std::optional<StringRef>());
+          *RemarkFormat, Buffer, /*StrTab=*/None,
+          PrependPath ? Optional<StringRef>(StringRef(*PrependPath))
+                      : Optional<StringRef>());
   if (!MaybeParser)
     return MaybeParser.takeError();
 
@@ -103,13 +105,12 @@ Error RemarkLinker::link(StringRef Buffer, std::optional<Format> RemarkFormat) {
 }
 
 Error RemarkLinker::link(const object::ObjectFile &Obj,
-                         std::optional<Format> RemarkFormat) {
-  Expected<std::optional<StringRef>> SectionOrErr =
-      getRemarksSectionContents(Obj);
+                         Optional<Format> RemarkFormat) {
+  Expected<Optional<StringRef>> SectionOrErr = getRemarksSectionContents(Obj);
   if (!SectionOrErr)
     return SectionOrErr.takeError();
 
-  if (std::optional<StringRef> Section = *SectionOrErr)
+  if (Optional<StringRef> Section = *SectionOrErr)
     return link(*Section, RemarkFormat);
   return Error::success();
 }

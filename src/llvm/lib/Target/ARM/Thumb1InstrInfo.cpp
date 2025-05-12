@@ -75,18 +75,17 @@ void Thumb1InstrInfo::copyPhysReg(MachineBasicBlock &MBB,
   }
 }
 
-void Thumb1InstrInfo::storeRegToStackSlot(MachineBasicBlock &MBB,
-                                          MachineBasicBlock::iterator I,
-                                          Register SrcReg, bool isKill, int FI,
-                                          const TargetRegisterClass *RC,
-                                          const TargetRegisterInfo *TRI,
-                                          Register VReg) const {
+void Thumb1InstrInfo::
+storeRegToStackSlot(MachineBasicBlock &MBB, MachineBasicBlock::iterator I,
+                    Register SrcReg, bool isKill, int FI,
+                    const TargetRegisterClass *RC,
+                    const TargetRegisterInfo *TRI) const {
   assert((RC == &ARM::tGPRRegClass ||
-          (SrcReg.isPhysical() && isARMLowRegister(SrcReg))) &&
+          (Register::isPhysicalRegister(SrcReg) && isARMLowRegister(SrcReg))) &&
          "Unknown regclass!");
 
   if (RC == &ARM::tGPRRegClass ||
-      (SrcReg.isPhysical() && isARMLowRegister(SrcReg))) {
+      (Register::isPhysicalRegister(SrcReg) && isARMLowRegister(SrcReg))) {
     DebugLoc DL;
     if (I != MBB.end()) DL = I->getDebugLoc();
 
@@ -104,18 +103,18 @@ void Thumb1InstrInfo::storeRegToStackSlot(MachineBasicBlock &MBB,
   }
 }
 
-void Thumb1InstrInfo::loadRegFromStackSlot(MachineBasicBlock &MBB,
-                                           MachineBasicBlock::iterator I,
-                                           Register DestReg, int FI,
-                                           const TargetRegisterClass *RC,
-                                           const TargetRegisterInfo *TRI,
-                                           Register VReg) const {
-  assert((RC->hasSuperClassEq(&ARM::tGPRRegClass) ||
-          (DestReg.isPhysical() && isARMLowRegister(DestReg))) &&
-         "Unknown regclass!");
+void Thumb1InstrInfo::
+loadRegFromStackSlot(MachineBasicBlock &MBB, MachineBasicBlock::iterator I,
+                     Register DestReg, int FI,
+                     const TargetRegisterClass *RC,
+                     const TargetRegisterInfo *TRI) const {
+  assert(
+      (RC->hasSuperClassEq(&ARM::tGPRRegClass) ||
+       (Register::isPhysicalRegister(DestReg) && isARMLowRegister(DestReg))) &&
+      "Unknown regclass!");
 
   if (RC->hasSuperClassEq(&ARM::tGPRRegClass) ||
-      (DestReg.isPhysical() && isARMLowRegister(DestReg))) {
+      (Register::isPhysicalRegister(DestReg) && isARMLowRegister(DestReg))) {
     DebugLoc DL;
     if (I != MBB.end()) DL = I->getDebugLoc();
 
@@ -136,21 +135,14 @@ void Thumb1InstrInfo::expandLoadStackGuard(
     MachineBasicBlock::iterator MI) const {
   MachineFunction &MF = *MI->getParent()->getParent();
   const TargetMachine &TM = MF.getTarget();
-  const ARMSubtarget &ST = MF.getSubtarget<ARMSubtarget>();
 
   assert(MF.getFunction().getParent()->getStackProtectorGuard() != "tls" &&
          "TLS stack protector not supported for Thumb1 targets");
 
-  unsigned Instr;
   if (TM.isPositionIndependent())
-    Instr = ARM::tLDRLIT_ga_pcrel;
-  else if (ST.genExecuteOnly() && ST.hasV8MBaselineOps())
-    Instr = ARM::t2MOVi32imm;
-  else if (ST.genExecuteOnly())
-    Instr = ARM::tMOVi32imm;
+    expandLoadStackGuardBase(MI, ARM::tLDRLIT_ga_pcrel, ARM::tLDRi);
   else
-    Instr = ARM::tLDRLIT_ga_abs;
-  expandLoadStackGuardBase(MI, Instr, ARM::tLDRi);
+    expandLoadStackGuardBase(MI, ARM::tLDRLIT_ga_abs, ARM::tLDRi);
 }
 
 bool Thumb1InstrInfo::canCopyGluedNodeDuringSchedule(SDNode *N) const {

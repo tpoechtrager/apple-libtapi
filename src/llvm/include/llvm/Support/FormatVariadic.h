@@ -26,6 +26,7 @@
 #define LLVM_SUPPORT_FORMATVARIADIC_H
 
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
@@ -36,7 +37,6 @@
 #include "llvm/Support/raw_ostream.h"
 #include <array>
 #include <cstddef>
-#include <optional>
 #include <string>
 #include <tuple>
 #include <utility>
@@ -103,7 +103,7 @@ public:
   }
   static SmallVector<ReplacementItem, 2> parseFormatString(StringRef Fmt);
 
-  static std::optional<ReplacementItem> parseReplacementItem(StringRef Spec);
+  static Optional<ReplacementItem> parseReplacementItem(StringRef Spec);
 
   std::string str() const {
     std::string Result;

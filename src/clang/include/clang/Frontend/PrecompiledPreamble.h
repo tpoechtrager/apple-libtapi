@@ -75,10 +75,6 @@ public:
   /// \param StoreInMemory Store PCH in memory. If false, PCH will be stored in
   /// a temporary file.
   ///
-  /// \param StoragePath The path to a directory, in which to create a temporary
-  /// file to store PCH in. If empty, the default system temporary directory is
-  /// used. This parameter is ignored if \p StoreInMemory is true.
-  ///
   /// \param Callbacks A set of callbacks to be executed when building
   /// the preamble.
   static llvm::ErrorOr<PrecompiledPreamble>
@@ -87,8 +83,7 @@ public:
         DiagnosticsEngine &Diagnostics,
         IntrusiveRefCntPtr<llvm::vfs::FileSystem> VFS,
         std::shared_ptr<PCHContainerOperations> PCHContainerOps,
-        bool StoreInMemory, StringRef StoragePath,
-        PreambleCallbacks &Callbacks);
+        bool StoreInMemory, PreambleCallbacks &Callbacks);
 
   PrecompiledPreamble(PrecompiledPreamble &&);
   PrecompiledPreamble &operator=(PrecompiledPreamble &&);

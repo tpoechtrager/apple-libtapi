@@ -28,7 +28,9 @@ bool MCObjectWriter::isSymbolRefDifferenceFullyResolved(
 
   const MCSymbol &SA = A->getSymbol();
   const MCSymbol &SB = B->getSymbol();
-  assert(!SA.isUndefined() && !SB.isUndefined());
+  if (SA.isUndefined() || SB.isUndefined())
+    return false;
+
   if (!SA.getFragment() || !SB.getFragment())
     return false;
 

@@ -9,6 +9,7 @@
 #ifndef LLVM_CAS_HIERARCHICALTREEBUILDER_H
 #define LLVM_CAS_HIERARCHICALTREEBUILDER_H
 
+#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/CAS/CASReference.h"
 #include "llvm/CAS/TreeEntry.h"
@@ -28,17 +29,17 @@ class HierarchicalTreeBuilder {
   struct HierarchicalEntry {
   public:
     StringRef getPath() const { return Path; }
-    std::optional<ObjectRef> getRef() const { return Ref; }
+    Optional<ObjectRef> getRef() const { return Ref; }
     TreeEntry::EntryKind getKind() const { return Kind; }
 
-    HierarchicalEntry(std::optional<ObjectRef> Ref, TreeEntry::EntryKind Kind,
+    HierarchicalEntry(Optional<ObjectRef> Ref, TreeEntry::EntryKind Kind,
                       StringRef Path)
         : Ref(Ref), Kind(Kind), Path(Path.str()) {
       assert(Ref || Kind == TreeEntry::Tree);
     }
 
   private:
-    std::optional<ObjectRef> Ref;
+    Optional<ObjectRef> Ref;
     TreeEntry::EntryKind Kind;
     std::string Path;
   };
@@ -47,7 +48,7 @@ class HierarchicalTreeBuilder {
   SmallVector<HierarchicalEntry, 8> Entries;
   SmallVector<HierarchicalEntry, 0> TreeContents;
 
-  void pushImpl(std::optional<ObjectRef> Ref, TreeEntry::EntryKind Kind,
+  void pushImpl(Optional<ObjectRef> Ref, TreeEntry::EntryKind Kind,
                 const Twine &Path);
 
 public:
@@ -64,7 +65,7 @@ public:
   /// Add a directory. Ensures the directory will exist even if there are no
   /// files pushed from within it.
   void pushDirectory(const Twine &Path) {
-    return pushImpl(std::nullopt, TreeEntry::Tree, Path);
+    return pushImpl(None, TreeEntry::Tree, Path);
   }
 
   /// Add a directory with specific contents. It is functionally equivalent to:

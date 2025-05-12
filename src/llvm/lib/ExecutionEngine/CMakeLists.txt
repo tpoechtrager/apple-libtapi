@@ -21,7 +21,6 @@ add_llvm_component_library(LLVMExecutionEngine
   RuntimeDyld
   Support
   Target
-  TargetParser
   )
 
 if(BUILD_SHARED_LIBS)

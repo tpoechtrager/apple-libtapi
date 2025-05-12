@@ -59,7 +59,7 @@ bool isMaskArithmetic(SDValue Op) {
 }
 
 /// \returns the VVP_* SDNode opcode corresponsing to \p OC.
-std::optional<unsigned> getVVPOpcode(unsigned Opcode) {
+Optional<unsigned> getVVPOpcode(unsigned Opcode) {
   switch (Opcode) {
   case ISD::MLOAD:
     return VEISD::VVP_LOAD;
@@ -79,7 +79,7 @@ std::optional<unsigned> getVVPOpcode(unsigned Opcode) {
   case ISD::EXPERIMENTAL_VP_STRIDED_STORE:
     return VEISD::VVP_STORE;
   }
-  return std::nullopt;
+  return None;
 }
 
 bool maySafelyIgnoreMask(SDValue Op) {
@@ -163,7 +163,7 @@ bool isVVPReductionOp(unsigned Opcode) {
 }
 
 // Return the AVL operand position for this VVP or VEC Op.
-std::optional<int> getAVLPos(unsigned Opc) {
+Optional<int> getAVLPos(unsigned Opc) {
   // This is only available for VP SDNodes
   auto PosOpt = ISD::getVPExplicitVectorLengthIdx(Opc);
   if (PosOpt)
@@ -185,10 +185,10 @@ std::optional<int> getAVLPos(unsigned Opc) {
     return 5;
   }
 
-  return std::nullopt;
+  return None;
 }
 
-std::optional<int> getMaskPos(unsigned Opc) {
+Optional<int> getMaskPos(unsigned Opc) {
   // This is only available for VP SDNodes
   auto PosOpt = ISD::getVPMaskIdx(Opc);
   if (PosOpt)
@@ -208,7 +208,7 @@ std::optional<int> getMaskPos(unsigned Opc) {
     return 2;
   }
 
-  return std::nullopt;
+  return None;
 }
 
 bool isLegalAVL(SDValue AVL) { return AVL->getOpcode() == VEISD::LEGALAVL; }
@@ -240,7 +240,7 @@ SDValue getMemoryPtr(SDValue Op) {
   return SDValue();
 }
 
-std::optional<EVT> getIdiomaticVectorType(SDNode *Op) {
+Optional<EVT> getIdiomaticVectorType(SDNode *Op) {
   unsigned OC = Op->getOpcode();
 
   // For memory ops -> the transfered data type

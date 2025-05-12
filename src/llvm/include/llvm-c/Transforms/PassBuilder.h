@@ -99,9 +99,6 @@ void LLVMPassBuilderOptionsSetCallGraphProfile(
 void LLVMPassBuilderOptionsSetMergeFunctions(LLVMPassBuilderOptionsRef Options,
                                              LLVMBool MergeFunctions);
 
-void LLVMPassBuilderOptionsSetInlinerThreshold(
-    LLVMPassBuilderOptionsRef Options, int Threshold);
-
 /**
  * Dispose of a heap-allocated PassBuilderOptions instance
  */

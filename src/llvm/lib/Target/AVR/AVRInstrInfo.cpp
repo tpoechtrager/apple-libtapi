@@ -35,9 +35,8 @@
 
 namespace llvm {
 
-AVRInstrInfo::AVRInstrInfo(AVRSubtarget &STI)
-    : AVRGenInstrInfo(AVR::ADJCALLSTACKDOWN, AVR::ADJCALLSTACKUP), RI(),
-      STI(STI) {}
+AVRInstrInfo::AVRInstrInfo()
+    : AVRGenInstrInfo(AVR::ADJCALLSTACKDOWN, AVR::ADJCALLSTACKUP), RI() {}
 
 void AVRInstrInfo::copyPhysReg(MachineBasicBlock &MBB,
                                MachineBasicBlock::iterator MI,
@@ -59,21 +58,16 @@ void AVRInstrInfo::copyPhysReg(MachineBasicBlock &MBB,
       TRI.splitReg(DestReg, DestLo, DestHi);
       TRI.splitReg(SrcReg, SrcLo, SrcHi);
 
-      // Emit the copies.
-      // The original instruction was for a register pair, of which only one
-      // register might have been live. Add 'undef' to satisfy the machine
-      // verifier, when subreg liveness is enabled.
-      // TODO: Eliminate these unnecessary copies.
       if (DestLo == SrcHi) {
         BuildMI(MBB, MI, DL, get(AVR::MOVRdRr), DestHi)
-            .addReg(SrcHi, getKillRegState(KillSrc) | RegState::Undef);
+            .addReg(SrcHi, getKillRegState(KillSrc));
         BuildMI(MBB, MI, DL, get(AVR::MOVRdRr), DestLo)
-            .addReg(SrcLo, getKillRegState(KillSrc) | RegState::Undef);
+            .addReg(SrcLo, getKillRegState(KillSrc));
       } else {
         BuildMI(MBB, MI, DL, get(AVR::MOVRdRr), DestLo)
-            .addReg(SrcLo, getKillRegState(KillSrc) | RegState::Undef);
+            .addReg(SrcLo, getKillRegState(KillSrc));
         BuildMI(MBB, MI, DL, get(AVR::MOVRdRr), DestHi)
-            .addReg(SrcHi, getKillRegState(KillSrc) | RegState::Undef);
+            .addReg(SrcHi, getKillRegState(KillSrc));
       }
     }
   } else {
@@ -130,10 +124,12 @@ unsigned AVRInstrInfo::isStoreToStackSlot(const MachineInstr &MI,
   return 0;
 }
 
-void AVRInstrInfo::storeRegToStackSlot(
-    MachineBasicBlock &MBB, MachineBasicBlock::iterator MI, Register SrcReg,
-    bool isKill, int FrameIndex, const TargetRegisterClass *RC,
-    const TargetRegisterInfo *TRI, Register VReg) const {
+void AVRInstrInfo::storeRegToStackSlot(MachineBasicBlock &MBB,
+                                       MachineBasicBlock::iterator MI,
+                                       Register SrcReg, bool isKill,
+                                       int FrameIndex,
+                                       const TargetRegisterClass *RC,
+                                       const TargetRegisterInfo *TRI) const {
   MachineFunction &MF = *MBB.getParent();
   AVRMachineFunctionInfo *AFI = MF.getInfo<AVRMachineFunctionInfo>();
 
@@ -166,8 +162,7 @@ void AVRInstrInfo::loadRegFromStackSlot(MachineBasicBlock &MBB,
                                         MachineBasicBlock::iterator MI,
                                         Register DestReg, int FrameIndex,
                                         const TargetRegisterClass *RC,
-                                        const TargetRegisterInfo *TRI,
-                                        Register VReg) const {
+                                        const TargetRegisterInfo *TRI) const {
   MachineFunction &MF = *MBB.getParent();
   const MachineFrameInfo &MFI = MF.getFrameInfo();
 
@@ -570,10 +565,7 @@ void AVRInstrInfo::insertIndirectBranch(MachineBasicBlock &MBB,
   // insertBranch or some hypothetical "insertDirectBranch".
   // See lib/CodeGen/RegisterRelaxation.cpp for details.
   // We end up here when a jump is too long for a RJMP instruction.
-  if (STI.hasJMPCALL())
-    BuildMI(&MBB, DL, get(AVR::JMPk)).addMBB(&NewDestBB);
-  else
-    report_fatal_error("cannot create long jump without FeatureJMPCALL");
+  BuildMI(&MBB, DL, get(AVR::JMPk)).addMBB(&NewDestBB);
 }
 
 } // end of namespace llvm

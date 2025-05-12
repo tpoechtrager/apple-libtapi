@@ -5,7 +5,6 @@ set(LLVM_LINK_COMPONENTS
     Object
     Support
     Symbolize
-    TargetParser
     )
 
 add_llvm_library(LLVMCFIVerify

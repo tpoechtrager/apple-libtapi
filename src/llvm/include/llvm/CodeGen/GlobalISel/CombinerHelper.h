@@ -19,17 +19,18 @@
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
-#include "llvm/CodeGen/LowLevelType.h"
 #include "llvm/CodeGen/Register.h"
+#include "llvm/Support/LowLevelTypeImpl.h"
 #include "llvm/IR/InstrTypes.h"
 #include <functional>
 
 namespace llvm {
 
 class GISelChangeObserver;
+class APFloat;
 class APInt;
-class ConstantFP;
 class GPtrAdd;
+class GStore;
 class GZExtLoad;
 class MachineIRBuilder;
 class MachineInstrBuilder;
@@ -78,6 +79,14 @@ struct ShiftOfShiftedLogic {
 
 using BuildFnTy = std::function<void(MachineIRBuilder &)>;
 
+struct MergeTruncStoresInfo {
+  SmallVector<GStore *> FoundStores;
+  GStore *LowestIdxStore = nullptr;
+  Register WideSrcVal;
+  bool NeedBSwap = false;
+  bool NeedRotate = false;
+};
+
 using OperandBuildSteps =
     SmallVector<std::function<void(MachineInstrBuilder &)>, 4>;
 struct InstructionBuildSteps {
@@ -118,10 +127,6 @@ public:
 
   GISelKnownBits *getKnownBits() const {
     return KB;
-  }
-
-  MachineIRBuilder &getBuilder() const {
-    return Builder;
   }
 
   const TargetLowering &getTargetLowering() const;
@@ -301,8 +306,6 @@ public:
   void applyShiftOfShiftedLogic(MachineInstr &MI,
                                 ShiftOfShiftedLogic &MatchInfo);
 
-  bool matchCommuteShift(MachineInstr &MI, BuildFnTy &MatchInfo);
-
   /// Transform a multiply by a power-of-2 value to a left shift.
   bool matchCombineMulToShl(MachineInstr &MI, unsigned &ShiftVal);
   void applyCombineMulToShl(MachineInstr &MI, unsigned &ShiftVal);
@@ -351,7 +354,10 @@ public:
   void applyCombineUnmergeZExtToZExt(MachineInstr &MI);
 
   /// Transform fp_instr(cst) to constant result of the fp operation.
-  void applyCombineConstantFoldFpUnary(MachineInstr &MI, const ConstantFP *Cst);
+  bool matchCombineConstantFoldFpUnary(MachineInstr &MI,
+                                       Optional<APFloat> &Cst);
+  void applyCombineConstantFoldFpUnary(MachineInstr &MI,
+                                       Optional<APFloat> &Cst);
 
   /// Transform IntToPtr(PtrToInt(x)) to x if cast is in the same address space.
   bool matchCombineI2PToP2I(MachineInstr &MI, Register &Reg);
@@ -396,17 +402,12 @@ public:
   void applyCombineTruncOfExt(MachineInstr &MI,
                               std::pair<Register, unsigned> &MatchInfo);
 
-  /// Transform trunc (shl x, K) to shl (trunc x), K
-  ///    if K < VT.getScalarSizeInBits().
-  ///
-  /// Transforms trunc ([al]shr x, K) to (trunc ([al]shr (MidVT (trunc x)), K))
-  ///    if K <= (MidVT.getScalarSizeInBits() - VT.getScalarSizeInBits())
-  /// MidVT is obtained by finding a legal type between the trunc's src and dst
-  /// types.
-  bool matchCombineTruncOfShift(MachineInstr &MI,
-                                std::pair<MachineInstr *, LLT> &MatchInfo);
-  void applyCombineTruncOfShift(MachineInstr &MI,
-                                std::pair<MachineInstr *, LLT> &MatchInfo);
+  /// Transform trunc (shl x, K) to shl (trunc x),
+  /// K => K < VT.getScalarSizeInBits().
+  bool matchCombineTruncOfShl(MachineInstr &MI,
+                              std::pair<Register, Register> &MatchInfo);
+  void applyCombineTruncOfShl(MachineInstr &MI,
+                              std::pair<Register, Register> &MatchInfo);
 
   /// Transform G_MUL(x, -1) to G_SUB(0, x)
   void applyCombineMulByNegativeOne(MachineInstr &MI);
@@ -436,22 +437,22 @@ public:
   bool matchConstantSelectCmp(MachineInstr &MI, unsigned &OpIdx);
 
   /// Replace an instruction with a G_FCONSTANT with value \p C.
-  void replaceInstWithFConstant(MachineInstr &MI, double C);
+  bool replaceInstWithFConstant(MachineInstr &MI, double C);
 
   /// Replace an instruction with a G_CONSTANT with value \p C.
-  void replaceInstWithConstant(MachineInstr &MI, int64_t C);
+  bool replaceInstWithConstant(MachineInstr &MI, int64_t C);
 
   /// Replace an instruction with a G_CONSTANT with value \p C.
-  void replaceInstWithConstant(MachineInstr &MI, APInt C);
+  bool replaceInstWithConstant(MachineInstr &MI, APInt C);
 
   /// Replace an instruction with a G_IMPLICIT_DEF.
-  void replaceInstWithUndef(MachineInstr &MI);
+  bool replaceInstWithUndef(MachineInstr &MI);
 
   /// Delete \p MI and replace all of its uses with its \p OpIdx-th operand.
-  void replaceSingleDefInstWithOperand(MachineInstr &MI, unsigned OpIdx);
+  bool replaceSingleDefInstWithOperand(MachineInstr &MI, unsigned OpIdx);
 
   /// Delete \p MI and replace all of its uses with \p Replacement.
-  void replaceSingleDefInstWithReg(MachineInstr &MI, Register Replacement);
+  bool replaceSingleDefInstWithReg(MachineInstr &MI, Register Replacement);
 
   /// Return true if \p MOP1 and \p MOP2 are register operands are defined by
   /// equivalent instructions.
@@ -477,7 +478,7 @@ public:
   bool matchOperandIsKnownToBeAPowerOfTwo(MachineInstr &MI, unsigned OpIdx);
 
   /// Erase \p MI
-  void eraseInst(MachineInstr &MI);
+  bool eraseInst(MachineInstr &MI);
 
   /// Return true if MI is a G_ADD which can be simplified to a G_SUB.
   bool matchSimplifyAddToSub(MachineInstr &MI,
@@ -548,7 +549,7 @@ public:
   /// binop (select cond, K0, K1), K2 ->
   ///   select cond, (binop K0, K2), (binop K1, K2)
   bool matchFoldBinOpIntoSelect(MachineInstr &MI, unsigned &SelectOpNo);
-  void applyFoldBinOpIntoSelect(MachineInstr &MI, const unsigned &SelectOpNo);
+  bool applyFoldBinOpIntoSelect(MachineInstr &MI, const unsigned &SelectOpNo);
 
   bool matchCombineInsertVecElts(MachineInstr &MI,
                                  SmallVectorImpl<Register> &MatchInfo);
@@ -566,6 +567,9 @@ public:
   /// And check if the tree can be replaced with a M-bit load + possibly a
   /// bswap.
   bool matchLoadOrCombine(MachineInstr &MI, BuildFnTy &MatchInfo);
+
+  bool matchTruncStoreMerge(MachineInstr &MI, MergeTruncStoresInfo &MatchInfo);
+  void applyTruncStoreMerge(MachineInstr &MI, MergeTruncStoresInfo &MatchInfo);
 
   bool matchExtendThroughPhis(MachineInstr &MI, MachineInstr *&ExtMI);
   void applyExtendThroughPhis(MachineInstr &MI, MachineInstr *&ExtMI);
@@ -629,12 +633,6 @@ public:
   /// addressing mode usage.
   bool matchReassocPtrAdd(MachineInstr &MI, BuildFnTy &MatchInfo);
 
-  /// Try to reassociate to reassociate operands of a commutative binop.
-  bool tryReassocBinOp(unsigned Opc, Register DstReg, Register Op0,
-                       Register Op1, BuildFnTy &MatchInfo);
-  /// Reassociate commutative binary operations like G_ADD.
-  bool matchReassocCommBinOp(MachineInstr &MI, BuildFnTy &MatchInfo);
-
   /// Do constant folding when opportunities are exposed after MIR building.
   bool matchConstantFold(MachineInstr &MI, APInt &MatchInfo);
 
@@ -697,9 +695,6 @@ public:
   ///           (fmad fneg(x), fneg(y), z) -> (fmad x, y, z)
   ///           (fma fneg(x), fneg(y), z) -> (fma x, y, z)
   bool matchRedundantNegOperands(MachineInstr &MI, BuildFnTy &MatchInfo);
-
-  bool matchFsubToFneg(MachineInstr &MI, Register &MatchInfo);
-  void applyFsubToFneg(MachineInstr &MI, Register &MatchInfo);
 
   bool canCombineFMadOrFMA(MachineInstr &MI, bool &AllowFusionGlobally,
                            bool &HasFMAD, bool &Aggressive,
@@ -782,9 +777,6 @@ public:
   ///   (X ^ Y) != X -> Y != 0
   bool matchRedundantBinOpInEquality(MachineInstr &MI, BuildFnTy &MatchInfo);
 
-  /// Match shifts greater or equal to the bitwidth of the operation.
-  bool matchShiftsTooBig(MachineInstr &MI);
-
 private:
   /// Given a non-indexed load or store instruction \p MI, find an offset that
   /// can be usefully and legally folded into it as a post-indexing operation.
@@ -806,7 +798,7 @@ private:
   /// \param [in] Root - The search root.
   ///
   /// \returns The Registers found during the search.
-  std::optional<SmallVector<Register, 8>>
+  Optional<SmallVector<Register, 8>>
   findCandidatesForLoadOrCombine(const MachineInstr *Root) const;
 
   /// Helper function for matchLoadOrCombine.
@@ -820,7 +812,7 @@ private:
   ///
   /// \returns On success, a 3-tuple containing lowest-index load found, the
   /// lowest index, and the last load in the sequence.
-  std::optional<std::tuple<GZExtLoad *, int64_t, GZExtLoad *>>
+  Optional<std::tuple<GZExtLoad *, int64_t, GZExtLoad *>>
   findLoadOffsetsForLoadOrCombine(
       SmallDenseMap<int64_t, int64_t, 8> &MemOffset2Idx,
       const SmallVector<Register, 8> &RegsToVisit,

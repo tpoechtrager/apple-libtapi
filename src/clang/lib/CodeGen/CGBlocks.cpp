@@ -505,10 +505,12 @@ static void initializeForBlockHeader(CodeGenModule &CGM, CGBlockInfo &info,
   if (CGM.getLangOpts().OpenCL) {
     // The header is basically 'struct { int; int; generic void *;
     // custom_fields; }'. Assert that struct is packed.
-    auto GenPtrAlign = CharUnits::fromQuantity(
-        CGM.getTarget().getPointerAlign(LangAS::opencl_generic) / 8);
-    auto GenPtrSize = CharUnits::fromQuantity(
-        CGM.getTarget().getPointerWidth(LangAS::opencl_generic) / 8);
+    auto GenericAS =
+        CGM.getContext().getTargetAddressSpace(LangAS::opencl_generic);
+    auto GenPtrAlign =
+        CharUnits::fromQuantity(CGM.getTarget().getPointerAlign(GenericAS) / 8);
+    auto GenPtrSize =
+        CharUnits::fromQuantity(CGM.getTarget().getPointerWidth(GenericAS) / 8);
     assert(CGM.getIntSize() <= GenPtrSize);
     assert(CGM.getIntAlign() <= GenPtrAlign);
     assert((2 * CGM.getIntSize()).isMultipleOf(GenPtrAlign));
@@ -525,7 +527,7 @@ static void initializeForBlockHeader(CodeGenModule &CGM, CGBlockInfo &info,
       for (auto *I : Helper->getCustomFieldTypes()) /* custom fields */ {
         // TargetOpenCLBlockHelp needs to make sure the struct is packed.
         // If necessary, add padding fields to the custom fields.
-        unsigned Align = CGM.getDataLayout().getABITypeAlign(I).value();
+        unsigned Align = CGM.getDataLayout().getABITypeAlignment(I);
         if (BlockAlign < Align)
           BlockAlign = Align;
         assert(Offset % Align == 0);
@@ -807,7 +809,9 @@ llvm::Value *CodeGenFunction::EmitBlockLiteral(const CGBlockInfo &blockInfo) {
       IsOpenCL ? CGM.getOpenCLRuntime().getGenericVoidPointerType() : VoidPtrTy;
   LangAS GenVoidPtrAddr = IsOpenCL ? LangAS::opencl_generic : LangAS::Default;
   auto GenVoidPtrSize = CharUnits::fromQuantity(
-      CGM.getTarget().getPointerWidth(GenVoidPtrAddr) / 8);
+      CGM.getTarget().getPointerWidth(
+          CGM.getContext().getTargetAddressSpace(GenVoidPtrAddr)) /
+      8);
   // Using the computed layout, generate the actual block function.
   bool isLambdaConv = blockInfo.getBlockDecl()->isConversionFromLambda();
   CodeGenFunction BlockCGF{CGM, true};
@@ -1287,8 +1291,9 @@ Address CodeGenFunction::GetAddrOfBlockDecl(const VarDecl *variable) {
     // to byref*.
 
     auto &byrefInfo = getBlockByrefInfo(variable);
-    addr = Address(Builder.CreateLoad(addr), byrefInfo.Type,
-                   byrefInfo.ByrefAlignment);
+    addr = Address(Builder.CreateLoad(addr), Int8Ty, byrefInfo.ByrefAlignment);
+
+    addr = Builder.CreateElementBitCast(addr, byrefInfo.Type, "byref.addr");
 
     addr = emitBlockByrefAddress(addr, byrefInfo, /*follow*/ true,
                                  variable->getName());
@@ -1465,8 +1470,7 @@ void CodeGenFunction::setBlockContextParameter(const ImplicitParamDecl *D,
   // directly as BlockPointer.
   BlockPointer = Builder.CreatePointerCast(
       arg,
-      llvm::PointerType::get(
-          getLLVMContext(),
+      BlockInfo->StructureType->getPointerTo(
           getContext().getLangOpts().OpenCL
               ? getContext().getTargetAddressSpace(LangAS::opencl_generic)
               : 0),
@@ -1989,12 +1993,14 @@ CodeGenFunction::GenerateCopyHelperFunction(const CGBlockInfo &blockInfo) {
   auto AL = ApplyDebugLocation::CreateArtificial(*this);
 
   Address src = GetAddrOfLocalVar(&SrcDecl);
-  src = Address(Builder.CreateLoad(src), blockInfo.StructureType,
-                blockInfo.BlockAlign);
+  src = Address(Builder.CreateLoad(src), Int8Ty, blockInfo.BlockAlign);
+  src = Builder.CreateElementBitCast(src, blockInfo.StructureType,
+                                     "block.source");
 
   Address dst = GetAddrOfLocalVar(&DstDecl);
-  dst = Address(Builder.CreateLoad(dst), blockInfo.StructureType,
-                blockInfo.BlockAlign);
+  dst = Address(Builder.CreateLoad(dst), Int8Ty, blockInfo.BlockAlign);
+  dst =
+      Builder.CreateElementBitCast(dst, blockInfo.StructureType, "block.dest");
 
   for (auto &capture : blockInfo.SortedCaptures) {
     if (capture.isConstantOrTrivial())
@@ -2185,8 +2191,8 @@ CodeGenFunction::GenerateDestroyHelperFunction(const CGBlockInfo &blockInfo) {
   auto AL = ApplyDebugLocation::CreateArtificial(*this);
 
   Address src = GetAddrOfLocalVar(&SrcDecl);
-  src = Address(Builder.CreateLoad(src), blockInfo.StructureType,
-                blockInfo.BlockAlign);
+  src = Address(Builder.CreateLoad(src), Int8Ty, blockInfo.BlockAlign);
+  src = Builder.CreateElementBitCast(src, blockInfo.StructureType, "block");
 
   CodeGenFunction::RunCleanupsScope cleanups(*this);
 
@@ -2223,9 +2229,9 @@ public:
 
   void emitCopy(CodeGenFunction &CGF, Address destField,
                 Address srcField) override {
-    destField = destField.withElementType(CGF.Int8Ty);
+    destField = CGF.Builder.CreateElementBitCast(destField, CGF.Int8Ty);
 
-    srcField = srcField.withElementType(CGF.Int8PtrTy);
+    srcField = CGF.Builder.CreateElementBitCast(srcField, CGF.Int8PtrTy);
     llvm::Value *srcValue = CGF.Builder.CreateLoad(srcField);
 
     unsigned flags = (Flags | BLOCK_BYREF_CALLER).getBitMask();
@@ -2238,7 +2244,7 @@ public:
   }
 
   void emitDispose(CodeGenFunction &CGF, Address field) override {
-    field = field.withElementType(CGF.Int8PtrTy);
+    field = CGF.Builder.CreateElementBitCast(field, CGF.Int8PtrTy);
     llvm::Value *value = CGF.Builder.CreateLoad(field);
 
     CGF.BuildBlockRelease(value, Flags | BLOCK_BYREF_CALLER, false);
@@ -2457,15 +2463,17 @@ generateByrefCopyHelper(CodeGenFunction &CGF, const BlockByrefInfo &byrefInfo,
   if (generator.needsCopy()) {
     // dst->x
     Address destField = CGF.GetAddrOfLocalVar(&Dst);
-    destField = Address(CGF.Builder.CreateLoad(destField), byrefInfo.Type,
+    destField = Address(CGF.Builder.CreateLoad(destField), CGF.Int8Ty,
                         byrefInfo.ByrefAlignment);
+    destField = CGF.Builder.CreateElementBitCast(destField, byrefInfo.Type);
     destField =
         CGF.emitBlockByrefAddress(destField, byrefInfo, false, "dest-object");
 
     // src->x
     Address srcField = CGF.GetAddrOfLocalVar(&Src);
-    srcField = Address(CGF.Builder.CreateLoad(srcField), byrefInfo.Type,
+    srcField = Address(CGF.Builder.CreateLoad(srcField), CGF.Int8Ty,
                        byrefInfo.ByrefAlignment);
+    srcField = CGF.Builder.CreateElementBitCast(srcField, byrefInfo.Type);
     srcField =
         CGF.emitBlockByrefAddress(srcField, byrefInfo, false, "src-object");
 
@@ -2521,8 +2529,9 @@ generateByrefDisposeHelper(CodeGenFunction &CGF,
 
   if (generator.needsDispose()) {
     Address addr = CGF.GetAddrOfLocalVar(&Src);
-    addr = Address(CGF.Builder.CreateLoad(addr), byrefInfo.Type,
+    addr = Address(CGF.Builder.CreateLoad(addr), CGF.Int8Ty,
                    byrefInfo.ByrefAlignment);
+    addr = CGF.Builder.CreateElementBitCast(addr, byrefInfo.Type);
     addr = CGF.emitBlockByrefAddress(addr, byrefInfo, false, "object");
 
     generator.emitDispose(CGF, addr);
@@ -2762,7 +2771,7 @@ const BlockByrefInfo &CodeGenFunction::getBlockByrefInfo(const VarDecl *D) {
     size = varOffset;
 
   // Conversely, we might have to prevent LLVM from inserting padding.
-  } else if (CGM.getDataLayout().getABITypeAlign(varTy) >
+  } else if (CGM.getDataLayout().getABITypeAlignment(varTy) >
              uint64_t(varAlign.getQuantity())) {
     packed = true;
   }

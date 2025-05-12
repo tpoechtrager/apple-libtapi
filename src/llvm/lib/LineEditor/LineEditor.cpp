@@ -248,14 +248,14 @@ void LineEditor::loadHistory() {
   }
 }
 
-std::optional<std::string> LineEditor::readLine() const {
+Optional<std::string> LineEditor::readLine() const {
   // Call el_gets to prompt the user and read the user's input.
   int LineLen = 0;
   const char *Line = ::el_gets(Data->EL, &LineLen);
 
   // Either of these may mean end-of-file.
   if (!Line || LineLen == 0)
-    return std::nullopt;
+    return Optional<std::string>();
 
   // Strip any newlines off the end of the string.
   while (LineLen > 0 &&
@@ -292,7 +292,7 @@ LineEditor::~LineEditor() {
 void LineEditor::saveHistory() {}
 void LineEditor::loadHistory() {}
 
-std::optional<std::string> LineEditor::readLine() const {
+Optional<std::string> LineEditor::readLine() const {
   ::fprintf(Data->Out, "%s", Prompt.c_str());
 
   std::string Line;
@@ -301,7 +301,7 @@ std::optional<std::string> LineEditor::readLine() const {
     char *Res = ::fgets(Buf, sizeof(Buf), Data->In);
     if (!Res) {
       if (Line.empty())
-        return std::nullopt;
+        return Optional<std::string>();
       else
         return Line;
     }

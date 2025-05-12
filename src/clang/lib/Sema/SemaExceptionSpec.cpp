@@ -21,7 +21,6 @@
 #include "clang/Basic/SourceManager.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallString.h"
-#include <optional>
 
 namespace clang {
 
@@ -171,12 +170,6 @@ bool Sema::CheckSpecifiedExceptionType(QualType &T, SourceRange Range) {
         PointeeT->castAs<RecordType>()->isBeingDefined()) &&
       RequireCompleteType(Range.getBegin(), PointeeT, DiagID, Kind, Range))
     return ReturnValueOnError;
-
-  // WebAssembly reference types can't be used in exception specifications.
-  if (PointeeT.isWebAssemblyReferenceType()) {
-    Diag(Range.getBegin(), diag::err_wasm_reftype_exception_spec);
-    return true;
-  }
 
   // The MSVC compatibility mode doesn't extend to sizeless types,
   // so diagnose them separately.
@@ -1296,7 +1289,6 @@ CanThrowResult Sema::canThrow(const Stmt *S) {
   case Expr::StmtExprClass:
   case Expr::ConvertVectorExprClass:
   case Expr::VAArgExprClass:
-  case Expr::CXXParenListInitExprClass:
     return canSubStmtsThrow(*this, S);
 
   case Expr::CompoundLiteralExprClass:
@@ -1502,7 +1494,6 @@ CanThrowResult Sema::canThrow(const Stmt *S) {
   case Stmt::OMPTaskLoopSimdDirectiveClass:
   case Stmt::OMPTaskwaitDirectiveClass:
   case Stmt::OMPTaskyieldDirectiveClass:
-  case Stmt::OMPErrorDirectiveClass:
   case Stmt::OMPTeamsDirectiveClass:
   case Stmt::OMPTeamsDistributeDirectiveClass:
   case Stmt::OMPTeamsDistributeParallelForDirectiveClass:
@@ -1554,7 +1545,7 @@ CanThrowResult Sema::canThrow(const Stmt *S) {
 
     // For 'if constexpr', consider only the non-discarded case.
     // FIXME: We should add a DiscardedStmt marker to the AST.
-    if (std::optional<const Stmt *> Case = IS->getNondiscardedCase(Context))
+    if (Optional<const Stmt *> Case = IS->getNondiscardedCase(Context))
       return *Case ? mergeCanThrow(CT, canThrow(*Case)) : CT;
 
     CanThrowResult Then = canThrow(IS->getThen());

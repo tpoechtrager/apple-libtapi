@@ -66,6 +66,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/SmallVector.h"
@@ -150,11 +151,11 @@ namespace {
   class RecurrenceInstr;
 
   class PeepholeOptimizer : public MachineFunctionPass {
-    const TargetInstrInfo *TII = nullptr;
-    const TargetRegisterInfo *TRI = nullptr;
-    MachineRegisterInfo *MRI = nullptr;
-    MachineDominatorTree *DT = nullptr; // Machine dominator tree
-    MachineLoopInfo *MLI = nullptr;
+    const TargetInstrInfo *TII;
+    const TargetRegisterInfo *TRI;
+    MachineRegisterInfo *MRI;
+    MachineDominatorTree *DT;  // Machine dominator tree
+    MachineLoopInfo *MLI;
 
   public:
     static char ID; // Pass identification
@@ -272,11 +273,11 @@ namespace {
       : MI(MI), CommutePair(std::make_pair(Idx1, Idx2)) {}
 
     MachineInstr *getMI() const { return MI; }
-    std::optional<IndexPair> getCommutePair() const { return CommutePair; }
+    Optional<IndexPair> getCommutePair() const { return CommutePair; }
 
   private:
     MachineInstr *MI;
-    std::optional<IndexPair> CommutePair;
+    Optional<IndexPair> CommutePair;
   };
 
   /// Helper class to hold a reply for ValueTracker queries.
@@ -695,7 +696,7 @@ bool PeepholeOptimizer::findNextSource(RegSubRegPair RegSubReg,
   do {
     CurSrcPair = SrcToLook.pop_back_val();
     // As explained above, do not handle physical registers
-    if (CurSrcPair.Reg.isPhysical())
+    if (Register::isPhysicalRegister(CurSrcPair.Reg))
       return false;
 
     ValueTracker ValTracker(CurSrcPair.Reg, CurSrcPair.SubReg, *MRI, TII);
@@ -743,7 +744,7 @@ bool PeepholeOptimizer::findNextSource(RegSubRegPair RegSubReg,
       // constraints to the register allocator. Moreover, if we want to extend
       // the live-range of a physical register, unlike SSA virtual register,
       // we will have to check that they aren't redefine before the related use.
-      if (CurSrcPair.Reg.isPhysical())
+      if (Register::isPhysicalRegister(CurSrcPair.Reg))
         return false;
 
       // Keep following the chain if the value isn't any better yet.
@@ -1190,7 +1191,7 @@ bool PeepholeOptimizer::optimizeCoalescableCopy(MachineInstr &MI) {
          "Coalescer can understand multiple defs?!");
   const MachineOperand &MODef = MI.getOperand(0);
   // Do not rewrite physical definitions.
-  if (MODef.getReg().isPhysical())
+  if (Register::isPhysicalRegister(MODef.getReg()))
     return false;
 
   bool Changed = false;
@@ -1241,7 +1242,8 @@ bool PeepholeOptimizer::optimizeCoalescableCopy(MachineInstr &MI) {
 MachineInstr &
 PeepholeOptimizer::rewriteSource(MachineInstr &CopyLike,
                                  RegSubRegPair Def, RewriteMapTy &RewriteMap) {
-  assert(!Def.Reg.isPhysical() && "We do not rewrite physical registers");
+  assert(!Register::isPhysicalRegister(Def.Reg) &&
+         "We do not rewrite physical registers");
 
   // Find the new source to use in the COPY rewrite.
   RegSubRegPair NewSrc = getNewSource(MRI, TII, Def, RewriteMap);
@@ -1299,7 +1301,7 @@ bool PeepholeOptimizer::optimizeUncoalescableCopy(
   while (CpyRewriter.getNextRewritableSource(Src, Def)) {
     // If a physical register is here, this is probably for a good reason.
     // Do not rewrite that.
-    if (Def.Reg.isPhysical())
+    if (Register::isPhysicalRegister(Def.Reg))
       return false;
 
     // If we do not know how to rewrite this definition, there is no point
@@ -1458,7 +1460,7 @@ bool PeepholeOptimizer::foldRedundantNAPhysCopy(
 
   Register DstReg = MI.getOperand(0).getReg();
   Register SrcReg = MI.getOperand(1).getReg();
-  if (isNAPhysCopy(SrcReg) && DstReg.isVirtual()) {
+  if (isNAPhysCopy(SrcReg) && Register::isVirtualRegister(DstReg)) {
     // %vreg = COPY $physreg
     // Avoid using a datastructure which can track multiple live non-allocatable
     // phys->virt copies since LLVM doesn't seem to do this.
@@ -2108,7 +2110,7 @@ ValueTrackerResult ValueTracker::getNextSource() {
 
     // If we can still move up in the use-def chain, move to the next
     // definition.
-    if (!Reg.isPhysical() && OneRegSrc) {
+    if (!Register::isPhysicalRegister(Reg) && OneRegSrc) {
       MachineRegisterInfo::def_iterator DI = MRI.def_begin(Reg);
       if (DI != MRI.def_end()) {
         Def = DI->getParent();

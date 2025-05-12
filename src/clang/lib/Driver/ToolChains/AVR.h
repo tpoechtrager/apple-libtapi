@@ -31,12 +31,10 @@ public:
                         llvm::opt::ArgStringList &CC1Args,
                         Action::OffloadKind DeviceOffloadKind) const override;
 
-  std::optional<std::string> findAVRLibcInstallation() const;
+  llvm::Optional<std::string> findAVRLibcInstallation() const;
   StringRef getGCCInstallPath() const { return GCCInstallPath; }
   std::string getCompilerRT(const llvm::opt::ArgList &Args, StringRef Component,
                             FileType Type) const override;
-
-  bool HasNativeLLVMSupport() const override { return true; }
 
 protected:
   Tool *buildLinker() const override;

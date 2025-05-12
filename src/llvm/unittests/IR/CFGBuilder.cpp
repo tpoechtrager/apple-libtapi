@@ -126,15 +126,15 @@ void CFGBuilder::buildCFG(const std::vector<Arc> &NewArcs) {
   }
 }
 
-std::optional<CFGBuilder::Update> CFGBuilder::getNextUpdate() const {
+Optional<CFGBuilder::Update> CFGBuilder::getNextUpdate() const {
   if (UpdateIdx == Updates.size())
-    return std::nullopt;
+    return None;
   return Updates[UpdateIdx];
 }
 
-std::optional<CFGBuilder::Update> CFGBuilder::applyUpdate() {
+Optional<CFGBuilder::Update> CFGBuilder::applyUpdate() {
   if (UpdateIdx == Updates.size())
-    return std::nullopt;
+    return None;
   Update NextUpdate = Updates[UpdateIdx++];
   if (NextUpdate.Action == ActionKind::Insert)
     connect(NextUpdate.Edge);
@@ -267,10 +267,11 @@ TEST(CFGBuilder, Rebuild) {
   EXPECT_TRUE(isa<SwitchInst>(B.getOrAddBlock("d")->getTerminator()));
 }
 
-static_assert(std::is_trivially_copyable_v<succ_iterator>,
+static_assert(std::is_trivially_copyable<succ_iterator>::value,
               "trivially copyable");
-static_assert(std::is_trivially_copyable_v<const_succ_iterator>,
+static_assert(std::is_trivially_copyable<const_succ_iterator>::value,
               "trivially copyable");
-static_assert(std::is_trivially_copyable_v<succ_range>, "trivially copyable");
-static_assert(std::is_trivially_copyable_v<const_succ_range>,
+static_assert(std::is_trivially_copyable<succ_range>::value,
+              "trivially copyable");
+static_assert(std::is_trivially_copyable<const_succ_range>::value,
               "trivially copyable");

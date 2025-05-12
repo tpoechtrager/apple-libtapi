@@ -1,4 +1,4 @@
-import("//third-party/unittest/unittest.gni")
+import("//llvm/utils/unittest/unittest.gni")
 
 unittest("SyntaxTests") {
   configs += [ "//llvm/utils/gn/build:clang_code" ]
@@ -13,7 +13,6 @@ unittest("SyntaxTests") {
     "//clang/lib/Tooling/Syntax",
     "//llvm/lib/Support",
     "//llvm/lib/Target:TargetsToBuild",
-    "//llvm/lib/Testing/Annotations",
     "//llvm/lib/Testing/Support",
   ]
   sources = [

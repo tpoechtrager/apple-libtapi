@@ -90,7 +90,7 @@ public:
 REGISTER_MAP_WITH_PROGRAMSTATE(StreamMap, SymbolRef, StreamState)
 
 SimpleStreamChecker::SimpleStreamChecker()
-    : OpenFn({"fopen"}), CloseFn({"fclose"}, 1) {
+    : OpenFn("fopen"), CloseFn("fclose", 1) {
   // Initialize the bug types.
   DoubleCloseBugType.reset(
       new BugType(this, "Double fclose", "Unix Stream API Error"));
@@ -163,11 +163,13 @@ void SimpleStreamChecker::checkDeadSymbols(SymbolReaper &SymReaper,
   ProgramStateRef State = C.getState();
   SymbolVector LeakedStreams;
   StreamMapTy TrackedStreams = State->get<StreamMap>();
-  for (auto [Sym, StreamStatus] : TrackedStreams) {
+  for (StreamMapTy::iterator I = TrackedStreams.begin(),
+                             E = TrackedStreams.end(); I != E; ++I) {
+    SymbolRef Sym = I->first;
     bool IsSymDead = SymReaper.isDead(Sym);
 
     // Collect leaked symbols.
-    if (isLeaked(Sym, StreamStatus, IsSymDead, State))
+    if (isLeaked(Sym, I->second, IsSymDead, State))
       LeakedStreams.push_back(Sym);
 
     // Remove the dead symbol from the streams map.
@@ -239,7 +241,11 @@ SimpleStreamChecker::checkPointerEscape(ProgramStateRef State,
     return State;
   }
 
-  for (SymbolRef Sym : Escaped) {
+  for (InvalidatedSymbols::const_iterator I = Escaped.begin(),
+                                          E = Escaped.end();
+                                          I != E; ++I) {
+    SymbolRef Sym = *I;
+
     // The symbol escaped. Optimistically, assume that the corresponding file
     // handle will be closed somewhere else.
     State = State->remove<StreamMap>(Sym);

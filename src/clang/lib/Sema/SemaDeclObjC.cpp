@@ -979,7 +979,7 @@ ObjCInterfaceDecl *Sema::ActOnStartClassInterface(
     ArrayRef<ParsedType> SuperTypeArgs, SourceRange SuperTypeArgsRange,
     Decl *const *ProtoRefs, unsigned NumProtoRefs,
     const SourceLocation *ProtoLocs, SourceLocation EndProtoLoc,
-    const ParsedAttributesView &AttrList, SkipBodyInfo *SkipBody) {
+    const ParsedAttributesView &AttrList) {
   assert(ClassName && "Missing class identifier");
 
   // Check for another declaration kind with the same name.
@@ -1061,16 +1061,10 @@ ObjCInterfaceDecl *Sema::ActOnStartClassInterface(
   if (PrevIDecl) {
     // Class already seen. Was it a definition?
     if (ObjCInterfaceDecl *Def = PrevIDecl->getDefinition()) {
-      if (SkipBody && !hasVisibleDefinition(Def)) {
-        SkipBody->CheckSameAsPrevious = true;
-        SkipBody->New = IDecl;
-        SkipBody->Previous = Def;
-      } else {
-        Diag(AtInterfaceLoc, diag::err_duplicate_class_def)
-            << PrevIDecl->getDeclName();
-        Diag(Def->getLocation(), diag::note_previous_definition);
-        IDecl->setInvalidDecl();
-      }
+      Diag(AtInterfaceLoc, diag::err_duplicate_class_def)
+        << PrevIDecl->getDeclName();
+      Diag(Def->getLocation(), diag::note_previous_definition);
+      IDecl->setInvalidDecl();
     }
   }
 
@@ -1084,9 +1078,7 @@ ObjCInterfaceDecl *Sema::ActOnStartClassInterface(
 
   // Start the definition of this class. If we're in a redefinition case, there
   // may already be a definition, so we'll end up adding to it.
-  if (SkipBody && SkipBody->CheckSameAsPrevious)
-    IDecl->startDuplicateDefinitionForComparison();
-  else if (!IDecl->hasDefinition())
+  if (!IDecl->hasDefinition())
     IDecl->startDefinition();
 
   if (SuperName) {
@@ -1225,7 +1217,7 @@ ObjCProtocolDecl *Sema::ActOnStartProtocolInterface(
     SourceLocation AtProtoInterfaceLoc, IdentifierInfo *ProtocolName,
     SourceLocation ProtocolLoc, Decl *const *ProtoRefs, unsigned NumProtoRefs,
     const SourceLocation *ProtoLocs, SourceLocation EndProtoLoc,
-    const ParsedAttributesView &AttrList, SkipBodyInfo *SkipBody) {
+    const ParsedAttributesView &AttrList) {
   bool err = false;
   // FIXME: Deal with AttrList.
   assert(ProtocolName && "Missing protocol identifier");
@@ -1233,29 +1225,23 @@ ObjCProtocolDecl *Sema::ActOnStartProtocolInterface(
                                               forRedeclarationInCurContext());
   ObjCProtocolDecl *PDecl = nullptr;
   if (ObjCProtocolDecl *Def = PrevDecl? PrevDecl->getDefinition() : nullptr) {
+    // If we already have a definition, complain.
+    Diag(ProtocolLoc, diag::warn_duplicate_protocol_def) << ProtocolName;
+    Diag(Def->getLocation(), diag::note_previous_definition);
+
     // Create a new protocol that is completely distinct from previous
     // declarations, and do not make this protocol available for name lookup.
     // That way, we'll end up completely ignoring the duplicate.
     // FIXME: Can we turn this into an error?
     PDecl = ObjCProtocolDecl::Create(Context, CurContext, ProtocolName,
                                      ProtocolLoc, AtProtoInterfaceLoc,
-                                     /*PrevDecl=*/Def);
-
-    if (SkipBody && !hasVisibleDefinition(Def)) {
-      SkipBody->CheckSameAsPrevious = true;
-      SkipBody->New = PDecl;
-      SkipBody->Previous = Def;
-    } else {
-      // If we already have a definition, complain.
-      Diag(ProtocolLoc, diag::warn_duplicate_protocol_def) << ProtocolName;
-      Diag(Def->getLocation(), diag::note_previous_definition);
-    }
+                                     /*PrevDecl=*/nullptr);
 
     // If we are using modules, add the decl to the context in order to
     // serialize something meaningful.
     if (getLangOpts().Modules)
       PushOnScopeChains(PDecl, TUScope);
-    PDecl->startDuplicateDefinitionForComparison();
+    PDecl->startDefinition();
   } else {
     if (PrevDecl) {
       // Check for circular dependencies among protocol declarations. This can
@@ -2378,17 +2364,21 @@ static bool CheckMethodOverrideReturn(Sema &S,
       !S.Context.hasSameNullabilityTypeQualifier(MethodImpl->getReturnType(),
                                                  MethodDecl->getReturnType(),
                                                  false)) {
-    auto nullabilityMethodImpl = *MethodImpl->getReturnType()->getNullability();
-    auto nullabilityMethodDecl = *MethodDecl->getReturnType()->getNullability();
-    S.Diag(MethodImpl->getLocation(),
-           diag::warn_conflicting_nullability_attr_overriding_ret_types)
-        << DiagNullabilityKind(nullabilityMethodImpl,
-                               ((MethodImpl->getObjCDeclQualifier() &
-                                 Decl::OBJC_TQ_CSNullability) != 0))
-        << DiagNullabilityKind(nullabilityMethodDecl,
-                               ((MethodDecl->getObjCDeclQualifier() &
-                                 Decl::OBJC_TQ_CSNullability) != 0));
-    S.Diag(MethodDecl->getLocation(), diag::note_previous_declaration);
+    auto nullabilityMethodImpl =
+      *MethodImpl->getReturnType()->getNullability(S.Context);
+    auto nullabilityMethodDecl =
+      *MethodDecl->getReturnType()->getNullability(S.Context);
+      S.Diag(MethodImpl->getLocation(),
+             diag::warn_conflicting_nullability_attr_overriding_ret_types)
+        << DiagNullabilityKind(
+             nullabilityMethodImpl,
+             ((MethodImpl->getObjCDeclQualifier() & Decl::OBJC_TQ_CSNullability)
+              != 0))
+        << DiagNullabilityKind(
+             nullabilityMethodDecl,
+             ((MethodDecl->getObjCDeclQualifier() & Decl::OBJC_TQ_CSNullability)
+                != 0));
+      S.Diag(MethodDecl->getLocation(), diag::note_previous_declaration);
   }
 
   if (S.Context.hasSameUnqualifiedType(MethodImpl->getReturnType(),
@@ -2466,12 +2456,14 @@ static bool CheckMethodOverrideParam(Sema &S,
       !S.Context.hasSameNullabilityTypeQualifier(ImplTy, IfaceTy, true)) {
     S.Diag(ImplVar->getLocation(),
            diag::warn_conflicting_nullability_attr_overriding_param_types)
-        << DiagNullabilityKind(*ImplTy->getNullability(),
-                               ((ImplVar->getObjCDeclQualifier() &
-                                 Decl::OBJC_TQ_CSNullability) != 0))
-        << DiagNullabilityKind(*IfaceTy->getNullability(),
-                               ((IfaceVar->getObjCDeclQualifier() &
-                                 Decl::OBJC_TQ_CSNullability) != 0));
+      << DiagNullabilityKind(
+           *ImplTy->getNullability(S.Context),
+           ((ImplVar->getObjCDeclQualifier() & Decl::OBJC_TQ_CSNullability)
+            != 0))
+      << DiagNullabilityKind(
+           *IfaceTy->getNullability(S.Context),
+           ((IfaceVar->getObjCDeclQualifier() & Decl::OBJC_TQ_CSNullability)
+            != 0));
     S.Diag(IfaceVar->getLocation(), diag::note_previous_declaration);
   }
   if (S.Context.hasSameUnqualifiedType(ImplTy, IfaceTy))
@@ -4598,8 +4590,8 @@ static QualType mergeTypeNullabilityForRedecl(Sema &S, SourceLocation loc,
                                               QualType prevType,
                                               bool prevUsesCSKeyword) {
   // Determine the nullability of both types.
-  auto nullability = type->getNullability();
-  auto prevNullability = prevType->getNullability();
+  auto nullability = type->getNullability(S.Context);
+  auto prevNullability = prevType->getNullability(S.Context);
 
   // Easy case: both have nullability.
   if (nullability.has_value() == prevNullability.has_value()) {
@@ -4623,7 +4615,9 @@ static QualType mergeTypeNullabilityForRedecl(Sema &S, SourceLocation loc,
     return type;
 
   // Otherwise, provide the result with the same nullability.
-  return S.Context.getAttributedType(*prevNullability, type, type);
+  return S.Context.getAttributedType(
+           AttributedType::getNullabilityAttrKind(*prevNullability),
+           type, type);
 }
 
 /// Merge information from the declaration of a method in the \@interface

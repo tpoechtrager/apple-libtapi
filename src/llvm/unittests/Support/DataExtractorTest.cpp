@@ -7,8 +7,6 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Support/DataExtractor.h"
-
-#include "llvm/ADT/StringExtras.h"
 #include "llvm/Testing/Support/Error.h"
 #include "gtest/gtest.h"
 using namespace llvm;
@@ -346,8 +344,7 @@ TEST(DataExtractorTest, FixedLengthString) {
   DataExtractor DE(StringRef(Data, sizeof(Data)-1), false, 8);
   uint64_t Offset = 0;
   StringRef Str;
-  // Test extracting too many bytes doesn't modify Offset and returns
-  // std::nullopt.
+  // Test extracting too many bytes doesn't modify Offset and returns None.
   Str = DE.getFixedLengthString(&Offset, sizeof(Data));
   EXPECT_TRUE(Str.empty());
   EXPECT_EQ(Offset, 0u);
@@ -377,8 +374,7 @@ TEST(DataExtractorTest, GetBytes) {
   DataExtractor DE(Bytes, false, 8);
   uint64_t Offset = 0;
   StringRef Str;
-  // Test extracting too many bytes doesn't modify Offset and returns
-  // std::nullopt.
+  // Test extracting too many bytes doesn't modify Offset and returns None.
   Str = DE.getBytes(&Offset, sizeof(Data));
   EXPECT_TRUE(Str.empty());
   EXPECT_EQ(Offset, 0u);

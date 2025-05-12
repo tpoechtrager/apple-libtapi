@@ -16,7 +16,6 @@
 
 #include "clang/StaticAnalyzer/Core/PathSensitive/ExprEngine.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/ProgramStateTrait.h"
-#include <optional>
 
 namespace clang {
 namespace ento {
@@ -140,7 +139,7 @@ public:
   /// example, for finding variables that the given symbol was assigned to.
   static const MemRegion *getLocationRegionIfPostStore(const ExplodedNode *N) {
     ProgramPoint L = N->getLocation();
-    if (std::optional<PostStore> PSL = L.getAs<PostStore>())
+    if (Optional<PostStore> PSL = L.getAs<PostStore>())
       return reinterpret_cast<const MemRegion*>(PSL->getLocationValue());
     return nullptr;
   }
@@ -316,8 +315,8 @@ public:
   ///        bug path significantly shorter.
   const NoteTag *getNoteTag(StringRef Note, bool IsPrunable = false) {
     return getNoteTag(
-        [Note = std::string(Note)](BugReporterContext &,
-               PathSensitiveBugReport &) { return Note; },
+        [Note](BugReporterContext &,
+               PathSensitiveBugReport &) { return std::string(Note); },
         IsPrunable);
   }
 

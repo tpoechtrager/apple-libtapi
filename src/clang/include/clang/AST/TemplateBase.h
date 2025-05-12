@@ -23,13 +23,14 @@
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/APSInt.h"
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/None.h"
+#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/TrailingObjects.h"
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
-#include <optional>
 
 namespace llvm {
 
@@ -217,7 +218,7 @@ public:
   ///
   /// \param IsDefaulted If 'true', implies that this TemplateArgument
   /// corresponds to a default template parameter
-  TemplateArgument(TemplateName Name, std::optional<unsigned> NumExpansions,
+  TemplateArgument(TemplateName Name, Optional<unsigned> NumExpansions,
                    bool IsDefaulted = false) {
     TemplateArg.Kind = TemplateExpansion;
     TemplateArg.IsDefaulted = IsDefaulted;
@@ -250,9 +251,7 @@ public:
     this->Args.NumArgs = Args.size();
   }
 
-  static TemplateArgument getEmptyPack() {
-    return TemplateArgument(std::nullopt);
-  }
+  static TemplateArgument getEmptyPack() { return TemplateArgument(None); }
 
   /// Create a new template argument pack by copying the given set of
   /// template arguments.
@@ -324,7 +323,7 @@ public:
 
   /// Retrieve the number of expansions that a template template argument
   /// expansion will produce, if known.
-  std::optional<unsigned> getNumTemplateExpansions() const;
+  Optional<unsigned> getNumTemplateExpansions() const;
 
   /// Retrieve the template argument as an integral value.
   // FIXME: Provide a way to read the integral data without copying the value.
@@ -337,7 +336,7 @@ public:
       return APSInt(APInt(Integer.BitWidth, Integer.VAL), Integer.IsUnsigned);
 
     unsigned NumWords = APInt::getNumWords(Integer.BitWidth);
-    return APSInt(APInt(Integer.BitWidth, ArrayRef(Integer.pVal, NumWords)),
+    return APSInt(APInt(Integer.BitWidth, makeArrayRef(Integer.pVal, NumWords)),
                   Integer.IsUnsigned);
   }
 
@@ -390,7 +389,7 @@ public:
   /// Iterator range referencing all of the elements of a template
   /// argument pack.
   ArrayRef<TemplateArgument> pack_elements() const {
-    return llvm::ArrayRef(pack_begin(), pack_end());
+    return llvm::makeArrayRef(pack_begin(), pack_end());
   }
 
   /// The number of template arguments in the given template argument
@@ -403,7 +402,7 @@ public:
   /// Return the array of arguments in this template argument pack.
   ArrayRef<TemplateArgument> getPackAsArray() const {
     assert(getKind() == Pack);
-    return llvm::ArrayRef(Args.Args, Args.NumArgs);
+    return llvm::makeArrayRef(Args.Args, Args.NumArgs);
   }
 
   /// Determines whether two template arguments are superficially the
@@ -668,7 +667,7 @@ public:
   unsigned getNumTemplateArgs() const { return NumTemplateArgs; }
 
   llvm::ArrayRef<TemplateArgumentLoc> arguments() const {
-    return llvm::ArrayRef(getTemplateArgs(), getNumTemplateArgs());
+    return llvm::makeArrayRef(getTemplateArgs(), getNumTemplateArgs());
   }
 
   const TemplateArgumentLoc &operator[](unsigned I) const {
@@ -724,6 +723,33 @@ struct alignas(void *) ASTTemplateKWAndArgsInfo {
 
 const StreamingDiagnostic &operator<<(const StreamingDiagnostic &DB,
                                       const TemplateArgument &Arg);
+
+inline TemplateSpecializationType::iterator
+    TemplateSpecializationType::end() const {
+  return getArgs() + getNumArgs();
+}
+
+inline DependentTemplateSpecializationType::iterator
+    DependentTemplateSpecializationType::end() const {
+  return getArgs() + getNumArgs();
+}
+
+inline const TemplateArgument &
+    TemplateSpecializationType::getArg(unsigned Idx) const {
+  assert(Idx < getNumArgs() && "Template argument out of range");
+  return getArgs()[Idx];
+}
+
+inline const TemplateArgument &
+    DependentTemplateSpecializationType::getArg(unsigned Idx) const {
+  assert(Idx < getNumArgs() && "Template argument out of range");
+  return getArgs()[Idx];
+}
+
+inline const TemplateArgument &AutoType::getArg(unsigned Idx) const {
+  assert(Idx < getNumArgs() && "Template argument out of range");
+  return getArgs()[Idx];
+}
 
 } // namespace clang
 

@@ -20,12 +20,7 @@
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ManagedStatic.h" // llvm_shutdown
 #include "llvm/Support/Signals.h"
-#include "llvm/Support/TargetSelect.h"
-#include <optional>
-
-static llvm::cl::opt<bool> CudaEnabled("cuda", llvm::cl::Hidden);
-static llvm::cl::opt<std::string> CudaPath("cuda-path", llvm::cl::Hidden);
-static llvm::cl::opt<std::string> OffloadArch("offload-arch", llvm::cl::Hidden);
+#include "llvm/Support/TargetSelect.h" // llvm::Initialize*
 
 static llvm::cl::list<std::string>
     ClangArgs("Xcc",
@@ -80,16 +75,11 @@ int main(int argc, const char **argv) {
   std::vector<const char *> ClangArgv(ClangArgs.size());
   std::transform(ClangArgs.begin(), ClangArgs.end(), ClangArgv.begin(),
                  [](const std::string &s) -> const char * { return s.data(); });
-  // Initialize all targets (required for device offloading)
-  llvm::InitializeAllTargetInfos();
-  llvm::InitializeAllTargets();
-  llvm::InitializeAllTargetMCs();
-  llvm::InitializeAllAsmPrinters();
+  llvm::InitializeNativeTarget();
+  llvm::InitializeNativeTargetAsmPrinter();
 
   if (OptHostSupportsJit) {
-    auto J = llvm::orc::LLJITBuilder()
-               .setEnableDebuggerSupport(true)
-               .create();
+    auto J = llvm::orc::LLJITBuilder().create();
     if (J)
       llvm::outs() << "true\n";
     else {
@@ -99,30 +89,9 @@ int main(int argc, const char **argv) {
     return 0;
   }
 
-  clang::IncrementalCompilerBuilder CB;
-  CB.SetCompilerArgs(ClangArgv);
-
-  std::unique_ptr<clang::CompilerInstance> DeviceCI;
-  if (CudaEnabled) {
-    if (!CudaPath.empty())
-      CB.SetCudaSDK(CudaPath);
-
-    if (OffloadArch.empty()) {
-      OffloadArch = "sm_35";
-    }
-    CB.SetOffloadArch(OffloadArch);
-
-    DeviceCI = ExitOnErr(CB.CreateCudaDevice());
-  }
-
   // FIXME: Investigate if we could use runToolOnCodeWithArgs from tooling. It
   // can replace the boilerplate code for creation of the compiler instance.
-  std::unique_ptr<clang::CompilerInstance> CI;
-  if (CudaEnabled) {
-    CI = ExitOnErr(CB.CreateCudaHost());
-  } else {
-    CI = ExitOnErr(CB.CreateCpp());
-  }
+  auto CI = ExitOnErr(clang::IncrementalCompilerBuilder::create(ClangArgv));
 
   // Set an error handler, so that any LLVM backend diagnostics go through our
   // error handler.
@@ -131,23 +100,8 @@ int main(int argc, const char **argv) {
 
   // Load any requested plugins.
   CI->LoadRequestedPlugins();
-  if (CudaEnabled)
-    DeviceCI->LoadRequestedPlugins();
 
-  std::unique_ptr<clang::Interpreter> Interp;
-  if (CudaEnabled) {
-    Interp = ExitOnErr(
-        clang::Interpreter::createWithCUDA(std::move(CI), std::move(DeviceCI)));
-
-    if (CudaPath.empty()) {
-      ExitOnErr(Interp->LoadDynamicLibrary("libcudart.so"));
-    } else {
-      auto CudaRuntimeLibPath = CudaPath + "/lib/libcudart.so";
-      ExitOnErr(Interp->LoadDynamicLibrary(CudaRuntimeLibPath.c_str()));
-    }
-  } else
-    Interp = ExitOnErr(clang::Interpreter::create(std::move(CI)));
-
+  auto Interp = ExitOnErr(clang::Interpreter::create(std::move(CI)));
   for (const std::string &input : OptInputs) {
     if (auto Err = Interp->ParseAndExecute(input))
       llvm::logAllUnhandledErrors(std::move(Err), llvm::errs(), "error: ");
@@ -158,38 +112,21 @@ int main(int argc, const char **argv) {
   if (OptInputs.empty()) {
     llvm::LineEditor LE("clang-repl");
     // FIXME: Add LE.setListCompleter
-    std::string Input;
-    while (std::optional<std::string> Line = LE.readLine()) {
-      llvm::StringRef L = *Line;
-      L = L.trim();
-      if (L.endswith("\\")) {
-        // FIXME: Support #ifdef X \ ...
-        Input += L.drop_back(1);
-        LE.setPrompt("clang-repl...   ");
-        continue;
-      }
-
-      Input += L;
-
-      if (Input == R"(%quit)") {
+    while (llvm::Optional<std::string> Line = LE.readLine()) {
+      if (*Line == R"(%quit)")
         break;
-      } else if (Input == R"(%undo)") {
+      if (*Line == R"(%undo)") {
         if (auto Err = Interp->Undo()) {
           llvm::logAllUnhandledErrors(std::move(Err), llvm::errs(), "error: ");
           HasError = true;
         }
-      } else if (Input.rfind("%lib ", 0) == 0) {
-        if (auto Err = Interp->LoadDynamicLibrary(Input.data() + 5)) {
-          llvm::logAllUnhandledErrors(std::move(Err), llvm::errs(), "error: ");
-          HasError = true;
-        }
-      } else if (auto Err = Interp->ParseAndExecute(Input)) {
+        continue;
+      }
+
+      if (auto Err = Interp->ParseAndExecute(*Line)) {
         llvm::logAllUnhandledErrors(std::move(Err), llvm::errs(), "error: ");
         HasError = true;
       }
-
-      Input = "";
-      LE.setPrompt("clang-repl> ");
     }
   }
 

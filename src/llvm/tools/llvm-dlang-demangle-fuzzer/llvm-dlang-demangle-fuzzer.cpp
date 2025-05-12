@@ -13,7 +13,7 @@
 
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t *Data, size_t Size) {
   std::string NullTerminatedString((const char *)Data, Size);
-  char *Demangled = llvm::dlangDemangle(NullTerminatedString);
+  char *Demangled = llvm::dlangDemangle(NullTerminatedString.c_str());
   std::free(Demangled);
   return 0;
 }

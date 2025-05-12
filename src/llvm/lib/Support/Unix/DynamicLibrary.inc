@@ -25,10 +25,9 @@ DynamicLibrary::HandleSet::~HandleSet() {
 }
 
 void *DynamicLibrary::HandleSet::DLOpen(const char *File, std::string *Err) {
-  void *Handle = ::dlopen(File, RTLD_LAZY | RTLD_GLOBAL);
+  void *Handle = ::dlopen(File, RTLD_LAZY|RTLD_GLOBAL);
   if (!Handle) {
-    if (Err)
-      *Err = ::dlerror();
+    if (Err) *Err = ::dlerror();
     return &DynamicLibrary::Invalid;
   }
 
@@ -42,7 +41,9 @@ void *DynamicLibrary::HandleSet::DLOpen(const char *File, std::string *Err) {
   return Handle;
 }
 
-void DynamicLibrary::HandleSet::DLClose(void *Handle) { ::dlclose(Handle); }
+void DynamicLibrary::HandleSet::DLClose(void *Handle) {
+  ::dlclose(Handle);
+}
 
 void *DynamicLibrary::HandleSet::DLSym(void *Handle, const char *Symbol) {
   return ::dlsym(Handle, Symbol);
@@ -53,12 +54,12 @@ void *DynamicLibrary::HandleSet::DLSym(void *Handle, const char *Symbol) {
 DynamicLibrary::HandleSet::~HandleSet() {}
 
 void *DynamicLibrary::HandleSet::DLOpen(const char *File, std::string *Err) {
-  if (Err)
-    *Err = "dlopen() not supported on this platform";
+  if (Err) *Err = "dlopen() not supported on this platform";
   return &Invalid;
 }
 
-void DynamicLibrary::HandleSet::DLClose(void *Handle) {}
+void DynamicLibrary::HandleSet::DLClose(void *Handle) {
+}
 
 void *DynamicLibrary::HandleSet::DLSym(void *Handle, const char *Symbol) {
   return nullptr;
@@ -67,11 +68,9 @@ void *DynamicLibrary::HandleSet::DLSym(void *Handle, const char *Symbol) {
 #endif
 
 // Must declare the symbols in the global namespace.
-static void *DoSearch(const char *SymbolName) {
-#define EXPLICIT_SYMBOL(SYM)                                                   \
-  extern void *SYM;                                                            \
-  if (!strcmp(SymbolName, #SYM))                                               \
-  return (void *)&SYM
+static void *DoSearch(const char* SymbolName) {
+#define EXPLICIT_SYMBOL(SYM) \
+   extern void *SYM; if (!strcmp(SymbolName, #SYM)) return (void*)&SYM
 
   // If this is darwin, it has some funky issues, try to solve them here.  Some
   // important symbols are marked 'private external' which doesn't allow
@@ -102,9 +101,8 @@ static void *DoSearch(const char *SymbolName) {
 #undef EXPLICIT_SYMBOL
 
 // This macro returns the address of a well-known, explicit symbol
-#define EXPLICIT_SYMBOL(SYM)                                                   \
-  if (!strcmp(SymbolName, #SYM))                                               \
-  return &SYM
+#define EXPLICIT_SYMBOL(SYM) \
+   if (!strcmp(SymbolName, #SYM)) return &SYM
 
 // Under glibc we have a weird situation. The stderr/out/in symbols are both
 // macros and global variables because of standards requirements. So, we

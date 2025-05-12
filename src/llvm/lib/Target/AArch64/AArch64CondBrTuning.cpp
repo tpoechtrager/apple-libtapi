@@ -61,8 +61,7 @@ public:
 
 private:
   MachineInstr *getOperandDef(const MachineOperand &MO);
-  MachineInstr *convertToFlagSetting(MachineInstr &MI, bool IsFlagSetting,
-                                     bool Is64Bit);
+  MachineInstr *convertToFlagSetting(MachineInstr &MI, bool IsFlagSetting);
   MachineInstr *convertToCondBr(MachineInstr &MI);
   bool tryToTuneBranch(MachineInstr &MI, MachineInstr &DefMI);
 };
@@ -79,14 +78,13 @@ void AArch64CondBrTuning::getAnalysisUsage(AnalysisUsage &AU) const {
 }
 
 MachineInstr *AArch64CondBrTuning::getOperandDef(const MachineOperand &MO) {
-  if (!MO.getReg().isVirtual())
+  if (!Register::isVirtualRegister(MO.getReg()))
     return nullptr;
   return MRI->getUniqueVRegDef(MO.getReg());
 }
 
 MachineInstr *AArch64CondBrTuning::convertToFlagSetting(MachineInstr &MI,
-                                                        bool IsFlagSetting,
-                                                        bool Is64Bit) {
+                                                        bool IsFlagSetting) {
   // If this is already the flag setting version of the instruction (e.g., SUBS)
   // just make sure the implicit-def of NZCV isn't marked dead.
   if (IsFlagSetting) {
@@ -95,7 +93,8 @@ MachineInstr *AArch64CondBrTuning::convertToFlagSetting(MachineInstr &MI,
         MO.setIsDead(false);
     return &MI;
   }
-  unsigned NewOpc = TII->convertToFlagSettingOpc(MI.getOpcode());
+  bool Is64Bit;
+  unsigned NewOpc = TII->convertToFlagSettingOpc(MI.getOpcode(), Is64Bit);
   Register NewDestReg = MI.getOperand(0).getReg();
   if (MRI->hasOneNonDBGUse(MI.getOperand(0).getReg()))
     NewDestReg = Is64Bit ? AArch64::XZR : AArch64::WZR;
@@ -199,7 +198,7 @@ bool AArch64CondBrTuning::tryToTuneBranch(MachineInstr &MI,
       LLVM_DEBUG(dbgs() << "    ");
       LLVM_DEBUG(MI.print(dbgs()));
 
-      NewCmp = convertToFlagSetting(DefMI, IsFlagSetting, /*Is64Bit=*/false);
+      NewCmp = convertToFlagSetting(DefMI, IsFlagSetting);
       NewBr = convertToCondBr(MI);
       break;
     }
@@ -254,7 +253,7 @@ bool AArch64CondBrTuning::tryToTuneBranch(MachineInstr &MI,
       LLVM_DEBUG(dbgs() << "    ");
       LLVM_DEBUG(MI.print(dbgs()));
 
-      NewCmp = convertToFlagSetting(DefMI, IsFlagSetting, /*Is64Bit=*/true);
+      NewCmp = convertToFlagSetting(DefMI, IsFlagSetting);
       NewBr = convertToCondBr(MI);
       break;
     }

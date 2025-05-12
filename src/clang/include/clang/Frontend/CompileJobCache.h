@@ -81,30 +81,22 @@ public:
   /// \returns true if finished successfully.
   bool finishComputedResult(CompilerInstance &Clang, bool Success);
 
-  static llvm::Expected<std::optional<int>>
-  replayCachedResult(std::shared_ptr<CompilerInvocation> Invok,
-                     StringRef WorkingDir, const llvm::cas::CASID &CacheKey,
-                     cas::CompileJobCacheResult &CachedResult,
-                     SmallVectorImpl<char> &DiagText,
-                     bool WriteOutputAsCASID = false,
-                     std::optional<llvm::cas::CASID> *MCOutputID = nullptr);
+  static llvm::Expected<std::optional<int>> replayCachedResult(
+      std::shared_ptr<CompilerInvocation> Invok,
+      const llvm::cas::CASID &CacheKey,
+      cas::CompileJobCacheResult &CachedResult, SmallVectorImpl<char> &DiagText);
 
   class CachingOutputs;
 
 private:
-  /// \returns true if the output from the compilation is not supported for
-  /// caching.
-  Expected<bool>
-  maybeIngestNonVirtualOutputFromFileSystem(CompilerInstance &Clang);
   int reportCachingBackendError(DiagnosticsEngine &Diag, llvm::Error &&E);
 
   bool CacheCompileJob = false;
   bool DisableCachedCompileJobReplay = false;
-  std::optional<llvm::cas::CASID> MCOutputID;
 
   std::shared_ptr<llvm::cas::ObjectStore> CAS;
   std::shared_ptr<llvm::cas::ActionCache> Cache;
-  std::optional<llvm::cas::CASID> ResultCacheKey;
+  llvm::Optional<llvm::cas::CASID> ResultCacheKey;
 
   std::unique_ptr<CachingOutputs> CacheBackend;
 };

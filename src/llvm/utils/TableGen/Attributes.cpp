@@ -7,7 +7,6 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/TableGen/Record.h"
-#include "llvm/TableGen/TableGenBackend.h"
 #include <vector>
 using namespace llvm;
 
@@ -18,7 +17,7 @@ namespace {
 class Attributes {
 public:
   Attributes(RecordKeeper &R) : Records(R) {}
-  void run(raw_ostream &OS);
+  void emit(raw_ostream &OS);
 
 private:
   void emitTargetIndependentNames(raw_ostream &OS);
@@ -55,7 +54,6 @@ void Attributes::emitTargetIndependentNames(raw_ostream &OS) {
   // Emit attribute enums in the same order llvm::Attribute::operator< expects.
   Emit({"EnumAttr", "TypeAttr", "IntAttr"}, "ATTRIBUTE_ENUM");
   Emit({"StrBoolAttr"}, "ATTRIBUTE_STRBOOL");
-  Emit({"ComplexStrAttr"}, "ATTRIBUTE_COMPLEXSTR");
 
   OS << "#undef ATTRIBUTE_ALL\n";
   OS << "#endif\n\n";
@@ -125,11 +123,16 @@ void Attributes::emitAttributeProperties(raw_ostream &OS) {
   OS << "#endif\n";
 }
 
-void Attributes::run(raw_ostream &OS) {
+void Attributes::emit(raw_ostream &OS) {
   emitTargetIndependentNames(OS);
   emitFnAttrCompatCheck(OS, false);
   emitAttributeProperties(OS);
 }
 
-static TableGen::Emitter::OptClass<Attributes> X("gen-attrs",
-                                                 "Generate attributes");
+namespace llvm {
+
+void EmitAttributes(RecordKeeper &RK, raw_ostream &OS) {
+  Attributes(RK).emit(OS);
+}
+
+} // End llvm namespace.

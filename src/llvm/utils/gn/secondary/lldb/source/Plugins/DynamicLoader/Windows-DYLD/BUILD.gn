@@ -5,7 +5,6 @@ static_library("Windows-DYLD") {
     "//lldb/source/Core",
     "//lldb/source/Target",
     "//llvm/lib/Support",
-    "//llvm/lib/TargetParser",
   ]
 
   # Uses source-relative includes for own headers.

@@ -24,17 +24,17 @@ std::string DIADataStream::getName() const {
   return invokeBstrMethod(*StreamData, &IDiaEnumDebugStreamData::get_name);
 }
 
-std::optional<DIADataStream::RecordType>
+llvm::Optional<DIADataStream::RecordType>
 DIADataStream::getItemAtIndex(uint32_t Index) const {
   RecordType Record;
   DWORD RecordSize = 0;
   StreamData->Item(Index, 0, &RecordSize, nullptr);
   if (RecordSize == 0)
-    return std::nullopt;
+    return llvm::Optional<RecordType>();
 
   Record.resize(RecordSize);
   if (S_OK != StreamData->Item(Index, RecordSize, &RecordSize, &Record[0]))
-    return std::nullopt;
+    return llvm::Optional<RecordType>();
   return Record;
 }
 

@@ -131,8 +131,7 @@ public:
   /// value of the OperandValToReplace of the given IVStrideUse.
   const SCEV *getReplacementExpr(const IVStrideUse &IU) const;
 
-  /// getExpr - Return the expression for the use. Returns nullptr if the result
-  /// is not invertible.
+  /// getExpr - Return the expression for the use.
   const SCEV *getExpr(const IVStrideUse &IU) const;
 
   const SCEV *getStride(const IVStrideUse &IU, const Loop *L) const;

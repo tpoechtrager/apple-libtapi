@@ -12,6 +12,7 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/ADT/Triple.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCInst.h"
@@ -30,7 +31,6 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/SMLoc.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/TargetParser/Triple.h"
 #include <algorithm>
 #include <cassert>
 #include <cstdint>
@@ -70,13 +70,12 @@ class SparcAsmParser : public MCTargetAsmParser {
                                OperandVector &Operands, MCStreamer &Out,
                                uint64_t &ErrorInfo,
                                bool MatchingInlineAsm) override;
-  bool parseRegister(MCRegister &RegNo, SMLoc &StartLoc,
-                     SMLoc &EndLoc) override;
-  OperandMatchResultTy tryParseRegister(MCRegister &RegNo, SMLoc &StartLoc,
+  bool ParseRegister(unsigned &RegNo, SMLoc &StartLoc, SMLoc &EndLoc) override;
+  OperandMatchResultTy tryParseRegister(unsigned &RegNo, SMLoc &StartLoc,
                                         SMLoc &EndLoc) override;
   bool ParseInstruction(ParseInstructionInfo &Info, StringRef Name,
                         SMLoc NameLoc, OperandVector &Operands) override;
-  ParseStatus parseDirective(AsmToken DirectiveID) override;
+  bool ParseDirective(AsmToken DirectiveID) override;
 
   unsigned validateTargetOperandClass(MCParsedAsmOperand &Op,
                                       unsigned Kind) override;
@@ -107,7 +106,7 @@ class SparcAsmParser : public MCTargetAsmParser {
                                          const MCExpr *subExpr);
 
   // returns true if Tok is matched to a register and returns register in RegNo.
-  bool matchRegisterName(const AsmToken &Tok, MCRegister &RegNo,
+  bool matchRegisterName(const AsmToken &Tok, unsigned &RegNo,
                          unsigned &RegKind);
 
   bool matchSparcAsmModifiers(const MCExpr *&EVal, SMLoc &EndLoc);
@@ -694,14 +693,14 @@ bool SparcAsmParser::MatchAndEmitInstruction(SMLoc IDLoc, unsigned &Opcode,
   llvm_unreachable("Implement any new match types added!");
 }
 
-bool SparcAsmParser::parseRegister(MCRegister &RegNo, SMLoc &StartLoc,
+bool SparcAsmParser::ParseRegister(unsigned &RegNo, SMLoc &StartLoc,
                                    SMLoc &EndLoc) {
   if (tryParseRegister(RegNo, StartLoc, EndLoc) != MatchOperand_Success)
     return Error(StartLoc, "invalid register name");
   return false;
 }
 
-OperandMatchResultTy SparcAsmParser::tryParseRegister(MCRegister &RegNo,
+OperandMatchResultTy SparcAsmParser::tryParseRegister(unsigned &RegNo,
                                                       SMLoc &StartLoc,
                                                       SMLoc &EndLoc) {
   const AsmToken &Tok = Parser.getTok();
@@ -769,23 +768,25 @@ bool SparcAsmParser::ParseInstruction(ParseInstructionInfo &Info,
   return false;
 }
 
-ParseStatus SparcAsmParser::parseDirective(AsmToken DirectiveID) {
+bool SparcAsmParser::
+ParseDirective(AsmToken DirectiveID)
+{
   StringRef IDVal = DirectiveID.getString();
 
   if (IDVal == ".register") {
     // For now, ignore .register directive.
     Parser.eatToEndOfStatement();
-    return ParseStatus::Success;
+    return false;
   }
   if (IDVal == ".proc") {
     // For compatibility, ignore this directive.
     // (It's supposed to be an "optimization" in the Sun assembler)
     Parser.eatToEndOfStatement();
-    return ParseStatus::Success;
+    return false;
   }
 
   // Let the MC layer to handle other directives.
-  return ParseStatus::NoMatch;
+  return true;
 }
 
 OperandMatchResultTy
@@ -1049,8 +1050,7 @@ SparcAsmParser::parseOperand(OperandVector &Operands, StringRef Mnemonic) {
         return MatchOperand_NoMatch;
       Parser.Lex(); // eat %
 
-      MCRegister RegNo;
-      unsigned RegKind;
+      unsigned RegNo, RegKind;
       if (!matchRegisterName(Parser.getTok(), RegNo, RegKind))
         return MatchOperand_NoMatch;
 
@@ -1106,9 +1106,9 @@ SparcAsmParser::parseSparcAsmOperand(std::unique_ptr<SparcOperand> &Op,
   switch (getLexer().getKind()) {
   default:  break;
 
-  case AsmToken::Percent: {
+  case AsmToken::Percent:
     Parser.Lex(); // Eat the '%'.
-    MCRegister RegNo;
+    unsigned RegNo;
     unsigned RegKind;
     if (matchRegisterName(Parser.getTok(), RegNo, RegKind)) {
       StringRef name = Parser.getTok().getString();
@@ -1156,7 +1156,6 @@ SparcAsmParser::parseSparcAsmOperand(std::unique_ptr<SparcOperand> &Op,
       Op = SparcOperand::CreateImm(EVal, S, E);
     }
     break;
-  }
 
   case AsmToken::Plus:
   case AsmToken::Minus:
@@ -1204,7 +1203,7 @@ SparcAsmParser::parseBranchModifiers(OperandVector &Operands) {
   return MatchOperand_Success;
 }
 
-bool SparcAsmParser::matchRegisterName(const AsmToken &Tok, MCRegister &RegNo,
+bool SparcAsmParser::matchRegisterName(const AsmToken &Tok, unsigned &RegNo,
                                        unsigned &RegKind) {
   int64_t intVal = 0;
   RegNo = 0;

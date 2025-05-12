@@ -14,7 +14,6 @@
 #include "llvm/IR/IntrinsicsARM.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Type.h"
-#include <optional>
 using namespace llvm;
 
 void LocationSize::print(raw_ostream &OS) const {
@@ -74,8 +73,7 @@ MemoryLocation MemoryLocation::get(const AtomicRMWInst *RMWI) {
                         RMWI->getAAMetadata());
 }
 
-std::optional<MemoryLocation>
-MemoryLocation::getOrNone(const Instruction *Inst) {
+Optional<MemoryLocation> MemoryLocation::getOrNone(const Instruction *Inst) {
   switch (Inst->getOpcode()) {
   case Instruction::Load:
     return get(cast<LoadInst>(Inst));
@@ -88,7 +86,7 @@ MemoryLocation::getOrNone(const Instruction *Inst) {
   case Instruction::AtomicRMW:
     return get(cast<AtomicRMWInst>(Inst));
   default:
-    return std::nullopt;
+    return None;
   }
 }
 
@@ -118,39 +116,39 @@ MemoryLocation MemoryLocation::getForDest(const AnyMemIntrinsic *MI) {
   return getForArgument(MI, 0, nullptr);
 }
 
-std::optional<MemoryLocation>
+Optional<MemoryLocation>
 MemoryLocation::getForDest(const CallBase *CB, const TargetLibraryInfo &TLI) {
   if (!CB->onlyAccessesArgMemory())
-    return std::nullopt;
+    return None;
 
   if (CB->hasOperandBundles())
     // TODO: remove implementation restriction
-    return std::nullopt;
+    return None;
 
   Value *UsedV = nullptr;
-  std::optional<unsigned> UsedIdx;
+  Optional<unsigned> UsedIdx;
   for (unsigned i = 0; i < CB->arg_size(); i++) {
     if (!CB->getArgOperand(i)->getType()->isPointerTy())
       continue;
-    if (CB->onlyReadsMemory(i))
-      continue;
+     if (CB->onlyReadsMemory(i))
+       continue;
     if (!UsedV) {
       // First potentially writing parameter
       UsedV = CB->getArgOperand(i);
       UsedIdx = i;
       continue;
     }
-    UsedIdx = std::nullopt;
+    UsedIdx = None;
     if (UsedV != CB->getArgOperand(i))
       // Can't describe writing to two distinct locations.
       // TODO: This results in an inprecision when two values derived from the
       // same object are passed as arguments to the same function.
-      return std::nullopt;
+      return None;
   }
   if (!UsedV)
     // We don't currently have a way to represent a "does not write" result
     // and thus have to be conservative and return unknown.
-    return std::nullopt;
+    return None;
 
   if (UsedIdx)
     return getForArgument(CB, *UsedIdx, &TLI);
@@ -257,7 +255,7 @@ MemoryLocation MemoryLocation::getForArgument(const CallBase *Call,
 
     case LibFunc_memset_chk:
       assert(ArgIdx == 0 && "Invalid argument index for memset_chk");
-      [[fallthrough]];
+      LLVM_FALLTHROUGH;
     case LibFunc_memcpy_chk: {
       assert((ArgIdx == 0 || ArgIdx == 1) &&
              "Invalid argument index for memcpy_chk");

@@ -22,8 +22,6 @@ namespace llvm {
                       const MCRegisterInfo &MRI)
       : MCInstPrinter(MAI, MII, MRI) {}
 
-    void printRegName(raw_ostream &O, MCRegister Reg) const override;
-
     void printInst(const MCInst *MI, uint64_t Address, StringRef Annot,
                    const MCSubtargetInfo &STI, raw_ostream &O) override;
 
@@ -34,9 +32,9 @@ namespace llvm {
     void printCustomAliasOperand(const MCInst *MI, uint64_t Address,
                                  unsigned OpIdx, unsigned PrintMethodIdx,
                                  raw_ostream &O);
-    static const char *getRegisterName(MCRegister Reg);
+    static const char *getRegisterName(unsigned RegNo);
 
-  private:
+private:
     void printOperand(const MCInst *MI, unsigned OpNo, raw_ostream &O,
                       const char *Modifier = nullptr);
     void printPCRelImmOperand(const MCInst *MI, unsigned OpNo, raw_ostream &O);

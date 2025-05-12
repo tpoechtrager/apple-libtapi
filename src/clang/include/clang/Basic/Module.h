@@ -20,6 +20,7 @@
 #include "clang/Basic/SourceLocation.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/PointerIntPair.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetVector.h"
@@ -32,7 +33,6 @@
 #include <cstdint>
 #include <ctime>
 #include <iterator>
-#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -81,12 +81,6 @@ struct ASTFileSignature : std::array<uint8_t, 20> {
     return Sentinel;
   }
 
-  static ASTFileSignature createDummy() {
-    ASTFileSignature Dummy;
-    Dummy.fill(0x00);
-    return Dummy;
-  }
-
   template <typename InputIt>
   static ASTFileSignature create(InputIt First, InputIt Last) {
     assert(std::distance(First, Last) == size &&
@@ -109,16 +103,10 @@ public:
   /// The location of the module definition.
   SourceLocation DefinitionLoc;
 
-  // FIXME: Consider if reducing the size of this enum (having Partition and
-  // Named modules only) then representing interface/implementation separately
-  // is more efficient.
   enum ModuleKind {
     /// This is a module that was defined by a module map and built out
     /// of header files.
     ModuleMapModule,
-
-    /// This is a C++ 20 header unit.
-    ModuleHeaderUnit,
 
     /// This is a module that was defined by a module map and built out
     /// of header files as part of an \c IncludeTree.
@@ -127,8 +115,8 @@ public:
     /// This is a C++20 module interface unit.
     ModuleInterfaceUnit,
 
-    /// This is a C++20 module implementation unit.
-    ModuleImplementationUnit,
+    /// This is a C++ 20 header unit.
+    ModuleHeaderUnit,
 
     /// This is a C++ 20 module partition interface.
     ModulePartitionInterface,
@@ -136,17 +124,11 @@ public:
     /// This is a C++ 20 module partition implementation.
     ModulePartitionImplementation,
 
-    /// This is the explicit Global Module Fragment of a modular TU.
-    /// As per C++ [module.global.frag].
-    ExplicitGlobalModuleFragment,
+    /// This is a fragment of the global module within some C++ module.
+    GlobalModuleFragment,
 
     /// This is the private module fragment within some C++ module.
     PrivateModuleFragment,
-
-    /// This is an implicit fragment of the global module which contains
-    /// only language linkage declarations (made in the purview of the
-    /// named module).
-    ImplicitGlobalModuleFragment,
   };
 
   /// The kind of this module.
@@ -159,14 +141,14 @@ public:
   /// The build directory of this module. This is the directory in
   /// which the module is notionally built, and relative to which its headers
   /// are found.
-  OptionalDirectoryEntryRefDegradesToDirectoryEntryPtr Directory;
+  const DirectoryEntry *Directory = nullptr;
 
   /// The presumed file name for the module map defining this module.
   /// Only non-empty when building from preprocessed source.
   std::string PresumedModuleMapFile;
 
   /// The umbrella header or directory.
-  llvm::PointerUnion<FileEntryRef, DirectoryEntryRef> Umbrella;
+  llvm::PointerUnion<const FileEntry *, const DirectoryEntry *> Umbrella;
 
   /// The module signature.
   ASTFileSignature Signature;
@@ -184,32 +166,16 @@ public:
   /// For the debug info, the path to this module's .apinotes file, if any.
   std::string APINotesFile;
   
-  /// Does this Module scope describe part of the purview of a standard named
-  /// C++ module?
+  /// Does this Module scope describe part of the purview of a named C++ module?
   bool isModulePurview() const {
-    switch (Kind) {
-    case ModuleInterfaceUnit:
-    case ModuleImplementationUnit:
-    case ModulePartitionInterface:
-    case ModulePartitionImplementation:
-    case PrivateModuleFragment:
-      return true;
-    default:
-      return false;
-    }
+    return Kind == ModuleInterfaceUnit || Kind == ModulePartitionInterface ||
+           Kind == ModulePartitionImplementation ||
+           Kind == PrivateModuleFragment;
   }
 
   /// Does this Module scope describe a fragment of the global module within
   /// some C++ module.
-  bool isGlobalModule() const {
-    return isExplicitGlobalModule() || isImplicitGlobalModule();
-  }
-  bool isExplicitGlobalModule() const {
-    return Kind == ExplicitGlobalModuleFragment;
-  }
-  bool isImplicitGlobalModule() const {
-    return Kind == ImplicitGlobalModuleFragment;
-  }
+  bool isGlobalModule() const { return Kind == GlobalModuleFragment; }
 
   bool isPrivateModule() const { return Kind == PrivateModuleFragment; }
 
@@ -227,13 +193,13 @@ private:
 
   /// The AST file if this is a top-level module which has a
   /// corresponding serialized AST file, or null otherwise.
-  OptionalFileEntryRef ASTFile;
+  Optional<FileEntryRef> ASTFile;
 
   /// The \c ActionCache key for this module, if any.
-  std::optional<std::string> ModuleCacheKey;
+  Optional<std::string> ModuleCacheKey;
 
   /// The top-level headers associated with this module.
-  llvm::SmallSetVector<FileEntryRef, 2> TopHeaders;
+  llvm::SmallSetVector<const FileEntry *, 2> TopHeaders;
 
   /// top-level header filenames that aren't resolved to FileEntries yet.
   std::vector<std::string> TopHeaderNames;
@@ -259,7 +225,9 @@ public:
   struct Header {
     std::string NameAsWritten;
     std::string PathRelativeToRootModuleDirectory;
-    FileEntryRef Entry;
+    const FileEntry *Entry;
+
+    explicit operator bool() { return Entry; }
   };
 
   /// Information about a directory name as found in the module map
@@ -267,7 +235,9 @@ public:
   struct DirectoryName {
     std::string NameAsWritten;
     std::string PathRelativeToRootModuleDirectory;
-    DirectoryEntryRef Entry;
+    const DirectoryEntry *Entry;
+
+    explicit operator bool() { return Entry; }
   };
 
   /// The headers that are part of this module.
@@ -281,8 +251,8 @@ public:
     std::string FileName;
     bool IsUmbrella = false;
     bool HasBuiltinHeader = false;
-    std::optional<off_t> Size;
-    std::optional<time_t> ModTime;
+    Optional<off_t> Size;
+    Optional<time_t> ModTime;
   };
 
   /// Headers that are mentioned in the module map file but that we have not
@@ -341,10 +311,6 @@ public:
   /// Whether this is an inferred submodule (module * { ... }).
   unsigned IsInferred : 1;
 
-  /// Whether this is an inferred submodule that's missing from the umbrella
-  /// header.
-  unsigned IsInferredMissingFromUmbrellaHeader : 1;
-
   /// Whether we should infer submodules for this module based on
   /// the headers.
   ///
@@ -398,7 +364,7 @@ public:
 
   /// The set of top-level modules that affected the compilation of this module,
   /// but were not imported.
-  llvm::SmallSetVector<Module *, 2> AffectingClangModules;
+  llvm::SmallSetVector<Module *, 2> AffectingModules;
 
   /// Describes an exported module.
   ///
@@ -516,9 +482,6 @@ public:
   bool isUnimportable(const LangOptions &LangOpts, const TargetInfo &Target,
                       Requirement &Req, Module *&ShadowingModule) const;
 
-  /// Determine whether this module can be built in this compilation.
-  bool isForBuilding(const LangOptions &LangOpts) const;
-
   /// Determine whether this module is available for use within the
   /// current translation unit.
   bool isAvailable() const { return IsAvailable; }
@@ -594,11 +557,6 @@ public:
            Kind == ModulePartitionImplementation;
   }
 
-  /// Is this a module implementation.
-  bool isModuleImplementation() const {
-    return Kind == ModuleImplementationUnit;
-  }
-
   /// Is this module a header unit.
   bool isHeaderUnit() const { return Kind == ModuleHeaderUnit; }
   // Is this a C++20 module interface or a partition.
@@ -666,12 +624,12 @@ public:
   }
 
   /// Set the serialized AST file for the top-level module of this module.
-  void setASTFile(OptionalFileEntryRef File) {
+  void setASTFile(Optional<FileEntryRef> File) {
     assert((!getASTFile() || getASTFile() == File) && "file path changed");
     getTopLevelModule()->ASTFile = File;
   }
 
-  std::optional<std::string> getModuleCacheKey() const {
+  Optional<std::string> getModuleCacheKey() const {
     return getTopLevelModule()->ModuleCacheKey;
   }
 
@@ -680,30 +638,28 @@ public:
     getTopLevelModule()->ModuleCacheKey = std::move(Key);
   }
 
-  /// Retrieve the umbrella directory as written.
-  std::optional<DirectoryName> getUmbrellaDirAsWritten() const {
-    if (Umbrella && Umbrella.is<DirectoryEntryRef>())
-      return DirectoryName{UmbrellaAsWritten,
-                           UmbrellaRelativeToRootModuleDirectory,
-                           Umbrella.get<DirectoryEntryRef>()};
-    return std::nullopt;
-  }
 
-  /// Retrieve the umbrella header as written.
-  std::optional<Header> getUmbrellaHeaderAsWritten() const {
-    if (Umbrella && Umbrella.is<FileEntryRef>())
+  /// Retrieve the directory for which this module serves as the
+  /// umbrella.
+  DirectoryName getUmbrellaDir() const;
+
+  /// Retrieve the header that serves as the umbrella header for this
+  /// module.
+  Header getUmbrellaHeader() const {
+    if (auto *FE = Umbrella.dyn_cast<const FileEntry *>())
       return Header{UmbrellaAsWritten, UmbrellaRelativeToRootModuleDirectory,
-                    Umbrella.get<FileEntryRef>()};
-    return std::nullopt;
+                    FE};
+    return Header{};
   }
 
-  /// Get the effective umbrella directory for this module: either the one
-  /// explicitly written in the module map file, or the parent of the umbrella
-  /// header.
-  OptionalDirectoryEntryRef getEffectiveUmbrellaDir() const;
+  /// Determine whether this module has an umbrella directory that is
+  /// not based on an umbrella header.
+  bool hasUmbrellaDir() const {
+    return Umbrella && Umbrella.is<const DirectoryEntry *>();
+  }
 
   /// Add a top-level header associated with this module.
-  void addTopHeader(FileEntryRef File);
+  void addTopHeader(const FileEntry *File);
 
   /// Add a top-level header filename associated with this module.
   void addTopHeaderFilename(StringRef Filename) {
@@ -711,7 +667,7 @@ public:
   }
 
   /// The top-level headers associated with this module.
-  ArrayRef<FileEntryRef> getTopHeaders(FileManager &FileMgr);
+  ArrayRef<const FileEntry *> getTopHeaders(FileManager &FileMgr);
 
   /// Determine whether this module has declared its intention to
   /// directly use another module.
@@ -773,11 +729,16 @@ public:
   using submodule_iterator = std::vector<Module *>::iterator;
   using submodule_const_iterator = std::vector<Module *>::const_iterator;
 
+  submodule_iterator submodule_begin() { return SubModules.begin(); }
+  submodule_const_iterator submodule_begin() const {return SubModules.begin();}
+  submodule_iterator submodule_end()   { return SubModules.end(); }
+  submodule_const_iterator submodule_end() const { return SubModules.end(); }
+
   llvm::iterator_range<submodule_iterator> submodules() {
-    return llvm::make_range(SubModules.begin(), SubModules.end());
+    return llvm::make_range(submodule_begin(), submodule_end());
   }
   llvm::iterator_range<submodule_const_iterator> submodules() const {
-    return llvm::make_range(SubModules.begin(), SubModules.end());
+    return llvm::make_range(submodule_begin(), submodule_end());
   }
 
   /// Appends this module's list of exported modules to \p Exported.
@@ -852,11 +813,6 @@ public:
                   VisibleCallback Vis = [](Module *) {},
                   ConflictCallback Cb = [](ArrayRef<Module *>, Module *,
                                            StringRef) {});
-
-  /// Make transitive imports visible for [module.import]/7.
-  void makeTransitiveImportsVisible(
-      Module *M, SourceLocation Loc, VisibleCallback Vis = [](Module *) {},
-      ConflictCallback Cb = [](ArrayRef<Module *>, Module *, StringRef) {});
 
 private:
   /// Import locations for each visible module. Indexed by the module's

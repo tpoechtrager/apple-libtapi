@@ -151,7 +151,7 @@ private:
   std::vector<std::pair<Register, ISD::ArgFlagsTy>> LiveInAttrs;
 
 public:
-  explicit PPCFunctionInfo(const Function &F, const TargetSubtargetInfo *STI);
+  explicit PPCFunctionInfo(const MachineFunction &MF);
 
   MachineFunctionInfo *
   clone(BumpPtrAllocator &Allocator, MachineFunction &DestMF,

@@ -78,14 +78,15 @@ TEST(ExecutionSessionWrapperFunctionCalls, RunNonVoidWrapperAsyncTemplate) {
 
 TEST(ExecutionSessionWrapperFunctionCalls, RegisterAsyncHandlerAndRun) {
 
-  constexpr ExecutorAddr AddAsyncTagAddr(0x01);
+  constexpr JITTargetAddress AddAsyncTagAddr = 0x01;
 
   ExecutionSession ES(cantFail(SelfExecutorProcessControl::Create()));
   auto &JD = ES.createBareJITDylib("JD");
 
   auto AddAsyncTag = ES.intern("addAsync_tag");
   cantFail(JD.define(absoluteSymbols(
-      {{AddAsyncTag, {AddAsyncTagAddr, JITSymbolFlags::Exported}}})));
+      {{AddAsyncTag,
+        JITEvaluatedSymbol(AddAsyncTagAddr, JITSymbolFlags::Exported)}})));
 
   ExecutionSession::JITDispatchHandlerAssociationMap Associations;
 

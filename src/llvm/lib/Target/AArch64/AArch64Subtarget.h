@@ -41,7 +41,6 @@ public:
     Others,
     A64FX,
     Ampere1,
-    Ampere1A,
     AppleA7,
     AppleA10,
     AppleA11,
@@ -65,12 +64,10 @@ public:
     CortexA78,
     CortexA78C,
     CortexA710,
-    CortexA715,
     CortexR82,
     CortexX1,
     CortexX1C,
     CortexX2,
-    CortexX3,
     ExynosM3,
     Falkor,
     Kryo,
@@ -108,8 +105,8 @@ protected:
   uint16_t PrefetchDistance = 0;
   uint16_t MinPrefetchStride = 1;
   unsigned MaxPrefetchIterationsAhead = UINT_MAX;
-  Align PrefFunctionAlignment;
-  Align PrefLoopAlignment;
+  unsigned PrefFunctionLogAlignment = 0;
+  unsigned PrefLoopLogAlignment = 0;
   unsigned MaxBytesForLoopAlignment = 0;
   unsigned MaxJumpTableSize = 0;
 
@@ -124,12 +121,9 @@ protected:
 
   bool IsLittle;
 
-  bool StreamingSVEMode;
-  bool StreamingCompatibleSVEMode;
   unsigned MinSVEVectorSizeInBits;
   unsigned MaxSVEVectorSizeInBits;
   unsigned VScaleForTuning = 2;
-  TailFoldingOpts DefaultSVETFOpts = TailFoldingOpts::Disabled;
 
   /// TargetTriple - What processor and OS we're targeting.
   Triple TargetTriple;
@@ -160,12 +154,11 @@ private:
 public:
   /// This constructor initializes the data members to match that
   /// of the specified triple.
-  AArch64Subtarget(const Triple &TT, StringRef CPU, StringRef TuneCPU,
-                   StringRef FS, const TargetMachine &TM, bool LittleEndian,
+  AArch64Subtarget(const Triple &TT, const std::string &CPU,
+                   const std::string &TuneCPU, const std::string &FS,
+                   const TargetMachine &TM, bool LittleEndian,
                    unsigned MinSVEVectorSizeInBitsOverride = 0,
-                   unsigned MaxSVEVectorSizeInBitsOverride = 0,
-                   bool StreamingSVEMode = false,
-                   bool StreamingCompatibleSVEMode = false);
+                   unsigned MaxSVEVectorSizeInBitsOverride = 0);
 
 // Getters for SubtargetFeatures defined in tablegen
 #define GET_SUBTARGETINFO_MACRO(ATTRIBUTE, DEFAULT, GETTER)                    \
@@ -204,21 +197,7 @@ public:
 
   bool isXRaySupported() const override { return true; }
 
-  /// Returns true if the function has the streaming attribute.
-  bool isStreaming() const { return StreamingSVEMode; }
-
-  /// Returns true if the function has the streaming-compatible attribute.
-  bool isStreamingCompatible() const { return StreamingCompatibleSVEMode; }
-
-  /// Returns true if the target has NEON and the function at runtime is known
-  /// to have NEON enabled (e.g. the function is known not to be in streaming-SVE
-  /// mode, which disables NEON instructions).
-  bool isNeonAvailable() const;
-
   unsigned getMinVectorRegisterBitWidth() const {
-    // Don't assume any minimum vector size when PSTATE.SM may not be 0.
-    if (StreamingSVEMode || StreamingCompatibleSVEMode)
-      return 0;
     return MinVectorRegisterBitWidth;
   }
 
@@ -255,10 +234,10 @@ public:
   unsigned getMaxPrefetchIterationsAhead() const override {
     return MaxPrefetchIterationsAhead;
   }
-  Align getPrefFunctionAlignment() const {
-    return PrefFunctionAlignment;
+  unsigned getPrefFunctionLogAlignment() const {
+    return PrefFunctionLogAlignment;
   }
-  Align getPrefLoopAlignment() const { return PrefLoopAlignment; }
+  unsigned getPrefLoopLogAlignment() const { return PrefLoopLogAlignment; }
 
   unsigned getMaxBytesForLoopAlignment() const {
     return MaxBytesForLoopAlignment;
@@ -321,14 +300,6 @@ public:
   unsigned classifyGlobalFunctionReference(const GlobalValue *GV,
                                            const TargetMachine &TM) const;
 
-  /// This function is design to compatible with the function def in other
-  /// targets and escape build error about the virtual function def in base
-  /// class TargetSubtargetInfo. Updeate me if AArch64 target need to use it.
-  unsigned char
-  classifyGlobalFunctionReference(const GlobalValue *GV) const override {
-    return 0;
-  }
-
   void overrideSchedPolicy(MachineSchedPolicy &Policy,
                            unsigned NumRegionInstrs) const override;
 
@@ -341,7 +312,6 @@ public:
     case CallingConv::C:
     case CallingConv::Fast:
     case CallingConv::Swift:
-    case CallingConv::SwiftTail:
       return isTargetWindows();
     case CallingConv::Win64:
       return true;
@@ -376,43 +346,25 @@ public:
 
   void mirFileLoaded(MachineFunction &MF) const override;
 
-  bool hasSVEorSME() const { return hasSVE() || hasSME(); }
-
   // Return the known range for the bit length of SVE data registers. A value
   // of 0 means nothing is known about that particular limit beyong what's
   // implied by the architecture.
   unsigned getMaxSVEVectorSizeInBits() const {
-    assert(hasSVEorSME() &&
-           "Tried to get SVE vector length without SVE support!");
+    assert(HasSVE && "Tried to get SVE vector length without SVE support!");
     return MaxSVEVectorSizeInBits;
   }
 
   unsigned getMinSVEVectorSizeInBits() const {
-    assert(hasSVEorSME() &&
-           "Tried to get SVE vector length without SVE support!");
+    assert(HasSVE && "Tried to get SVE vector length without SVE support!");
     return MinSVEVectorSizeInBits;
   }
 
   bool useSVEForFixedLengthVectors() const {
-    if (!isNeonAvailable())
-      return hasSVE();
-
     // Prefer NEON unless larger SVE registers are available.
     return hasSVE() && getMinSVEVectorSizeInBits() >= 256;
   }
 
-  bool useSVEForFixedLengthVectors(EVT VT) const {
-    if (!useSVEForFixedLengthVectors() || !VT.isFixedLengthVector())
-      return false;
-    return VT.getFixedSizeInBits() > AArch64::SVEBitsPerBlock ||
-           !isNeonAvailable();
-  }
-
   unsigned getVScaleForTuning() const { return VScaleForTuning; }
-
-  TailFoldingOpts getSVETailFoldingDefaultOpts() const {
-    return DefaultSVETFOpts;
-  }
 
   const char* getChkStkName() const {
     if (isWindowsArm64EC())
@@ -425,6 +377,7 @@ public:
       return "__security_check_cookie_arm64ec";
     return "__security_check_cookie";
   }
+
 };
 } // End llvm namespace
 

@@ -4,7 +4,6 @@ static_library("Utils") {
     "//llvm/lib/Analysis",
     "//llvm/lib/IR",
     "//llvm/lib/Support",
-    "//llvm/lib/TargetParser",
   ]
   sources = [
     "AMDGPUEmitPrintf.cpp",
@@ -24,7 +23,6 @@ static_library("Utils") {
     "CodeExtractor.cpp",
     "CodeLayout.cpp",
     "CodeMoverUtils.cpp",
-    "CountVisits.cpp",
     "CtorUtils.cpp",
     "Debugify.cpp",
     "DemoteRegToStack.cpp",
@@ -55,7 +53,6 @@ static_library("Utils") {
     "LoopVersioning.cpp",
     "LowerAtomic.cpp",
     "LowerGlobalDtors.cpp",
-    "LowerIFunc.cpp",
     "LowerInvoke.cpp",
     "LowerMemIntrinsics.cpp",
     "LowerSwitch.cpp",
@@ -66,7 +63,6 @@ static_library("Utils") {
     "MetaRenamer.cpp",
     "MisExpect.cpp",
     "ModuleUtils.cpp",
-    "MoveAutoInit.cpp",
     "NameAnonGlobals.cpp",
     "PredicateInfo.cpp",
     "PromoteMemoryToRegister.cpp",

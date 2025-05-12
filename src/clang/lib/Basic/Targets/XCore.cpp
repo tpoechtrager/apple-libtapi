@@ -18,11 +18,11 @@
 using namespace clang;
 using namespace clang::targets;
 
-static constexpr Builtin::Info BuiltinInfo[] = {
+const Builtin::Info XCoreTargetInfo::BuiltinInfo[] = {
 #define BUILTIN(ID, TYPE, ATTRS)                                               \
-  {#ID, TYPE, ATTRS, nullptr, HeaderDesc::NO_HEADER, ALL_LANGUAGES},
+  {#ID, TYPE, ATTRS, nullptr, ALL_LANGUAGES, nullptr},
 #define LIBBUILTIN(ID, TYPE, ATTRS, HEADER)                                    \
-  {#ID, TYPE, ATTRS, nullptr, HeaderDesc::HEADER, ALL_LANGUAGES},
+  {#ID, TYPE, ATTRS, HEADER, ALL_LANGUAGES, nullptr},
 #include "clang/Basic/BuiltinsXCore.def"
 };
 
@@ -33,6 +33,6 @@ void XCoreTargetInfo::getTargetDefines(const LangOptions &Opts,
 }
 
 ArrayRef<Builtin::Info> XCoreTargetInfo::getTargetBuiltins() const {
-  return llvm::ArrayRef(BuiltinInfo,
-                        clang::XCore::LastTSBuiltin - Builtin::FirstTSBuiltin);
+  return llvm::makeArrayRef(BuiltinInfo, clang::XCore::LastTSBuiltin -
+                                             Builtin::FirstTSBuiltin);
 }

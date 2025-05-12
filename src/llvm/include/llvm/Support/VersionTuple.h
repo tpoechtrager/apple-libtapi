@@ -16,8 +16,8 @@
 
 #include "llvm/ADT/DenseMapInfo.h"
 #include "llvm/ADT/Hashing.h"
+#include "llvm/ADT/Optional.h"
 #include "llvm/Support/Endian.h"
-#include <optional>
 #include <string>
 #include <tuple>
 
@@ -41,25 +41,24 @@ class VersionTuple {
   unsigned HasBuild : 1;
 
 public:
-  constexpr VersionTuple()
+  VersionTuple()
       : Major(0), Minor(0), HasMinor(false), Subminor(0), HasSubminor(false),
         Build(0), HasBuild(false) {}
 
-  explicit constexpr VersionTuple(unsigned Major)
+  explicit VersionTuple(unsigned Major)
       : Major(Major), Minor(0), HasMinor(false), Subminor(0),
         HasSubminor(false), Build(0), HasBuild(false) {}
 
-  explicit constexpr VersionTuple(unsigned Major, unsigned Minor)
+  explicit VersionTuple(unsigned Major, unsigned Minor)
       : Major(Major), Minor(Minor), HasMinor(true), Subminor(0),
         HasSubminor(false), Build(0), HasBuild(false) {}
 
-  explicit constexpr VersionTuple(unsigned Major, unsigned Minor,
-                                  unsigned Subminor)
+  explicit VersionTuple(unsigned Major, unsigned Minor, unsigned Subminor)
       : Major(Major), Minor(Minor), HasMinor(true), Subminor(Subminor),
         HasSubminor(true), Build(0), HasBuild(false) {}
 
-  explicit constexpr VersionTuple(unsigned Major, unsigned Minor,
-                                  unsigned Subminor, unsigned Build)
+  explicit VersionTuple(unsigned Major, unsigned Minor, unsigned Subminor,
+                        unsigned Build)
       : Major(Major), Minor(Minor), HasMinor(true), Subminor(Subminor),
         HasSubminor(true), Build(Build), HasBuild(true) {}
 
@@ -76,23 +75,23 @@ public:
   unsigned getMajor() const { return Major; }
 
   /// Retrieve the minor version number, if provided.
-  std::optional<unsigned> getMinor() const {
+  Optional<unsigned> getMinor() const {
     if (!HasMinor)
-      return std::nullopt;
+      return None;
     return Minor;
   }
 
   /// Retrieve the subminor version number, if provided.
-  std::optional<unsigned> getSubminor() const {
+  Optional<unsigned> getSubminor() const {
     if (!HasSubminor)
-      return std::nullopt;
+      return None;
     return Subminor;
   }
 
   /// Retrieve the build version number, if provided.
-  std::optional<unsigned> getBuild() const {
+  Optional<unsigned> getBuild() const {
     if (!HasBuild)
-      return std::nullopt;
+      return None;
     return Build;
   }
 

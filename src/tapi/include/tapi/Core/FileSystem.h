@@ -48,6 +48,8 @@ public:
                                           std::error_code &ec) override;
   std::error_code setCurrentWorkingDirectory(const Twine &path) override;
   std::error_code isLocal(const Twine &path, bool &result) override;
+  std::error_code getRealPath(const Twine &path,
+                              SmallVectorImpl<char> &output) const override;
 
 protected:
   virtual bool pathMasked(const Twine &path) const = 0;

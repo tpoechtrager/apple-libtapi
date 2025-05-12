@@ -30,6 +30,8 @@ Error getELFRelocationValueString(const object::ELFObjectFileBase *Obj,
 uint64_t getELFSectionLMA(const object::ELFSectionRef &Sec);
 
 void printELFFileHeader(const object::ObjectFile *O);
+void printELFDynamicSection(const object::ObjectFile *Obj);
+void printELFSymbolVersionInfo(const object::ObjectFile *Obj);
 
 } // namespace objdump
 } // namespace llvm

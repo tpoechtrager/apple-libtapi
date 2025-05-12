@@ -1,3 +1,5 @@
+import("//llvm/utils/TableGen/tablegen.gni")
+
 static_library("InstCombine") {
   output_name = "LLVMInstCombine"
   deps = [

@@ -25,10 +25,9 @@ namespace {
 
 class MachOLinkGraphBuilder_x86_64 : public MachOLinkGraphBuilder {
 public:
-  MachOLinkGraphBuilder_x86_64(const object::MachOObjectFile &Obj,
-                               SubtargetFeatures Features)
+  MachOLinkGraphBuilder_x86_64(const object::MachOObjectFile &Obj)
       : MachOLinkGraphBuilder(Obj, Triple("x86_64-apple-darwin"),
-                              std::move(Features), x86_64::getEdgeKindName) {}
+                              x86_64::getEdgeKindName) {}
 
 private:
   enum MachONormalizedRelocationType : unsigned {
@@ -467,13 +466,7 @@ createLinkGraphFromMachOObject_x86_64(MemoryBufferRef ObjectBuffer) {
   auto MachOObj = object::ObjectFile::createMachOObjectFile(ObjectBuffer);
   if (!MachOObj)
     return MachOObj.takeError();
-
-  auto Features = (*MachOObj)->getFeatures();
-  if (!Features)
-    return Features.takeError();
-
-  return MachOLinkGraphBuilder_x86_64(**MachOObj, std::move(*Features))
-      .buildGraph();
+  return MachOLinkGraphBuilder_x86_64(**MachOObj).buildGraph();
 }
 
 void link_MachO_x86_64(std::unique_ptr<LinkGraph> G,

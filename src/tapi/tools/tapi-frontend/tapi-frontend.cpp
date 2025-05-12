@@ -13,15 +13,13 @@
 //===----------------------------------------------------------------------===//
 #include "tapi/APIVerifier/APIVerifier.h"
 #include "tapi/Config/Version.h"
-#include "tapi/Core/APIJSONSerializer.h"
 #include "tapi/Core/APIPrinter.h"
+#include "tapi/Core/APIJSONSerializer.h"
 #include "tapi/Core/HeaderFile.h"
 #include "tapi/Diagnostics/Diagnostics.h"
 #include "tapi/Frontend/Frontend.h"
-#include "clang/Basic/FileManager.h"
-#include "clang/Basic/Version.inc"
-#include "clang/Config/config.h"
 #include "llvm/ADT/SmallString.h"
+#include "llvm/ADT/Triple.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Format.h"
 #include "llvm/Support/ManagedStatic.h"
@@ -30,7 +28,9 @@
 #include "llvm/Support/Process.h"
 #include "llvm/Support/Signals.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/TargetParser/Triple.h"
+#include "clang/Basic/FileManager.h"
+#include "clang/Basic/Version.inc"
+#include "clang/Config/config.h"
 
 using namespace llvm;
 using namespace TAPI_INTERNAL;
@@ -109,15 +109,15 @@ static std::string getClangResourcesPath(clang::FileManager &fm) {
   // Try the default tapi path.
   SmallString<PATH_MAX>
       path(dir);
-  llvm::sys::path::append(path, "..", CLANG_INSTALL_LIBDIR_BASENAME, "tapi",
-                          TAPI_MAKE_STRING(TAPI_VERSION_MAJOR));
+  llvm::sys::path::append(path, "..", CLANG_INSTALL_LIBDIR_BASENAME,
+                          "tapi", TAPI_MAKE_STRING(TAPI_VERSION));
   if (fileExists(path))
     return path.str().str();
 
   // Try the default clang path. This is used by check-tapi.
   path = dir;
-  llvm::sys::path::append(path, "..", CLANG_INSTALL_LIBDIR_BASENAME, "clang",
-                          CLANG_VERSION_MAJOR_STRING);
+  llvm::sys::path::append(path, "..", CLANG_INSTALL_LIBDIR_BASENAME,
+                          "clang", CLANG_VERSION_STRING);
   if (fileExists(path))
     return path.str().str();
 

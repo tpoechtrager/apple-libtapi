@@ -43,10 +43,12 @@ using namespace llvm;
 #define DEBUG_TYPE "tile-pre-config"
 
 static void emitErrorMsg(MachineFunction &MF) {
-  LLVMContext &Context = MF.getMMI().getModule()->getContext();
-  Context.emitError(
+  SmallString<32> Str;
+  Twine ErrorMsg =
       MF.getName() +
-      ": Failed to config tile register, please define the shape earlier");
+      ": Failed to config tile register, please define the shape earlier";
+  LLVMContext &Context = MF.getMMI().getModule()->getContext();
+  Context.emitError(ErrorMsg);
 }
 
 namespace {
@@ -96,8 +98,8 @@ struct BBInfo {
 };
 
 class X86PreTileConfig : public MachineFunctionPass {
-  MachineRegisterInfo *MRI = nullptr;
-  const MachineLoopInfo *MLI = nullptr;
+  MachineRegisterInfo *MRI;
+  const MachineLoopInfo *MLI;
   SmallSet<MachineInstr *, 8> DefVisited;
   DenseMap<MachineBasicBlock *, BBInfo> BBVisitedInfo;
   DenseMap<MachineBasicBlock *, SmallVector<MIRef, 8>> ShapeBBs;

@@ -15,7 +15,6 @@ set(LLVM_LINK_COMPONENTS
   object
   selectiondag
   Support
-  TargetParser
   ExecutionEngine
   RuntimeDyld
   Core

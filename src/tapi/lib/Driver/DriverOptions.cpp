@@ -15,27 +15,19 @@ using namespace llvm::opt;
 using namespace tapi::internal;
 
 /// Create prefix string literals used in TAPIOptions.td.
-#define PREFIX(NAME, VALUE)                                                    \
-  static constexpr llvm::StringLiteral NAME##_init[] = VALUE;                  \
-  static constexpr llvm::ArrayRef<llvm::StringLiteral> NAME(                   \
-      NAME##_init, std::size(NAME##_init) - 1);
+#define PREFIX(NAME, VALUE) static const char *const NAME[] = VALUE;
 #include "tapi/Driver/TAPIOptions.inc"
 #undef PREFIX
 
-static constexpr const StringLiteral prefixTable_init[] =
-#define PREFIX_UNION(VALUES) VALUES
-#include "tapi/Driver/TAPIOptions.inc"
-#undef PREFIX_UNION
-    ;
-static constexpr const ArrayRef<StringLiteral>
-    prefixTable(prefixTable_init, std::size(prefixTable_init) - 1);
-
 /// Create table mapping all options defined in TAPIOptions.td.
-static constexpr OptTable::Info infoTable[] = {
+static const OptTable::Info infoTable[] = {
 #define OPTION(PREFIX, NAME, ID, KIND, GROUP, ALIAS, ALIASARGS, FLAGS, PARAM,  \
                HELPTEXT, METAVAR, VALUES)                                      \
-  {PREFIX, NAME,  HELPTEXT,    METAVAR,     OPT_##ID,  Option::KIND##Class,    \
-   PARAM,  FLAGS, OPT_##GROUP, OPT_##ALIAS, ALIASARGS, VALUES},
+  {                                                                            \
+    PREFIX, NAME, HELPTEXT, METAVAR, OPT_##ID, Option::KIND##Class, PARAM,     \
+        FLAGS, OPT_##GROUP, OPT_##ALIAS, ALIASARGS, VALUES                     \
+  }                                                                            \
+  ,
 #include "tapi/Driver/TAPIOptions.inc"
 #undef OPTION
 };
@@ -43,9 +35,9 @@ static constexpr OptTable::Info infoTable[] = {
 namespace {
 
 /// \brief Create OptTable class for parsing actual command line arguments.
-class DriverOptTable : public opt::PrecomputedOptTable {
+class DriverOptTable : public OptTable {
 public:
-  DriverOptTable() : PrecomputedOptTable(infoTable, prefixTable) {}
+  DriverOptTable() : OptTable(infoTable, std::size(infoTable)) {}
 };
 
 } // end anonymous namespace.

@@ -17,7 +17,6 @@
 #include "llvm/Support/FileOutputBuffer.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/MemoryBuffer.h"
-#include <optional>
 
 using llvm::object::ELFObjectFile;
 
@@ -32,13 +31,13 @@ namespace ifs {
 struct DynamicEntries {
   uint64_t StrTabAddr = 0;
   uint64_t StrSize = 0;
-  std::optional<uint64_t> SONameOffset;
+  Optional<uint64_t> SONameOffset;
   std::vector<uint64_t> NeededLibNames;
   // Symbol table:
   uint64_t DynSymAddr = 0;
   // Hash tables:
-  std::optional<uint64_t> ElfHash;
-  std::optional<uint64_t> GnuHash;
+  Optional<uint64_t> ElfHash;
+  Optional<uint64_t> GnuHash;
 };
 
 /// This initializes an ELF file header with information specific to a binary

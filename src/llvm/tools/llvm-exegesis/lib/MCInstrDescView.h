@@ -24,6 +24,7 @@
 
 #include "RegisterAliasing.h"
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/Optional.h"
 #include "llvm/MC/MCInst.h"
 #include "llvm/MC/MCInstrDesc.h"
 #include "llvm/MC/MCInstrInfo.h"
@@ -48,7 +49,7 @@ struct Variable {
 
   // The index of this Variable in Instruction.Variables and its associated
   // Value in InstructionBuilder.VariableValues.
-  std::optional<uint8_t> Index;
+  Optional<uint8_t> Index;
 };
 
 // MCOperandInfo can only represents Explicit operands. This object gives a
@@ -58,7 +59,8 @@ struct Variable {
 // registers and the registers reachable from them (aliasing registers).
 // - Info: a shortcut for MCInstrDesc::operands()[Index].
 // - TiedToIndex: the index of the Operand holding the value or -1.
-// - ImplicitReg: the register value when Operand is Implicit, 0 otherwise.
+// - ImplicitReg: a pointer to the register value when Operand is Implicit,
+// nullptr otherwise.
 // - VariableIndex: the index of the Variable holding the value for this Operand
 // or -1 if this operand is implicit.
 struct Operand {
@@ -80,13 +82,13 @@ struct Operand {
   const MCOperandInfo &getExplicitOperandInfo() const;
 
   // Please use the accessors above and not the following fields.
-  std::optional<uint8_t> Index;
+  Optional<uint8_t> Index;
   bool IsDef = false;
   const RegisterAliasingTracker *Tracker = nullptr; // Set for Register Op.
   const MCOperandInfo *Info = nullptr;              // Set for Explicit Op.
-  std::optional<uint8_t> TiedToIndex;               // Set for Reg&Explicit Op.
-  MCPhysReg ImplicitReg = 0;                        // Non-0 for Implicit Op.
-  std::optional<uint8_t> VariableIndex;             // Set for Explicit Op.
+  Optional<uint8_t> TiedToIndex;                    // Set for Reg&Explicit Op.
+  const MCPhysReg *ImplicitReg = nullptr;           // Set for Implicit Op.
+  Optional<uint8_t> VariableIndex;                  // Set for Explicit Op.
 };
 
 /// A cache of BitVector to reuse between Instructions.
@@ -216,8 +218,7 @@ struct AliasingRegisterOperands {
 // to alias with Use registers of UseInstruction.
 struct AliasingConfigurations {
   AliasingConfigurations(const Instruction &DefInstruction,
-                         const Instruction &UseInstruction,
-                         const BitVector &ForbiddenRegisters);
+                         const Instruction &UseInstruction);
 
   bool empty() const; // True if no aliasing configuration is found.
   bool hasImplicitAliasing() const;

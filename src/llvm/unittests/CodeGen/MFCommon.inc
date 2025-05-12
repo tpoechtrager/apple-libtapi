@@ -32,8 +32,8 @@ public:
   getCalleeSavedRegs(const MachineFunction *MF) const override {
     return nullptr;
   }
-  ArrayRef<const uint32_t *> getRegMasks() const override { return std::nullopt; }
-  ArrayRef<const char *> getRegMaskNames() const override { return std::nullopt; }
+  ArrayRef<const uint32_t *> getRegMasks() const override { return None; }
+  ArrayRef<const char *> getRegMaskNames() const override { return None; }
   BitVector getReservedRegs(const MachineFunction &MF) const override {
     return BitVector();
   }
@@ -64,12 +64,9 @@ public:
   Register getFrameRegister(const MachineFunction &MF) const override {
     return 0;
   }
-  bool eliminateFrameIndex(MachineBasicBlock::iterator MI, int SPAdj,
+  void eliminateFrameIndex(MachineBasicBlock::iterator MI, int SPAdj,
                            unsigned FIOperandNum,
-                           RegScavenger *RS = nullptr) const override {
-    return false;
-
-  }
+                           RegScavenger *RS = nullptr) const override {}
 };
 
 class BogusSubtarget : public TargetSubtargetInfo {

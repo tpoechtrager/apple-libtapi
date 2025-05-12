@@ -16,7 +16,6 @@
 #include "MCTargetDesc/HexagonMCInstrInfo.h"
 #include "MCTargetDesc/HexagonMCTargetDesc.h"
 #include "llvm/ADT/SmallVector.h"
-#include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCInst.h"
@@ -29,7 +28,6 @@
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <cassert>
-#include <optional>
 #include <utility>
 #include <vector>
 
@@ -49,7 +47,7 @@ class HexagonBid {
 
 public:
   HexagonBid() = default;
-  HexagonBid(unsigned B) { Bid = B ? MAX / llvm::popcount(B) : 0; }
+  HexagonBid(unsigned B) { Bid = B ? MAX / countPopulation(B) : 0; }
 
   // Check if the insn priority is overflowed.
   bool isSold() const { return (Bid >= MAX); }
@@ -101,8 +99,8 @@ unsigned HexagonResource::setWeight(unsigned s) {
   if (Key == 0 || Units == 0 || (SlotWeight * s >= 32))
     return Weight = 0;
 
-  unsigned Ctpop = llvm::popcount(Units);
-  unsigned Cttz = llvm::countr_zero(Units);
+  unsigned Ctpop = countPopulation(Units);
+  unsigned Cttz = countTrailingZeros(Units);
   Weight = (1u << (SlotWeight * s)) * ((MaskWeight - Ctpop) << Cttz);
   return Weight;
 }
@@ -318,7 +316,7 @@ void HexagonShuffler::permitNonSlot() {
 }
 
 bool HexagonShuffler::ValidResourceUsage(HexagonPacketSummary const &Summary) {
-  std::optional<HexagonPacket> ShuffledPacket = tryAuction(Summary);
+  Optional<HexagonPacket> ShuffledPacket = tryAuction(Summary);
 
   if (!ShuffledPacket) {
     reportResourceError(Summary, "slot error");
@@ -625,7 +623,7 @@ bool HexagonShuffler::check(const bool RequireShuffle) {
   return !CheckFailure;
 }
 
-std::optional<HexagonShuffler::HexagonPacket>
+llvm::Optional<HexagonShuffler::HexagonPacket>
 HexagonShuffler::tryAuction(HexagonPacketSummary const &Summary) {
   HexagonPacket PacketResult = Packet;
   HexagonUnitAuction AuctionCore(Summary.ReservedSlotMask);
@@ -644,7 +642,7 @@ HexagonShuffler::tryAuction(HexagonPacketSummary const &Summary) {
              << llvm::format_hex(ISJ.Core.getUnits(), 4, true) << "\n";
   );
 
-  std::optional<HexagonPacket> Res;
+  Optional<HexagonPacket> Res;
   if (ValidSlots)
     Res = PacketResult;
 

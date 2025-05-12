@@ -17,13 +17,13 @@
 
 using namespace llvm;
 
-std::optional<RegOrConstant>
+Optional<RegOrConstant>
 AArch64GISelUtils::getAArch64VectorSplat(const MachineInstr &MI,
                                          const MachineRegisterInfo &MRI) {
   if (auto Splat = getVectorSplat(MI, MRI))
     return Splat;
   if (MI.getOpcode() != AArch64::G_DUP)
-    return std::nullopt;
+    return None;
   Register Src = MI.getOperand(1).getReg();
   if (auto ValAndVReg =
           getAnyConstantVRegValWithLookThrough(MI.getOperand(1).getReg(), MRI))
@@ -31,12 +31,12 @@ AArch64GISelUtils::getAArch64VectorSplat(const MachineInstr &MI,
   return RegOrConstant(Src);
 }
 
-std::optional<int64_t>
+Optional<int64_t>
 AArch64GISelUtils::getAArch64VectorSplatScalar(const MachineInstr &MI,
                                                const MachineRegisterInfo &MRI) {
   auto Splat = getAArch64VectorSplat(MI, MRI);
   if (!Splat || Splat->isReg())
-    return std::nullopt;
+    return None;
   return Splat->getCst();
 }
 

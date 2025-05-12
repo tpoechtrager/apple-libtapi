@@ -22,12 +22,13 @@ const char *const MSP430TargetInfo::GCCRegNames[] = {
 };
 
 ArrayRef<const char *> MSP430TargetInfo::getGCCRegNames() const {
-  return llvm::ArrayRef(GCCRegNames);
+  return llvm::makeArrayRef(GCCRegNames);
 }
 
 void MSP430TargetInfo::getTargetDefines(const LangOptions &Opts,
                                         MacroBuilder &Builder) const {
   Builder.defineMacro("MSP430");
   Builder.defineMacro("__MSP430__");
+  Builder.defineMacro("__ELF__");
   // FIXME: defines for different 'flavours' of MCU
 }

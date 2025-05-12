@@ -58,7 +58,6 @@ struct SpecialTypeDescriptor {
     STK_SampledImage,
     STK_Sampler,
     STK_Pipe,
-    STK_DeviceEvent,
     STK_Last = -1
   };
   SpecialTypeKind Kind;
@@ -146,18 +145,6 @@ struct PipeTypeDescriptor : public SpecialTypeDescriptor {
 
   static bool classof(const SpecialTypeDescriptor *TD) {
     return TD->Kind == SpecialTypeKind::STK_Pipe;
-  }
-};
-
-struct DeviceEventTypeDescriptor : public SpecialTypeDescriptor {
-
-  DeviceEventTypeDescriptor()
-      : SpecialTypeDescriptor(SpecialTypeKind::STK_DeviceEvent) {
-    Hash = Kind;
-  }
-
-  static bool classof(const SpecialTypeDescriptor *TD) {
-    return TD->Kind == SpecialTypeKind::STK_DeviceEvent;
   }
 };
 } // namespace SPIRV

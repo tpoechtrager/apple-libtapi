@@ -172,9 +172,6 @@ public:
   /// in the function. One of co_return, co_await, or co_yield.
   unsigned char FirstCoroutineStmtKind : 2;
 
-  /// Whether we found an immediate-escalating expression.
-  bool FoundImmediateEscalatingExpression : 1;
-
   /// First coroutine statement in the current function.
   /// (ex co_return, co_await, co_yield)
   SourceLocation FirstCoroutineStmtLoc;
@@ -235,9 +232,6 @@ public:
   /// A list of parameters which have the nonnull attribute and are
   /// modified in the function.
   llvm::SmallPtrSet<const ParmVarDecl *, 8> ModifiedNonNullParams;
-
-  /// The set of GNU address of label extension "&&label".
-  llvm::SmallVector<AddrLabelExpr *, 4> AddrLabels;
 
 public:
   /// Represents a simple identification of a weak object.
@@ -391,8 +385,7 @@ public:
         HasPotentialAvailabilityViolations(false), ObjCShouldCallSuper(false),
         ObjCIsDesignatedInit(false), ObjCWarnForNoDesignatedInitChain(false),
         ObjCIsSecondaryInit(false), ObjCWarnForNoInitDelegation(false),
-        NeedsCoroutineSuspends(true), FoundImmediateEscalatingExpression(false),
-        ErrorTrap(Diag) {}
+        NeedsCoroutineSuspends(true), ErrorTrap(Diag) {}
 
   virtual ~FunctionScopeInfo();
 
@@ -842,11 +835,6 @@ public:
   /// The lambda's compiler-generated \c operator().
   CXXMethodDecl *CallOperator = nullptr;
 
-  /// Indicate that we parsed the parameter list
-  /// at which point the mutability of the lambda
-  /// is known.
-  bool AfterParameterList = true;
-
   /// Source range covering the lambda introducer [...].
   SourceRange IntroducerRange;
 
@@ -858,9 +846,8 @@ public:
   /// explicit captures.
   unsigned NumExplicitCaptures = 0;
 
-  /// Whether this is a mutable lambda. Until the mutable keyword is parsed,
-  /// we assume the lambda is mutable.
-  bool Mutable = true;
+  /// Whether this is a mutable lambda.
+  bool Mutable = false;
 
   /// Whether the (empty) parameter list is explicit.
   bool ExplicitParams = false;
@@ -896,7 +883,7 @@ public:
   ///  This is specifically useful for generic lambdas or
   ///  lambdas within a potentially evaluated-if-used context.
   ///  If an enclosing variable is named in an expression of a lambda nested
-  ///  within a generic lambda, we don't always know whether the variable
+  ///  within a generic lambda, we don't always know know whether the variable
   ///  will truly be odr-used (i.e. need to be captured) by that nested lambda,
   ///  until its instantiation. But we still need to capture it in the
   ///  enclosing lambda if all intervening lambdas can capture the variable.
@@ -1041,7 +1028,7 @@ public:
   }
 
   void visitPotentialCaptures(
-      llvm::function_ref<void(ValueDecl *, Expr *)> Callback) const;
+      llvm::function_ref<void(VarDecl *, Expr *)> Callback) const;
 };
 
 FunctionScopeInfo::WeakObjectProfileTy::WeakObjectProfileTy()

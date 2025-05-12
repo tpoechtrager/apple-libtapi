@@ -128,7 +128,7 @@ static void resolveTopLevelMetadata(llvm::Function *Fn,
 
   // Find all llvm.dbg.declare intrinsics and resolve the DILocalVariable nodes
   // they are referencing.
-  for (auto &BB : *Fn) {
+  for (auto &BB : Fn->getBasicBlockList()) {
     for (auto &I : BB) {
       if (auto *DII = dyn_cast<llvm::DbgVariableIntrinsic>(&I)) {
         auto *DILocal = DII->getVariable();
@@ -678,23 +678,15 @@ void CodeGenVTables::addRelativeComponent(ConstantArrayBuilder &builder,
                                       /*position=*/vtableAddressPoint);
 }
 
-static bool UseRelativeLayout(const CodeGenModule &CGM) {
+bool CodeGenVTables::useRelativeLayout() const {
   return CGM.getTarget().getCXXABI().isItaniumFamily() &&
          CGM.getItaniumVTableContext().isRelativeLayout();
 }
 
-bool CodeGenVTables::useRelativeLayout() const {
-  return UseRelativeLayout(CGM);
-}
-
-llvm::Type *CodeGenModule::getVTableComponentType() const {
-  if (UseRelativeLayout(*this))
-    return Int32Ty;
-  return GlobalsInt8PtrTy;
-}
-
 llvm::Type *CodeGenVTables::getVTableComponentType() const {
-  return CGM.getVTableComponentType();
+  if (useRelativeLayout())
+    return CGM.Int32Ty;
+  return CGM.Int8PtrTy;
 }
 
 static void AddPointerLayoutOffset(const CodeGenModule &CGM,
@@ -702,7 +694,7 @@ static void AddPointerLayoutOffset(const CodeGenModule &CGM,
                                    CharUnits offset) {
   builder.add(llvm::ConstantExpr::getIntToPtr(
       llvm::ConstantInt::get(CGM.PtrDiffTy, offset.getQuantity()),
-      CGM.GlobalsInt8PtrTy));
+      CGM.Int8PtrTy));
 }
 
 static void AddRelativeLayoutOffset(const CodeGenModule &CGM,
@@ -739,7 +731,7 @@ void CodeGenVTables::addVTableComponent(ConstantArrayBuilder &builder,
                                   vtableHasLocalLinkage,
                                   /*isCompleteDtor=*/false);
     else
-      return builder.add(rtti);
+      return builder.add(llvm::ConstantExpr::getBitCast(rtti, CGM.Int8PtrTy));
 
   case VTableComponent::CK_FunctionPointer:
   case VTableComponent::CK_CompleteDtorPointer:
@@ -758,8 +750,7 @@ void CodeGenVTables::addVTableComponent(ConstantArrayBuilder &builder,
               ? MD->hasAttr<CUDADeviceAttr>()
               : (MD->hasAttr<CUDAHostAttr>() || !MD->hasAttr<CUDADeviceAttr>());
       if (!CanEmitMethod)
-        return builder.add(
-            llvm::ConstantExpr::getNullValue(CGM.GlobalsInt8PtrTy));
+        return builder.add(llvm::ConstantExpr::getNullValue(CGM.Int8PtrTy));
       // Method is acceptable, continue processing as usual.
     }
 
@@ -772,20 +763,20 @@ void CodeGenVTables::addVTableComponent(ConstantArrayBuilder &builder,
       // with the local symbol. As a temporary solution, fill these components
       // with zero. We shouldn't be calling these in the first place anyway.
       if (useRelativeLayout())
-        return llvm::ConstantPointerNull::get(CGM.GlobalsInt8PtrTy);
+        return llvm::ConstantPointerNull::get(CGM.Int8PtrTy);
 
       // For NVPTX devices in OpenMP emit special functon as null pointers,
       // otherwise linking ends up with unresolved references.
-      if (CGM.getLangOpts().OpenMP && CGM.getLangOpts().OpenMPIsTargetDevice &&
+      if (CGM.getLangOpts().OpenMP && CGM.getLangOpts().OpenMPIsDevice &&
           CGM.getTriple().isNVPTX())
-        return llvm::ConstantPointerNull::get(CGM.GlobalsInt8PtrTy);
+        return llvm::ConstantPointerNull::get(CGM.Int8PtrTy);
       llvm::FunctionType *fnTy =
           llvm::FunctionType::get(CGM.VoidTy, /*isVarArg=*/false);
       llvm::Constant *fn = cast<llvm::Constant>(
           CGM.CreateRuntimeFunction(fnTy, name).getCallee());
       if (auto f = dyn_cast<llvm::Function>(fn))
         f->setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::Global);
-      return fn;
+      return llvm::ConstantExpr::getBitCast(fn, CGM.Int8PtrTy);
     };
 
     llvm::Constant *fnPtr;
@@ -830,16 +821,7 @@ void CodeGenVTables::addVTableComponent(ConstantArrayBuilder &builder,
           builder, fnPtr, vtableAddressPoint, vtableHasLocalLinkage,
           component.getKind() == VTableComponent::CK_CompleteDtorPointer);
     } else {
-      // TODO: this icky and only exists due to functions being in the generic
-      //       address space, rather than the global one, even though they are
-      //       globals;  fixing said issue might be intrusive, and will be done
-      //       later.
-      unsigned FnAS = fnPtr->getType()->getPointerAddressSpace();
-      unsigned GVAS = CGM.GlobalsInt8PtrTy->getPointerAddressSpace();
-
-      if (FnAS != GVAS)
-        fnPtr =
-            llvm::ConstantExpr::getAddrSpaceCast(fnPtr, CGM.GlobalsInt8PtrTy);
+      fnPtr = llvm::ConstantExpr::getBitCast(fnPtr, CGM.Int8PtrTy);
       if (auto &schema =
           CGM.getCodeGenOpts().PointerAuth.CXXVirtualFunctionPointers)
         return builder.addSignedPointer(fnPtr, schema, GD, QualType());
@@ -851,7 +833,7 @@ void CodeGenVTables::addVTableComponent(ConstantArrayBuilder &builder,
     if (useRelativeLayout())
       return builder.add(llvm::ConstantExpr::getNullValue(CGM.Int32Ty));
     else
-      return builder.addNullPointer(CGM.GlobalsInt8PtrTy);
+      return builder.addNullPointer(CGM.Int8PtrTy);
   }
 
   llvm_unreachable("Unexpected vtable component kind");
@@ -930,7 +912,7 @@ llvm::GlobalVariable *CodeGenVTables::GenerateConstructionVTable(
   if (Linkage == llvm::GlobalVariable::AvailableExternallyLinkage)
     Linkage = llvm::GlobalVariable::InternalLinkage;
 
-  llvm::Align Align = CGM.getDataLayout().getABITypeAlign(VTType);
+  unsigned Align = CGM.getDataLayout().getABITypeAlignment(VTType);
 
   // Create the variable that will hold the construction vtable.
   llvm::GlobalVariable *VTable =
@@ -1066,20 +1048,19 @@ CodeGenModule::getVTableLinkage(const CXXRecordDecl *RD) {
     switch (keyFunction->getTemplateSpecializationKind()) {
       case TSK_Undeclared:
       case TSK_ExplicitSpecialization:
-      assert(
-          (def || CodeGenOpts.OptimizationLevel > 0 ||
-           CodeGenOpts.getDebugInfo() != llvm::codegenoptions::NoDebugInfo) &&
-          "Shouldn't query vtable linkage without key function, "
-          "optimizations, or debug info");
-      if (!def && CodeGenOpts.OptimizationLevel > 0)
-        return llvm::GlobalVariable::AvailableExternallyLinkage;
+        assert((def || CodeGenOpts.OptimizationLevel > 0 ||
+                CodeGenOpts.getDebugInfo() != codegenoptions::NoDebugInfo) &&
+               "Shouldn't query vtable linkage without key function, "
+               "optimizations, or debug info");
+        if (!def && CodeGenOpts.OptimizationLevel > 0)
+          return llvm::GlobalVariable::AvailableExternallyLinkage;
 
-      if (keyFunction->isInlined())
-        return !Context.getLangOpts().AppleKext
-                   ? llvm::GlobalVariable::LinkOnceODRLinkage
-                   : llvm::Function::InternalLinkage;
+        if (keyFunction->isInlined())
+          return !Context.getLangOpts().AppleKext ?
+                   llvm::GlobalVariable::LinkOnceODRLinkage :
+                   llvm::Function::InternalLinkage;
 
-      return llvm::GlobalVariable::ExternalLinkage;
+        return llvm::GlobalVariable::ExternalLinkage;
 
       case TSK_ImplicitInstantiation:
         return !Context.getLangOpts().AppleKext ?
@@ -1193,16 +1174,9 @@ bool CodeGenVTables::isVTableExternal(const CXXRecordDecl *RD) {
   if (!keyFunction)
     return false;
 
-  const FunctionDecl *Def;
   // Otherwise, if we don't have a definition of the key function, the
   // vtable must be defined somewhere else.
-  if (!keyFunction->hasBody(Def))
-    return true;
-
-  assert(Def && "The body of the key function is not assigned to Def?");
-  // If the non-inline key function comes from another module unit, the vtable
-  // must be defined there.
-  return Def->isInAnotherModuleUnit() && !Def->isInlineSpecified();
+  return !keyFunction->hasBody();
 }
 
 /// Given that we're currently at the end of the translation unit, and
@@ -1240,8 +1214,7 @@ void CodeGenModule::EmitDeferredVTables() {
 }
 
 bool CodeGenModule::AlwaysHasLTOVisibilityPublic(const CXXRecordDecl *RD) {
-  if (RD->hasAttr<LTOVisibilityPublicAttr>() || RD->hasAttr<UuidAttr>() ||
-      RD->hasAttr<DLLExportAttr>() || RD->hasAttr<DLLImportAttr>())
+  if (RD->hasAttr<LTOVisibilityPublicAttr>() || RD->hasAttr<UuidAttr>())
     return true;
 
   if (!getCodeGenOpts().LTOVisibilityPublicStd)
@@ -1268,9 +1241,13 @@ bool CodeGenModule::HasHiddenLTOVisibility(const CXXRecordDecl *RD) {
   if (!isExternallyVisible(LV.getLinkage()))
     return true;
 
-  if (!getTriple().isOSBinFormatCOFF() &&
-      LV.getVisibility() != HiddenVisibility)
-    return false;
+  if (getTriple().isOSBinFormatCOFF()) {
+    if (RD->hasAttr<DLLExportAttr>() || RD->hasAttr<DLLImportAttr>())
+      return false;
+  } else {
+    if (LV.getVisibility() != HiddenVisibility)
+      return false;
+  }
 
   return !AlwaysHasLTOVisibilityPublic(RD);
 }
@@ -1294,13 +1271,13 @@ llvm::GlobalObject::VCallVisibility CodeGenModule::GetVCallVisibilityLevel(
   else
     TypeVis = llvm::GlobalObject::VCallVisibilityPublic;
 
-  for (const auto &B : RD->bases())
+  for (auto B : RD->bases())
     if (B.getType()->getAsCXXRecordDecl()->isDynamicClass())
       TypeVis = std::min(
           TypeVis,
           GetVCallVisibilityLevel(B.getType()->getAsCXXRecordDecl(), Visited));
 
-  for (const auto &B : RD->vbases())
+  for (auto B : RD->vbases())
     if (B.getType()->getAsCXXRecordDecl()->isDynamicClass())
       TypeVis = std::min(
           TypeVis,
@@ -1315,7 +1292,8 @@ void CodeGenModule::EmitVTableTypeMetadata(const CXXRecordDecl *RD,
   if (!getCodeGenOpts().LTOUnit)
     return;
 
-  CharUnits ComponentWidth = GetTargetTypeStoreSize(getVTableComponentType());
+  CharUnits PointerWidth =
+      Context.toCharUnitsFromBits(Context.getTargetInfo().getPointerWidth(0));
 
   typedef std::pair<const CXXRecordDecl *, unsigned> AddressPoint;
   std::vector<AddressPoint> AddressPoints;
@@ -1353,7 +1331,7 @@ void CodeGenModule::EmitVTableTypeMetadata(const CXXRecordDecl *RD,
   ArrayRef<VTableComponent> Comps = VTLayout.vtable_components();
   for (auto AP : AddressPoints) {
     // Create type metadata for the address point.
-    AddVTableTypeMetadata(VTable, ComponentWidth * AP.second, AP.first);
+    AddVTableTypeMetadata(VTable, PointerWidth * AP.second, AP.first);
 
     // The class associated with each address point could also potentially be
     // used for indirect calls via a member function pointer, so we need to
@@ -1366,7 +1344,7 @@ void CodeGenModule::EmitVTableTypeMetadata(const CXXRecordDecl *RD,
           Context.getMemberPointerType(
               Comps[I].getFunctionDecl()->getType(),
               Context.getRecordType(AP.first).getTypePtr()));
-      VTable->addTypeMetadata((ComponentWidth * I).getQuantity(), MD);
+      VTable->addTypeMetadata((PointerWidth * I).getQuantity(), MD);
     }
   }
 

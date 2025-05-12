@@ -24,7 +24,7 @@ const char *const LanaiTargetInfo::GCCRegNames[] = {
 };
 
 ArrayRef<const char *> LanaiTargetInfo::getGCCRegNames() const {
-  return llvm::ArrayRef(GCCRegNames);
+  return llvm::makeArrayRef(GCCRegNames);
 }
 
 const TargetInfo::GCCRegAlias LanaiTargetInfo::GCCRegAliases[] = {
@@ -33,7 +33,7 @@ const TargetInfo::GCCRegAlias LanaiTargetInfo::GCCRegAliases[] = {
 };
 
 ArrayRef<TargetInfo::GCCRegAlias> LanaiTargetInfo::getGCCRegAliases() const {
-  return llvm::ArrayRef(GCCRegAliases);
+  return llvm::makeArrayRef(GCCRegAliases);
 }
 
 bool LanaiTargetInfo::isValidCPUName(StringRef Name) const {

@@ -23,18 +23,17 @@
 #include "llvm_ocaml.h"
 
 /* Llvm.llmodule -> string option */
-value llvm_verify_module(value M) {
+value llvm_verify_module(LLVMModuleRef M) {
   CAMLparam0();
   CAMLlocal2(String, Option);
 
   char *Message;
-  int Result =
-      LLVMVerifyModule(Module_val(M), LLVMReturnStatusAction, &Message);
+  int Result = LLVMVerifyModule(M, LLVMReturnStatusAction, &Message);
 
   if (0 == Result) {
     Option = Val_none;
   } else {
-    String = caml_copy_string(Message);
+    String = copy_string(Message);
     Option = caml_alloc_some(String);
   }
 
@@ -44,31 +43,30 @@ value llvm_verify_module(value M) {
 }
 
 /* Llvm.llvalue -> bool */
-value llvm_verify_function(value Fn) {
-  return Val_bool(LLVMVerifyFunction(Value_val(Fn), LLVMReturnStatusAction) ==
-                  0);
+value llvm_verify_function(LLVMValueRef Fn) {
+  return Val_bool(LLVMVerifyFunction(Fn, LLVMReturnStatusAction) == 0);
 }
 
 /* Llvm.llmodule -> unit */
-value llvm_assert_valid_module(value M) {
-  LLVMVerifyModule(Module_val(M), LLVMAbortProcessAction, 0);
+value llvm_assert_valid_module(LLVMModuleRef M) {
+  LLVMVerifyModule(M, LLVMAbortProcessAction, 0);
   return Val_unit;
 }
 
 /* Llvm.llvalue -> unit */
-value llvm_assert_valid_function(value Fn) {
-  LLVMVerifyFunction(Value_val(Fn), LLVMAbortProcessAction);
+value llvm_assert_valid_function(LLVMValueRef Fn) {
+  LLVMVerifyFunction(Fn, LLVMAbortProcessAction);
   return Val_unit;
 }
 
 /* Llvm.llvalue -> unit */
-value llvm_view_function_cfg(value Fn) {
-  LLVMViewFunctionCFG(Value_val(Fn));
+value llvm_view_function_cfg(LLVMValueRef Fn) {
+  LLVMViewFunctionCFG(Fn);
   return Val_unit;
 }
 
 /* Llvm.llvalue -> unit */
-value llvm_view_function_cfg_only(value Fn) {
-  LLVMViewFunctionCFGOnly(Value_val(Fn));
+value llvm_view_function_cfg_only(LLVMValueRef Fn) {
+  LLVMViewFunctionCFGOnly(Fn);
   return Val_unit;
 }

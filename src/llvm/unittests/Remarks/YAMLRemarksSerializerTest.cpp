@@ -24,8 +24,8 @@ using namespace llvm;
 
 static void check(remarks::Format SerializerFormat,
                   remarks::SerializerMode Mode, ArrayRef<remarks::Remark> Rs,
-                  StringRef ExpectedR, std::optional<StringRef> ExpectedMeta,
-                  std::optional<remarks::StringTable> StrTab = std::nullopt) {
+                  StringRef ExpectedR, Optional<StringRef> ExpectedMeta,
+                  Optional<remarks::StringTable> StrTab = None) {
   std::string Buf;
   raw_string_ostream OS(Buf);
   Expected<std::unique_ptr<remarks::RemarkSerializer>> MaybeS = [&] {
@@ -53,19 +53,18 @@ static void check(remarks::Format SerializerFormat,
 
 static void check(remarks::Format SerializerFormat, const remarks::Remark &R,
                   StringRef ExpectedR, StringRef ExpectedMeta,
-                  std::optional<remarks::StringTable> StrTab = std::nullopt) {
+                  Optional<remarks::StringTable> StrTab = None) {
   return check(SerializerFormat, remarks::SerializerMode::Separate,
-               ArrayRef(&R, &R + 1), ExpectedR, ExpectedMeta,
+               makeArrayRef(&R, &R + 1), ExpectedR, ExpectedMeta,
                std::move(StrTab));
 }
 
-static void
-checkStandalone(remarks::Format SerializerFormat, const remarks::Remark &R,
-                StringRef ExpectedR,
-                std::optional<remarks::StringTable> StrTab = std::nullopt) {
+static void checkStandalone(remarks::Format SerializerFormat,
+                            const remarks::Remark &R, StringRef ExpectedR,
+                            Optional<remarks::StringTable> StrTab = None) {
   return check(SerializerFormat, remarks::SerializerMode::Standalone,
-               ArrayRef(&R, &R + 1), ExpectedR,
-               /*ExpectedMeta=*/std::nullopt, std::move(StrTab));
+               makeArrayRef(&R, &R + 1), ExpectedR,
+               /*ExpectedMeta=*/None, std::move(StrTab));
 }
 
 TEST(YAMLRemarks, SerializerRemark) {
@@ -326,5 +325,5 @@ TEST(YAMLRemarks, SerializerRemarkParsedStrTabStandaloneMultipleRemarks) {
                   "    DebugLoc:        { File: 6, Line: 6, Column: 7 }\n"
                   "...\n",
                   561),
-        /*ExpectedMeta=*/std::nullopt, std::move(PreFilledStrTab));
+        /*ExpectedMeta=*/None, std::move(PreFilledStrTab));
 }

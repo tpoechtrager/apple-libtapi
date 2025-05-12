@@ -4,14 +4,11 @@ include_directories(
   )
 
 set(LLVM_LINK_COMPONENTS
-  CodeGen
-  CodeGenTypes
-  Core
-  Exegesis
-  MC
-  Support
-  TargetParser
   X86
+  Exegesis
+  Core
+  Support
+  CodeGen
   )
 
 add_llvm_library(LLVMExegesisX86

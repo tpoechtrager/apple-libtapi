@@ -42,11 +42,11 @@ void PrettyStackTraceLoc::print(raw_ostream &OS) const {
 // SourceLocation
 //===----------------------------------------------------------------------===//
 
-static_assert(std::is_trivially_destructible_v<SourceLocation>,
+static_assert(std::is_trivially_destructible<SourceLocation>::value,
               "SourceLocation must be trivially destructible because it is "
               "used in unions");
 
-static_assert(std::is_trivially_destructible_v<SourceRange>,
+static_assert(std::is_trivially_destructible<SourceRange>::value,
               "SourceRange must be trivially destructible because it is "
               "used in unions");
 

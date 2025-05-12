@@ -31,8 +31,8 @@ using namespace ento;
 using namespace tooling;
 
 namespace {
-/// Emits minimal diagnostics (report message + notes) for the 'none' output
-/// type to the standard error, or to complement many others. Emits detailed
+/// Emitsd minimal diagnostics (report message + notes) for the 'none' output
+/// type to the standard error, or to to compliment many others. Emits detailed
 /// diagnostics in textual format for the 'text' output type.
 class TextDiagnostics : public PathDiagnosticConsumer {
   PathDiagnosticConsumerOptions DiagOpts;
@@ -86,7 +86,10 @@ public:
       }
     };
 
-    for (const PathDiagnostic *PD : Diags) {
+    for (std::vector<const PathDiagnostic *>::iterator I = Diags.begin(),
+         E = Diags.end();
+         I != E; ++I) {
+      const PathDiagnostic *PD = *I;
       std::string WarningMsg = (DiagOpts.ShouldDisplayDiagnosticName
                                     ? " [" + PD->getCheckerName() + "]"
                                     : "")

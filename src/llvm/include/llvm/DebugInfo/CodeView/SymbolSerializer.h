@@ -9,6 +9,7 @@
 #ifndef LLVM_DEBUGINFO_CODEVIEW_SYMBOLSERIALIZER_H
 #define LLVM_DEBUGINFO_CODEVIEW_SYMBOLSERIALIZER_H
 
+#include "llvm/ADT/Optional.h"
 #include "llvm/DebugInfo/CodeView/CVRecord.h"
 #include "llvm/DebugInfo/CodeView/CodeView.h"
 #include "llvm/DebugInfo/CodeView/RecordSerialization.h"
@@ -34,7 +35,7 @@ class SymbolSerializer : public SymbolVisitorCallbacks {
   MutableBinaryByteStream Stream;
   BinaryStreamWriter Writer;
   SymbolRecordMapping Mapping;
-  std::optional<SymbolKind> CurrentSymbol;
+  Optional<SymbolKind> CurrentSymbol;
 
   Error writeRecordPrefix(SymbolKind Kind) {
     RecordPrefix Prefix;

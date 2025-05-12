@@ -3,19 +3,17 @@ set(exegesis_includes
   )
 
 set(LLVM_LINK_COMPONENTS
-  CodeGenTypes
   MC
   MCParser
   Object
   Support
   Symbolize
-  TargetParser
   )
 
 set(exegesis_sources
   BenchmarkRunnerTest.cpp
   ClusteringTest.cpp
-  ProgressMeterTest.cpp
+  PerfHelperTest.cpp
   RegisterValueTest.cpp
   )
 
@@ -42,6 +40,9 @@ endfunction()
 
 if(LLVM_TARGETS_TO_BUILD MATCHES "X86")
   include(X86/CMakeLists.txt)
+endif()
+if(LLVM_TARGETS_TO_BUILD MATCHES "ARM")
+  include(ARM/CMakeLists.txt)
 endif()
 if(LLVM_TARGETS_TO_BUILD MATCHES "AArch64")
   include(AArch64/CMakeLists.txt)

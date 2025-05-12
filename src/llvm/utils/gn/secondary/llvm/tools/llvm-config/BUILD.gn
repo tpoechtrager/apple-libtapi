@@ -114,7 +114,6 @@ executable("llvm-config") {
     "//llvm/include/llvm/Config:config",
     "//llvm/include/llvm/Config:llvm-config",
     "//llvm/lib/Support",
-    "//llvm/lib/TargetParser",
   ]
 
   # To pick up the generated inc files.

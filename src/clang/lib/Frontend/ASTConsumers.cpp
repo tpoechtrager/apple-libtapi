@@ -183,20 +183,21 @@ std::unique_ptr<ASTConsumer> clang::CreateASTDeclNodeLister() {
 /// ASTViewer - AST Visualization
 
 namespace {
-class ASTViewer : public ASTConsumer {
-  ASTContext *Context = nullptr;
+  class ASTViewer : public ASTConsumer {
+    ASTContext *Context;
+  public:
+    void Initialize(ASTContext &Context) override {
+      this->Context = &Context;
+    }
 
-public:
-  void Initialize(ASTContext &Context) override { this->Context = &Context; }
+    bool HandleTopLevelDecl(DeclGroupRef D) override {
+      for (DeclGroupRef::iterator I = D.begin(), E = D.end(); I != E; ++I)
+        HandleTopLevelSingleDecl(*I);
+      return true;
+    }
 
-  bool HandleTopLevelDecl(DeclGroupRef D) override {
-    for (DeclGroupRef::iterator I = D.begin(), E = D.end(); I != E; ++I)
-      HandleTopLevelSingleDecl(*I);
-    return true;
-  }
-
-  void HandleTopLevelSingleDecl(Decl *D);
-};
+    void HandleTopLevelSingleDecl(Decl *D);
+  };
 }
 
 void ASTViewer::HandleTopLevelSingleDecl(Decl *D) {

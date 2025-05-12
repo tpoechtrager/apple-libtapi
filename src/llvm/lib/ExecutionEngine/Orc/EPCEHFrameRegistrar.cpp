@@ -9,7 +9,7 @@
 #include "llvm/ExecutionEngine/Orc/EPCEHFrameRegistrar.h"
 
 #include "llvm/ExecutionEngine/Orc/Core.h"
-#include "llvm/ExecutionEngine/Orc/Shared/OrcRTBridge.h"
+#include "llvm/Support/BinaryStreamWriter.h"
 
 using namespace llvm::orc::shared;
 
@@ -18,31 +18,53 @@ namespace orc {
 
 Expected<std::unique_ptr<EPCEHFrameRegistrar>>
 EPCEHFrameRegistrar::Create(ExecutionSession &ES) {
+  // FIXME: Proper mangling here -- we really need to decouple linker mangling
+  // from DataLayout.
 
-  // Lookup addresseses of the registration/deregistration functions in the
-  // bootstrap map.
-  ExecutorAddr RegisterEHFrameSectionWrapper;
-  ExecutorAddr DeregisterEHFrameSectionWrapper;
-  if (auto Err = ES.getExecutorProcessControl().getBootstrapSymbols(
-          {{RegisterEHFrameSectionWrapper,
-            rt::RegisterEHFrameSectionWrapperName},
-           {DeregisterEHFrameSectionWrapper,
-            rt::DeregisterEHFrameSectionWrapperName}}))
-    return std::move(Err);
+  // Find the addresses of the registration/deregistration functions in the
+  // executor process.
+  auto &EPC = ES.getExecutorProcessControl();
+  auto ProcessHandle = EPC.loadDylib(nullptr);
+  if (!ProcessHandle)
+    return ProcessHandle.takeError();
+
+  std::string RegisterWrapperName, DeregisterWrapperName;
+  if (EPC.getTargetTriple().isOSBinFormatMachO()) {
+    RegisterWrapperName += '_';
+    DeregisterWrapperName += '_';
+  }
+  RegisterWrapperName += "llvm_orc_registerEHFrameSectionWrapper";
+  DeregisterWrapperName += "llvm_orc_deregisterEHFrameSectionWrapper";
+
+  SymbolLookupSet RegistrationSymbols;
+  RegistrationSymbols.add(EPC.intern(RegisterWrapperName));
+  RegistrationSymbols.add(EPC.intern(DeregisterWrapperName));
+
+  auto Result = EPC.lookupSymbols({{*ProcessHandle, RegistrationSymbols}});
+  if (!Result)
+    return Result.takeError();
+
+  assert(Result->size() == 1 && "Unexpected number of dylibs in result");
+  assert((*Result)[0].size() == 2 &&
+         "Unexpected number of addresses in result");
+
+  auto RegisterEHFrameWrapperFnAddr = (*Result)[0][0];
+  auto DeregisterEHFrameWrapperFnAddr = (*Result)[0][1];
 
   return std::make_unique<EPCEHFrameRegistrar>(
-      ES, RegisterEHFrameSectionWrapper, DeregisterEHFrameSectionWrapper);
+      ES, ExecutorAddr(RegisterEHFrameWrapperFnAddr),
+      ExecutorAddr(DeregisterEHFrameWrapperFnAddr));
 }
 
 Error EPCEHFrameRegistrar::registerEHFrames(ExecutorAddrRange EHFrameSection) {
   return ES.callSPSWrapper<void(SPSExecutorAddrRange)>(
-      RegisterEHFrameSectionWrapper, EHFrameSection);
+      RegisterEHFrameWrapperFnAddr, EHFrameSection);
 }
 
 Error EPCEHFrameRegistrar::deregisterEHFrames(
     ExecutorAddrRange EHFrameSection) {
   return ES.callSPSWrapper<void(SPSExecutorAddrRange)>(
-      DeregisterEHFrameSectionWrapper, EHFrameSection);
+      DeregisterEHFrameWrapperFnAddr, EHFrameSection);
 }
 
 } // end namespace orc

@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Analysis/FunctionPropertiesAnalysis.h"
+#include "llvm/ADT/iterator_range.h"
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/AsmParser/Parser.h"
@@ -157,7 +158,7 @@ define i32 @f2(i32 %a) {
   auto IR = llvm::InlineFunction(*CB, IFI);
   EXPECT_TRUE(IR.isSuccess());
   invalidate(*F1);
-  EXPECT_TRUE(FPU.finishAndTest(FAM));
+  FPU.finish(FAM);
   EXPECT_EQ(FPI, ExpectedFinal);
 }
 
@@ -211,7 +212,7 @@ define i32 @f2(i32 %a) {
   auto IR = llvm::InlineFunction(*CB, IFI);
   EXPECT_TRUE(IR.isSuccess());
   invalidate(*F1);
-  EXPECT_TRUE(FPU.finishAndTest(FAM));
+  FPU.finish(FAM);
   EXPECT_EQ(FPI, ExpectedFinal);
 }
 
@@ -278,7 +279,7 @@ exit:
   auto IR = llvm::InlineFunction(*CB, IFI);
   EXPECT_TRUE(IR.isSuccess());
   invalidate(*F1);
-  EXPECT_TRUE(FPU.finishAndTest(FAM));
+  FPU.finish(FAM);
   EXPECT_EQ(FPI, ExpectedFinal);
 }
 
@@ -323,8 +324,9 @@ declare i32 @__gxx_personality_v0(...)
   auto IR = llvm::InlineFunction(*CB, IFI);
   EXPECT_TRUE(IR.isSuccess());
   invalidate(*F1);
-  EXPECT_TRUE(FPU.finishAndTest(FAM));
-  EXPECT_EQ(static_cast<size_t>(FPI.BasicBlockCount), F1->size());
+  FPU.finish(FAM);
+  EXPECT_EQ(static_cast<size_t>(FPI.BasicBlockCount),
+            F1->getBasicBlockList().size());
   EXPECT_EQ(static_cast<size_t>(FPI.TotalInstructionCount),
             F1->getInstructionCount());
 }
@@ -376,8 +378,9 @@ declare i32 @__gxx_personality_v0(...)
   auto IR = llvm::InlineFunction(*CB, IFI);
   EXPECT_TRUE(IR.isSuccess());
   invalidate(*F1);
-  EXPECT_TRUE(FPU.finishAndTest(FAM));
-  EXPECT_EQ(static_cast<size_t>(FPI.BasicBlockCount), F1->size() - 1);
+  FPU.finish(FAM);
+  EXPECT_EQ(static_cast<size_t>(FPI.BasicBlockCount),
+            F1->getBasicBlockList().size() - 1);
   EXPECT_EQ(static_cast<size_t>(FPI.TotalInstructionCount),
             F1->getInstructionCount() - 2);
   EXPECT_EQ(FPI, FunctionPropertiesInfo::getFunctionPropertiesInfo(*F1, FAM));
@@ -430,8 +433,9 @@ declare i32 @__gxx_personality_v0(...)
   auto IR = llvm::InlineFunction(*CB, IFI);
   EXPECT_TRUE(IR.isSuccess());
   invalidate(*F1);
-  EXPECT_TRUE(FPU.finishAndTest(FAM));
-  EXPECT_EQ(static_cast<size_t>(FPI.BasicBlockCount), F1->size() - 1);
+  FPU.finish(FAM);
+  EXPECT_EQ(static_cast<size_t>(FPI.BasicBlockCount),
+            F1->getBasicBlockList().size() - 1);
   EXPECT_EQ(static_cast<size_t>(FPI.TotalInstructionCount),
             F1->getInstructionCount() - 2);
   EXPECT_EQ(FPI, FunctionPropertiesInfo::getFunctionPropertiesInfo(*F1, FAM));
@@ -482,8 +486,9 @@ lpad:
   auto IR = llvm::InlineFunction(*CB, IFI);
   EXPECT_TRUE(IR.isSuccess());
   invalidate(*F1);
-  EXPECT_TRUE(FPU.finishAndTest(FAM));
-  EXPECT_EQ(static_cast<size_t>(FPI.BasicBlockCount), F1->size() - 1);
+  FPU.finish(FAM);
+  EXPECT_EQ(static_cast<size_t>(FPI.BasicBlockCount),
+            F1->getBasicBlockList().size() - 1);
   EXPECT_EQ(static_cast<size_t>(FPI.TotalInstructionCount),
             F1->getInstructionCount() - 2);
   EXPECT_EQ(FPI, FunctionPropertiesInfo::getFunctionPropertiesInfo(*F1, FAM));
@@ -538,8 +543,9 @@ lpad:
   auto IR = llvm::InlineFunction(*CB, IFI);
   EXPECT_TRUE(IR.isSuccess());
   invalidate(*F1);
-  EXPECT_TRUE(FPU.finishAndTest(FAM));
-  EXPECT_EQ(static_cast<size_t>(FPI.BasicBlockCount), F1->size() - 1);
+  FPU.finish(FAM);
+  EXPECT_EQ(static_cast<size_t>(FPI.BasicBlockCount),
+            F1->getBasicBlockList().size() - 1);
   EXPECT_EQ(static_cast<size_t>(FPI.TotalInstructionCount),
             F1->getInstructionCount() - 2);
   EXPECT_EQ(FPI, FunctionPropertiesInfo::getFunctionPropertiesInfo(*F1, FAM));
@@ -609,7 +615,7 @@ end:
   auto IR = llvm::InlineFunction(*CB, IFI);
   EXPECT_TRUE(IR.isSuccess());
   invalidate(*F1);
-  EXPECT_TRUE(FPU.finishAndTest(FAM));
+  FPU.finish(FAM);
   EXPECT_EQ(FPI, ExpectedFinal);
 }
 
@@ -676,7 +682,7 @@ declare void @llvm.trap()
   auto IR = llvm::InlineFunction(*CB, IFI);
   EXPECT_TRUE(IR.isSuccess());
   invalidate(*F1);
-  EXPECT_TRUE(FPU.finishAndTest(FAM));
+  FPU.finish(FAM);
   EXPECT_EQ(FPI, ExpectedFinal);
 }
 
@@ -736,7 +742,7 @@ declare void @f3()
   auto IR = llvm::InlineFunction(*CB, IFI);
   EXPECT_TRUE(IR.isSuccess());
   invalidate(*F1);
-  EXPECT_TRUE(FPU.finishAndTest(FAM));
+  FPU.finish(FAM);
   EXPECT_EQ(FPI, ExpectedFinal);
 }
 } // end anonymous namespace

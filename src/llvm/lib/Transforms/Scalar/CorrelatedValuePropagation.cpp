@@ -12,6 +12,7 @@
 
 #include "llvm/Transforms/Scalar/CorrelatedValuePropagation.h"
 #include "llvm/ADT/DepthFirstIterator.h"
+#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/DomTreeUpdater.h"
@@ -36,11 +37,13 @@
 #include "llvm/IR/PassManager.h"
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Value.h"
+#include "llvm/InitializePasses.h"
+#include "llvm/Pass.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/CommandLine.h"
+#include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include <cassert>
-#include <optional>
 #include <utility>
 
 using namespace llvm;
@@ -91,36 +94,61 @@ STATISTIC(NumSaturating,
     "Number of saturating arithmetics converted to normal arithmetics");
 STATISTIC(NumNonNull, "Number of function pointer arguments marked non-null");
 STATISTIC(NumMinMax, "Number of llvm.[us]{min,max} intrinsics removed");
-STATISTIC(NumUDivURemsNarrowedExpanded,
-          "Number of bound udiv's/urem's expanded");
+
+namespace {
+
+  class CorrelatedValuePropagation : public FunctionPass {
+  public:
+    static char ID;
+
+    CorrelatedValuePropagation(): FunctionPass(ID) {
+     initializeCorrelatedValuePropagationPass(*PassRegistry::getPassRegistry());
+    }
+
+    bool runOnFunction(Function &F) override;
+
+    void getAnalysisUsage(AnalysisUsage &AU) const override {
+      AU.addRequired<DominatorTreeWrapperPass>();
+      AU.addRequired<LazyValueInfoWrapperPass>();
+      AU.addPreserved<GlobalsAAWrapperPass>();
+      AU.addPreserved<DominatorTreeWrapperPass>();
+      AU.addPreserved<LazyValueInfoWrapperPass>();
+    }
+  };
+
+} // end anonymous namespace
+
+char CorrelatedValuePropagation::ID = 0;
+
+INITIALIZE_PASS_BEGIN(CorrelatedValuePropagation, "correlated-propagation",
+                "Value Propagation", false, false)
+INITIALIZE_PASS_DEPENDENCY(DominatorTreeWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(LazyValueInfoWrapperPass)
+INITIALIZE_PASS_END(CorrelatedValuePropagation, "correlated-propagation",
+                "Value Propagation", false, false)
+
+// Public interface to the Value Propagation pass
+Pass *llvm::createCorrelatedValuePropagationPass() {
+  return new CorrelatedValuePropagation();
+}
 
 static bool processSelect(SelectInst *S, LazyValueInfo *LVI) {
-  if (S->getType()->isVectorTy() || isa<Constant>(S->getCondition()))
-    return false;
+  if (S->getType()->isVectorTy()) return false;
+  if (isa<Constant>(S->getCondition())) return false;
 
-  bool Changed = false;
-  for (Use &U : make_early_inc_range(S->uses())) {
-    auto *I = cast<Instruction>(U.getUser());
-    Constant *C;
-    if (auto *PN = dyn_cast<PHINode>(I))
-      C = LVI->getConstantOnEdge(S->getCondition(), PN->getIncomingBlock(U),
-                                 I->getParent(), I);
-    else
-      C = LVI->getConstant(S->getCondition(), I);
+  Constant *C = LVI->getConstant(S->getCondition(), S);
+  if (!C) return false;
 
-    auto *CI = dyn_cast_or_null<ConstantInt>(C);
-    if (!CI)
-      continue;
+  ConstantInt *CI = dyn_cast<ConstantInt>(C);
+  if (!CI) return false;
 
-    U.set(CI->isOne() ? S->getTrueValue() : S->getFalseValue());
-    Changed = true;
-    ++NumSelects;
-  }
+  Value *ReplaceWith = CI->isOne() ? S->getTrueValue() : S->getFalseValue();
+  S->replaceAllUsesWith(ReplaceWith);
+  S->eraseFromParent();
 
-  if (Changed && S->use_empty())
-    S->eraseFromParent();
+  ++NumSelects;
 
-  return Changed;
+  return true;
 }
 
 /// Try to simplify a phi with constant incoming values that match the edge
@@ -312,16 +340,18 @@ static bool processICmp(ICmpInst *Cmp, LazyValueInfo *LVI) {
 /// exploiting range information.
 static bool constantFoldCmp(CmpInst *Cmp, LazyValueInfo *LVI) {
   Value *Op0 = Cmp->getOperand(0);
-  Value *Op1 = Cmp->getOperand(1);
+  auto *C = dyn_cast<Constant>(Cmp->getOperand(1));
+  if (!C)
+    return false;
+
   LazyValueInfo::Tristate Result =
-      LVI->getPredicateAt(Cmp->getPredicate(), Op0, Op1, Cmp,
+      LVI->getPredicateAt(Cmp->getPredicate(), Op0, C, Cmp,
                           /*UseBlockValue=*/true);
   if (Result == LazyValueInfo::Unknown)
     return false;
 
   ++NumCmps;
-  Constant *TorF =
-      ConstantInt::get(CmpInst::makeCmpResultType(Op0->getType()), Result);
+  Constant *TorF = ConstantInt::get(Type::getInt1Ty(Cmp->getContext()), Result);
   Cmp->replaceAllUsesWith(TorF);
   Cmp->eraseFromParent();
   return true;
@@ -409,8 +439,8 @@ static bool processSwitch(SwitchInst *I, LazyValueInfo *LVI,
 
 // See if we can prove that the given binary op intrinsic will not overflow.
 static bool willNotOverflow(BinaryOpIntrinsic *BO, LazyValueInfo *LVI) {
-  ConstantRange LRange = LVI->getConstantRangeAtUse(BO->getOperandUse(0));
-  ConstantRange RRange = LVI->getConstantRangeAtUse(BO->getOperandUse(1));
+  ConstantRange LRange = LVI->getConstantRange(BO->getLHS(), BO);
+  ConstantRange RRange = LVI->getConstantRange(BO->getRHS(), BO);
   ConstantRange NWRegion = ConstantRange::makeGuaranteedNoWrapRegion(
       BO->getBinaryOp(), RRange, BO->getNoWrapKind());
   return NWRegion.contains(LRange);
@@ -470,17 +500,17 @@ static bool processBinOp(BinaryOperator *BinOp, LazyValueInfo *LVI);
 // because it is negation-invariant.
 static bool processAbsIntrinsic(IntrinsicInst *II, LazyValueInfo *LVI) {
   Value *X = II->getArgOperand(0);
-  Type *Ty = X->getType();
-  if (!Ty->isIntegerTy())
-    return false;
-
   bool IsIntMinPoison = cast<ConstantInt>(II->getArgOperand(1))->isOne();
-  APInt IntMin = APInt::getSignedMinValue(Ty->getScalarSizeInBits());
-  ConstantRange Range = LVI->getConstantRangeAtUse(
-      II->getOperandUse(0), /*UndefAllowed*/ IsIntMinPoison);
+
+  Type *Ty = X->getType();
+  Constant *IntMin =
+      ConstantInt::get(Ty, APInt::getSignedMinValue(Ty->getScalarSizeInBits()));
+  LazyValueInfo::Tristate Result;
 
   // Is X in [0, IntMin]?  NOTE: INT_MIN is fine!
-  if (Range.icmp(CmpInst::ICMP_ULE, IntMin)) {
+  Result = LVI->getPredicateAt(CmpInst::Predicate::ICMP_ULE, X, IntMin, II,
+                               /*UseBlockValue=*/true);
+  if (Result == LazyValueInfo::True) {
     ++NumAbs;
     II->replaceAllUsesWith(X);
     II->eraseFromParent();
@@ -488,30 +518,40 @@ static bool processAbsIntrinsic(IntrinsicInst *II, LazyValueInfo *LVI) {
   }
 
   // Is X in [IntMin, 0]?  NOTE: INT_MIN is fine!
-  if (Range.getSignedMax().isNonPositive()) {
-    IRBuilder<> B(II);
-    Value *NegX = B.CreateNeg(X, II->getName(), /*HasNUW=*/false,
-                              /*HasNSW=*/IsIntMinPoison);
-    ++NumAbs;
-    II->replaceAllUsesWith(NegX);
-    II->eraseFromParent();
+  Constant *Zero = ConstantInt::getNullValue(Ty);
+  Result = LVI->getPredicateAt(CmpInst::Predicate::ICMP_SLE, X, Zero, II,
+                               /*UseBlockValue=*/true);
+  assert(Result != LazyValueInfo::False && "Should have been handled already.");
 
-    // See if we can infer some no-wrap flags.
-    if (auto *BO = dyn_cast<BinaryOperator>(NegX))
-      processBinOp(BO, LVI);
-
-    return true;
+  if (Result == LazyValueInfo::Unknown) {
+    // Argument's range crosses zero.
+    bool Changed = false;
+    if (!IsIntMinPoison) {
+      // Can we at least tell that the argument is never INT_MIN?
+      Result = LVI->getPredicateAt(CmpInst::Predicate::ICMP_NE, X, IntMin, II,
+                                   /*UseBlockValue=*/true);
+      if (Result == LazyValueInfo::True) {
+        ++NumNSW;
+        ++NumSubNSW;
+        II->setArgOperand(1, ConstantInt::getTrue(II->getContext()));
+        Changed = true;
+      }
+    }
+    return Changed;
   }
 
-  // Argument's range crosses zero.
-  // Can we at least tell that the argument is never INT_MIN?
-  if (!IsIntMinPoison && !Range.contains(IntMin)) {
-    ++NumNSW;
-    ++NumSubNSW;
-    II->setArgOperand(1, ConstantInt::getTrue(II->getContext()));
-    return true;
-  }
-  return false;
+  IRBuilder<> B(II);
+  Value *NegX = B.CreateNeg(X, II->getName(), /*HasNUW=*/false,
+                            /*HasNSW=*/IsIntMinPoison);
+  ++NumAbs;
+  II->replaceAllUsesWith(NegX);
+  II->eraseFromParent();
+
+  // See if we can infer some no-wrap flags.
+  if (auto *BO = dyn_cast<BinaryOperator>(NegX))
+    processBinOp(BO, LVI);
+
+  return true;
 }
 
 // See if this min/max intrinsic always picks it's one specific operand.
@@ -653,23 +693,37 @@ static bool processCallSite(CallBase &CB, LazyValueInfo *LVI) {
   return true;
 }
 
+static bool isNonNegative(Value *V, LazyValueInfo *LVI, Instruction *CxtI) {
+  Constant *Zero = ConstantInt::get(V->getType(), 0);
+  auto Result = LVI->getPredicateAt(ICmpInst::ICMP_SGE, V, Zero, CxtI,
+                                    /*UseBlockValue=*/true);
+  return Result == LazyValueInfo::True;
+}
+
+static bool isNonPositive(Value *V, LazyValueInfo *LVI, Instruction *CxtI) {
+  Constant *Zero = ConstantInt::get(V->getType(), 0);
+  auto Result = LVI->getPredicateAt(ICmpInst::ICMP_SLE, V, Zero, CxtI,
+                                    /*UseBlockValue=*/true);
+  return Result == LazyValueInfo::True;
+}
+
 enum class Domain { NonNegative, NonPositive, Unknown };
 
-static Domain getDomain(const ConstantRange &CR) {
-  if (CR.isAllNonNegative())
+Domain getDomain(Value *V, LazyValueInfo *LVI, Instruction *CxtI) {
+  if (isNonNegative(V, LVI, CxtI))
     return Domain::NonNegative;
-  if (CR.icmp(ICmpInst::ICMP_SLE, APInt::getZero(CR.getBitWidth())))
+  if (isNonPositive(V, LVI, CxtI))
     return Domain::NonPositive;
   return Domain::Unknown;
 }
 
 /// Try to shrink a sdiv/srem's width down to the smallest power of two that's
 /// sufficient to contain its operands.
-static bool narrowSDivOrSRem(BinaryOperator *Instr, const ConstantRange &LCR,
-                             const ConstantRange &RCR) {
+static bool narrowSDivOrSRem(BinaryOperator *Instr, LazyValueInfo *LVI) {
   assert(Instr->getOpcode() == Instruction::SDiv ||
          Instr->getOpcode() == Instruction::SRem);
-  assert(!Instr->getType()->isVectorTy());
+  if (Instr->getType()->isVectorTy())
+    return false;
 
   // Find the smallest power of two bitwidth that's sufficient to hold Instr's
   // operands.
@@ -677,13 +731,17 @@ static bool narrowSDivOrSRem(BinaryOperator *Instr, const ConstantRange &LCR,
 
   // What is the smallest bit width that can accommodate the entire value ranges
   // of both of the operands?
-  unsigned MinSignedBits =
-      std::max(LCR.getMinSignedBits(), RCR.getMinSignedBits());
+  std::array<Optional<ConstantRange>, 2> CRs;
+  unsigned MinSignedBits = 0;
+  for (auto I : zip(Instr->operands(), CRs)) {
+    std::get<1>(I) = LVI->getConstantRange(std::get<0>(I), Instr);
+    MinSignedBits = std::max(std::get<1>(I)->getMinSignedBits(), MinSignedBits);
+  }
 
   // sdiv/srem is UB if divisor is -1 and divident is INT_MIN, so unless we can
   // prove that such a combination is impossible, we need to bump the bitwidth.
-  if (RCR.contains(APInt::getAllOnes(OrigWidth)) &&
-      LCR.contains(APInt::getSignedMinValue(MinSignedBits).sext(OrigWidth)))
+  if (CRs[1]->contains(APInt::getAllOnes(OrigWidth)) &&
+      CRs[0]->contains(APInt::getSignedMinValue(MinSignedBits).sext(OrigWidth)))
     ++MinSignedBits;
 
   // Don't shrink below 8 bits wide.
@@ -712,99 +770,24 @@ static bool narrowSDivOrSRem(BinaryOperator *Instr, const ConstantRange &LCR,
   return true;
 }
 
-static bool expandUDivOrURem(BinaryOperator *Instr, const ConstantRange &XCR,
-                             const ConstantRange &YCR) {
-  Type *Ty = Instr->getType();
-  assert(Instr->getOpcode() == Instruction::UDiv ||
-         Instr->getOpcode() == Instruction::URem);
-  assert(!Ty->isVectorTy());
-  bool IsRem = Instr->getOpcode() == Instruction::URem;
-
-  Value *X = Instr->getOperand(0);
-  Value *Y = Instr->getOperand(1);
-
-  // X u/ Y -> 0  iff X u< Y
-  // X u% Y -> X  iff X u< Y
-  if (XCR.icmp(ICmpInst::ICMP_ULT, YCR)) {
-    Instr->replaceAllUsesWith(IsRem ? X : Constant::getNullValue(Ty));
-    Instr->eraseFromParent();
-    ++NumUDivURemsNarrowedExpanded;
-    return true;
-  }
-
-  // Given
-  //   R  = X u% Y
-  // We can represent the modulo operation as a loop/self-recursion:
-  //   urem_rec(X, Y):
-  //     Z = X - Y
-  //     if X u< Y
-  //       ret X
-  //     else
-  //       ret urem_rec(Z, Y)
-  // which isn't better, but if we only need a single iteration
-  // to compute the answer, this becomes quite good:
-  //   R  = X < Y ? X : X - Y    iff X u< 2*Y (w/ unsigned saturation)
-  // Now, we do not care about all full multiples of Y in X, they do not change
-  // the answer, thus we could rewrite the expression as:
-  //   X* = X - (Y * |_ X / Y _|)
-  //   R  = X* % Y
-  // so we don't need the *first* iteration to return, we just need to
-  // know *which* iteration will always return, so we could also rewrite it as:
-  //   X* = X - (Y * |_ X / Y _|)
-  //   R  = X* % Y                 iff X* u< 2*Y (w/ unsigned saturation)
-  // but that does not seem profitable here.
-
-  // Even if we don't know X's range, the divisor may be so large, X can't ever
-  // be 2x larger than that. I.e. if divisor is always negative.
-  if (!XCR.icmp(ICmpInst::ICMP_ULT,
-                YCR.umul_sat(APInt(YCR.getBitWidth(), 2))) &&
-      !YCR.isAllNegative())
-    return false;
-
-  IRBuilder<> B(Instr);
-  Value *ExpandedOp;
-  if (XCR.icmp(ICmpInst::ICMP_UGE, YCR)) {
-    // If X is between Y and 2*Y the result is known.
-    if (IsRem)
-      ExpandedOp = B.CreateNUWSub(X, Y);
-    else
-      ExpandedOp = ConstantInt::get(Instr->getType(), 1);
-  } else if (IsRem) {
-    // NOTE: this transformation introduces two uses of X,
-    //       but it may be undef so we must freeze it first.
-    Value *FrozenX = X;
-    if (!isGuaranteedNotToBeUndefOrPoison(X))
-      FrozenX = B.CreateFreeze(X, X->getName() + ".frozen");
-    auto *AdjX = B.CreateNUWSub(FrozenX, Y, Instr->getName() + ".urem");
-    auto *Cmp =
-        B.CreateICmp(ICmpInst::ICMP_ULT, FrozenX, Y, Instr->getName() + ".cmp");
-    ExpandedOp = B.CreateSelect(Cmp, FrozenX, AdjX);
-  } else {
-    auto *Cmp =
-        B.CreateICmp(ICmpInst::ICMP_UGE, X, Y, Instr->getName() + ".cmp");
-    ExpandedOp = B.CreateZExt(Cmp, Ty, Instr->getName() + ".udiv");
-  }
-  ExpandedOp->takeName(Instr);
-  Instr->replaceAllUsesWith(ExpandedOp);
-  Instr->eraseFromParent();
-  ++NumUDivURemsNarrowedExpanded;
-  return true;
-}
-
 /// Try to shrink a udiv/urem's width down to the smallest power of two that's
 /// sufficient to contain its operands.
-static bool narrowUDivOrURem(BinaryOperator *Instr, const ConstantRange &XCR,
-                             const ConstantRange &YCR) {
+static bool processUDivOrURem(BinaryOperator *Instr, LazyValueInfo *LVI) {
   assert(Instr->getOpcode() == Instruction::UDiv ||
          Instr->getOpcode() == Instruction::URem);
-  assert(!Instr->getType()->isVectorTy());
+  if (Instr->getType()->isVectorTy())
+    return false;
 
   // Find the smallest power of two bitwidth that's sufficient to hold Instr's
   // operands.
 
   // What is the smallest bit width that can accommodate the entire value ranges
   // of both of the operands?
-  unsigned MaxActiveBits = std::max(XCR.getActiveBits(), YCR.getActiveBits());
+  unsigned MaxActiveBits = 0;
+  for (Value *Operand : Instr->operands()) {
+    ConstantRange CR = LVI->getConstantRange(Operand, Instr);
+    MaxActiveBits = std::max(CR.getActiveBits(), MaxActiveBits);
+  }
   // Don't shrink below 8 bits wide.
   unsigned NewWidth = std::max<unsigned>(PowerOf2Ceil(MaxActiveBits), 8);
 
@@ -831,39 +814,24 @@ static bool narrowUDivOrURem(BinaryOperator *Instr, const ConstantRange &XCR,
   return true;
 }
 
-static bool processUDivOrURem(BinaryOperator *Instr, LazyValueInfo *LVI) {
-  assert(Instr->getOpcode() == Instruction::UDiv ||
-         Instr->getOpcode() == Instruction::URem);
-  if (Instr->getType()->isVectorTy())
-    return false;
-
-  ConstantRange XCR = LVI->getConstantRangeAtUse(Instr->getOperandUse(0));
-  ConstantRange YCR = LVI->getConstantRangeAtUse(Instr->getOperandUse(1));
-  if (expandUDivOrURem(Instr, XCR, YCR))
-    return true;
-
-  return narrowUDivOrURem(Instr, XCR, YCR);
-}
-
-static bool processSRem(BinaryOperator *SDI, const ConstantRange &LCR,
-                        const ConstantRange &RCR, LazyValueInfo *LVI) {
+static bool processSRem(BinaryOperator *SDI, LazyValueInfo *LVI) {
   assert(SDI->getOpcode() == Instruction::SRem);
-  assert(!SDI->getType()->isVectorTy());
-
-  if (LCR.abs().icmp(CmpInst::ICMP_ULT, RCR.abs())) {
-    SDI->replaceAllUsesWith(SDI->getOperand(0));
-    SDI->eraseFromParent();
-    return true;
-  }
+  if (SDI->getType()->isVectorTy())
+    return false;
 
   struct Operand {
     Value *V;
     Domain D;
   };
-  std::array<Operand, 2> Ops = {{{SDI->getOperand(0), getDomain(LCR)},
-                                 {SDI->getOperand(1), getDomain(RCR)}}};
-  if (Ops[0].D == Domain::Unknown || Ops[1].D == Domain::Unknown)
-    return false;
+  std::array<Operand, 2> Ops;
+
+  for (const auto I : zip(Ops, SDI->operands())) {
+    Operand &Op = std::get<0>(I);
+    Op.V = std::get<1>(I);
+    Op.D = getDomain(Op.V, LVI, SDI);
+    if (Op.D == Domain::Unknown)
+      return false;
+  }
 
   // We know domains of both of the operands!
   ++NumSRems;
@@ -904,19 +872,24 @@ static bool processSRem(BinaryOperator *SDI, const ConstantRange &LCR,
 /// If this is the case, replace the SDiv with a UDiv. Even for local
 /// conditions, this can sometimes prove conditions instcombine can't by
 /// exploiting range information.
-static bool processSDiv(BinaryOperator *SDI, const ConstantRange &LCR,
-                        const ConstantRange &RCR, LazyValueInfo *LVI) {
+static bool processSDiv(BinaryOperator *SDI, LazyValueInfo *LVI) {
   assert(SDI->getOpcode() == Instruction::SDiv);
-  assert(!SDI->getType()->isVectorTy());
+  if (SDI->getType()->isVectorTy())
+    return false;
 
   struct Operand {
     Value *V;
     Domain D;
   };
-  std::array<Operand, 2> Ops = {{{SDI->getOperand(0), getDomain(LCR)},
-                                 {SDI->getOperand(1), getDomain(RCR)}}};
-  if (Ops[0].D == Domain::Unknown || Ops[1].D == Domain::Unknown)
-    return false;
+  std::array<Operand, 2> Ops;
+
+  for (const auto I : zip(Ops, SDI->operands())) {
+    Operand &Op = std::get<0>(I);
+    Op.V = std::get<1>(I);
+    Op.D = getDomain(Op.V, LVI, SDI);
+    if (Op.D == Domain::Unknown)
+      return false;
+  }
 
   // We know domains of both of the operands!
   ++NumSDivs;
@@ -957,26 +930,22 @@ static bool processSDivOrSRem(BinaryOperator *Instr, LazyValueInfo *LVI) {
   if (Instr->getType()->isVectorTy())
     return false;
 
-  ConstantRange LCR = LVI->getConstantRangeAtUse(Instr->getOperandUse(0));
-  ConstantRange RCR = LVI->getConstantRangeAtUse(Instr->getOperandUse(1));
   if (Instr->getOpcode() == Instruction::SDiv)
-    if (processSDiv(Instr, LCR, RCR, LVI))
+    if (processSDiv(Instr, LVI))
       return true;
 
-  if (Instr->getOpcode() == Instruction::SRem) {
-    if (processSRem(Instr, LCR, RCR, LVI))
+  if (Instr->getOpcode() == Instruction::SRem)
+    if (processSRem(Instr, LVI))
       return true;
-  }
 
-  return narrowSDivOrSRem(Instr, LCR, RCR);
+  return narrowSDivOrSRem(Instr, LVI);
 }
 
 static bool processAShr(BinaryOperator *SDI, LazyValueInfo *LVI) {
   if (SDI->getType()->isVectorTy())
     return false;
 
-  ConstantRange LRange =
-      LVI->getConstantRangeAtUse(SDI->getOperandUse(0), /*UndefAllowed*/ false);
+  ConstantRange LRange = LVI->getConstantRange(SDI->getOperand(0), SDI);
   unsigned OrigWidth = SDI->getType()->getIntegerBitWidth();
   ConstantRange NegOneOrZero =
       ConstantRange(APInt(OrigWidth, (uint64_t)-1, true), APInt(OrigWidth, 1));
@@ -988,7 +957,7 @@ static bool processAShr(BinaryOperator *SDI, LazyValueInfo *LVI) {
     return true;
   }
 
-  if (!LRange.isAllNonNegative())
+  if (!isNonNegative(SDI->getOperand(0), LVI, SDI))
     return false;
 
   ++NumAShrsConverted;
@@ -1007,9 +976,9 @@ static bool processSExt(SExtInst *SDI, LazyValueInfo *LVI) {
   if (SDI->getType()->isVectorTy())
     return false;
 
-  const Use &Base = SDI->getOperandUse(0);
-  if (!LVI->getConstantRangeAtUse(Base, /*UndefAllowed*/ false)
-           .isAllNonNegative())
+  Value *Base = SDI->getOperand(0);
+
+  if (!isNonNegative(Base, LVI, SDI))
     return false;
 
   ++NumSExt;
@@ -1066,7 +1035,7 @@ static bool processAnd(BinaryOperator *BinOp, LazyValueInfo *LVI) {
 
   // Pattern match (and lhs, C) where C includes a superset of bits which might
   // be set in lhs.  This is a common truncation idiom created by instcombine.
-  const Use &LHS = BinOp->getOperandUse(0);
+  Value *LHS = BinOp->getOperand(0);
   ConstantInt *RHS = dyn_cast<ConstantInt>(BinOp->getOperand(1));
   if (!RHS || !RHS->getValue().isMask())
     return false;
@@ -1074,7 +1043,7 @@ static bool processAnd(BinaryOperator *BinOp, LazyValueInfo *LVI) {
   // We can only replace the AND with LHS based on range info if the range does
   // not include undef.
   ConstantRange LRange =
-      LVI->getConstantRangeAtUse(LHS, /*UndefAllowed=*/false);
+      LVI->getConstantRange(LHS, BinOp, /*UndefAllowed=*/false);
   if (!LRange.getUnsignedMax().ule(RHS->getValue()))
     return false;
 
@@ -1189,6 +1158,16 @@ static bool runImpl(Function &F, LazyValueInfo *LVI, DominatorTree *DT,
   }
 
   return FnChanged;
+}
+
+bool CorrelatedValuePropagation::runOnFunction(Function &F) {
+  if (skipFunction(F))
+    return false;
+
+  LazyValueInfo *LVI = &getAnalysis<LazyValueInfoWrapperPass>().getLVI();
+  DominatorTree *DT = &getAnalysis<DominatorTreeWrapperPass>().getDomTree();
+
+  return runImpl(F, LVI, DT, getBestSimplifyQuery(*this, F));
 }
 
 PreservedAnalyses

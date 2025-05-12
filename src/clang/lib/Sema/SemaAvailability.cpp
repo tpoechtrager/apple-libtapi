@@ -19,7 +19,6 @@
 #include "clang/Sema/DelayedDiagnostic.h"
 #include "clang/Sema/ScopeInfo.h"
 #include "clang/Sema/Sema.h"
-#include <optional>
 
 using namespace clang;
 using namespace sema;
@@ -257,16 +256,16 @@ struct AttributeInsertion {
 /// attribute argument.
 /// \param SlotNames The vector that will be populated with slot names. In case
 /// of unsuccessful parsing can contain invalid data.
-/// \returns A number of method parameters if parsing was successful,
-/// std::nullopt otherwise.
-static std::optional<unsigned>
+/// \returns A number of method parameters if parsing was successful, None
+/// otherwise.
+static Optional<unsigned>
 tryParseObjCMethodName(StringRef Name, SmallVectorImpl<StringRef> &SlotNames,
                        const LangOptions &LangOpts) {
   // Accept replacements starting with - or + as valid ObjC method names.
   if (!Name.empty() && (Name.front() == '-' || Name.front() == '+'))
     Name = Name.drop_front(1);
   if (Name.empty())
-    return std::nullopt;
+    return None;
   Name.split(SlotNames, ':');
   unsigned NumParams;
   if (Name.back() == ':') {
@@ -276,7 +275,7 @@ tryParseObjCMethodName(StringRef Name, SmallVectorImpl<StringRef> &SlotNames,
   } else {
     if (SlotNames.size() != 1)
       // Not a valid method name, just a colon-separated string.
-      return std::nullopt;
+      return None;
     NumParams = 0;
   }
   // Verify all slot names are valid.
@@ -285,28 +284,28 @@ tryParseObjCMethodName(StringRef Name, SmallVectorImpl<StringRef> &SlotNames,
     if (S.empty())
       continue;
     if (!isValidAsciiIdentifier(S, AllowDollar))
-      return std::nullopt;
+      return None;
   }
   return NumParams;
 }
 
 /// Returns a source location in which it's appropriate to insert a new
 /// attribute for the given declaration \D.
-static std::optional<AttributeInsertion>
+static Optional<AttributeInsertion>
 createAttributeInsertion(const NamedDecl *D, const SourceManager &SM,
                          const LangOptions &LangOpts) {
   if (isa<ObjCPropertyDecl>(D))
     return AttributeInsertion::createInsertionAfter(D);
   if (const auto *MD = dyn_cast<ObjCMethodDecl>(D)) {
     if (MD->hasBody())
-      return std::nullopt;
+      return None;
     return AttributeInsertion::createInsertionAfter(D);
   }
   if (const auto *TD = dyn_cast<TagDecl>(D)) {
     SourceLocation Loc =
         Lexer::getLocForEndOfToken(TD->getInnerLocStart(), 0, SM, LangOpts);
     if (Loc.isInvalid())
-      return std::nullopt;
+      return None;
     // Insert after the 'struct'/whatever keyword.
     return AttributeInsertion::createInsertionAfter(Loc);
   }
@@ -413,7 +412,7 @@ static void DoEmitAvailabilityWarning(Sema &S, AvailabilityResult K,
         return;
       if (!S.getPreprocessor().isMacroDefined("API_AVAILABLE"))
         return;
-      std::optional<AttributeInsertion> Insertion = createAttributeInsertion(
+      Optional<AttributeInsertion> Insertion = createAttributeInsertion(
           Enclosing, S.getSourceManager(), S.getLangOpts());
       if (!Insertion)
         return;
@@ -515,7 +514,7 @@ static void DoEmitAvailabilityWarning(Sema &S, AvailabilityResult K,
       if (const auto *MethodDecl = dyn_cast<ObjCMethodDecl>(ReferringDecl)) {
         Selector Sel = MethodDecl->getSelector();
         SmallVector<StringRef, 12> SelectorSlotNames;
-        std::optional<unsigned> NumParams = tryParseObjCMethodName(
+        Optional<unsigned> NumParams = tryParseObjCMethodName(
             Replacement, SelectorSlotNames, S.getLangOpts());
         if (NumParams && *NumParams == Sel.getNumArgs()) {
           assert(SelectorSlotNames.size() == Locs.size());

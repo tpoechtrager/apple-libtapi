@@ -254,7 +254,7 @@ struct AssumeBuilderState {
     unsigned DerefSize = MemInst->getModule()
                              ->getDataLayout()
                              .getTypeStoreSize(AccType)
-                             .getKnownMinValue();
+                             .getKnownMinSize();
     if (DerefSize != 0) {
       addKnowledge({Attribute::Dereferenceable, DerefSize, Pointer});
       if (!NullPointerIsDefined(MemInst->getFunction(),
@@ -290,20 +290,17 @@ AssumeInst *llvm::buildAssumeFromInst(Instruction *I) {
   return Builder.build();
 }
 
-bool llvm::salvageKnowledge(Instruction *I, AssumptionCache *AC,
+void llvm::salvageKnowledge(Instruction *I, AssumptionCache *AC,
                             DominatorTree *DT) {
   if (!EnableKnowledgeRetention || I->isTerminator())
-    return false;
-  bool Changed = false;
+    return;
   AssumeBuilderState Builder(I->getModule(), I, AC, DT);
   Builder.addInstruction(I);
   if (auto *Intr = Builder.build()) {
     Intr->insertBefore(I);
-    Changed = true;
     if (AC)
       AC->registerAssumption(Intr);
   }
-  return Changed;
 }
 
 AssumeInst *
@@ -566,26 +563,57 @@ PreservedAnalyses AssumeSimplifyPass::run(Function &F,
                                           FunctionAnalysisManager &AM) {
   if (!EnableKnowledgeRetention)
     return PreservedAnalyses::all();
-  if (!simplifyAssumes(F, &AM.getResult<AssumptionAnalysis>(F),
-                       AM.getCachedResult<DominatorTreeAnalysis>(F)))
-    return PreservedAnalyses::all();
-  PreservedAnalyses PA;
-  PA.preserveSet<CFGAnalyses>();
-  return PA;
+  simplifyAssumes(F, &AM.getResult<AssumptionAnalysis>(F),
+                  AM.getCachedResult<DominatorTreeAnalysis>(F));
+  return PreservedAnalyses::all();
+}
+
+namespace {
+class AssumeSimplifyPassLegacyPass : public FunctionPass {
+public:
+  static char ID;
+
+  AssumeSimplifyPassLegacyPass() : FunctionPass(ID) {
+    initializeAssumeSimplifyPassLegacyPassPass(
+        *PassRegistry::getPassRegistry());
+  }
+  bool runOnFunction(Function &F) override {
+    if (skipFunction(F) || !EnableKnowledgeRetention)
+      return false;
+    AssumptionCache &AC =
+        getAnalysis<AssumptionCacheTracker>().getAssumptionCache(F);
+    DominatorTreeWrapperPass *DTWP =
+        getAnalysisIfAvailable<DominatorTreeWrapperPass>();
+    return simplifyAssumes(F, &AC, DTWP ? &DTWP->getDomTree() : nullptr);
+  }
+
+  void getAnalysisUsage(AnalysisUsage &AU) const override {
+    AU.addRequired<AssumptionCacheTracker>();
+
+    AU.setPreservesAll();
+  }
+};
+} // namespace
+
+char AssumeSimplifyPassLegacyPass::ID = 0;
+
+INITIALIZE_PASS_BEGIN(AssumeSimplifyPassLegacyPass, "assume-simplify",
+                      "Assume Simplify", false, false)
+INITIALIZE_PASS_DEPENDENCY(AssumptionCacheTracker)
+INITIALIZE_PASS_END(AssumeSimplifyPassLegacyPass, "assume-simplify",
+                    "Assume Simplify", false, false)
+
+FunctionPass *llvm::createAssumeSimplifyPass() {
+  return new AssumeSimplifyPassLegacyPass();
 }
 
 PreservedAnalyses AssumeBuilderPass::run(Function &F,
                                          FunctionAnalysisManager &AM) {
   AssumptionCache *AC = &AM.getResult<AssumptionAnalysis>(F);
   DominatorTree* DT = AM.getCachedResult<DominatorTreeAnalysis>(F);
-  bool Changed = false;
   for (Instruction &I : instructions(F))
-    Changed |= salvageKnowledge(&I, AC, DT);
-  if (!Changed)
-    PreservedAnalyses::all();
-  PreservedAnalyses PA;
-  PA.preserveSet<CFGAnalyses>();
-  return PA;
+    salvageKnowledge(&I, AC, DT);
+  return PreservedAnalyses::all();
 }
 
 namespace {

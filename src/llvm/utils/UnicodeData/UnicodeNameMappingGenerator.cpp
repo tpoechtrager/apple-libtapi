@@ -11,6 +11,7 @@
 // https://unicode.org/Public/15.0.0/ucd/
 //===----------------------------------------------------------------------===//
 
+#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
@@ -19,7 +20,6 @@
 #include <deque>
 #include <fstream>
 #include <memory>
-#include <optional>
 #include <set>
 #include <string>
 #include <unordered_map>
@@ -43,7 +43,7 @@ loadDataFiles(const std::string &NamesFile, const std::string &AliasesFile) {
       if (FirstSemiPos == std::string::npos)
         continue;
       auto SecondSemiPos = Line.find(';', FirstSemiPos + 1);
-      if (SecondSemiPos == std::string::npos)
+      if (FirstSemiPos == std::string::npos)
         continue;
       unsigned long long CodePoint;
       if (llvm::getAsUnsignedInteger(
@@ -327,7 +327,7 @@ private:
     std::vector<std::unique_ptr<Node>> Children;
     std::string Name;
     Node *Parent = nullptr;
-    std::optional<char32_t> Value;
+    llvm::Optional<char32_t> Value;
   };
 
   std::unique_ptr<Node> Root = std::make_unique<Node>("");
@@ -361,8 +361,9 @@ int main(int argc, char **argv) {
     char32_t Codepoint = Entry.first;
     const std::string &Name = Entry.second;
     // Ignore names which are not valid.
-    if (Name.empty() ||
-        !llvm::all_of(Name, [](char C) { return Letters.contains(C); })) {
+    if (Name.empty() || !llvm::all_of(Name, [](char C) {
+          return llvm::is_contained(Letters, C);
+        })) {
       continue;
     }
     printf("%06x: %s\n", static_cast<unsigned int>(Codepoint), Name.c_str());

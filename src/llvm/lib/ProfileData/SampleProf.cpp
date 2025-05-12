@@ -32,7 +32,7 @@ static cl::opt<uint64_t> ProfileSymbolListCutOff(
     cl::desc("Cutoff value about how many symbols in profile symbol list "
              "will be used. This is very useful for performance debugging"));
 
-static cl::opt<bool> GenerateMergedBaseProfiles(
+cl::opt<bool> GenerateMergedBaseProfiles(
     "generate-merged-base-profiles",
     cl::desc("When generating nested context-sensitive profiles, always "
              "generate extra base profile for function with all its context "
@@ -291,7 +291,7 @@ const FunctionSamples *FunctionSamples::findFunctionSamplesAt(
   std::string CalleeGUID;
   CalleeName = getRepInFormat(CalleeName, UseMD5, CalleeGUID);
 
-  auto iter = CallsiteSamples.find(mapIRLocToProfileLoc(Loc));
+  auto iter = CallsiteSamples.find(Loc);
   if (iter == CallsiteSamples.end())
     return nullptr;
   auto FS = iter->second.find(CalleeName);
@@ -461,9 +461,9 @@ void ProfileSymbolList::dump(raw_ostream &OS) const {
     OS << Sym << "\n";
 }
 
-ProfileConverter::FrameNode *
-ProfileConverter::FrameNode::getOrCreateChildFrame(const LineLocation &CallSite,
-                                                   StringRef CalleeName) {
+CSProfileConverter::FrameNode *
+CSProfileConverter::FrameNode::getOrCreateChildFrame(
+    const LineLocation &CallSite, StringRef CalleeName) {
   uint64_t Hash = FunctionSamples::getCallSiteHash(CalleeName, CallSite);
   auto It = AllChildFrames.find(Hash);
   if (It != AllChildFrames.end()) {
@@ -476,7 +476,7 @@ ProfileConverter::FrameNode::getOrCreateChildFrame(const LineLocation &CallSite,
   return &AllChildFrames[Hash];
 }
 
-ProfileConverter::ProfileConverter(SampleProfileMap &Profiles)
+CSProfileConverter::CSProfileConverter(SampleProfileMap &Profiles)
     : ProfileMap(Profiles) {
   for (auto &FuncSample : Profiles) {
     FunctionSamples *FSamples = &FuncSample.second;
@@ -486,8 +486,8 @@ ProfileConverter::ProfileConverter(SampleProfileMap &Profiles)
   }
 }
 
-ProfileConverter::FrameNode *
-ProfileConverter::getOrCreateContextPath(const SampleContext &Context) {
+CSProfileConverter::FrameNode *
+CSProfileConverter::getOrCreateContextPath(const SampleContext &Context) {
   auto Node = &RootFrame;
   LineLocation CallSiteLoc(0, 0);
   for (auto &Callsite : Context.getContextFrames()) {
@@ -497,14 +497,14 @@ ProfileConverter::getOrCreateContextPath(const SampleContext &Context) {
   return Node;
 }
 
-void ProfileConverter::convertCSProfiles(ProfileConverter::FrameNode &Node) {
+void CSProfileConverter::convertProfiles(CSProfileConverter::FrameNode &Node) {
   // Process each child profile. Add each child profile to callsite profile map
   // of the current node `Node` if `Node` comes with a profile. Otherwise
   // promote the child profile to a standalone profile.
   auto *NodeProfile = Node.FuncSamples;
   for (auto &It : Node.AllChildFrames) {
     auto &ChildNode = It.second;
-    convertCSProfiles(ChildNode);
+    convertProfiles(ChildNode);
     auto *ChildProfile = ChildNode.FuncSamples;
     if (!ChildProfile)
       continue;
@@ -544,4 +544,4 @@ void ProfileConverter::convertCSProfiles(ProfileConverter::FrameNode &Node) {
   }
 }
 
-void ProfileConverter::convertCSProfiles() { convertCSProfiles(RootFrame); }
+void CSProfileConverter::convertProfiles() { convertProfiles(RootFrame); }

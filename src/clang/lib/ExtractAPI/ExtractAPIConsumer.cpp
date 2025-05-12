@@ -12,11 +12,11 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "clang/AST/ASTConcept.h"
 #include "clang/AST/ASTConsumer.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/DeclObjC.h"
 #include "clang/Basic/DiagnosticFrontend.h"
-#include "clang/Basic/FileEntry.h"
 #include "clang/Basic/SourceLocation.h"
 #include "clang/Basic/SourceManager.h"
 #include "clang/Basic/TargetInfo.h"
@@ -28,17 +28,13 @@
 #include "clang/Frontend/ASTConsumers.h"
 #include "clang/Frontend/CompilerInstance.h"
 #include "clang/Frontend/FrontendOptions.h"
-#include "clang/Frontend/MultiplexConsumer.h"
-#include "clang/Index/USRGeneration.h"
 #include "clang/Lex/MacroInfo.h"
 #include "clang/Lex/PPCallbacks.h"
 #include "clang/Lex/Preprocessor.h"
 #include "clang/Lex/PreprocessorOptions.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
-#include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/FileSystem.h"
@@ -47,7 +43,6 @@
 #include "llvm/Support/Regex.h"
 #include "llvm/Support/raw_ostream.h"
 #include <memory>
-#include <optional>
 #include <utility>
 
 using namespace clang;
@@ -55,9 +50,9 @@ using namespace extractapi;
 
 namespace {
 
-std::optional<std::string> getRelativeIncludeName(const CompilerInstance &CI,
-                                                  StringRef File,
-                                                  bool *IsQuoted = nullptr) {
+Optional<std::string> getRelativeIncludeName(const CompilerInstance &CI,
+                                             StringRef File,
+                                             bool *IsQuoted = nullptr) {
   assert(CI.hasFileManager() &&
          "CompilerInstance does not have a FileNamager!");
 
@@ -151,7 +146,7 @@ std::optional<std::string> getRelativeIncludeName(const CompilerInstance &CI,
         Rule.match(File, &Matches);
         // Returned matches are always in stable order.
         if (Matches.size() != 4)
-          return std::nullopt;
+          return None;
 
         return path::convert_to_slash(
             (Matches[1].drop_front(Matches[1].rfind('/') + 1) + "/" +
@@ -166,13 +161,7 @@ std::optional<std::string> getRelativeIncludeName(const CompilerInstance &CI,
   }
 
   // Couldn't determine a include name, use full path instead.
-  return std::nullopt;
-}
-
-std::optional<std::string> getRelativeIncludeName(const CompilerInstance &CI,
-                                                  FileEntryRef FE,
-                                                  bool *IsQuoted = nullptr) {
-  return getRelativeIncludeName(CI, FE.getNameAsRequested(), IsQuoted);
+  return None;
 }
 
 struct LocationFileChecker {
@@ -185,31 +174,33 @@ struct LocationFileChecker {
     if (FID.isInvalid())
       return false;
 
-    OptionalFileEntryRef File = SM.getFileEntryRefForID(FID);
+    const auto *File = SM.getFileEntryForID(FID);
     if (!File)
       return false;
 
-    if (KnownFileEntries.count(*File))
+    if (KnownFileEntries.count(File))
       return true;
 
-    if (ExternalFileEntries.count(*File))
+    if (ExternalFileEntries.count(File))
       return false;
+
+    StringRef FileName = SM.getFileManager().getCanonicalName(File);
 
     // Try to reduce the include name the same way we tried to include it.
     bool IsQuoted = false;
-    if (auto IncludeName = getRelativeIncludeName(CI, *File, &IsQuoted))
+    if (auto IncludeName = getRelativeIncludeName(CI, FileName, &IsQuoted))
       if (llvm::any_of(KnownFiles,
                        [&IsQuoted, &IncludeName](const auto &KnownFile) {
                          return KnownFile.first.equals(*IncludeName) &&
                                 KnownFile.second == IsQuoted;
                        })) {
-        KnownFileEntries.insert(*File);
+        KnownFileEntries.insert(File);
         return true;
       }
 
     // Record that the file was not found to avoid future reverse lookup for
     // the same file.
-    ExternalFileEntries.insert(*File);
+    ExternalFileEntries.insert(File);
     return false;
   }
 
@@ -251,20 +242,6 @@ private:
   LocationFileChecker &LCF;
 };
 
-class WrappingExtractAPIConsumer : public ASTConsumer {
-public:
-  WrappingExtractAPIConsumer(ASTContext &Context, APISet &API)
-      : Visitor(Context, API) {}
-
-  void HandleTranslationUnit(ASTContext &Context) override {
-    // Use ExtractAPIVisitor to traverse symbol declarations in the context.
-    Visitor.TraverseDecl(Context.getTranslationUnitDecl());
-  }
-
-private:
-  ExtractAPIVisitor<> Visitor;
-};
-
 class ExtractAPIConsumer : public ASTConsumer {
 public:
   ExtractAPIConsumer(ASTContext &Context,
@@ -283,8 +260,9 @@ private:
 
 class MacroCallback : public PPCallbacks {
 public:
-  MacroCallback(const SourceManager &SM, APISet &API, Preprocessor &PP)
-      : SM(SM), API(API), PP(PP) {}
+  MacroCallback(const SourceManager &SM, LocationFileChecker &LCF, APISet &API,
+                Preprocessor &PP)
+      : SM(SM), LCF(LCF), API(API), PP(PP) {}
 
   void MacroDefined(const Token &MacroNameToken,
                     const MacroDirective *MD) override {
@@ -324,17 +302,16 @@ public:
       if (PM.MD->getMacroInfo()->isUsedForHeaderGuard())
         continue;
 
-      if (!shouldMacroBeIncluded(PM))
+      if (!LCF(PM.MacroNameToken.getLocation()))
         continue;
 
       StringRef Name = PM.MacroNameToken.getIdentifierInfo()->getName();
       PresumedLoc Loc = SM.getPresumedLoc(PM.MacroNameToken.getLocation());
-      SmallString<128> USR;
-      index::generateUSRForMacro(Name, PM.MacroNameToken.getLocation(), SM,
-                                 USR);
+      StringRef USR =
+          API.recordUSRForMacro(Name, PM.MacroNameToken.getLocation(), SM);
 
-      API.createRecord<extractapi::MacroDefinitionRecord>(
-          USR, Name, SymbolReference(), Loc,
+      API.addMacroDefinition(
+          Name, USR, Loc,
           DeclarationFragmentsBuilder::getFragmentsForMacro(Name, PM.MD),
           DeclarationFragmentsBuilder::getSubHeadingForMacro(Name),
           SM.isInSystemHeader(PM.MacroNameToken.getLocation()));
@@ -343,7 +320,7 @@ public:
     PendingMacros.clear();
   }
 
-protected:
+private:
   struct PendingMacro {
     Token MacroNameToken;
     const MacroDirective *MD;
@@ -352,79 +329,22 @@ protected:
         : MacroNameToken(MacroNameToken), MD(MD) {}
   };
 
-  virtual bool shouldMacroBeIncluded(const PendingMacro &PM) { return true; }
-
   const SourceManager &SM;
+  LocationFileChecker &LCF;
   APISet &API;
   Preprocessor &PP;
   llvm::SmallVector<PendingMacro> PendingMacros;
 };
 
-class APIMacroCallback : public MacroCallback {
-public:
-  APIMacroCallback(const SourceManager &SM, APISet &API, Preprocessor &PP,
-                   LocationFileChecker &LCF)
-      : MacroCallback(SM, API, PP), LCF(LCF) {}
-
-  bool shouldMacroBeIncluded(const PendingMacro &PM) override {
-    // Do not include macros from external files
-    return LCF(PM.MacroNameToken.getLocation());
-  }
-
-private:
-  LocationFileChecker &LCF;
-};
-
-std::unique_ptr<llvm::raw_pwrite_stream>
-createAdditionalSymbolGraphFile(CompilerInstance &CI, Twine BaseName) {
-  auto OutputDirectory = CI.getFrontendOpts().SymbolGraphOutputDir;
-
-  SmallString<256> FileName;
-  llvm::sys::path::append(FileName, OutputDirectory,
-                          BaseName + ".symbols.json");
-  return CI.createOutputFile(
-      FileName, /*Binary*/ false, /*RemoveFileOnSignal*/ false,
-      /*UseTemporary*/ true, /*CreateMissingDirectories*/ true);
-}
-
 } // namespace
-
-void ExtractAPIActionBase::ImplEndSourceFileAction(CompilerInstance &CI) {
-  SymbolGraphSerializerOption SerializationOptions;
-  SerializationOptions.Compact = !CI.getFrontendOpts().EmitPrettySymbolGraphs;
-  SerializationOptions.EmitSymbolLabelsForTesting =
-      CI.getFrontendOpts().EmitSymbolGraphSymbolLabelsForTesting;
-
-  if (CI.getFrontendOpts().EmitExtensionSymbolGraphs) {
-    auto ConstructOutputFile = [&CI](Twine BaseName) {
-      return createAdditionalSymbolGraphFile(CI, BaseName);
-    };
-
-    SymbolGraphSerializer::serializeWithExtensionGraphs(
-        *OS, *API, IgnoresList, ConstructOutputFile, SerializationOptions);
-  } else {
-    SymbolGraphSerializer::serializeMainSymbolGraph(*OS, *API, IgnoresList,
-                                                    SerializationOptions);
-  }
-
-  // Flush the stream and close the main output stream.
-  OS.reset();
-}
 
 std::unique_ptr<ASTConsumer>
 ExtractAPIAction::CreateASTConsumer(CompilerInstance &CI, StringRef InFile) {
-  auto ProductName = CI.getFrontendOpts().ProductName;
-
-  if (CI.getFrontendOpts().SymbolGraphOutputDir.empty())
-    OS = CI.createDefaultOutputFile(/*Binary*/ false, InFile,
-                                    /*Extension*/ "symbols.json",
-                                    /*RemoveFileOnSignal*/ false,
-                                    /*CreateMissingDirectories*/ true);
-  else
-    OS = createAdditionalSymbolGraphFile(CI, ProductName);
-
+  OS = CreateOutputFile(CI, InFile);
   if (!OS)
     return nullptr;
+
+  auto ProductName = CI.getFrontendOpts().ProductName;
 
   // Now that we have enough information about the language options and the
   // target triple, let's create the APISet before anyone uses it.
@@ -434,8 +354,8 @@ ExtractAPIAction::CreateASTConsumer(CompilerInstance &CI, StringRef InFile) {
 
   auto LCF = std::make_unique<LocationFileChecker>(CI, KnownInputFiles);
 
-  CI.getPreprocessor().addPPCallbacks(std::make_unique<APIMacroCallback>(
-      CI.getSourceManager(), *API, CI.getPreprocessor(), *LCF));
+  CI.getPreprocessor().addPPCallbacks(std::make_unique<MacroCallback>(
+      CI.getSourceManager(), *LCF, *API, CI.getPreprocessor()));
 
   // Do not include location in anonymous decls.
   PrintingPolicy Policy = CI.getASTContext().getPrintingPolicy();
@@ -516,62 +436,23 @@ bool ExtractAPIAction::PrepareToExecuteAction(CompilerInstance &CI) {
 }
 
 void ExtractAPIAction::EndSourceFileAction() {
-  ImplEndSourceFileAction(getCompilerInstance());
+  if (!OS)
+    return;
+
+  // Setup a SymbolGraphSerializer to write out collected API information in
+  // the Symbol Graph format.
+  // FIXME: Make the kind of APISerializer configurable.
+  SymbolGraphSerializer SGSerializer(*API, IgnoresList);
+  SGSerializer.serialize(*OS);
+  OS.reset();
 }
 
-std::unique_ptr<ASTConsumer>
-WrappingExtractAPIAction::CreateASTConsumer(CompilerInstance &CI,
-                                            StringRef InFile) {
-  auto OtherConsumer = WrapperFrontendAction::CreateASTConsumer(CI, InFile);
-  if (!OtherConsumer)
+std::unique_ptr<raw_pwrite_stream>
+ExtractAPIAction::CreateOutputFile(CompilerInstance &CI, StringRef InFile) {
+  std::unique_ptr<raw_pwrite_stream> OS =
+      CI.createDefaultOutputFile(/*Binary=*/false, InFile, /*Extension=*/"json",
+                                 /*RemoveFileOnSignal=*/false);
+  if (!OS)
     return nullptr;
-
-  CreatedASTConsumer = true;
-
-  ProductName = CI.getFrontendOpts().ProductName;
-  auto InputFilename = llvm::sys::path::filename(InFile);
-  OS = createAdditionalSymbolGraphFile(CI, InputFilename);
-
-  // Now that we have enough information about the language options and the
-  // target triple, let's create the APISet before anyone uses it.
-  API = std::make_unique<APISet>(
-      CI.getTarget().getTriple(),
-      CI.getFrontendOpts().Inputs.back().getKind().getLanguage(), ProductName);
-
-  CI.getPreprocessor().addPPCallbacks(std::make_unique<MacroCallback>(
-      CI.getSourceManager(), *API, CI.getPreprocessor()));
-
-  // Do not include location in anonymous decls.
-  PrintingPolicy Policy = CI.getASTContext().getPrintingPolicy();
-  Policy.AnonymousTagLocations = false;
-  CI.getASTContext().setPrintingPolicy(Policy);
-
-  if (!CI.getFrontendOpts().ExtractAPIIgnoresFileList.empty()) {
-    llvm::handleAllErrors(
-        APIIgnoresList::create(CI.getFrontendOpts().ExtractAPIIgnoresFileList,
-                               CI.getFileManager())
-            .moveInto(IgnoresList),
-        [&CI](const IgnoresFileNotFound &Err) {
-          CI.getDiagnostics().Report(
-              diag::err_extract_api_ignores_file_not_found)
-              << Err.Path;
-        });
-  }
-
-  auto WrappingConsumer =
-      std::make_unique<WrappingExtractAPIConsumer>(CI.getASTContext(), *API);
-  std::vector<std::unique_ptr<ASTConsumer>> Consumers;
-  Consumers.push_back(std::move(OtherConsumer));
-  Consumers.push_back(std::move(WrappingConsumer));
-
-  return std::make_unique<MultiplexConsumer>(std::move(Consumers));
-}
-
-void WrappingExtractAPIAction::EndSourceFileAction() {
-  // Invoke wrapped action's method.
-  WrapperFrontendAction::EndSourceFileAction();
-
-  if (CreatedASTConsumer) {
-    ImplEndSourceFileAction(getCompilerInstance());
-  }
+  return OS;
 }

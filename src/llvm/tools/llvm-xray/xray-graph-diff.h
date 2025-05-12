@@ -15,6 +15,7 @@
 #define XRAY_GRAPH_DIFF_H
 
 #include "xray-graph.h"
+#include "llvm/ADT/StringMap.h"
 #include "llvm/XRay/Graph.h"
 
 namespace llvm {

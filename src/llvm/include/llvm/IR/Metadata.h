@@ -18,6 +18,7 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseMapInfo.h"
+#include "llvm/ADT/None.h"
 #include "llvm/ADT/PointerUnion.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
@@ -735,14 +736,6 @@ struct AAMDNodes {
   /// together. Different from `merge`, where different locations should
   /// overlap each other, `concat` puts non-overlapping locations together.
   AAMDNodes concat(const AAMDNodes &Other) const;
-
-  /// Create a new AAMDNode for accessing \p AccessSize bytes of this AAMDNode.
-  /// If his AAMDNode has !tbaa.struct and \p AccessSize matches the size of the
-  /// field at offset 0, get the TBAA tag describing the accessed field.
-  AAMDNodes adjustForAccess(unsigned AccessSize);
-  AAMDNodes adjustForAccess(size_t Offset, Type *AccessTy,
-                            const DataLayout &DL);
-  AAMDNodes adjustForAccess(size_t Offset, unsigned AccessSize);
 };
 
 // Specialize DenseMapInfo for AAMDNodes.
@@ -797,13 +790,6 @@ public:
     Op.MD = nullptr;
     return *this;
   }
-
-  // Check if MDOperand is of type MDString and equals `Str`.
-  bool equalsStr(StringRef Str) const {
-    return isa<MDString>(this->get()) &&
-           cast<MDString>(this->get())->getString() == Str;
-  }
-
   ~MDOperand() { untrack(); }
 
   Metadata *get() const { return MD; }
@@ -876,18 +862,18 @@ public:
 
   /// Whether this contains RAUW support.
   bool hasReplaceableUses() const {
-    return isa<ReplaceableMetadataImpl *>(Ptr);
+    return Ptr.is<ReplaceableMetadataImpl *>();
   }
 
   LLVMContext &getContext() const {
     if (hasReplaceableUses())
       return getReplaceableUses()->getContext();
-    return *cast<LLVMContext *>(Ptr);
+    return *Ptr.get<LLVMContext *>();
   }
 
   ReplaceableMetadataImpl *getReplaceableUses() const {
     if (hasReplaceableUses())
-      return cast<ReplaceableMetadataImpl *>(Ptr);
+      return Ptr.get<ReplaceableMetadataImpl *>();
     return nullptr;
   }
 
@@ -1042,15 +1028,15 @@ class MDNode : public Metadata {
     MutableArrayRef<MDOperand> operands() {
       if (IsLarge)
         return getLarge();
-      return MutableArrayRef(
+      return makeMutableArrayRef(
           reinterpret_cast<MDOperand *>(this) - SmallSize, SmallNumOps);
     }
 
     ArrayRef<MDOperand> operands() const {
       if (IsLarge)
         return getLarge();
-      return ArrayRef(reinterpret_cast<const MDOperand *>(this) - SmallSize,
-                      SmallNumOps);
+      return makeArrayRef(reinterpret_cast<const MDOperand *>(this) - SmallSize,
+                          SmallNumOps);
     }
 
     unsigned getNumOperands() const {
@@ -1070,7 +1056,7 @@ class MDNode : public Metadata {
 
 protected:
   MDNode(LLVMContext &Context, unsigned ID, StorageType Storage,
-         ArrayRef<Metadata *> Ops1, ArrayRef<Metadata *> Ops2 = std::nullopt);
+         ArrayRef<Metadata *> Ops1, ArrayRef<Metadata *> Ops2 = None);
   ~MDNode() = default;
 
   void *operator new(size_t Size, size_t NumOps, StorageType Storage);
@@ -1289,11 +1275,6 @@ private:
   template <class NodeTy>
   static void dispatchResetHash(NodeTy *, std::false_type) {}
 
-  /// Merge branch weights from two direct callsites.
-  static MDNode *mergeDirectCallProfMetadata(MDNode *A, MDNode *B,
-                                             const Instruction *AInstr,
-                                             const Instruction *BInstr);
-
 public:
   using op_iterator = const MDOperand *;
   using op_range = iterator_range<op_iterator>;
@@ -1339,11 +1320,6 @@ public:
   static MDNode *getMostGenericRange(MDNode *A, MDNode *B);
   static MDNode *getMostGenericAliasScope(MDNode *A, MDNode *B);
   static MDNode *getMostGenericAlignmentOrDereferenceable(MDNode *A, MDNode *B);
-  /// Merge !prof metadata from two instructions.
-  /// Currently only implemented with direct callsites with branch weights.
-  static MDNode *getMergedProfMetadata(MDNode *A, MDNode *B,
-                                       const Instruction *AInstr,
-                                       const Instruction *BInstr);
 };
 
 /// Tuple of metadata.

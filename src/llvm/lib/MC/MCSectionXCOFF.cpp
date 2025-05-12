@@ -20,7 +20,8 @@ using namespace llvm;
 MCSectionXCOFF::~MCSectionXCOFF() = default;
 
 void MCSectionXCOFF::printCsectDirective(raw_ostream &OS) const {
-  OS << "\t.csect " << QualName->getName() << "," << Log2(getAlign()) << '\n';
+  OS << "\t.csect " << QualName->getName() << "," << Log2_32(getAlignment())
+     << '\n';
 }
 
 void MCSectionXCOFF::printSwitchToSection(const MCAsmInfo &MAI, const Triple &T,
@@ -109,7 +110,7 @@ void MCSectionXCOFF::printSwitchToSection(const MCAsmInfo &MAI, const Triple &T,
 
   // XCOFF debug sections.
   if (getKind().isMetadata() && isDwarfSect()) {
-    OS << "\n\t.dwsect " << format("0x%" PRIx32, *getDwarfSubtypeFlags())
+    OS << "\n\t.dwsect " << format("0x%" PRIx32, getDwarfSubtypeFlags().value())
        << '\n';
     OS << MAI.getPrivateLabelPrefix() << getName() << ':' << '\n';
     return;

@@ -14,6 +14,7 @@
 #define LLVM_LIB_TARGET_AARCH64_AARCH64MACHINEFUNCTIONINFO_H
 
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/CodeGen/CallingConvLower.h"
@@ -23,7 +24,6 @@
 #include "llvm/IR/Function.h"
 #include "llvm/MC/MCLinkerOptimizationHint.h"
 #include <cassert>
-#include <optional>
 
 namespace llvm {
 
@@ -31,12 +31,14 @@ namespace yaml {
 struct AArch64FunctionInfo;
 } // end namespace yaml
 
-class AArch64Subtarget;
 class MachineInstr;
 
 /// AArch64FunctionInfo - This class is derived from MachineFunctionInfo and
 /// contains private AArch64-specific information for each MachineFunction.
 class AArch64FunctionInfo final : public MachineFunctionInfo {
+  /// Backreference to the machine function.
+  MachineFunction *MF;
+
   /// Number of bytes of arguments this function has on the stack. If the callee
   /// is expected to restore the argument stack this should be a multiple of 16,
   /// all usable during a tail call.
@@ -131,14 +133,14 @@ class AArch64FunctionInfo final : public MachineFunctionInfo {
   /// redzone, and no value otherwise.
   /// Initialized during frame lowering, unless the function has the noredzone
   /// attribute, in which case it is set to false at construction.
-  std::optional<bool> HasRedZone;
+  Optional<bool> HasRedZone;
 
   /// ForwardedMustTailRegParms - A list of virtual and physical registers
   /// that must be forwarded to every musttail call.
   SmallVector<ForwardedRegister, 1> ForwardedMustTailRegParms;
 
   /// FrameIndex for the tagged base pointer.
-  std::optional<int> TaggedBasePointerIndex;
+  Optional<int> TaggedBasePointerIndex;
 
   /// Offset from SP-at-entry to the tagged base pointer.
   /// Tagged base pointer is set up to point to the first (lowest address)
@@ -147,7 +149,7 @@ class AArch64FunctionInfo final : public MachineFunctionInfo {
 
   /// OutliningStyle denotes, if a function was outined, how it was outlined,
   /// e.g. Tail Call, Thunk, or Function if none apply.
-  std::optional<std::string> OutliningStyle;
+  Optional<std::string> OutliningStyle;
 
   // Offset from SP-after-callee-saved-spills (i.e. SP-at-entry minus
   // CalleeSavedStackSize) to the address of the frame record.
@@ -182,18 +184,22 @@ class AArch64FunctionInfo final : public MachineFunctionInfo {
   /// or return type
   bool IsSVECC = false;
 
+  /// The virtual register that is the pointer to the lazy save buffer.
+  /// This value is used during ISelLowering.
+  Register LazySaveBufferReg = 0;
+
   /// The frame-index for the TPIDR2 object used for lazy saves.
   Register LazySaveTPIDR2Obj = 0;
 
 
   /// True if the function need unwind information.
-  mutable std::optional<bool> NeedsDwarfUnwindInfo;
+  mutable Optional<bool> NeedsDwarfUnwindInfo;
 
   /// True if the function need asynchronous unwind information.
-  mutable std::optional<bool> NeedsAsyncDwarfUnwindInfo;
+  mutable Optional<bool> NeedsAsyncDwarfUnwindInfo;
 
 public:
-  AArch64FunctionInfo(const Function &F, const AArch64Subtarget *STI);
+  explicit AArch64FunctionInfo(MachineFunction &MF);
 
   MachineFunctionInfo *
   clone(BumpPtrAllocator &Allocator, MachineFunction &DestMF,
@@ -202,6 +208,9 @@ public:
 
   bool isSVECC() const { return IsSVECC; };
   void setIsSVECC(bool s) { IsSVECC = s; };
+
+  unsigned getLazySaveBufferReg() const { return LazySaveBufferReg; }
+  void setLazySaveBufferReg(unsigned Reg) { LazySaveBufferReg = Reg; }
 
   unsigned getLazySaveTPIDR2Obj() const { return LazySaveTPIDR2Obj; }
   void setLazySaveTPIDR2Obj(unsigned Reg) { LazySaveTPIDR2Obj = Reg; }
@@ -249,9 +258,7 @@ public:
   uint64_t getLocalStackSize() const { return LocalStackSize; }
 
   void setOutliningStyle(std::string Style) { OutliningStyle = Style; }
-  std::optional<std::string> getOutliningStyle() const {
-    return OutliningStyle;
-  }
+  Optional<std::string> getOutliningStyle() const { return OutliningStyle; }
 
   void setCalleeSavedStackSize(unsigned Size) {
     CalleeSavedStackSize = Size;
@@ -333,7 +340,7 @@ public:
     return NumLocalDynamicTLSAccesses;
   }
 
-  std::optional<bool> hasRedZone() const { return HasRedZone; }
+  Optional<bool> hasRedZone() const { return HasRedZone; }
   void setHasRedZone(bool s) { HasRedZone = s; }
 
   int getVarArgsStackIndex() const { return VarArgsStackIndex; }
@@ -407,7 +414,7 @@ public:
     return ForwardedMustTailRegParms;
   }
 
-  std::optional<int> getTaggedBasePointerIndex() const {
+  Optional<int> getTaggedBasePointerIndex() const {
     return TaggedBasePointerIndex;
   }
   void setTaggedBasePointerIndex(int Index) { TaggedBasePointerIndex = Index; }
@@ -426,7 +433,7 @@ public:
     CalleeSaveBaseToFrameRecordOffset = Offset;
   }
 
-  bool shouldSignReturnAddress(const MachineFunction &MF) const;
+  bool shouldSignReturnAddress() const;
   bool shouldSignReturnAddress(bool SpillsLR) const;
 
   bool shouldSignWithBKey() const { return SignWithBKey; }
@@ -444,8 +451,8 @@ public:
   }
   int getSwiftAsyncContextFrameIdx() const { return SwiftAsyncContextFrameIdx; }
 
-  bool needsDwarfUnwindInfo(const MachineFunction &MF) const;
-  bool needsAsyncDwarfUnwindInfo(const MachineFunction &MF) const;
+  bool needsDwarfUnwindInfo() const;
+  bool needsAsyncDwarfUnwindInfo() const;
 
 private:
   // Hold the lists of LOHs.
@@ -457,7 +464,7 @@ private:
 
 namespace yaml {
 struct AArch64FunctionInfo final : public yaml::MachineFunctionInfo {
-  std::optional<bool> HasRedZone;
+  Optional<bool> HasRedZone;
 
   AArch64FunctionInfo() = default;
   AArch64FunctionInfo(const llvm::AArch64FunctionInfo &MFI);

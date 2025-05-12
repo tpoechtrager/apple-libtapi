@@ -30,7 +30,7 @@ TEST(OffloadingTest, checkOffloadingBinary) {
   }
 
   // Create the image.
-  MapVector<StringRef, StringRef> StringData;
+  StringMap<StringRef> StringData;
   for (auto &KeyAndValue : Strings)
     StringData[KeyAndValue.first] = KeyAndValue.second;
   std::unique_ptr<MemoryBuffer> ImageData = MemoryBuffer::getMemBuffer(

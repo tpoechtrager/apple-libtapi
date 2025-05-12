@@ -35,7 +35,6 @@
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
-#include <optional>
 #include <utility>
 
 using namespace llvm;
@@ -215,14 +214,14 @@ public:
 PreservedAnalyses LoopInstSimplifyPass::run(Loop &L, LoopAnalysisManager &AM,
                                             LoopStandardAnalysisResults &AR,
                                             LPMUpdater &) {
-  std::optional<MemorySSAUpdater> MSSAU;
+  Optional<MemorySSAUpdater> MSSAU;
   if (AR.MSSA) {
     MSSAU = MemorySSAUpdater(AR.MSSA);
     if (VerifyMemorySSA)
       AR.MSSA->verifyMemorySSA();
   }
   if (!simplifyLoopInst(L, AR.DT, AR.LI, AR.AC, AR.TLI,
-                        MSSAU ? &*MSSAU : nullptr))
+                        MSSAU ? MSSAU.getPointer() : nullptr))
     return PreservedAnalyses::all();
 
   auto PA = getLoopPassPreservedAnalyses();

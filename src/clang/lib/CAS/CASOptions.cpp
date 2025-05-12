@@ -18,6 +18,13 @@
 using namespace clang;
 using namespace llvm::cas;
 
+void clang::getClangDefaultCachePath(SmallVectorImpl<char> &Path) {
+  // FIXME: Should this return 'Error' instead of hard-failing?
+  if (!llvm::sys::path::cache_directory(Path))
+    llvm::report_fatal_error("cannot get default cache directory");
+  llvm::sys::path::append(Path, "clang-cache");
+}
+
 std::pair<std::shared_ptr<llvm::cas::ObjectStore>,
           std::shared_ptr<llvm::cas::ActionCache>>
 CASOptions::getOrCreateDatabases(DiagnosticsEngine &Diags,
@@ -109,7 +116,7 @@ llvm::Error CASOptions::initCache() const {
 
   SmallString<256> PathBuf;
   if (CASPath == "auto") {
-    getDefaultOnDiskCASPath(PathBuf);
+    getClangDefaultCachePath(PathBuf);
     CASPath = PathBuf;
   }
   std::pair<std::unique_ptr<ObjectStore>, std::unique_ptr<ActionCache>> DBs;

@@ -18,7 +18,6 @@
 #include "clang/Lex/Preprocessor.h"
 #include "clang/Sema/Lookup.h"
 #include "clang/Sema/SemaInternal.h"
-#include <optional>
 using namespace clang;
 
 //===----------------------------------------------------------------------===//
@@ -223,6 +222,8 @@ void Sema::ActOnPragmaOptionsAlign(PragmaOptionsAlignKind Kind,
   switch (Kind) {
     // For most of the platforms we support, native and natural are the same.
     // With XL, native is the same as power, natural means something else.
+    //
+    // FIXME: This is not true on Darwin/PPC.
   case POAK_Native:
   case POAK_Power:
     Action = Sema::PSK_Push_Set;
@@ -336,7 +337,7 @@ void Sema::ActOnPragmaPack(SourceLocation PragmaLoc, PragmaMsStackAction Action,
   AlignPackInfo::Mode ModeVal = CurVal.getAlignMode();
 
   if (Alignment) {
-    std::optional<llvm::APSInt> Val;
+    Optional<llvm::APSInt> Val;
     Val = Alignment->getIntegerConstantExpr(Context);
 
     // pack(0) is like pack(), which just works out since that is what
@@ -563,6 +564,13 @@ void Sema::ActOnPragmaFloatControl(SourceLocation Loc,
   case PFC_Precise:
     NewFPFeatures.setFPPreciseEnabled(true);
     FpPragmaStack.Act(Loc, Action, StringRef(), NewFPFeatures);
+    if (PP.getCurrentFPEvalMethod() ==
+            LangOptions::FPEvalMethodKind::FEM_Indeterminable &&
+        PP.getLastFPEvalPragmaLocation().isValid())
+      // A preceding `pragma float_control(precise,off)` has changed
+      // the value of the evaluation method.
+      // Set it back to its old value.
+      PP.setCurrentFPEvalMethod(SourceLocation(), PP.getLastFPEvalMethod());
     break;
   case PFC_NoPrecise:
     if (CurFPFeatures.getExceptionMode() == LangOptions::FPE_Strict)
@@ -572,6 +580,10 @@ void Sema::ActOnPragmaFloatControl(SourceLocation Loc,
     else
       NewFPFeatures.setFPPreciseEnabled(false);
     FpPragmaStack.Act(Loc, Action, StringRef(), NewFPFeatures);
+    PP.setLastFPEvalMethod(PP.getCurrentFPEvalMethod());
+    // `AllowFPReassoc` or `AllowReciprocal` option is enabled.
+    PP.setCurrentFPEvalMethod(
+        Loc, LangOptions::FPEvalMethodKind::FEM_Indeterminable);
     break;
   case PFC_Except:
     if (!isPreciseFPEnabled())
@@ -595,6 +607,12 @@ void Sema::ActOnPragmaFloatControl(SourceLocation Loc,
     }
     FpPragmaStack.Act(Loc, Action, StringRef(), NewFPFeatures);
     NewFPFeatures = FpPragmaStack.CurrentValue;
+    if (CurFPFeatures.getAllowFPReassociate() ||
+        CurFPFeatures.getAllowReciprocal())
+      // Since we are popping the pragma, we don't want to be passing
+      // a location here.
+      PP.setCurrentFPEvalMethod(SourceLocation(),
+                                CurFPFeatures.getFPEvalMethod());
     break;
   }
   CurFPFeatures = NewFPFeatures.applyOverrides(getLangOpts());
@@ -845,6 +863,7 @@ void Sema::ActOnPragmaUnused(const Token &IdTok, Scope *curScope,
     Diag(PragmaLoc, diag::warn_used_but_marked_unused) << Name;
 
   VD->addAttr(UnusedAttr::CreateImplicit(Context, IdTok.getLocation(),
+                                         AttributeCommonInfo::AS_Pragma,
                                          UnusedAttr::GNU_unused));
 }
 
@@ -860,18 +879,18 @@ void Sema::AddCFAuditedAttribute(Decl *D) {
     return;
 
   AttributeCommonInfo Info(Ident, SourceRange(Loc),
-                           AttributeCommonInfo::Form::Pragma());
+                           AttributeCommonInfo::AS_Pragma);
   D->addAttr(CFAuditedTransferAttr::CreateImplicit(Context, Info));
 }
 
 namespace {
 
-std::optional<attr::SubjectMatchRule>
+Optional<attr::SubjectMatchRule>
 getParentAttrMatcherRule(attr::SubjectMatchRule Rule) {
   using namespace attr;
   switch (Rule) {
   default:
-    return std::nullopt;
+    return None;
 #define ATTR_MATCH_RULE(Value, Spelling, IsAbstract)
 #define ATTR_MATCH_SUB_RULE(Value, Spelling, IsAbstract, Parent, IsNegated)    \
   case Value:                                                                  \
@@ -941,7 +960,7 @@ void Sema::ActOnPragmaAttributeAttribute(
         RulesToFirstSpecifiedNegatedSubRule;
     for (const auto &Rule : Rules) {
       attr::SubjectMatchRule MatchRule = attr::SubjectMatchRule(Rule.first);
-      std::optional<attr::SubjectMatchRule> ParentRule =
+      Optional<attr::SubjectMatchRule> ParentRule =
           getParentAttrMatcherRule(MatchRule);
       if (!ParentRule)
         continue;
@@ -965,7 +984,7 @@ void Sema::ActOnPragmaAttributeAttribute(
     bool IgnoreNegatedSubRules = false;
     for (const auto &Rule : Rules) {
       attr::SubjectMatchRule MatchRule = attr::SubjectMatchRule(Rule.first);
-      std::optional<attr::SubjectMatchRule> ParentRule =
+      Optional<attr::SubjectMatchRule> ParentRule =
           getParentAttrMatcherRule(MatchRule);
       if (!ParentRule)
         continue;
@@ -1335,7 +1354,6 @@ void Sema::ActOnPragmaFEnvAccess(SourceLocation Loc, bool IsEnabled) {
       Diag(Loc, diag::err_pragma_fenv_requires_precise);
   }
   NewFPFeatures.setAllowFEnvAccessOverride(IsEnabled);
-  NewFPFeatures.setRoundingMathOverride(IsEnabled);
   FpPragmaStack.Act(Loc, PSK_Set, StringRef(), NewFPFeatures);
   CurFPFeatures = NewFPFeatures.applyOverrides(getLangOpts());
 }

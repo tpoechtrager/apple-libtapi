@@ -96,8 +96,6 @@ void COFFWriter::layoutSections() {
   for (auto &S : Obj.getMutableSections()) {
     if (S.Header.SizeOfRawData > 0)
       S.Header.PointerToRawData = FileSize;
-    else
-      S.Header.PointerToRawData = 0;
     FileSize += S.Header.SizeOfRawData; // For executables, this is already
                                         // aligned to FileAlignment.
     if (S.Relocs.size() >= 0xffff) {

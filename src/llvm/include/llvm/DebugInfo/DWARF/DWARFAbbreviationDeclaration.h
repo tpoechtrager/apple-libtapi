@@ -9,10 +9,10 @@
 #ifndef LLVM_DEBUGINFO_DWARF_DWARFABBREVIATIONDECLARATION_H
 #define LLVM_DEBUGINFO_DWARF_DWARFABBREVIATIONDECLARATION_H
 
+#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/iterator_range.h"
 #include "llvm/BinaryFormat/Dwarf.h"
-#include "llvm/DebugInfo/DWARF/DWARFFormValue.h"
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
@@ -20,31 +20,23 @@
 namespace llvm {
 
 class DataExtractor;
+class DWARFFormValue;
 class DWARFUnit;
 class raw_ostream;
 
 class DWARFAbbreviationDeclaration {
 public:
-  enum class ExtractState { Complete, MoreItems };
   struct AttributeSpec {
     AttributeSpec(dwarf::Attribute A, dwarf::Form F, int64_t Value)
         : Attr(A), Form(F), Value(Value) {
       assert(isImplicitConst());
     }
-    AttributeSpec(dwarf::Attribute A, dwarf::Form F,
-                  std::optional<uint8_t> ByteSize)
+    AttributeSpec(dwarf::Attribute A, dwarf::Form F, Optional<uint8_t> ByteSize)
         : Attr(A), Form(F) {
       assert(!isImplicitConst());
       this->ByteSize.HasByteSize = ByteSize.has_value();
       if (this->ByteSize.HasByteSize)
         this->ByteSize.ByteSize = *ByteSize;
-    }
-
-    DWARFFormValue getFormValue() const {
-      if (Form == dwarf::DW_FORM_implicit_const)
-        return DWARFFormValue::createFromSValue(Form, getImplicitConstValue());
-
-      return DWARFFormValue(Form);
     }
 
     dwarf::Attribute Attr;
@@ -87,7 +79,7 @@ public:
     /// use the DWARFUnit to calculate the size of the Form, like for
     /// DW_AT_address and DW_AT_ref_addr, so this isn't just an accessor for
     /// the ByteSize member.
-    std::optional<int64_t> getByteSize(const DWARFUnit &U) const;
+    Optional<int64_t> getByteSize(const DWARFUnit &U) const;
   };
   using AttributeSpecVector = SmallVector<AttributeSpec, 8>;
 
@@ -135,8 +127,8 @@ public:
   /// attribute.
   ///
   /// \param attr DWARF attribute to search for.
-  /// \returns Optional index of the attribute if found, std::nullopt otherwise.
-  std::optional<uint32_t> findAttributeIndex(dwarf::Attribute attr) const;
+  /// \returns Optional index of the attribute if found, None otherwise.
+  Optional<uint32_t> findAttributeIndex(dwarf::Attribute attr) const;
 
   /// Extract a DWARF form value from a DIE specified by DIE offset.
   ///
@@ -148,9 +140,9 @@ public:
   /// \param Attr DWARF attribute to search for.
   /// \param U the DWARFUnit the contains the DIE.
   /// \returns Optional DWARF form value if the attribute was extracted.
-  std::optional<DWARFFormValue> getAttributeValue(const uint64_t DIEOffset,
-                                                  const dwarf::Attribute Attr,
-                                                  const DWARFUnit &U) const;
+  Optional<DWARFFormValue> getAttributeValue(const uint64_t DIEOffset,
+                                             const dwarf::Attribute Attr,
+                                             const DWARFUnit &U) const;
 
   /// Compute an offset from a DIE specified by DIE offset and attribute index.
   ///
@@ -169,17 +161,17 @@ public:
   /// \param Offset offset of the attribute.
   /// \param U the DWARFUnit the contains the DIE.
   /// \returns Optional DWARF form value if the attribute was extracted.
-  std::optional<DWARFFormValue>
+  Optional<DWARFFormValue>
   getAttributeValueFromOffset(uint32_t AttrIndex, uint64_t Offset,
                               const DWARFUnit &U) const;
 
-  llvm::Expected<ExtractState> extract(DataExtractor Data, uint64_t *OffsetPtr);
+  bool extract(DataExtractor Data, uint64_t* OffsetPtr);
   void dump(raw_ostream &OS) const;
 
   // Return an optional byte size of all attribute data in this abbreviation
   // if a constant byte size can be calculated given a DWARFUnit. This allows
   // DWARF parsing to be faster as many DWARF DIEs have a fixed byte size.
-  std::optional<size_t> getFixedAttributesByteSize(const DWARFUnit &U) const;
+  Optional<size_t> getFixedAttributesByteSize(const DWARFUnit &U) const;
 
 private:
   void clear();
@@ -214,7 +206,7 @@ private:
   AttributeSpecVector AttributeSpecs;
   /// If this abbreviation has a fixed byte size then FixedAttributeSize member
   /// variable below will have a value.
-  std::optional<FixedSizeInfo> FixedAttributeSize;
+  Optional<FixedSizeInfo> FixedAttributeSize;
 };
 
 } // end namespace llvm

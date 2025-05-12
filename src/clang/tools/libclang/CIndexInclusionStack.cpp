@@ -12,7 +12,6 @@
 //===----------------------------------------------------------------------===//
 
 #include "CIndexer.h"
-#include "CXFile.h"
 #include "CXSourceLocation.h"
 #include "CXTranslationUnit.h"
 #include "clang/AST/DeclVisitor.h"
@@ -59,7 +58,9 @@ void getInclusions(bool IsLocal, unsigned n, CXTranslationUnit TU,
       InclusionStack.pop_back();
 
     // Callback to the client.
-    CB(cxfile::makeCXFile(*FI.getContentCache().OrigEntry),
+    // FIXME: We should have a function to construct CXFiles.
+    CB(static_cast<CXFile>(const_cast<FileEntry *>(
+           static_cast<const FileEntry *>(FI.getContentCache().OrigEntry))),
        InclusionStack.data(), InclusionStack.size(), clientData);
   }
 }

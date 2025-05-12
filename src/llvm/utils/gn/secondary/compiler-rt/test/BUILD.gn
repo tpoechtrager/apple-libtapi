@@ -106,8 +106,8 @@ write_cmake_config("lit_common_configured") {
   }
 
   if (llvm_enable_zlib) {
-    values += [ "ZLIB_FOUND_PYBOOL=1" ]
+    values += [ "LLVM_ENABLE_ZLIB=1" ]
   } else {
-    values += [ "ZLIB_FOUND_PYBOOL=0" ]
+    values += [ "LLVM_ENABLE_ZLIB=0" ]
   }
 }

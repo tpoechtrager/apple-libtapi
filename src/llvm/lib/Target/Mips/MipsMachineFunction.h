@@ -24,7 +24,7 @@ namespace llvm {
 /// Mips target-specific information for each MachineFunction.
 class MipsFunctionInfo : public MachineFunctionInfo {
 public:
-  MipsFunctionInfo(const Function &F, const TargetSubtargetInfo *STI) {}
+  MipsFunctionInfo(MachineFunction &MF) {}
 
   MachineFunctionInfo *
   clone(BumpPtrAllocator &Allocator, MachineFunction &DestMF,

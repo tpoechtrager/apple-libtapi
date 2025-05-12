@@ -42,7 +42,7 @@ void MarkupParser::parseLine(StringRef Line) {
   this->Line = Line;
 }
 
-std::optional<MarkupNode> MarkupParser::nextNode() {
+Optional<MarkupNode> MarkupParser::nextNode() {
   // Pull something out of the buffer if possible.
   if (!Buffer.empty()) {
     if (NextIdx < Buffer.size())
@@ -54,10 +54,10 @@ std::optional<MarkupNode> MarkupParser::nextNode() {
   // The buffer is empty, so parse the next bit of the line.
 
   if (Line.empty())
-    return std::nullopt;
+    return None;
 
   if (!InProgressMultiline.empty()) {
-    if (std::optional<StringRef> MultilineEnd = parseMultiLineEnd(Line)) {
+    if (Optional<StringRef> MultilineEnd = parseMultiLineEnd(Line)) {
       llvm::append_range(InProgressMultiline, *MultilineEnd);
       assert(FinishedMultiline.empty() &&
              "At most one multi-line element can be finished at a time.");
@@ -70,11 +70,11 @@ std::optional<MarkupNode> MarkupParser::nextNode() {
     // The whole line is part of the multi-line element.
     llvm::append_range(InProgressMultiline, Line);
     Line = Line.drop_front(Line.size());
-    return std::nullopt;
+    return None;
   }
 
   // Find the first valid markup element, if any.
-  if (std::optional<MarkupNode> Element = parseElement(Line)) {
+  if (Optional<MarkupNode> Element = parseElement(Line)) {
     parseTextOutsideMarkup(takeTo(Line, Element->Text.begin()));
     Buffer.push_back(std::move(*Element));
     advanceTo(Line, Element->Text.end());
@@ -83,7 +83,7 @@ std::optional<MarkupNode> MarkupParser::nextNode() {
 
   // Since there were no valid elements remaining, see if the line opens a
   // multi-line element.
-  if (std::optional<StringRef> MultilineBegin = parseMultiLineBegin(Line)) {
+  if (Optional<StringRef> MultilineBegin = parseMultiLineBegin(Line)) {
     // Emit any text before the element.
     parseTextOutsideMarkup(takeTo(Line, MultilineBegin->begin()));
 
@@ -110,16 +110,16 @@ void MarkupParser::flush() {
 }
 
 // Finds and returns the next valid markup element in the given line. Returns
-// std::nullopt if the line contains no valid elements.
-std::optional<MarkupNode> MarkupParser::parseElement(StringRef Line) {
+// None if the line contains no valid elements.
+Optional<MarkupNode> MarkupParser::parseElement(StringRef Line) {
   while (true) {
     // Find next element using begin and end markers.
     size_t BeginPos = Line.find("{{{");
     if (BeginPos == StringRef::npos)
-      return std::nullopt;
+      return None;
     size_t EndPos = Line.find("}}}", BeginPos + 3);
     if (EndPos == StringRef::npos)
-      return std::nullopt;
+      return None;
     EndPos += 3;
     MarkupNode Element;
     Element.Text = Line.slice(BeginPos, EndPos);
@@ -169,35 +169,35 @@ void MarkupParser::parseTextOutsideMarkup(StringRef Text) {
 
 // Given that a line doesn't contain any valid markup, see if it ends with the
 // start of a multi-line element. If so, returns the beginning.
-std::optional<StringRef> MarkupParser::parseMultiLineBegin(StringRef Line) {
+Optional<StringRef> MarkupParser::parseMultiLineBegin(StringRef Line) {
   // A multi-line begin marker must be the last one on the line.
   size_t BeginPos = Line.rfind("{{{");
   if (BeginPos == StringRef::npos)
-    return std::nullopt;
+    return None;
   size_t BeginTagPos = BeginPos + 3;
 
   // If there are any end markers afterwards, the begin marker cannot belong to
   // a multi-line element.
   size_t EndPos = Line.find("}}}", BeginTagPos);
   if (EndPos != StringRef::npos)
-    return std::nullopt;
+    return None;
 
   // Check whether the tag is registered multi-line.
   size_t EndTagPos = Line.find(':', BeginTagPos);
   if (EndTagPos == StringRef::npos)
-    return std::nullopt;
+    return None;
   StringRef Tag = Line.slice(BeginTagPos, EndTagPos);
   if (!MultilineTags.contains(Tag))
-    return std::nullopt;
+    return None;
   return Line.substr(BeginPos);
 }
 
 // See if the line begins with the ending of an in-progress multi-line element.
 // If so, return the ending.
-std::optional<StringRef> MarkupParser::parseMultiLineEnd(StringRef Line) {
+Optional<StringRef> MarkupParser::parseMultiLineEnd(StringRef Line) {
   size_t EndPos = Line.find("}}}");
   if (EndPos == StringRef::npos)
-    return std::nullopt;
+    return None;
   return Line.take_front(EndPos + 3);
 }
 

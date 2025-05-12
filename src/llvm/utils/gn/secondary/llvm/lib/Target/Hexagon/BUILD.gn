@@ -35,7 +35,6 @@ static_library("LLVMHexagonCodeGen") {
     "//llvm/lib/Passes",
     "//llvm/lib/Support",
     "//llvm/lib/Target",
-    "//llvm/lib/TargetParser",
     "//llvm/lib/Transforms/Utils",
   ]
   include_dirs = [ "." ]

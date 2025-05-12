@@ -253,12 +253,9 @@ _mm_movedup_pd(__m128d __a)
 ///    the processor in the monitor event pending state. Data stored in the
 ///    monitored address range causes the processor to exit the pending state.
 ///
-/// The \c MONITOR instruction can be used in kernel mode, and in other modes
-/// if MSR <c> C001_0015h[MonMwaitUserEn] </c> is set.
-///
 /// \headerfile <x86intrin.h>
 ///
-/// This intrinsic corresponds to the \c MONITOR instruction.
+/// This intrinsic corresponds to the <c> MONITOR </c> instruction.
 ///
 /// \param __p
 ///    The memory range to be monitored. The size of the range is determined by
@@ -273,22 +270,19 @@ _mm_monitor(void const *__p, unsigned __extensions, unsigned __hints)
   __builtin_ia32_monitor(__p, __extensions, __hints);
 }
 
-/// Used with the \c MONITOR instruction to wait while the processor is in
+/// Used with the MONITOR instruction to wait while the processor is in
 ///    the monitor event pending state. Data stored in the monitored address
-///    range, or an interrupt, causes the processor to exit the pending state.
-///
-/// The \c MWAIT instruction can be used in kernel mode, and in other modes if
-/// MSR <c> C001_0015h[MonMwaitUserEn] </c> is set.
+///    range causes the processor to exit the pending state.
 ///
 /// \headerfile <x86intrin.h>
 ///
-/// This intrinsic corresponds to the \c MWAIT instruction.
+/// This intrinsic corresponds to the <c> MWAIT </c> instruction.
 ///
 /// \param __extensions
-///    Optional extensions for the monitoring state, which can vary by
+///    Optional extensions for the monitoring state, which may vary by
 ///    processor.
 /// \param __hints
-///    Optional hints for the monitoring state, which can vary by processor.
+///    Optional hints for the monitoring state, which may vary by processor.
 static __inline__ void __DEFAULT_FN_ATTRS
 _mm_mwait(unsigned __extensions, unsigned __hints)
 {

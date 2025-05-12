@@ -67,13 +67,14 @@ private:
 BinaryStreamRef::BinaryStreamRef(BinaryStream &Stream)
     : BinaryStreamRefBase(Stream) {}
 BinaryStreamRef::BinaryStreamRef(BinaryStream &Stream, uint64_t Offset,
-                                 std::optional<uint64_t> Length)
+                                 Optional<uint64_t> Length)
     : BinaryStreamRefBase(Stream, Offset, Length) {}
 BinaryStreamRef::BinaryStreamRef(ArrayRef<uint8_t> Data, endianness Endian)
     : BinaryStreamRefBase(std::make_shared<ArrayRefImpl>(Data, Endian), 0,
                           Data.size()) {}
 BinaryStreamRef::BinaryStreamRef(StringRef Data, endianness Endian)
-    : BinaryStreamRef(ArrayRef(Data.bytes_begin(), Data.bytes_end()), Endian) {}
+    : BinaryStreamRef(makeArrayRef(Data.bytes_begin(), Data.bytes_end()),
+                      Endian) {}
 
 Error BinaryStreamRef::readBytes(uint64_t Offset, uint64_t Size,
                                  ArrayRef<uint8_t> &Buffer) const {
@@ -104,7 +105,7 @@ WritableBinaryStreamRef::WritableBinaryStreamRef(WritableBinaryStream &Stream)
 
 WritableBinaryStreamRef::WritableBinaryStreamRef(WritableBinaryStream &Stream,
                                                  uint64_t Offset,
-                                                 std::optional<uint64_t> Length)
+                                                 Optional<uint64_t> Length)
     : BinaryStreamRefBase(Stream, Offset, Length) {}
 
 WritableBinaryStreamRef::WritableBinaryStreamRef(MutableArrayRef<uint8_t> Data,

@@ -18,7 +18,6 @@
 #include "clang/AST/ASTImporterLookupTable.h"
 #include "clang/AST/Decl.h"
 #include "llvm/ADT/DenseMap.h"
-#include <optional>
 
 namespace clang {
 
@@ -66,12 +65,12 @@ public:
         LookupTable->remove(ND);
   }
 
-  std::optional<ASTImportError> getImportDeclErrorIfAny(Decl *ToD) const {
+  llvm::Optional<ASTImportError> getImportDeclErrorIfAny(Decl *ToD) const {
     auto Pos = ImportErrors.find(ToD);
     if (Pos != ImportErrors.end())
       return Pos->second;
     else
-      return std::nullopt;
+      return Optional<ASTImportError>();
   }
 
   void setImportDeclError(Decl *To, ASTImportError Error) {

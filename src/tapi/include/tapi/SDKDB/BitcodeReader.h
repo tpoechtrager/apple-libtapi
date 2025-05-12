@@ -18,9 +18,9 @@
 #include "tapi/SDKDB/SDKDB.h"
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/StringSet.h"
+#include "llvm/ADT/Triple.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/MemoryBuffer.h"
-#include "llvm/TargetParser/Triple.h"
 
 TAPI_NAMESPACE_INTERNAL_BEGIN
 

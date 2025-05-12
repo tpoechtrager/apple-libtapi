@@ -35,7 +35,7 @@ struct SelectedStmtSet {
 
   /// The index of the innermost statement that contains the entire selection
   /// range. The index points into the NodeTree stored in the \c ASTSlice.
-  std::optional<unsigned> containsSelectionRangeIndex;
+  Optional<unsigned> containsSelectionRangeIndex;
 
   static SelectedStmtSet createFromEntirelySelected(const Stmt *S,
                                                     unsigned Index);
@@ -124,12 +124,12 @@ public:
   /// Returns the statement that results in true when passed into \p Predicate
   /// that's nearest to the location of interest, or \c None if such statement
   /// isn't found.
-  std::optional<SelectedStmt>
+  Optional<SelectedStmt>
   nearestSelectedStmt(llvm::function_ref<bool(const Stmt *)> Predicate);
 
   /// Returns the statement of the given class that's nearest to the location
   /// of interest, or \c None if such statement isn't found.
-  std::optional<SelectedStmt> nearestSelectedStmt(Stmt::StmtClass Class);
+  Optional<SelectedStmt> nearestSelectedStmt(Stmt::StmtClass Class);
 
   /// TODO: Remove in favour of nearestStmt that returns \c SelectedStmt
   const Stmt *nearestStmt(Stmt::StmtClass Class);
@@ -137,17 +137,17 @@ public:
   /// Returns the declaration that overlaps with the selection range, is
   /// nearest to the location of interest and that results in true when passed
   /// into \p Predicate, or \c None if such declaration isn't found.
-  std::optional<SelectedDecl>
+  Optional<SelectedDecl>
   innermostSelectedDecl(llvm::function_ref<bool(const Decl *)> Predicate,
                         unsigned Options = 0);
 
   /// Returns the declaration closest to the location of interest whose decl
   /// kind is in \p Classes, or \c None if no such decl can't be found.
-  std::optional<SelectedDecl>
-  innermostSelectedDecl(ArrayRef<Decl::Kind> Classes, unsigned Options = 0);
+  Optional<SelectedDecl> innermostSelectedDecl(ArrayRef<Decl::Kind> Classes,
+                                               unsigned Options = 0);
 
   /// Returns the set of statements that overlap with the selection range.
-  std::optional<SelectedStmtSet> getSelectedStmtSet();
+  Optional<SelectedStmtSet> getSelectedStmtSet();
 
   /// Returns true if the statement with the given index is contained in a
   /// compound statement that overlaps with the selection range.
@@ -160,19 +160,19 @@ public:
   const Stmt *parentStmtForIndex(unsigned Index);
 
 private:
-  std::optional<SelectedStmtSet> computeSelectedStmtSet();
+  Optional<SelectedStmtSet> computeSelectedStmtSet();
 
   /// Returns the innermost declaration that contains both the start and the
   /// end of the selection range.
-  std::optional<SelectedDecl> getInnermostCompletelySelectedDecl();
+  Optional<SelectedDecl> getInnermostCompletelySelectedDecl();
 
   /// The lowest element is the top of the hierarchy
   SmallVector<Node, 16> NodeTree;
   ASTContext &Context;
   SourceLocation SelectionLocation;
   SourceRange SelectionRange;
-  std::optional<std::optional<SelectedStmtSet>> CachedSelectedStmtSet;
-  std::optional<std::optional<SelectedDecl>> CachedSelectedInnermostDecl;
+  Optional<Optional<SelectedStmtSet>> CachedSelectedStmtSet;
+  Optional<Optional<SelectedDecl>> CachedSelectedInnermostDecl;
 };
 
 } // end namespace tooling

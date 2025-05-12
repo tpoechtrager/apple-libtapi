@@ -8,9 +8,7 @@
 
 #include "llvm/Support/ScopedPrinter.h"
 #include "llvm/ADT/APSInt.h"
-#include "llvm/Support/Format.h"
 #include "gtest/gtest.h"
-#include <cmath>
 #include <vector>
 
 using namespace llvm;
@@ -228,8 +226,8 @@ TEST_F(ScopedPrinterTest, PrintEnum) {
                                        {"Name3", "AltName3", 3},
                                        {"Name4", "AltName4", 2}};
     EnumEntry<int> OtherEnum{"Name5", "AltName5", 5};
-    W.printEnum("Exists", EnumList[1].Value, ArrayRef(EnumList));
-    W.printEnum("DoesNotExist", OtherEnum.Value, ArrayRef(EnumList));
+    W.printEnum("Exists", EnumList[1].Value, makeArrayRef(EnumList));
+    W.printEnum("DoesNotExist", OtherEnum.Value, makeArrayRef(EnumList));
   };
 
   const char *ExpectedOut = R"(Exists: Name2 (0x2)
@@ -238,8 +236,8 @@ DoesNotExist: 0x5
 
   const char *JSONExpectedOut = R"({
   "Exists": {
-    "Name": "Name2",
-    "Value": 2
+    "Value": "Name2",
+    "RawValue": 2
   },
   "DoesNotExist": 5
 })";
@@ -261,10 +259,11 @@ TEST_F(ScopedPrinterTest, PrintFlag) {
         {"SecondByte2", "Second2", 0x20u}, {"SecondByte3", "Second3", 0x30u},
         {"ThirdByte1", "Third1", 0x100u},  {"ThirdByte2", "Third2", 0x200u},
         {"ThirdByte3", "Third3", 0x300u}};
-    W.printFlags("ZeroFlag", 0, ArrayRef(SingleBitFlags));
-    W.printFlags("NoFlag", 1 << 3, ArrayRef(SingleBitFlags));
-    W.printFlags("Flag1", SingleBitFlags[1].Value, ArrayRef(SingleBitFlags));
-    W.printFlags("Flag1&3", (1 << 2) + 1, ArrayRef(SingleBitFlags));
+    W.printFlags("ZeroFlag", 0, makeArrayRef(SingleBitFlags));
+    W.printFlags("NoFlag", 1 << 3, makeArrayRef(SingleBitFlags));
+    W.printFlags("Flag1", SingleBitFlags[1].Value,
+                 makeArrayRef(SingleBitFlags));
+    W.printFlags("Flag1&3", (1 << 2) + 1, makeArrayRef(SingleBitFlags));
 
     W.printFlags("ZeroFlagRaw", 0);
     W.printFlags("NoFlagRaw", 1 << 3);
@@ -272,19 +271,21 @@ TEST_F(ScopedPrinterTest, PrintFlag) {
     W.printFlags("Flag1&3Raw", (1 << 2) + 1);
 
     W.printFlags("FlagSorted", (1 << 2) + (1 << 1) + 1,
-                 ArrayRef(UnsortedFlags));
+                 makeArrayRef(UnsortedFlags));
 
     uint16_t NoBitMask = 0;
     uint16_t FirstByteMask = 0xFu;
     uint16_t SecondByteMask = 0xF0u;
     uint16_t ThirdByteMask = 0xF00u;
-    W.printFlags("NoBitMask", 0xFFFu, ArrayRef(EnumFlags), NoBitMask);
-    W.printFlags("FirstByteMask", 0x3u, ArrayRef(EnumFlags), FirstByteMask);
-    W.printFlags("SecondByteMask", 0x30u, ArrayRef(EnumFlags), SecondByteMask);
-    W.printFlags("ValueOutsideMask", 0x1u, ArrayRef(EnumFlags), SecondByteMask);
-    W.printFlags("FirstSecondByteMask", 0xFFu, ArrayRef(EnumFlags),
+    W.printFlags("NoBitMask", 0xFFFu, makeArrayRef(EnumFlags), NoBitMask);
+    W.printFlags("FirstByteMask", 0x3u, makeArrayRef(EnumFlags), FirstByteMask);
+    W.printFlags("SecondByteMask", 0x30u, makeArrayRef(EnumFlags),
+                 SecondByteMask);
+    W.printFlags("ValueOutsideMask", 0x1u, makeArrayRef(EnumFlags),
+                 SecondByteMask);
+    W.printFlags("FirstSecondByteMask", 0xFFu, makeArrayRef(EnumFlags),
                  FirstByteMask, SecondByteMask);
-    W.printFlags("FirstSecondThirdByteMask", 0x333u, ArrayRef(EnumFlags),
+    W.printFlags("FirstSecondThirdByteMask", 0x333u, makeArrayRef(EnumFlags),
                  FirstByteMask, SecondByteMask, ThirdByteMask);
   };
 
@@ -347,15 +348,15 @@ FirstSecondThirdByteMask [ (0x333)
 
   const char *JSONExpectedOut = R"({
   "ZeroFlag": {
-    "Value": 0,
+    "RawFlags": 0,
     "Flags": []
   },
   "NoFlag": {
-    "Value": 8,
+    "RawFlags": 8,
     "Flags": []
   },
   "Flag1": {
-    "Value": 1,
+    "RawFlags": 1,
     "Flags": [
       {
         "Name": "Name1",
@@ -364,7 +365,7 @@ FirstSecondThirdByteMask [ (0x333)
     ]
   },
   "Flag1&3": {
-    "Value": 5,
+    "RawFlags": 5,
     "Flags": [
       {
         "Name": "Name1",
@@ -377,30 +378,30 @@ FirstSecondThirdByteMask [ (0x333)
     ]
   },
   "ZeroFlagRaw": {
-    "Value": 0,
+    "RawFlags": 0,
     "Flags": []
   },
   "NoFlagRaw": {
-    "Value": 8,
+    "RawFlags": 8,
     "Flags": [
       8
     ]
   },
   "Flag1Raw": {
-    "Value": 1,
+    "RawFlags": 1,
     "Flags": [
       1
     ]
   },
   "Flag1&3Raw": {
-    "Value": 5,
+    "RawFlags": 5,
     "Flags": [
       1,
       4
     ]
   },
   "FlagSorted": {
-    "Value": 7,
+    "RawFlags": 7,
     "Flags": [
       {
         "Name": "A",
@@ -417,7 +418,7 @@ FirstSecondThirdByteMask [ (0x333)
     ]
   },
   "NoBitMask": {
-    "Value": 4095,
+    "RawFlags": 4095,
     "Flags": [
       {
         "Name": "FirstByte1",
@@ -458,7 +459,7 @@ FirstSecondThirdByteMask [ (0x333)
     ]
   },
   "FirstByteMask": {
-    "Value": 3,
+    "RawFlags": 3,
     "Flags": [
       {
         "Name": "FirstByte3",
@@ -467,7 +468,7 @@ FirstSecondThirdByteMask [ (0x333)
     ]
   },
   "SecondByteMask": {
-    "Value": 48,
+    "RawFlags": 48,
     "Flags": [
       {
         "Name": "SecondByte3",
@@ -476,7 +477,7 @@ FirstSecondThirdByteMask [ (0x333)
     ]
   },
   "ValueOutsideMask": {
-    "Value": 1,
+    "RawFlags": 1,
     "Flags": [
       {
         "Name": "FirstByte1",
@@ -485,11 +486,11 @@ FirstSecondThirdByteMask [ (0x333)
     ]
   },
   "FirstSecondByteMask": {
-    "Value": 255,
+    "RawFlags": 255,
     "Flags": []
   },
   "FirstSecondThirdByteMask": {
-    "Value": 819,
+    "RawFlags": 819,
     "Flags": [
       {
         "Name": "FirstByte3",
@@ -509,39 +510,8 @@ FirstSecondThirdByteMask [ (0x333)
   verifyAll(ExpectedOut, JSONExpectedOut, PrintFunc);
 }
 
-// Format floats using the same format string as PrintNumber, so we can check
-// the output on all platforms.
-template <typename T,
-          std::enable_if_t<std::is_floating_point_v<T>, bool> = true>
-std::string formatFloatString(T Val) {
-  std::string Ret;
-  raw_string_ostream OS(Ret);
-  OS << format("%5.1f", Val);
-  return Ret;
-}
-
-// Format floats using the same format string used in JSON, so we can check the
-// output on all platforms.
-template <typename T,
-          std::enable_if_t<std::is_floating_point_v<T>, bool> = true>
-std::string formatJsonFloatString(T Val) {
-  std::string Ret;
-  raw_string_ostream OS(Ret);
-  OS << format("%.*g", std::numeric_limits<double>::max_digits10, Val);
-  return Ret;
-}
-
 TEST_F(ScopedPrinterTest, PrintNumber) {
-  constexpr float MaxFloat = std::numeric_limits<float>::max();
-  constexpr float MinFloat = std::numeric_limits<float>::min();
-  constexpr float InfFloat = std::numeric_limits<float>::infinity();
-  const float NaNFloat = std::nanf("1");
-  constexpr double MaxDouble = std::numeric_limits<double>::max();
-  constexpr double MinDouble = std::numeric_limits<double>::min();
-  constexpr double InfDouble = std::numeric_limits<double>::infinity();
-  const double NaNDouble = std::nan("1");
-
-  auto PrintFunc = [&](ScopedPrinter &W) {
+  auto PrintFunc = [](ScopedPrinter &W) {
     uint64_t Unsigned64Max = std::numeric_limits<uint64_t>::max();
     uint64_t Unsigned64Min = std::numeric_limits<uint64_t>::min();
     W.printNumber("uint64_t-max", Unsigned64Max);
@@ -586,24 +556,9 @@ TEST_F(ScopedPrinterTest, PrintNumber) {
     W.printNumber("apsint", LargeNum);
 
     W.printNumber("label", "value", 0);
-
-    W.printNumber("float-max", MaxFloat);
-    W.printNumber("float-min", MinFloat);
-    W.printNumber("float-inf", InfFloat);
-    W.printNumber("float-nan", NaNFloat);
-    W.printNumber("float-42.0", 42.0f);
-    W.printNumber("float-42.5625", 42.5625f);
-
-    W.printNumber("double-max", MaxDouble);
-    W.printNumber("double-min", MinDouble);
-    W.printNumber("double-inf", InfDouble);
-    W.printNumber("double-nan", NaNDouble);
-    W.printNumber("double-42.0", 42.0);
-    W.printNumber("double-42.5625", 42.5625);
   };
 
-  std::string ExpectedOut = Twine(
-                                R"(uint64_t-max: 18446744073709551615
+  const char *ExpectedOut = R"(uint64_t-max: 18446744073709551615
 uint64_t-min: 0
 uint32_t-max: 4294967295
 uint32_t-min: 0
@@ -621,28 +576,9 @@ int8_t-max: 127
 int8_t-min: -128
 apsint: 9999999999999999999999
 label: value (0)
-float-max: )" + formatFloatString(MaxFloat) +
-                                R"(
-float-min:   0.0
-float-inf: )" + formatFloatString(InfFloat) +
-                                R"(
-float-nan: )" + formatFloatString(NaNFloat) +
-                                R"(
-float-42.0:  42.0
-float-42.5625:  42.6
-double-max: )" + formatFloatString(MaxDouble) +
-                                R"(
-double-min:   0.0
-double-inf: )" + formatFloatString(InfDouble) +
-                                R"(
-double-nan: )" + formatFloatString(NaNDouble) +
-                                R"(
-double-42.0:  42.0
-double-42.5625:  42.6
-)")
-                                .str();
+)";
 
-  std::string JSONExpectedOut = Twine(R"({
+  const char *JSONExpectedOut = R"({
   "uint64_t-max": 18446744073709551615,
   "uint64_t-min": 0,
   "uint32_t-max": 4294967295,
@@ -661,27 +597,10 @@ double-42.5625:  42.6
   "int8_t-min": -128,
   "apsint": 9999999999999999999999,
   "label": {
-    "Name": "value",
-    "Value": 0
-  },
-  "float-max": 3.4028234663852886e+38,
-  "float-min": 1.1754943508222875e-38,
-  "float-inf": )" + formatJsonFloatString(InfFloat) +
-                                      R"(,
-  "float-nan": )" + formatJsonFloatString(NaNFloat) +
-                                      R"(,
-  "float-42.0": 42,
-  "float-42.5625": 42.5625,
-  "double-max": 1.7976931348623157e+308,
-  "double-min": 2.2250738585072014e-308,
-  "double-inf": )" + formatJsonFloatString(InfDouble) +
-                                      R"(,
-  "double-nan": )" + formatJsonFloatString(NaNDouble) +
-                                      R"(,
-  "double-42.0": 42,
-  "double-42.5625": 42.5625
-})")
-                                    .str();
+    "Value": "value",
+    "RawValue": 0
+  }
+})";
   verifyAll(ExpectedOut, JSONExpectedOut, PrintFunc);
 }
 
@@ -743,7 +662,7 @@ TEST_F(ScopedPrinterTest, PrintList) {
                                             APSInt("-9999999999999999999999")};
     W.printList("EmptyList", EmptyList);
     W.printList("StringList", StringList);
-    W.printList("BoolList", ArrayRef(BoolList));
+    W.printList("BoolList", makeArrayRef(BoolList));
     W.printList("uint64List", Unsigned64List);
     W.printList("uint32List", Unsigned32List);
     W.printList("uint16List", Unsigned16List);
@@ -845,8 +764,8 @@ HexLabel: Name (0x10)
   const char *JSONExpectedOut = R"({
   "HexNumber": 16,
   "HexLabel": {
-    "Name": "Name",
-    "Value": 16
+    "Value": "Name",
+    "RawValue": 16
   }
 })";
   verifyAll(ExpectedOut, JSONExpectedOut, PrintFunc);

@@ -63,7 +63,7 @@ private:
   /// and 1 means content of register will be preserved around function call.
   DenseMap<const Function *, std::vector<uint32_t>> RegMasks;
 
-  const LLVMTargetMachine *TM = nullptr;
+  const LLVMTargetMachine *TM;
 };
 
 } // end namespace llvm

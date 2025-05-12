@@ -19,11 +19,14 @@
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Support/ManagedStatic.h"
 #include <cassert>
 #include <cstddef>
 #include <utility>
 
 using namespace clang;
+
+LLVM_INSTANTIATE_REGISTRY(ParsedAttrInfoRegistry)
 
 IdentifierLoc *IdentifierLoc::create(ASTContext &Ctx, SourceLocation Loc,
                                      IdentifierInfo *Ident) {
@@ -117,7 +120,13 @@ const ParsedAttrInfo &ParsedAttrInfo::get(const AttributeCommonInfo &A) {
   if (A.getParsedKind() == AttributeCommonInfo::IgnoredAttribute)
     return IgnoredParsedAttrInfo;
 
-  // Otherwise this may be an attribute defined by a plugin.
+  // Otherwise this may be an attribute defined by a plugin. First instantiate
+  // all plugin attributes if we haven't already done so.
+  static llvm::ManagedStatic<std::list<std::unique_ptr<ParsedAttrInfo>>>
+      PluginAttrInstances;
+  if (PluginAttrInstances->empty())
+    for (auto It : ParsedAttrInfoRegistry::entries())
+      PluginAttrInstances->emplace_back(It.instantiate());
 
   // Search for a ParsedAttrInfo whose name and syntax match.
   std::string FullName = A.getNormalizedFullName();
@@ -125,9 +134,10 @@ const ParsedAttrInfo &ParsedAttrInfo::get(const AttributeCommonInfo &A) {
   if (SyntaxUsed == AttributeCommonInfo::AS_ContextSensitiveKeyword)
     SyntaxUsed = AttributeCommonInfo::AS_Keyword;
 
-  for (auto &Ptr : getAttributePluginInstances())
-    if (Ptr->hasSpelling(SyntaxUsed, FullName))
-      return *Ptr;
+  for (auto &Ptr : *PluginAttrInstances)
+    for (auto &S : Ptr->Spellings)
+      if (S.Syntax == SyntaxUsed && S.NormalizedFullName == FullName)
+        return *Ptr;
 
   // If we failed to find a match then return a default ParsedAttrInfo.
   static const ParsedAttrInfo DefaultParsedAttrInfo(
@@ -136,7 +146,7 @@ const ParsedAttrInfo &ParsedAttrInfo::get(const AttributeCommonInfo &A) {
 }
 
 ArrayRef<const ParsedAttrInfo *> ParsedAttrInfo::getAllBuiltin() {
-  return llvm::ArrayRef(AttrInfoMap);
+  return llvm::makeArrayRef(AttrInfoMap);
 }
 
 unsigned ParsedAttr::getMinArgs() const { return getInfo().NumArgs; }
@@ -203,11 +213,6 @@ bool ParsedAttr::isSupportedByPragmaAttribute() const {
 }
 
 bool ParsedAttr::slidesFromDeclToDeclSpecLegacyBehavior() const {
-  if (isRegularKeywordAttribute())
-    // The appurtenance rules are applied strictly for all regular keyword
-    // atributes.
-    return false;
-
   assert(isStandardAttributeSyntax());
 
   // We have historically allowed some type attributes with standard attribute

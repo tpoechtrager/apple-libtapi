@@ -152,13 +152,8 @@ namespace {
           assocTypes.push_back(assoc.getTypeSourceInfo());
         }
 
-        if (gse->isExprPredicate())
-          return GenericSelectionExpr::Create(
-              S.Context, gse->getGenericLoc(), gse->getControllingExpr(),
-              assocTypes, assocExprs, gse->getDefaultLoc(), gse->getRParenLoc(),
-              gse->containsUnexpandedParameterPack(), resultIndex);
         return GenericSelectionExpr::Create(
-            S.Context, gse->getGenericLoc(), gse->getControllingType(),
+            S.Context, gse->getGenericLoc(), gse->getControllingExpr(),
             assocTypes, assocExprs, gse->getDefaultLoc(), gse->getRParenLoc(),
             gse->containsUnexpandedParameterPack(), resultIndex);
       }
@@ -742,11 +737,11 @@ ExprResult ObjCPropertyOpBuilder::buildGet() {
     assert(InstanceReceiver || RefExpr->isSuperReceiver());
     msg = S.BuildInstanceMessageImplicit(InstanceReceiver, receiverType,
                                          GenericLoc, Getter->getSelector(),
-                                         Getter, std::nullopt);
+                                         Getter, None);
   } else {
     msg = S.BuildClassMessageImplicit(receiverType, RefExpr->isSuperReceiver(),
-                                      GenericLoc, Getter->getSelector(), Getter,
-                                      std::nullopt);
+                                      GenericLoc, Getter->getSelector(),
+                                      Getter, None);
   }
   return msg;
 }
@@ -1205,7 +1200,7 @@ bool ObjCSubscriptOpBuilder::findAtIndexGetter() {
                                                 /*TInfo=*/nullptr,
                                                 SC_None,
                                                 nullptr);
-    AtIndexGetter->setMethodParams(S.Context, Argument, std::nullopt);
+    AtIndexGetter->setMethodParams(S.Context, Argument, None);
   }
 
   if (!AtIndexGetter) {
@@ -1321,7 +1316,7 @@ bool ObjCSubscriptOpBuilder::findAtIndexSetter() {
                                                 SC_None,
                                                 nullptr);
     Params.push_back(key);
-    AtIndexSetter->setMethodParams(S.Context, Params, std::nullopt);
+    AtIndexSetter->setMethodParams(S.Context, Params, None);
   }
 
   if (!AtIndexSetter) {

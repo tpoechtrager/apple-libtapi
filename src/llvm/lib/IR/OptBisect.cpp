@@ -20,15 +20,10 @@
 
 using namespace llvm;
 
-static OptBisect &getOptBisector() {
-  static OptBisect OptBisector;
-  return OptBisector;
-}
-
 static cl::opt<int> OptBisectLimit("opt-bisect-limit", cl::Hidden,
                                    cl::init(OptBisect::Disabled), cl::Optional,
                                    cl::cb<void, int>([](int Limit) {
-                                     getOptBisector().setLimit(Limit);
+                                     llvm::getOptBisector().setLimit(Limit);
                                    }),
                                    cl::desc("Maximum optimization to perform"));
 
@@ -39,16 +34,25 @@ static void printPassMessage(const StringRef &Name, int PassNum,
          << "(" << PassNum << ") " << Name << " on " << TargetDesc << "\n";
 }
 
-bool OptBisect::shouldRunPass(const StringRef PassName,
-                              StringRef IRDescription) {
+bool OptBisect::shouldRunPass(const Pass *P, StringRef IRDescription) {
+  assert(isEnabled());
+
+  return checkPass(P->getPassName(), IRDescription);
+}
+
+bool OptBisect::checkPass(const StringRef PassName,
+                          const StringRef TargetDesc) {
   assert(isEnabled());
 
   int CurBisectNum = ++LastBisectNum;
   bool ShouldRun = (BisectLimit == -1 || CurBisectNum <= BisectLimit);
-  printPassMessage(PassName, CurBisectNum, IRDescription, ShouldRun);
+  printPassMessage(PassName, CurBisectNum, TargetDesc, ShouldRun);
   return ShouldRun;
 }
 
 const int OptBisect::Disabled;
 
-OptPassGate &llvm::getGlobalPassGate() { return getOptBisector(); }
+OptBisect &llvm::getOptBisector() {
+  static OptBisect OptBisector;
+  return OptBisector;
+}

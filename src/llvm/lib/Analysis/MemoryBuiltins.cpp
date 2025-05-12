@@ -13,6 +13,8 @@
 
 #include "llvm/Analysis/MemoryBuiltins.h"
 #include "llvm/ADT/APInt.h"
+#include "llvm/ADT/None.h"
+#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/AliasAnalysis.h"
@@ -42,7 +44,6 @@
 #include <cstdint>
 #include <iterator>
 #include <numeric>
-#include <optional>
 #include <type_traits>
 #include <utility>
 
@@ -53,10 +54,14 @@ using namespace llvm;
 enum AllocType : uint8_t {
   OpNewLike          = 1<<0, // allocates; never returns null
   MallocLike         = 1<<1, // allocates; may return null
-  StrDupLike         = 1<<2,
+  AlignedAllocLike   = 1<<2, // allocates with alignment; may return null
+  CallocLike         = 1<<3, // allocates + bzero
+  ReallocLike        = 1<<4, // reallocates
+  StrDupLike         = 1<<5,
   MallocOrOpNewLike  = MallocLike | OpNewLike,
-  AllocLike          = MallocOrOpNewLike | StrDupLike,
-  AnyAlloc           = AllocLike
+  MallocOrCallocLike = MallocLike | OpNewLike | CallocLike | AlignedAllocLike,
+  AllocLike          = MallocOrCallocLike | StrDupLike,
+  AnyAlloc           = AllocLike | ReallocLike
 };
 
 enum class MallocFamily {
@@ -110,30 +115,23 @@ struct AllocFnsTy {
 // FIXME: certain users need more information. E.g., SimplifyLibCalls needs to
 // know which functions are nounwind, noalias, nocapture parameters, etc.
 static const std::pair<LibFunc, AllocFnsTy> AllocationFnData[] = {
+    {LibFunc_vec_malloc,                        {MallocLike,       1,  0, -1, -1, MallocFamily::VecMalloc}},
     {LibFunc_Znwj,                              {OpNewLike,        1,  0, -1, -1, MallocFamily::CPPNew}},             // new(unsigned int)
     {LibFunc_ZnwjRKSt9nothrow_t,                {MallocLike,       2,  0, -1, -1, MallocFamily::CPPNew}},             // new(unsigned int, nothrow)
     {LibFunc_ZnwjSt11align_val_t,               {OpNewLike,        2,  0, -1,  1, MallocFamily::CPPNewAligned}},      // new(unsigned int, align_val_t)
     {LibFunc_ZnwjSt11align_val_tRKSt9nothrow_t, {MallocLike,       3,  0, -1,  1, MallocFamily::CPPNewAligned}},      // new(unsigned int, align_val_t, nothrow)
     {LibFunc_Znwm,                              {OpNewLike,        1,  0, -1, -1, MallocFamily::CPPNew}},             // new(unsigned long)
-    {LibFunc_Znwm12__hot_cold_t,                  {OpNewLike,        2, 0,  -1, -1, MallocFamily::CPPNew}},             // new(unsigned long, __hot_cold_t)
     {LibFunc_ZnwmRKSt9nothrow_t,                {MallocLike,       2,  0, -1, -1, MallocFamily::CPPNew}},             // new(unsigned long, nothrow)
-    {LibFunc_ZnwmRKSt9nothrow_t12__hot_cold_t,      {MallocLike,       3, 0,  -1, -1, MallocFamily::CPPNew}},             // new(unsigned long, nothrow, __hot_cold_t)
     {LibFunc_ZnwmSt11align_val_t,               {OpNewLike,        2,  0, -1,  1, MallocFamily::CPPNewAligned}},      // new(unsigned long, align_val_t)
-    {LibFunc_ZnwmSt11align_val_t12__hot_cold_t,   {OpNewLike,        3, 0,  -1, 1, MallocFamily::CPPNewAligned}},       // new(unsigned long, align_val_t, __hot_cold_t)
     {LibFunc_ZnwmSt11align_val_tRKSt9nothrow_t, {MallocLike,       3,  0, -1,  1, MallocFamily::CPPNewAligned}},      // new(unsigned long, align_val_t, nothrow)
-    {LibFunc_ZnwmSt11align_val_tRKSt9nothrow_t12__hot_cold_t, {MallocLike,  4, 0,  -1, 1, MallocFamily::CPPNewAligned}},            // new(unsigned long, align_val_t, nothrow, __hot_cold_t)
     {LibFunc_Znaj,                              {OpNewLike,        1,  0, -1, -1, MallocFamily::CPPNewArray}},        // new[](unsigned int)
     {LibFunc_ZnajRKSt9nothrow_t,                {MallocLike,       2,  0, -1, -1, MallocFamily::CPPNewArray}},        // new[](unsigned int, nothrow)
     {LibFunc_ZnajSt11align_val_t,               {OpNewLike,        2,  0, -1,  1, MallocFamily::CPPNewArrayAligned}}, // new[](unsigned int, align_val_t)
     {LibFunc_ZnajSt11align_val_tRKSt9nothrow_t, {MallocLike,       3,  0, -1,  1, MallocFamily::CPPNewArrayAligned}}, // new[](unsigned int, align_val_t, nothrow)
     {LibFunc_Znam,                              {OpNewLike,        1,  0, -1, -1, MallocFamily::CPPNewArray}},        // new[](unsigned long)
-    {LibFunc_Znam12__hot_cold_t,                  {OpNewLike,        2, 0,  -1, -1, MallocFamily::CPPNew}},             // new[](unsigned long, __hot_cold_t)
     {LibFunc_ZnamRKSt9nothrow_t,                {MallocLike,       2,  0, -1, -1, MallocFamily::CPPNewArray}},        // new[](unsigned long, nothrow)
-    {LibFunc_ZnamRKSt9nothrow_t12__hot_cold_t,      {MallocLike,       3, 0,  -1, -1, MallocFamily::CPPNew}},             // new[](unsigned long, nothrow, __hot_cold_t)
     {LibFunc_ZnamSt11align_val_t,               {OpNewLike,        2,  0, -1,  1, MallocFamily::CPPNewArrayAligned}}, // new[](unsigned long, align_val_t)
-    {LibFunc_ZnamSt11align_val_t12__hot_cold_t,   {OpNewLike,        3, 0,  -1, 1, MallocFamily::CPPNewAligned}},       // new[](unsigned long, align_val_t, __hot_cold_t)
     {LibFunc_ZnamSt11align_val_tRKSt9nothrow_t, {MallocLike,       3,  0, -1,  1, MallocFamily::CPPNewArrayAligned}}, // new[](unsigned long, align_val_t, nothrow)
-    {LibFunc_ZnamSt11align_val_tRKSt9nothrow_t12__hot_cold_t, {MallocLike,  4, 0,  -1, 1, MallocFamily::CPPNewAligned}},            // new[](unsigned long, align_val_t, nothrow, __hot_cold_t)
     {LibFunc_msvc_new_int,                      {OpNewLike,        1,  0, -1, -1, MallocFamily::MSVCNew}},            // new(unsigned int)
     {LibFunc_msvc_new_int_nothrow,              {MallocLike,       2,  0, -1, -1, MallocFamily::MSVCNew}},            // new(unsigned int, nothrow)
     {LibFunc_msvc_new_longlong,                 {OpNewLike,        1,  0, -1, -1, MallocFamily::MSVCNew}},            // new(unsigned long long)
@@ -142,6 +140,9 @@ static const std::pair<LibFunc, AllocFnsTy> AllocationFnData[] = {
     {LibFunc_msvc_new_array_int_nothrow,        {MallocLike,       2,  0, -1, -1, MallocFamily::MSVCArrayNew}},       // new[](unsigned int, nothrow)
     {LibFunc_msvc_new_array_longlong,           {OpNewLike,        1,  0, -1, -1, MallocFamily::MSVCArrayNew}},       // new[](unsigned long long)
     {LibFunc_msvc_new_array_longlong_nothrow,   {MallocLike,       2,  0, -1, -1, MallocFamily::MSVCArrayNew}},       // new[](unsigned long long, nothrow)
+    {LibFunc_memalign,                          {AlignedAllocLike, 2,  1, -1,  0, MallocFamily::Malloc}},
+    {LibFunc_vec_calloc,                        {CallocLike,       2,  0,  1, -1, MallocFamily::VecMalloc}},
+    {LibFunc_vec_realloc,                       {ReallocLike,      2,  1, -1, -1, MallocFamily::VecMalloc}},
     {LibFunc_strdup,                            {StrDupLike,       1, -1, -1, -1, MallocFamily::Malloc}},
     {LibFunc_dunder_strdup,                     {StrDupLike,       1, -1, -1, -1, MallocFamily::Malloc}},
     {LibFunc_strndup,                           {StrDupLike,       2,  1, -1, -1, MallocFamily::Malloc}},
@@ -169,18 +170,18 @@ static const Function *getCalledFunction(const Value *V,
 
 /// Returns the allocation data for the given value if it's a call to a known
 /// allocation function.
-static std::optional<AllocFnsTy>
+static Optional<AllocFnsTy>
 getAllocationDataForFunction(const Function *Callee, AllocType AllocTy,
                              const TargetLibraryInfo *TLI) {
   // Don't perform a slow TLI lookup, if this function doesn't return a pointer
   // and thus can't be an allocation function.
   if (!Callee->getReturnType()->isPointerTy())
-    return std::nullopt;
+    return None;
 
   // Make sure that the function is available.
   LibFunc TLIFn;
   if (!TLI || !TLI->getLibFunc(*Callee, TLIFn) || !TLI->has(TLIFn))
-    return std::nullopt;
+    return None;
 
   const auto *Iter = find_if(
       AllocationFnData, [TLIFn](const std::pair<LibFunc, AllocFnsTy> &P) {
@@ -188,18 +189,18 @@ getAllocationDataForFunction(const Function *Callee, AllocType AllocTy,
       });
 
   if (Iter == std::end(AllocationFnData))
-    return std::nullopt;
+    return None;
 
   const AllocFnsTy *FnData = &Iter->second;
   if ((FnData->AllocTy & AllocTy) != FnData->AllocTy)
-    return std::nullopt;
+    return None;
 
   // Check function prototype.
   int FstParam = FnData->FstParam;
   int SndParam = FnData->SndParam;
   FunctionType *FTy = Callee->getFunctionType();
 
-  if (FTy->getReturnType()->isPointerTy() &&
+  if (FTy->getReturnType() == Type::getInt8PtrTy(FTy->getContext()) &&
       FTy->getNumParams() == FnData->NumParams &&
       (FstParam < 0 ||
        (FTy->getParamType(FstParam)->isIntegerTy(32) ||
@@ -208,20 +209,19 @@ getAllocationDataForFunction(const Function *Callee, AllocType AllocTy,
        FTy->getParamType(SndParam)->isIntegerTy(32) ||
        FTy->getParamType(SndParam)->isIntegerTy(64)))
     return *FnData;
-  return std::nullopt;
+  return None;
 }
 
-static std::optional<AllocFnsTy>
-getAllocationData(const Value *V, AllocType AllocTy,
-                  const TargetLibraryInfo *TLI) {
+static Optional<AllocFnsTy> getAllocationData(const Value *V, AllocType AllocTy,
+                                              const TargetLibraryInfo *TLI) {
   bool IsNoBuiltinCall;
   if (const Function *Callee = getCalledFunction(V, IsNoBuiltinCall))
     if (!IsNoBuiltinCall)
       return getAllocationDataForFunction(Callee, AllocTy, TLI);
-  return std::nullopt;
+  return None;
 }
 
-static std::optional<AllocFnsTy>
+static Optional<AllocFnsTy>
 getAllocationData(const Value *V, AllocType AllocTy,
                   function_ref<const TargetLibraryInfo &(Function &)> GetTLI) {
   bool IsNoBuiltinCall;
@@ -229,29 +229,29 @@ getAllocationData(const Value *V, AllocType AllocTy,
     if (!IsNoBuiltinCall)
       return getAllocationDataForFunction(
           Callee, AllocTy, &GetTLI(const_cast<Function &>(*Callee)));
-  return std::nullopt;
+  return None;
 }
 
-static std::optional<AllocFnsTy>
-getAllocationSize(const Value *V, const TargetLibraryInfo *TLI) {
+static Optional<AllocFnsTy> getAllocationSize(const Value *V,
+                                              const TargetLibraryInfo *TLI) {
   bool IsNoBuiltinCall;
   const Function *Callee =
       getCalledFunction(V, IsNoBuiltinCall);
   if (!Callee)
-    return std::nullopt;
+    return None;
 
   // Prefer to use existing information over allocsize. This will give us an
   // accurate AllocTy.
   if (!IsNoBuiltinCall)
-    if (std::optional<AllocFnsTy> Data =
+    if (Optional<AllocFnsTy> Data =
             getAllocationDataForFunction(Callee, AnyAlloc, TLI))
       return Data;
 
   Attribute Attr = Callee->getFnAttribute(Attribute::AllocSize);
   if (Attr == Attribute())
-    return std::nullopt;
+    return None;
 
-  std::pair<unsigned, std::optional<unsigned>> Args = Attr.getAllocSizeArgs();
+  std::pair<unsigned, Optional<unsigned>> Args = Attr.getAllocSizeArgs();
 
   AllocFnsTy Result;
   // Because allocsize only tells us how many bytes are allocated, we're not
@@ -310,10 +310,27 @@ bool llvm::isNewLikeFn(const Value *V, const TargetLibraryInfo *TLI) {
 }
 
 /// Tests if a value is a call or invoke to a library function that
+/// allocates uninitialized memory (such as malloc).
+static bool isMallocLikeFn(const Value *V, const TargetLibraryInfo *TLI) {
+  return getAllocationData(V, MallocOrOpNewLike, TLI).has_value();
+}
+
+/// Tests if a value is a call or invoke to a library function that
+/// allocates uninitialized memory with alignment (such as aligned_alloc).
+static bool isAlignedAllocLikeFn(const Value *V, const TargetLibraryInfo *TLI) {
+  return getAllocationData(V, AlignedAllocLike, TLI).has_value();
+}
+
+/// Tests if a value is a call or invoke to a library function that
+/// allocates zero-filled memory (such as calloc).
+static bool isCallocLikeFn(const Value *V, const TargetLibraryInfo *TLI) {
+  return getAllocationData(V, CallocLike, TLI).has_value();
+}
+
+/// Tests if a value is a call or invoke to a library function that
 /// allocates memory similar to malloc or calloc.
 bool llvm::isMallocOrCallocLikeFn(const Value *V, const TargetLibraryInfo *TLI) {
-  // TODO: Function behavior does not match name.
-  return getAllocationData(V, MallocOrOpNewLike, TLI).has_value();
+  return getAllocationData(V, MallocOrCallocLike, TLI).has_value();
 }
 
 /// Tests if a value is a call or invoke to a library function that
@@ -325,11 +342,17 @@ bool llvm::isAllocLikeFn(const Value *V, const TargetLibraryInfo *TLI) {
 
 /// Tests if a functions is a call or invoke to a library function that
 /// reallocates memory (e.g., realloc).
-bool llvm::isReallocLikeFn(const Function *F) {
-  return checkFnAllocKind(F, AllocFnKind::Realloc);
+bool llvm::isReallocLikeFn(const Function *F, const TargetLibraryInfo *TLI) {
+  return getAllocationDataForFunction(F, ReallocLike, TLI).has_value() ||
+         checkFnAllocKind(F, AllocFnKind::Realloc);
 }
 
-Value *llvm::getReallocatedOperand(const CallBase *CB) {
+Value *llvm::getReallocatedOperand(const CallBase *CB,
+                                   const TargetLibraryInfo *TLI) {
+  if (getAllocationData(CB, ReallocLike, TLI).has_value()) {
+    // All currently supported realloc functions reallocate the first argument.
+    return CB->getArgOperand(0);
+  }
   if (checkFnAllocKind(CB, AllocFnKind::Realloc))
     return CB->getArgOperandWithAttribute(Attribute::AllocatedPointer);
   return nullptr;
@@ -348,7 +371,7 @@ bool llvm::isRemovableAlloc(const CallBase *CB, const TargetLibraryInfo *TLI) {
 
 Value *llvm::getAllocAlignment(const CallBase *V,
                                const TargetLibraryInfo *TLI) {
-  const std::optional<AllocFnsTy> FnData = getAllocationData(V, AnyAlloc, TLI);
+  const Optional<AllocFnsTy> FnData = getAllocationData(V, AnyAlloc, TLI);
   if (FnData && FnData->AlignParam >= 0) {
     return V->getOperand(FnData->AlignParam);
   }
@@ -371,14 +394,14 @@ static bool CheckedZextOrTrunc(APInt &I, unsigned IntTyBits) {
   return true;
 }
 
-std::optional<APInt>
+Optional<APInt>
 llvm::getAllocSize(const CallBase *CB, const TargetLibraryInfo *TLI,
                    function_ref<const Value *(const Value *)> Mapper) {
   // Note: This handles both explicitly listed allocation functions and
   // allocsize.  The code structure could stand to be cleaned up a bit.
-  std::optional<AllocFnsTy> FnData = getAllocationSize(CB, TLI);
+  Optional<AllocFnsTy> FnData = getAllocationSize(CB, TLI);
   if (!FnData)
-    return std::nullopt;
+    return None;
 
   // Get the index type for this address space, results and intermediate
   // computations are performed at that width.
@@ -389,14 +412,14 @@ llvm::getAllocSize(const CallBase *CB, const TargetLibraryInfo *TLI,
   if (FnData->AllocTy == StrDupLike) {
     APInt Size(IntTyBits, GetStringLength(Mapper(CB->getArgOperand(0))));
     if (!Size)
-      return std::nullopt;
+      return None;
 
     // Strndup limits strlen.
     if (FnData->FstParam > 0) {
       const ConstantInt *Arg =
         dyn_cast<ConstantInt>(Mapper(CB->getArgOperand(FnData->FstParam)));
       if (!Arg)
-        return std::nullopt;
+        return None;
 
       APInt MaxSize = Arg->getValue().zext(IntTyBits);
       if (Size.ugt(MaxSize))
@@ -408,11 +431,11 @@ llvm::getAllocSize(const CallBase *CB, const TargetLibraryInfo *TLI,
   const ConstantInt *Arg =
     dyn_cast<ConstantInt>(Mapper(CB->getArgOperand(FnData->FstParam)));
   if (!Arg)
-    return std::nullopt;
+    return None;
 
   APInt Size = Arg->getValue();
   if (!CheckedZextOrTrunc(Size, IntTyBits))
-    return std::nullopt;
+    return None;
 
   // Size is determined by just 1 parameter.
   if (FnData->SndParam < 0)
@@ -420,16 +443,16 @@ llvm::getAllocSize(const CallBase *CB, const TargetLibraryInfo *TLI,
 
   Arg = dyn_cast<ConstantInt>(Mapper(CB->getArgOperand(FnData->SndParam)));
   if (!Arg)
-    return std::nullopt;
+    return None;
 
   APInt NumElems = Arg->getValue();
   if (!CheckedZextOrTrunc(NumElems, IntTyBits))
-    return std::nullopt;
+    return None;
 
   bool Overflow;
   Size = Size.umul_ov(NumElems, Overflow);
   if (Overflow)
-    return std::nullopt;
+    return None;
   return Size;
 }
 
@@ -440,9 +463,13 @@ Constant *llvm::getInitialValueOfAllocation(const Value *V,
   if (!Alloc)
     return nullptr;
 
-  // malloc are uninitialized (undef)
-  if (getAllocationData(Alloc, MallocOrOpNewLike, TLI).has_value())
+  // malloc and aligned_alloc are uninitialized (undef)
+  if (isMallocLikeFn(Alloc, TLI) || isAlignedAllocLikeFn(Alloc, TLI))
     return UndefValue::get(Ty);
+
+  // calloc zero initializes
+  if (isCallocLikeFn(Alloc, TLI))
+    return Constant::getNullValue(Ty);
 
   AllocFnKind AK = getAllocFnKind(Alloc);
   if ((AK & AllocFnKind::Uninitialized) != AllocFnKind::Unknown)
@@ -461,6 +488,7 @@ struct FreeFnsTy {
 
 // clang-format off
 static const std::pair<LibFunc, FreeFnsTy> FreeFnData[] = {
+    {LibFunc_vec_free,                           {1, MallocFamily::VecMalloc}},
     {LibFunc_ZdlPv,                              {1, MallocFamily::CPPNew}},             // operator delete(void*)
     {LibFunc_ZdaPv,                              {1, MallocFamily::CPPNewArray}},        // operator delete[](void*)
     {LibFunc_msvc_delete_ptr32,                  {1, MallocFamily::MSVCNew}},            // operator delete(void*)
@@ -493,33 +521,33 @@ static const std::pair<LibFunc, FreeFnsTy> FreeFnData[] = {
 };
 // clang-format on
 
-std::optional<FreeFnsTy> getFreeFunctionDataForFunction(const Function *Callee,
-                                                        const LibFunc TLIFn) {
+Optional<FreeFnsTy> getFreeFunctionDataForFunction(const Function *Callee,
+                                                   const LibFunc TLIFn) {
   const auto *Iter =
       find_if(FreeFnData, [TLIFn](const std::pair<LibFunc, FreeFnsTy> &P) {
         return P.first == TLIFn;
       });
   if (Iter == std::end(FreeFnData))
-    return std::nullopt;
+    return None;
   return Iter->second;
 }
 
-std::optional<StringRef>
-llvm::getAllocationFamily(const Value *I, const TargetLibraryInfo *TLI) {
+Optional<StringRef> llvm::getAllocationFamily(const Value *I,
+                                              const TargetLibraryInfo *TLI) {
   bool IsNoBuiltin;
   const Function *Callee = getCalledFunction(I, IsNoBuiltin);
   if (Callee == nullptr || IsNoBuiltin)
-    return std::nullopt;
+    return None;
   LibFunc TLIFn;
 
   if (TLI && TLI->getLibFunc(*Callee, TLIFn) && TLI->has(TLIFn)) {
     // Callee is some known library function.
     const auto AllocData = getAllocationDataForFunction(Callee, AnyAlloc, TLI);
     if (AllocData)
-      return mangledNameForMallocFamily(AllocData->Family);
+      return mangledNameForMallocFamily(AllocData.value().Family);
     const auto FreeData = getFreeFunctionDataForFunction(Callee, TLIFn);
     if (FreeData)
-      return mangledNameForMallocFamily(FreeData->Family);
+      return mangledNameForMallocFamily(FreeData.value().Family);
   }
   // Callee isn't a known library function, still check attributes.
   if (checkFnAllocKind(I, AllocFnKind::Free | AllocFnKind::Alloc |
@@ -528,12 +556,12 @@ llvm::getAllocationFamily(const Value *I, const TargetLibraryInfo *TLI) {
     if (Attr.isValid())
       return Attr.getValueAsString();
   }
-  return std::nullopt;
+  return None;
 }
 
 /// isLibFreeFunction - Returns true if the function is a builtin free()
 bool llvm::isLibFreeFunction(const Function *F, const LibFunc TLIFn) {
-  std::optional<FreeFnsTy> FnData = getFreeFunctionDataForFunction(F, TLIFn);
+  Optional<FreeFnsTy> FnData = getFreeFunctionDataForFunction(F, TLIFn);
   if (!FnData)
     return checkFnAllocKind(F, AllocFnKind::Free);
 
@@ -545,7 +573,7 @@ bool llvm::isLibFreeFunction(const Function *F, const LibFunc TLIFn) {
     return false;
   if (FTy->getNumParams() != FnData->NumParams)
     return false;
-  if (!FTy->getParamType(0)->isPointerTy())
+  if (FTy->getParamType(0) != Type::getInt8PtrTy(F->getContext()))
     return false;
 
   return true;
@@ -602,10 +630,10 @@ Value *llvm::lowerObjectSizeCall(IntrinsicInst *ObjectSize,
                              MustSucceed);
 }
 
-Value *llvm::lowerObjectSizeCall(
-    IntrinsicInst *ObjectSize, const DataLayout &DL,
-    const TargetLibraryInfo *TLI, AAResults *AA, bool MustSucceed,
-    SmallVectorImpl<Instruction *> *InsertedInstructions) {
+Value *llvm::lowerObjectSizeCall(IntrinsicInst *ObjectSize,
+                                 const DataLayout &DL,
+                                 const TargetLibraryInfo *TLI, AAResults *AA,
+                                 bool MustSucceed) {
   assert(ObjectSize->getIntrinsicID() == Intrinsic::objectsize &&
          "ObjectSize must be a call to llvm.objectsize!");
 
@@ -640,11 +668,7 @@ Value *llvm::lowerObjectSizeCall(
         Eval.compute(ObjectSize->getArgOperand(0));
 
     if (SizeOffsetPair != ObjectSizeOffsetEvaluator::unknown()) {
-      IRBuilder<TargetFolder, IRBuilderCallbackInserter> Builder(
-          Ctx, TargetFolder(DL), IRBuilderCallbackInserter([&](Instruction *I) {
-            if (InsertedInstructions)
-              InsertedInstructions->push_back(I);
-          }));
+      IRBuilder<TargetFolder> Builder(Ctx, TargetFolder(DL));
       Builder.SetInsertPoint(ObjectSize);
 
       // If we've outside the end of the object, then we can always access
@@ -759,10 +783,13 @@ bool ObjectSizeOffsetVisitor::CheckedZextOrTrunc(APInt &I) {
 }
 
 SizeOffsetType ObjectSizeOffsetVisitor::visitAllocaInst(AllocaInst &I) {
+  if (!I.getAllocatedType()->isSized())
+    return unknown();
+
   TypeSize ElemSize = DL.getTypeAllocSize(I.getAllocatedType());
   if (ElemSize.isScalable() && Options.EvalMode != ObjectSizeOpts::Mode::Min)
     return unknown();
-  APInt Size(IntTyBits, ElemSize.getKnownMinValue());
+  APInt Size(IntTyBits, ElemSize.getKnownMinSize());
   if (!I.isArrayAllocation())
     return std::make_pair(align(Size, I.getAlign()), Zero);
 
@@ -793,7 +820,7 @@ SizeOffsetType ObjectSizeOffsetVisitor::visitArgument(Argument &A) {
 }
 
 SizeOffsetType ObjectSizeOffsetVisitor::visitCallBase(CallBase &CB) {
-  if (std::optional<APInt> Size = getAllocSize(&CB, TLI))
+  if (Optional<APInt> Size = getAllocSize(&CB, TLI))
     return std::make_pair(*Size, Zero);
   return unknown();
 }
@@ -830,9 +857,7 @@ SizeOffsetType ObjectSizeOffsetVisitor::visitGlobalAlias(GlobalAlias &GA) {
 }
 
 SizeOffsetType ObjectSizeOffsetVisitor::visitGlobalVariable(GlobalVariable &GV){
-  if (!GV.getValueType()->isSized() || GV.hasExternalWeakLinkage() ||
-      ((!GV.hasInitializer() || GV.isInterposable()) &&
-       Options.EvalMode != ObjectSizeOpts::Mode::Min))
+  if (!GV.hasDefinitiveInitializer())
     return unknown();
 
   APInt Size(IntTyBits, DL.getTypeAllocSize(GV.getValueType()));
@@ -918,7 +943,7 @@ SizeOffsetType ObjectSizeOffsetVisitor::findLoadSizeOffset(
       // Is the error status of posix_memalign correctly checked? If not it
       // would be incorrect to assume it succeeds and load doesn't see the
       // previous value.
-      std::optional<bool> Checked = isImpliedByDomCondition(
+      Optional<bool> Checked = isImpliedByDomCondition(
           ICmpInst::ICMP_EQ, CB, ConstantInt::get(CB->getType(), 0), &Load, DL);
       if (!Checked || !*Checked)
         return Unknown();
@@ -990,8 +1015,6 @@ SizeOffsetType ObjectSizeOffsetVisitor::combineSizeOffset(SizeOffsetType LHS,
 }
 
 SizeOffsetType ObjectSizeOffsetVisitor::visitPHINode(PHINode &PN) {
-  if (PN.getNumIncomingValues() == 0)
-    return unknown();
   auto IncomingValues = PN.incoming_values();
   return std::accumulate(IncomingValues.begin() + 1, IncomingValues.end(),
                          compute(*IncomingValues.begin()),
@@ -1115,13 +1138,12 @@ SizeOffsetEvalType ObjectSizeOffsetEvaluator::visitAllocaInst(AllocaInst &I) {
   // must be a VLA
   assert(I.isArrayAllocation());
 
-  // If needed, adjust the alloca's operand size to match the pointer indexing
-  // size. Subsequent math operations expect the types to match.
+  // If needed, adjust the alloca's operand size to match the pointer size.
+  // Subsequent math operations expect the types to match.
   Value *ArraySize = Builder.CreateZExtOrTrunc(
-      I.getArraySize(),
-      DL.getIndexType(I.getContext(), DL.getAllocaAddrSpace()));
+      I.getArraySize(), DL.getIntPtrType(I.getContext()));
   assert(ArraySize->getType() == Zero->getType() &&
-         "Expected zero constant to have pointer index type");
+         "Expected zero constant to have pointer type");
 
   Value *Size = ConstantInt::get(ArraySize->getType(),
                                  DL.getTypeAllocSize(I.getAllocatedType()));
@@ -1130,7 +1152,7 @@ SizeOffsetEvalType ObjectSizeOffsetEvaluator::visitAllocaInst(AllocaInst &I) {
 }
 
 SizeOffsetEvalType ObjectSizeOffsetEvaluator::visitCallBase(CallBase &CB) {
-  std::optional<AllocFnsTy> FnData = getAllocationSize(&CB, TLI);
+  Optional<AllocFnsTy> FnData = getAllocationSize(&CB, TLI);
   if (!FnData)
     return unknown();
 
@@ -1167,7 +1189,7 @@ ObjectSizeOffsetEvaluator::visitGEPOperator(GEPOperator &GEP) {
   if (!bothKnown(PtrData))
     return unknown();
 
-  Value *Offset = emitGEPOffset(&Builder, DL, &GEP, /*NoAssumptions=*/true);
+  Value *Offset = EmitGEPOffset(&Builder, DL, &GEP, /*NoAssumptions=*/true);
   Offset = Builder.CreateAdd(PtrData.second, Offset);
   return std::make_pair(PtrData.first, Offset);
 }

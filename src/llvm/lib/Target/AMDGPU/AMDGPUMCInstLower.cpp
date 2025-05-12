@@ -13,9 +13,7 @@
 //
 
 #include "AMDGPUMCInstLower.h"
-#include "AMDGPU.h"
 #include "AMDGPUAsmPrinter.h"
-#include "AMDGPUMachineFunction.h"
 #include "AMDGPUTargetMachine.h"
 #include "MCTargetDesc/AMDGPUInstPrinter.h"
 #include "MCTargetDesc/AMDGPUMCTargetDesc.h"
@@ -134,8 +132,7 @@ void AMDGPUMCInstLower::lower(const MachineInstr *MI, MCInst &OutMI) const {
     OutMI.addOperand(Dest);
     OutMI.addOperand(Src);
     return;
-  } else if (Opcode == AMDGPU::SI_TCRETURN ||
-             Opcode == AMDGPU::SI_TCRETURN_GFX) {
+  } else if (Opcode == AMDGPU::SI_TCRETURN) {
     // TODO: How to use branch immediate and avoid register+add?
     Opcode = AMDGPU::S_SETPC_B64;
   }
@@ -168,16 +165,6 @@ bool AMDGPUAsmPrinter::lowerOperand(const MachineOperand &MO,
 }
 
 const MCExpr *AMDGPUAsmPrinter::lowerConstant(const Constant *CV) {
-
-  // Intercept LDS variables with known addresses
-  if (const GlobalVariable *GV = dyn_cast<const GlobalVariable>(CV)) {
-    if (std::optional<uint32_t> Address =
-            AMDGPUMachineFunction::getLDSAbsoluteAddress(*GV)) {
-      auto *IntTy = Type::getInt32Ty(CV->getContext());
-      return AsmPrinter::lowerConstant(ConstantInt::get(IntTy, *Address));
-    }
-  }
-
   if (const MCExpr *E = lowerAddrSpaceCast(TM, CV, OutContext))
     return E;
   return AsmPrinter::lowerConstant(CV);
@@ -286,10 +273,11 @@ void AMDGPUAsmPrinter::emitInstruction(const MachineInstr *MI) {
         (!STI.hasOffset3fBug() || !MI->isBranch())) {
       SmallVector<MCFixup, 4> Fixups;
       SmallVector<char, 16> CodeBytes;
+      raw_svector_ostream CodeStream(CodeBytes);
 
-      std::unique_ptr<MCCodeEmitter> InstEmitter(createAMDGPUMCCodeEmitter(
+      std::unique_ptr<MCCodeEmitter> InstEmitter(createSIMCCodeEmitter(
           *STI.getInstrInfo(), OutContext));
-      InstEmitter->encodeInstruction(TmpInst, CodeBytes, Fixups, STI);
+      InstEmitter->encodeInstruction(TmpInst, CodeStream, Fixups, STI);
 
       assert(CodeBytes.size() == STI.getInstrInfo()->getInstSizeInBytes(*MI));
     }
@@ -308,9 +296,10 @@ void AMDGPUAsmPrinter::emitInstruction(const MachineInstr *MI) {
       // Disassemble instruction/operands to hex representation.
       SmallVector<MCFixup, 4> Fixups;
       SmallVector<char, 16> CodeBytes;
+      raw_svector_ostream CodeStream(CodeBytes);
 
       DumpCodeInstEmitter->encodeInstruction(
-          TmpInst, CodeBytes, Fixups, MF->getSubtarget<MCSubtargetInfo>());
+          TmpInst, CodeStream, Fixups, MF->getSubtarget<MCSubtargetInfo>());
       HexLines.resize(HexLines.size() + 1);
       std::string &HexLine = HexLines.back();
       raw_string_ostream HexStream(HexLine);

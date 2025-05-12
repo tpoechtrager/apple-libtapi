@@ -19,7 +19,6 @@
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/TableGen/Error.h"
 #include "llvm/TableGen/Record.h"
-#include "llvm/TableGen/TableGenBackend.h"
 #include <algorithm>
 #include <set>
 #include <string>
@@ -174,8 +173,6 @@ private:
                                      "' lookup method '" + Index.Name +
                                      "', key field '" + Field.Name +
                                      "' of type bits is too large");
-    } else if (isa<BitRecTy>(Field.RecType)) {
-      return "bool";
     } else if (Field.Enum || Field.IsIntrinsic || Field.IsInstruction)
       return "unsigned";
     PrintFatalError(Index.Loc,
@@ -381,7 +378,7 @@ void SearchableTableEmitter::emitLookupFunction(const GenericTable &Table,
   }
 
   if (IsContiguous) {
-    OS << "  auto Table = ArrayRef(" << IndexName << ");\n";
+    OS << "  auto Table = makeArrayRef(" << IndexName << ");\n";
     OS << "  size_t Idx = " << Index.Fields[0].Name << ";\n";
     OS << "  return Idx >= Table.size() ? nullptr : ";
     if (IsPrimary)
@@ -426,7 +423,7 @@ void SearchableTableEmitter::emitLookupFunction(const GenericTable &Table,
   }
   OS << "};\n";
 
-  OS << "  auto Table = ArrayRef(" << IndexName << ");\n";
+  OS << "  auto Table = makeArrayRef(" << IndexName << ");\n";
   OS << "  auto Idx = std::lower_bound(Table.begin(), Table.end(), Key,\n";
   OS << "    [](const " << IndexTypeName << " &LHS, const KeyType &RHS) {\n";
 
@@ -825,5 +822,10 @@ void SearchableTableEmitter::run(raw_ostream &OS) {
     OS << "#undef " << Guard << "\n";
 }
 
-static TableGen::Emitter::OptClass<SearchableTableEmitter>
-    X("gen-searchable-tables", "Generate generic binary-searchable table");
+namespace llvm {
+
+void EmitSearchableTables(RecordKeeper &RK, raw_ostream &OS) {
+  SearchableTableEmitter(RK).run(OS);
+}
+
+} // End llvm namespace.

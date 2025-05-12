@@ -59,7 +59,9 @@ elseif( CMAKE_HOST_UNIX )
   if( LLVM_ENABLE_TERMINFO )
     set(imported_libs ${imported_libs} Terminfo::terminfo)
   endif()
-  set(system_libs ${system_libs} ${LLVM_ATOMIC_LIB})
+  if( LLVM_ENABLE_THREADS AND (HAVE_LIBATOMIC OR HAVE_CXX_LIBATOMICS64) )
+    set(system_libs ${system_libs} atomic)
+  endif()
   set(system_libs ${system_libs} ${LLVM_PTHREAD_LIB})
   if( UNIX AND NOT (BEOS OR HAIKU) )
     set(system_libs ${system_libs} m)
@@ -71,7 +73,7 @@ elseif( CMAKE_HOST_UNIX )
     set(system_libs ${system_libs} zircon)
   endif()
   if ( HAIKU )
-    add_compile_definitions(_BSD_SOURCE)
+    add_definitions(-D_BSD_SOURCE)
     set(system_libs ${system_libs} bsd)
   endif()
 endif( MSVC OR MINGW )
@@ -79,7 +81,7 @@ endif( MSVC OR MINGW )
 # Delay load shell32.dll if possible to speed up process startup.
 set (delayload_flags)
 if (MSVC)
-  set (delayload_flags $<$<NOT:$<LINK_LANGUAGE:Swift>>:delayimp -delayload:shell32.dll -delayload:ole32.dll>)
+  set (delayload_flags delayimp -delayload:shell32.dll -delayload:ole32.dll)
 endif()
 
 # Link Z3 if the user wants to build it.
@@ -89,8 +91,8 @@ endif()
 
 # Override the C runtime allocator on Windows and embed it into LLVM tools & libraries
 if(LLVM_INTEGRATED_CRT_ALLOC)
-  if (NOT CMAKE_MSVC_RUNTIME_LIBRARY OR CMAKE_MSVC_RUNTIME_LIBRARY MATCHES "DLL$")
-    message(FATAL_ERROR "LLVM_INTEGRATED_CRT_ALLOC only works with CMAKE_MSVC_RUNTIME_LIBRARY set to MultiThreaded or MultiThreadedDebug.")
+  if (CMAKE_BUILD_TYPE AND NOT ${LLVM_USE_CRT_${uppercase_CMAKE_BUILD_TYPE}} MATCHES "^(MT|MTd)$")
+    message(FATAL_ERROR "LLVM_INTEGRATED_CRT_ALLOC only works with /MT or /MTd. Use LLVM_USE_CRT_${uppercase_CMAKE_BUILD_TYPE} to set the appropriate option.")
   endif()
 
   string(REGEX REPLACE "(/|\\\\)$" "" LLVM_INTEGRATED_CRT_ALLOC "${LLVM_INTEGRATED_CRT_ALLOC}")
@@ -100,7 +102,7 @@ if(LLVM_INTEGRATED_CRT_ALLOC)
   endif()
 
   if(LLVM_INTEGRATED_CRT_ALLOC MATCHES "rpmalloc$")
-    add_compile_definitions(ENABLE_OVERRIDE ENABLE_PRELOAD)
+    add_definitions(-DENABLE_OVERRIDE -DENABLE_PRELOAD)
     set(ALLOCATOR_FILES "${LLVM_INTEGRATED_CRT_ALLOC}/rpmalloc/rpmalloc.c")
   elseif(LLVM_INTEGRATED_CRT_ALLOC MATCHES "snmalloc$")
     set(ALLOCATOR_FILES "${LLVM_INTEGRATED_CRT_ALLOC}/src/snmalloc/override/new.cc")
@@ -117,7 +119,10 @@ endif()
 add_subdirectory(BLAKE3)
 
 add_llvm_component_library(LLVMSupport
+  AddressRanges.cpp
+  AArch64TargetParser.cpp
   ABIBreak.cpp
+  ARMTargetParser.cpp
   AMDGPUMetadata.cpp
   APFixedPoint.cpp
   APFloat.cpp
@@ -129,7 +134,6 @@ add_llvm_component_library(LLVMSupport
   Allocator.cpp
   AutoConvert.cpp
   Base64.cpp
-  BalancedPartitioning.cpp
   BinaryStreamError.cpp
   BinaryStreamReader.cpp
   BinaryStreamRef.cpp
@@ -147,11 +151,11 @@ add_llvm_component_library(LLVMSupport
   Compression.cpp
   CRC.cpp
   ConvertUTF.cpp
-  ConvertEBCDIC.cpp
   ConvertUTFWrapper.cpp
   CrashRecoveryContext.cpp
   CSKYAttributes.cpp
   CSKYAttributeParser.cpp
+  CSKYTargetParser.cpp
   DataExtractor.cpp
   Debug.cpp
   DebugCounter.cpp
@@ -167,8 +171,8 @@ add_llvm_component_library(LLVMSupport
   FileCollector.cpp
   FileUtilities.cpp
   FileOutputBuffer.cpp
-  FloatingPointMode.cpp
   FoldingSet.cpp
+  Format.cpp
   FormattedStream.cpp
   FormatVariadic.cpp
   GlobPattern.cpp
@@ -178,12 +182,14 @@ add_llvm_component_library(LLVMSupport
   InstructionCost.cpp
   IntEqClasses.cpp
   IntervalMap.cpp
+  ItaniumManglingCanonicalizer.cpp
   JSON.cpp
   KnownBits.cpp
   LEB128.cpp
   LineIterator.cpp
   Locale.cpp
   LockFileManager.cpp
+  LowLevelType.cpp
   ManagedStatic.cpp
   MathExtras.cpp
   MemAlloc.cpp
@@ -220,14 +226,17 @@ add_llvm_component_library(LLVMSupport
   StringMap.cpp
   StringSaver.cpp
   StringRef.cpp
-  SuffixTreeNode.cpp
   SuffixTree.cpp
+  SymbolRemappingReader.cpp
   SystemUtils.cpp
   TarWriter.cpp
+  TargetParser.cpp
   ThreadPool.cpp
   TimeProfiler.cpp
   Timer.cpp
   ToolOutputFile.cpp
+  TrigramIndex.cpp
+  Triple.cpp
   Twine.cpp
   TypeSize.cpp
   Unicode.cpp
@@ -242,6 +251,7 @@ add_llvm_component_library(LLVMSupport
   VirtualOutputError.cpp
   VirtualOutputFile.cpp
   WithColor.cpp
+  X86TargetParser.cpp
   YAMLParser.cpp
   YAMLTraits.cpp
   raw_os_ostream.cpp
@@ -262,12 +272,14 @@ add_llvm_component_library(LLVMSupport
   Atomic.cpp
   DynamicLibrary.cpp
   Errno.cpp
+  Host.cpp
   Memory.cpp
   Path.cpp
   Process.cpp
   Program.cpp
   RWMutex.cpp
   Signals.cpp
+  ThreadLocal.cpp
   Threading.cpp
   Valgrind.cpp
   Watchdog.cpp
@@ -278,9 +290,6 @@ add_llvm_component_library(LLVMSupport
   ${LLVM_MAIN_INCLUDE_DIR}/llvm/ADT
   ${LLVM_MAIN_INCLUDE_DIR}/llvm/Support
   ${Backtrace_INCLUDE_DIRS}
-
-  DEPENDS
-  llvm_vcsrevision_h
 
   LINK_LIBS
   ${system_libs} ${imported_libs} ${delayload_flags}
@@ -333,7 +342,7 @@ set_property(TARGET LLVMSupport PROPERTY LLVM_SYSTEM_LIBS "${llvm_system_libs}")
 if(LLVM_INTEGRATED_CRT_ALLOC)
   if(LLVM_INTEGRATED_CRT_ALLOC MATCHES "snmalloc$")
     set_property(TARGET LLVMSupport PROPERTY CXX_STANDARD 17)
-    add_compile_definitions(_SILENCE_CXX17_ITERATOR_BASE_CLASS_DEPRECATION_WARNING)
+    add_definitions(-D_SILENCE_CXX17_ITERATOR_BASE_CLASS_DEPRECATION_WARNING)
     if ("${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang" AND
         "${CMAKE_SYSTEM_PROCESSOR}" MATCHES "x86_64")
       set_property(TARGET LLVMSupport PROPERTY COMPILE_FLAGS "-mcx16")

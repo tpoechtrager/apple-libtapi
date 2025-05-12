@@ -282,7 +282,7 @@ TEST_F(MemorySSATest, SinkLoad) {
   // - remove from original block
 
   LoadInst *LoadInstClone = cast<LoadInst>(LoadInst1->clone());
-  LoadInstClone->insertInto(Merge, Merge->begin());
+  Merge->getInstList().insert(Merge->begin(), LoadInstClone);
   MemoryAccess * NewLoadAccess =
       Updater.createMemoryAccessInBB(LoadInstClone, nullptr,
                                      LoadInstClone->getParent(),

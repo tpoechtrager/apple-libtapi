@@ -51,11 +51,6 @@ CSEMIRBuilder::getDominatingInstrForID(FoldingSetNodeID &ID,
       // this builder will have the def ready.
       setInsertPt(*CurMBB, std::next(MII));
     } else if (!dominates(MI, CurrPos)) {
-      // Update the spliced machineinstr's debug location by merging it with the
-      // debug location of the instruction at the insertion point.
-      auto *Loc = DILocation::getMergedLocation(getDebugLoc().get(),
-                                                MI->getDebugLoc().get());
-      MI->setDebugLoc(Loc);
       CurMBB->splice(CurrPos, CurMBB, MI);
     }
     return MachineInstrBuilder(getMF(), MI);
@@ -112,7 +107,7 @@ void CSEMIRBuilder::profileMBBOpcode(GISelInstProfileBuilder &B,
 
 void CSEMIRBuilder::profileEverything(unsigned Opc, ArrayRef<DstOp> DstOps,
                                       ArrayRef<SrcOp> SrcOps,
-                                      std::optional<unsigned> Flags,
+                                      Optional<unsigned> Flags,
                                       GISelInstProfileBuilder &B) const {
 
   profileMBBOpcode(B, Opc);
@@ -175,7 +170,7 @@ CSEMIRBuilder::generateCopiesIfRequired(ArrayRef<DstOp> DstOps,
 MachineInstrBuilder CSEMIRBuilder::buildInstr(unsigned Opc,
                                               ArrayRef<DstOp> DstOps,
                                               ArrayRef<SrcOp> SrcOps,
-                                              std::optional<unsigned> Flag) {
+                                              Optional<unsigned> Flag) {
   switch (Opc) {
   default:
     break;
@@ -215,8 +210,8 @@ MachineInstrBuilder CSEMIRBuilder::buildInstr(unsigned Opc,
       break;
     }
 
-    if (std::optional<APInt> Cst = ConstantFoldBinOp(
-            Opc, SrcOps[0].getReg(), SrcOps[1].getReg(), *getMRI()))
+    if (Optional<APInt> Cst = ConstantFoldBinOp(Opc, SrcOps[0].getReg(),
+                                                SrcOps[1].getReg(), *getMRI()))
       return buildConstant(DstOps[0], *Cst);
     break;
   }
@@ -235,7 +230,7 @@ MachineInstrBuilder CSEMIRBuilder::buildInstr(unsigned Opc,
     // Try to constant fold these.
     assert(SrcOps.size() == 2 && "Invalid sources");
     assert(DstOps.size() == 1 && "Invalid dsts");
-    if (std::optional<APFloat> Cst = ConstantFoldFPBinOp(
+    if (Optional<APFloat> Cst = ConstantFoldFPBinOp(
             Opc, SrcOps[0].getReg(), SrcOps[1].getReg(), *getMRI()))
       return buildFConstant(DstOps[0], *Cst);
     break;
@@ -256,7 +251,7 @@ MachineInstrBuilder CSEMIRBuilder::buildInstr(unsigned Opc,
     // Try to constant fold these.
     assert(SrcOps.size() == 1 && "Invalid sources");
     assert(DstOps.size() == 1 && "Invalid dsts");
-    if (std::optional<APFloat> Cst = ConstantFoldIntToFloat(
+    if (Optional<APFloat> Cst = ConstantFoldIntToFloat(
             Opc, DstOps[0].getLLTTy(*getMRI()), SrcOps[0].getReg(), *getMRI()))
       return buildFConstant(DstOps[0], *Cst);
     break;

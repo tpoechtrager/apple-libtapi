@@ -28,7 +28,7 @@
 /// into something like this:
 ///
 ///  std::pair<int, int> foo(int a, int b) {
-///     return std::pair(a + b, bar());
+///     return std::make_pair(a + b, bar());
 /// }
 ///
 /// Typically the incoming pointer is a simple alloca for a temporary variable
@@ -46,7 +46,6 @@
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/MemoryDependenceAnalysis.h"
-#include "llvm/IR/AttributeMask.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/InitializePasses.h"
@@ -333,7 +332,7 @@ bool AMDGPURewriteOutArguments::runOnFunction(Function &F) {
 
   // Move the body of the function into the new rewritten function, and replace
   // this function with a stub.
-  NewFunc->splice(NewFunc->begin(), &F);
+  NewFunc->getBasicBlockList().splice(NewFunc->begin(), F.getBasicBlockList());
 
   for (std::pair<ReturnInst *, ReplacementVec> &Replacement : Replacements) {
     ReturnInst *RI = Replacement.first;
@@ -341,7 +340,7 @@ bool AMDGPURewriteOutArguments::runOnFunction(Function &F) {
     B.SetCurrentDebugLocation(RI->getDebugLoc());
 
     int RetIdx = 0;
-    Value *NewRetVal = PoisonValue::get(NewRetTy);
+    Value *NewRetVal = UndefValue::get(NewRetTy);
 
     Value *RetVal = RI->getReturnValue();
     if (RetVal)
@@ -363,7 +362,7 @@ bool AMDGPURewriteOutArguments::runOnFunction(Function &F) {
     if (OutArgIndexes.count(Arg.getArgNo())) {
       // It's easier to preserve the type of the argument list. We rely on
       // DeadArgumentElimination to take care of these.
-      StubCallArgs.push_back(PoisonValue::get(Arg.getType()));
+      StubCallArgs.push_back(UndefValue::get(Arg.getType()));
     } else {
       StubCallArgs.push_back(&Arg);
     }
@@ -378,12 +377,19 @@ bool AMDGPURewriteOutArguments::runOnFunction(Function &F) {
     if (!OutArgIndexes.count(Arg.getArgNo()))
       continue;
 
+    PointerType *ArgType = cast<PointerType>(Arg.getType());
+
     Type *EltTy = OutArgIndexes[Arg.getArgNo()];
     const auto Align =
         DL->getValueOrABITypeAlignment(Arg.getParamAlign(), EltTy);
 
     Value *Val = B.CreateExtractValue(StubCall, RetIdx++);
-    B.CreateAlignedStore(Val, &Arg, Align);
+    Type *PtrTy = Val->getType()->getPointerTo(ArgType->getAddressSpace());
+
+    // We can peek through bitcasts, so the type may not match.
+    Value *PtrVal = B.CreateBitCast(&Arg, PtrTy);
+
+    B.CreateAlignedStore(Val, PtrVal, Align);
   }
 
   if (!RetTy->isVoidTy()) {

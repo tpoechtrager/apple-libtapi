@@ -81,9 +81,8 @@ emitPrologueEpilogueSPUpdate(MachineBasicBlock &MBB,
     MachineFunction &MF = *MBB.getParent();
     const ARMSubtarget &ST = MF.getSubtarget<ARMSubtarget>();
     if (ST.genExecuteOnly()) {
-      unsigned XOInstr = ST.useMovt() ? ARM::t2MOVi32imm : ARM::tMOVi32imm;
-      BuildMI(MBB, MBBI, dl, TII.get(XOInstr), ScratchReg)
-          .addImm(NumBytes).setMIFlags(MIFlags);
+      BuildMI(MBB, MBBI, dl, TII.get(ARM::t2MOVi32imm), ScratchReg)
+        .addImm(NumBytes).setMIFlags(MIFlags);
     } else {
       MRI.emitLoadConstPool(MBB, MBBI, dl, ScratchReg, 0, NumBytes, ARMCC::AL,
                             0, MIFlags);

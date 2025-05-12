@@ -33,7 +33,7 @@ class TargetRegisterClass;
 class TargetRegisterInfo;
 
 class LiveStacks : public MachineFunctionPass {
-  const TargetRegisterInfo *TRI = nullptr;
+  const TargetRegisterInfo *TRI;
 
   /// Special pool allocator for VNInfo's (LiveInterval val#).
   ///

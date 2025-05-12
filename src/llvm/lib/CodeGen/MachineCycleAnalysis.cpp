@@ -9,10 +9,8 @@
 #include "llvm/CodeGen/MachineCycleAnalysis.h"
 #include "llvm/ADT/GenericCycleImpl.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
-#include "llvm/CodeGen/MachineSSAContext.h"
 #include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
-#include "llvm/InitializePasses.h"
 
 using namespace llvm;
 
@@ -54,7 +52,6 @@ void MachineCycleInfoWrapperPass::releaseMemory() {
   F = nullptr;
 }
 
-namespace {
 class MachineCycleInfoPrinterPass : public MachineFunctionPass {
 public:
   static char ID;
@@ -64,7 +61,6 @@ public:
   bool runOnMachineFunction(MachineFunction &F) override;
   void getAnalysisUsage(AnalysisUsage &AU) const override;
 };
-} // namespace
 
 char MachineCycleInfoPrinterPass::ID = 0;
 
@@ -109,7 +105,7 @@ bool llvm::isCycleInvariant(const MachineCycle *Cycle, MachineInstr &I) {
 
     // An instruction that uses or defines a physical register can't e.g. be
     // hoisted, so mark this as not invariant.
-    if (Reg.isPhysical()) {
+    if (Register::isPhysicalRegister(Reg)) {
       if (MO.isUse()) {
         // If the physreg has no defs anywhere, it's just an ambient register
         // and we can freely move its uses. Alternatively, if it's allocatable,

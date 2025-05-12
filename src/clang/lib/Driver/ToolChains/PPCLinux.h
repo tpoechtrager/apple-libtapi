@@ -27,8 +27,6 @@ public:
 private:
   bool SupportIEEEFloat128(const Driver &D, const llvm::Triple &Triple,
                            const llvm::opt::ArgList &Args) const;
-  bool supportIBMLongDouble(const Driver &D,
-                            const llvm::opt::ArgList &Args) const;
 };
 
 } // end namespace toolchains

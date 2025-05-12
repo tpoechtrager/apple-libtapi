@@ -16,8 +16,7 @@
 
 using namespace clang;
 
-std::optional<StringRef>
-tooling::extract::nameForExtractedVariable(const Expr *E) {
+Optional<StringRef> tooling::extract::nameForExtractedVariable(const Expr *E) {
   if (const auto *Call = dyn_cast<CallExpr>(E)) {
     if (const auto *Fn = Call->getDirectCallee())
       return Fn->getName();
@@ -33,7 +32,7 @@ tooling::extract::nameForExtractedVariable(const Expr *E) {
     } else if (const auto *Prop = PRE->getExplicitProperty())
       return Prop->getName();
   }
-  return std::nullopt;
+  return None;
 }
 
 namespace {

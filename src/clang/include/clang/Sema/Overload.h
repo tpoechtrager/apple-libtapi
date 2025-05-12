@@ -26,6 +26,7 @@
 #include "clang/Sema/SemaFixItUtils.h"
 #include "clang/Sema/TemplateDeduction.h"
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/None.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
@@ -161,9 +162,6 @@ class Sema;
 
     /// Arm SVE Vector conversions
     ICK_SVE_Vector_Conversion,
-
-    /// RISC-V RVV Vector conversions
-    ICK_RVV_Vector_Conversion,
 
     /// A vector splat from an arithmetic type
     ICK_Vector_Splat,
@@ -1148,9 +1146,8 @@ class Sema;
 
     /// Add a new candidate with NumConversions conversion sequence slots
     /// to the overload set.
-    OverloadCandidate &
-    addCandidate(unsigned NumConversions = 0,
-                 ConversionSequenceList Conversions = std::nullopt) {
+    OverloadCandidate &addCandidate(unsigned NumConversions = 0,
+                                    ConversionSequenceList Conversions = None) {
       assert((Conversions.empty() || Conversions.size() == NumConversions) &&
              "preallocated conversion sequence has wrong length");
 

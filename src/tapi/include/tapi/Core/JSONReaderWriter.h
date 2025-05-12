@@ -48,7 +48,7 @@ public:
   }
 
   Error writeFile(raw_ostream &os, const InterfaceFile *file,
-                  FileType fileType = FileType::TBD_V5) const override;
+                  FileType fileType) const override;
 };
 
 TAPI_NAMESPACE_INTERNAL_END

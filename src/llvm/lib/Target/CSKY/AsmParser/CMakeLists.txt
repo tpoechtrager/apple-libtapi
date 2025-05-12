@@ -7,7 +7,6 @@ add_llvm_component_library(LLVMCSKYAsmParser
   MC
   MCParser
   Support
-  TargetParser
 
   ADD_TO_COMPONENT
   CSKY

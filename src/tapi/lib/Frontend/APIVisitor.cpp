@@ -23,7 +23,6 @@
 #include "llvm/IR/Mangler.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/TextAPI/Symbol.h"
 
 using namespace llvm;
 using namespace TAPI_INTERNAL;
@@ -203,22 +202,22 @@ static bool hasRTTI(ASTContext &context, const CXXRecordDecl *decl) {
   return true;
 }
 
-static std::optional<std::pair<APIAccess, APILoc>>
+static Optional<std::pair<APIAccess, APILoc>>
 getFileAttributesForLoc(FrontendContext &context, SourceLocation loc) {
   // If the loc refers to a macro expansion we need to first get the file
   // location of the expansion.
   auto fileLoc = context.sourceMgr->getFileLoc(loc);
   FileID id = context.sourceMgr->getFileID(fileLoc);
   if (id.isInvalid())
-    return std::nullopt;
+    return None;
 
   const auto *file = context.sourceMgr->getFileEntryForID(id);
   if (!file)
-    return std::nullopt;
+    return None;
 
   auto header = context.findAndRecordFile(file);
   if (!header.has_value())
-    return std::nullopt;
+    return None;
 
   APIAccess access;
   switch (header.value()) {
@@ -252,11 +251,11 @@ void APIVisitor::HandleTranslationUnit(ASTContext &context) {
   TraverseDecl(decl);
 }
 
-std::optional<std::pair<APIAccess, APILoc>>
+Optional<std::pair<APIAccess, APILoc>>
 APIVisitor::getFileAttributesForDecl(const NamedDecl *decl) const {
   auto loc = decl->getLocation();
   if (loc.isInvalid())
-    return std::nullopt;
+    return None;
 
   return getFileAttributesForLoc(frontend, loc);
 }
@@ -310,7 +309,7 @@ std::string APIVisitor::getMangledCXXThunk(const GlobalDecl &decl,
   raw_svector_ostream nameStream(name);
   const auto *method = cast<CXXMethodDecl>(decl.getDecl());
   if (const auto *dtor = dyn_cast<CXXDestructorDecl>(method))
-    mc->mangleCXXDtorThunk(dtor, decl.getDtorType(), thunk.This, 
+    mc->mangleCXXDtorThunk(dtor, decl.getDtorType(), thunk.This,
                            nameStream);
   else
     mc->mangleThunk(method, thunk, nameStream);
@@ -342,9 +341,6 @@ AvailabilityInfo APIVisitor::getAvailabilityInfo(const Decl *decl) const {
       if (A->getPlatform()->getName() != platformName)
         continue;
 
-      availability = AvailabilityInfo(A->getIntroduced(), A->getDeprecated(),
-                                      A->getObsoleted(), A->getUnavailable(),
-                                      false, isAvailabilitySPI(A->getLoc()));
       break;
     }
 
@@ -549,14 +545,11 @@ bool APIVisitor::VisitObjCInterfaceDecl(const ObjCInterfaceDecl *decl) {
   std::tie(access, loc) = attributes.value();
   auto avail = getAvailabilityInfo(decl);
 
-  MachO::ObjCIFSymbolKind symType =
-      MachO::ObjCIFSymbolKind::Class | MachO::ObjCIFSymbolKind::MetaClass;
-  if (!context.getLangOpts().ObjCRuntime.isFragile() &&
-      hasObjCExceptionAttribute(decl))
-    symType |= MachO::ObjCIFSymbolKind::EHType;
-
   auto *objcClass = frontend.api->addObjCInterface(
-      name, loc, avail, access, linkage, superClassName, decl, symType);
+      name, loc, avail, access, linkage, superClassName, decl);
+  objcClass->hasExceptionAttribute =
+      !context.getLangOpts().ObjCRuntime.isFragile() &&
+      hasObjCExceptionAttribute(decl);
 
   frontend.verifier->verify(objcClass);
   // Record all methods (selectors). This doesn't include automatically

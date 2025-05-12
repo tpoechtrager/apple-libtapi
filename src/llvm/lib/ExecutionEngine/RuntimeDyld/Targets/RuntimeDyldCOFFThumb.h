@@ -14,7 +14,6 @@
 #define LLVM_LIB_EXECUTIONENGINE_RUNTIMEDYLD_TARGETS_RUNTIMEDYLDCOFFTHUMB_H
 
 #include "../RuntimeDyldCOFF.h"
-#include "llvm/ADT/SmallString.h"
 #include "llvm/BinaryFormat/COFF.h"
 #include "llvm/Object/COFF.h"
 
@@ -54,7 +53,7 @@ public:
     return 16; // 8-byte load instructions, 4-byte jump, 4-byte padding
   }
 
-  Align getStubAlignment() override { return Align(1); }
+  unsigned getStubAlignment() override { return 1; }
 
   Expected<object::relocation_iterator>
   processRelocationRef(unsigned SectionID,

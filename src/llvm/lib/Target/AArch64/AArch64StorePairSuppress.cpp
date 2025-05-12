@@ -75,28 +75,20 @@ FunctionPass *llvm::createAArch64StorePairSuppressPass() {
 /// oversaturate the vector units.
 bool AArch64StorePairSuppress::shouldAddSTPToBlock(const MachineBasicBlock *BB) {
   if (!MinInstr)
-    MinInstr = Traces->getEnsemble(MachineTraceStrategy::TS_MinInstrCount);
+    MinInstr = Traces->getEnsemble(MachineTraceMetrics::TS_MinInstrCount);
 
   MachineTraceMetrics::Trace BBTrace = MinInstr->getTrace(BB);
   unsigned ResLength = BBTrace.getResourceLength();
 
-  // Get the machine model's scheduling class for STPDi and STRDui.
+  // Get the machine model's scheduling class for STPQi.
   // Bypass TargetSchedule's SchedClass resolution since we only have an opcode.
   unsigned SCIdx = TII->get(AArch64::STPDi).getSchedClass();
-  const MCSchedClassDesc *PairSCDesc =
+  const MCSchedClassDesc *SCDesc =
       SchedModel.getMCSchedModel()->getSchedClassDesc(SCIdx);
 
-  unsigned SCIdx2 = TII->get(AArch64::STRDui).getSchedClass();
-  const MCSchedClassDesc *SingleSCDesc =
-      SchedModel.getMCSchedModel()->getSchedClassDesc(SCIdx2);
-
-  // If a subtarget does not define resources for STPDi, bail here.
-  if (PairSCDesc->isValid() && !PairSCDesc->isVariant() &&
-      SingleSCDesc->isValid() && !SingleSCDesc->isVariant()) {
-    // Compute the new critical resource length after replacing 2 separate
-    // STRDui with one STPDi.
-    unsigned ResLenWithSTP = BBTrace.getResourceLength(
-        std::nullopt, PairSCDesc, {SingleSCDesc, SingleSCDesc});
+  // If a subtarget does not define resources for STPQi, bail here.
+  if (SCDesc->isValid() && !SCDesc->isVariant()) {
+    unsigned ResLenWithSTP = BBTrace.getResourceLength(None, SCDesc);
     if (ResLenWithSTP > ResLength) {
       LLVM_DEBUG(dbgs() << "  Suppress STP in BB: " << BB->getNumber()
                         << " resources " << ResLength << " -> " << ResLenWithSTP

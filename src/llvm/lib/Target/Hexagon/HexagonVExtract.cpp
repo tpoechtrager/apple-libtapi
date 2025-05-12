@@ -105,7 +105,7 @@ bool HexagonVExtract::runOnMachineFunction(MachineFunction &MF) {
   MachineRegisterInfo &MRI = MF.getRegInfo();
   MachineFrameInfo &MFI = MF.getFrameInfo();
   Register AR =
-      MF.getInfo<HexagonMachineFunctionInfo>()->getStackAlignBaseReg();
+      MF.getInfo<HexagonMachineFunctionInfo>()->getStackAlignBaseVReg();
   std::map<unsigned, SmallVector<MachineInstr *, 4>> VExtractMap;
   bool Changed = false;
 

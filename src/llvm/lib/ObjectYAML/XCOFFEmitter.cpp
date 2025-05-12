@@ -70,7 +70,7 @@ private:
   support::endian::Writer W;
   yaml::ErrorHandler ErrHandler;
   StringTableBuilder StrTblBuilder;
-  uint64_t StartOffset = 0u;
+  uint64_t StartOffset;
   // Map the section name to its corrresponding section index.
   DenseMap<StringRef, int16_t> SectionIndexMap = {
       {StringRef("N_DEBUG"), XCOFF::N_DEBUG},

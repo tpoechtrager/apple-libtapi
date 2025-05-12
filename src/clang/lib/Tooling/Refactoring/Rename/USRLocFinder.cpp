@@ -60,8 +60,8 @@ public:
                                    const ASTContext &Context)
       : RecursiveSymbolVisitor(Context.getSourceManager(),
                                Context.getLangOpts()),
-        USRSet(USRs.begin(), USRs.end()),
-        PrevName(PrevName, /*IsObjectiveCSelector=*/false), Context(Context) {}
+        USRSet(USRs.begin(), USRs.end()), PrevName(PrevName), Context(Context) {
+  }
 
   bool visitSymbolOccurrence(const NamedDecl *ND,
                              ArrayRef<SourceRange> NameRanges) {
@@ -228,17 +228,16 @@ public:
 
   bool VisitDesignatedInitExpr(const DesignatedInitExpr *E) {
     for (const DesignatedInitExpr::Designator &D : E->designators()) {
-      if (D.isFieldDesignator()) {
-        if (const FieldDecl *Decl = D.getFieldDecl()) {
-          if (isInUSRSet(Decl)) {
-            auto StartLoc = D.getFieldLoc();
-            auto EndLoc = D.getFieldLoc();
-            RenameInfos.push_back({StartLoc, EndLoc,
-                                   /*FromDecl=*/nullptr,
-                                   /*Context=*/nullptr,
-                                   /*Specifier=*/nullptr,
-                                   /*IgnorePrefixQualifiers=*/true});
-          }
+      if (D.isFieldDesignator() && D.getField()) {
+        const FieldDecl *Decl = D.getField();
+        if (isInUSRSet(Decl)) {
+          auto StartLoc = D.getFieldLoc();
+          auto EndLoc = D.getFieldLoc();
+          RenameInfos.push_back({StartLoc, EndLoc,
+                                 /*FromDecl=*/nullptr,
+                                 /*Context=*/nullptr,
+                                 /*Specifier=*/nullptr,
+                                 /*IgnorePrefixQualifiers=*/true});
         }
       }
     }

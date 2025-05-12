@@ -214,8 +214,8 @@ TEST(HashMappedTrieTest, TrieDestructionLoop) {
   };
 
   // Use optionals to control when destructors are called.
-  std::optional<TrieT> Trie;
-  std::optional<TrieWithDestructorT> TrieWithDestructor;
+  Optional<TrieT> Trie;
+  Optional<TrieWithDestructorT> TrieWithDestructor;
 
   // Limit the tries to 2 slots (1 bit) to generate subtries at a higher rate.
   Trie.emplace(/*NumRootBits=*/1, /*NumSubtrieBits=*/1);
@@ -270,9 +270,8 @@ public:
     friend class ThreadSafeHashMappedTrieSet;
   };
 
-  ThreadSafeHashMappedTrieSet(
-      std::optional<size_t> NumRootBits = std::nullopt,
-      std::optional<size_t> NumSubtrieBits = std::nullopt)
+  ThreadSafeHashMappedTrieSet(Optional<size_t> NumRootBits = None,
+                              Optional<size_t> NumSubtrieBits = None)
       : TrieType(NumRootBits, NumSubtrieBits) {}
 
   static HashType hash(const T &V) {

@@ -38,10 +38,10 @@ private:
   virtual void anchor();
   bool ExtendedInsts = false;
   HWMultEnum HWMultMode = NoHWMult;
+  MSP430FrameLowering FrameLowering;
   MSP430InstrInfo InstrInfo;
   MSP430TargetLowering TLInfo;
   SelectionDAGTargetInfo TSInfo;
-  MSP430FrameLowering FrameLowering;
 
 public:
   /// This constructor initializes the data members to match that
@@ -64,10 +64,9 @@ public:
     return &FrameLowering;
   }
   const MSP430InstrInfo *getInstrInfo() const override { return &InstrInfo; }
-  const MSP430RegisterInfo *getRegisterInfo() const override {
-    return &getInstrInfo()->getRegisterInfo();
+  const TargetRegisterInfo *getRegisterInfo() const override {
+    return &InstrInfo.getRegisterInfo();
   }
-
   const MSP430TargetLowering *getTargetLowering() const override {
     return &TLInfo;
   }

@@ -43,8 +43,7 @@ class XCoreFunctionInfo : public MachineFunctionInfo {
 public:
   XCoreFunctionInfo() = default;
 
-  explicit XCoreFunctionInfo(const Function &F,
-                             const TargetSubtargetInfo *STI) {}
+  explicit XCoreFunctionInfo(MachineFunction &MF) {}
 
   MachineFunctionInfo *
   clone(BumpPtrAllocator &Allocator, MachineFunction &DestMF,

@@ -24,7 +24,6 @@
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Regex.h"
 #include "llvm/Support/raw_ostream.h"
-#include <optional>
 
 using namespace llvm;
 
@@ -176,11 +175,11 @@ std::pair<unsigned, unsigned> getLineColumn(StringRef Filename,
 
 bool TestRefactoringResultConsumer::handleAllResults() {
   bool Failed = false;
-  for (const auto &Group : llvm::enumerate(Results)) {
+  for (auto &Group : llvm::enumerate(Results)) {
     // All ranges in the group must produce the same result.
-    std::optional<tooling::AtomicChanges> CanonicalResult;
-    std::optional<std::string> CanonicalErrorMessage;
-    for (const auto &I : llvm::enumerate(Group.value())) {
+    Optional<tooling::AtomicChanges> CanonicalResult;
+    Optional<std::string> CanonicalErrorMessage;
+    for (auto &I : llvm::enumerate(Group.value())) {
       Expected<tooling::AtomicChanges> &Result = I.value();
       std::string ErrorMessage;
       bool HasResult = !!Result;
@@ -292,14 +291,14 @@ static unsigned addEndLineOffsetAndEndColumn(StringRef Source, unsigned Offset,
       Source, LineStart == StringRef::npos ? 0 : LineStart + 1, Column - 1);
 }
 
-std::optional<TestSelectionRangesInFile>
+Optional<TestSelectionRangesInFile>
 findTestSelectionRanges(StringRef Filename) {
   ErrorOr<std::unique_ptr<MemoryBuffer>> ErrOrFile =
       MemoryBuffer::getFile(Filename);
   if (!ErrOrFile) {
     llvm::errs() << "error: -selection=test:" << Filename
                  << " : could not open the given file";
-    return std::nullopt;
+    return None;
   }
   StringRef Source = ErrOrFile.get()->getBuffer();
 
@@ -341,7 +340,7 @@ findTestSelectionRanges(StringRef Filename) {
     // Allow CHECK: comments to contain range= commands.
     if (!RangeRegex.match(Comment, &Matches) || Comment.contains("CHECK")) {
       if (DetectMistypedCommand())
-        return std::nullopt;
+        return None;
       continue;
     }
     unsigned Offset = Tok.getEndLoc().getRawEncoding();
@@ -360,7 +359,7 @@ findTestSelectionRanges(StringRef Filename) {
       SmallVector<StringRef, 4> EndLocMatches;
       if (!EndLocRegex.match(Matches[3], &EndLocMatches)) {
         if (DetectMistypedCommand())
-          return std::nullopt;
+          return None;
         continue;
       }
       unsigned EndLineOffset = 0, EndColumn = 0;
@@ -381,7 +380,7 @@ findTestSelectionRanges(StringRef Filename) {
   if (GroupedRanges.empty()) {
     llvm::errs() << "error: -selection=test:" << Filename
                  << ": no 'range' commands";
-    return std::nullopt;
+    return None;
   }
 
   TestSelectionRangesInFile TestRanges = {Filename.str(), {}};

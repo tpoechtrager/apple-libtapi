@@ -26,7 +26,6 @@
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCInst.h"
-#include "llvm/MC/MCStreamer.h"
 #include "llvm/Support/CodeGen.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Target/TargetLoweringObjectFile.h"
@@ -111,38 +110,15 @@ AArch64MCInstLower::GetGlobalAddressSymbol(const MachineOperand &MO) const {
   assert(TheTriple.isOSWindows() &&
          "Windows is the only supported COFF target");
 
-  bool IsIndirect =
-      (TargetFlags & (AArch64II::MO_DLLIMPORT | AArch64II::MO_DLLIMPORTAUX |
-                      AArch64II::MO_COFFSTUB));
+  bool IsIndirect = (TargetFlags & (AArch64II::MO_DLLIMPORT | AArch64II::MO_COFFSTUB));
   if (!IsIndirect)
     return Printer.getSymbol(GV);
 
   SmallString<128> Name;
-
-  if (TargetFlags & AArch64II::MO_DLLIMPORTAUX) {
-    // __imp_aux is specific to arm64EC; it represents the actual address of
-    // an imported function without any thunks.
-    //
-    // If we see a reference to an "aux" symbol, also emit a reference to the
-    // corresponding non-aux symbol.  Otherwise, the Microsoft linker behaves
-    // strangely when linking against x64 import libararies.
-    //
-    // emitSymbolAttribute() doesn't have any real effect here; it just
-    // ensures the symbol name appears in the assembly without any
-    // side-effects. It might make sense to design a cleaner way to express
-    // this.
+  if (TargetFlags & AArch64II::MO_DLLIMPORT)
     Name = "__imp_";
-    Printer.TM.getNameWithPrefix(Name, GV,
-                                 Printer.getObjFileLowering().getMangler());
-    MCSymbol *ExtraSym = Ctx.getOrCreateSymbol(Name);
-    Printer.OutStreamer->emitSymbolAttribute(ExtraSym, MCSA_Global);
-
-    Name = "__imp_aux_";
-  } else if (TargetFlags & AArch64II::MO_DLLIMPORT) {
-    Name = "__imp_";
-  } else if (TargetFlags & AArch64II::MO_COFFSTUB) {
+  else if (TargetFlags & AArch64II::MO_COFFSTUB)
     Name = ".refptr.";
-  }
   Printer.TM.getNameWithPrefix(Name, GV,
                                Printer.getObjFileLowering().getMangler());
 
@@ -166,8 +142,8 @@ AArch64MCInstLower::GetExternalSymbolSymbol(const MachineOperand &MO) const {
   return Printer.GetExternalSymbolSymbol(MO.getSymbolName());
 }
 
-MCOperand AArch64MCInstLower::lowerSymbolOperandMachO(const MachineOperand &MO,
-                                                      MCSymbol *Sym) const {
+MCOperand AArch64MCInstLower::lowerSymbolOperandDarwin(const MachineOperand &MO,
+                                                       MCSymbol *Sym) const {
   // FIXME: We would like an efficient form for this, so we don't have to do a
   // lot of extra uniquing.
   MCSymbolRefExpr::VariantKind RefKind = MCSymbolRefExpr::VK_None;
@@ -336,8 +312,8 @@ MCOperand AArch64MCInstLower::lowerSymbolOperandCOFF(const MachineOperand &MO,
 
 MCOperand AArch64MCInstLower::LowerSymbolOperand(const MachineOperand &MO,
                                                  MCSymbol *Sym) const {
-  if (Printer.TM.getTargetTriple().isOSBinFormatMachO())
-    return lowerSymbolOperandMachO(MO, Sym);
+  if (Printer.TM.getTargetTriple().isOSDarwin())
+    return lowerSymbolOperandDarwin(MO, Sym);
   if (Printer.TM.getTargetTriple().isOSBinFormatCOFF())
     return lowerSymbolOperandCOFF(MO, Sym);
 

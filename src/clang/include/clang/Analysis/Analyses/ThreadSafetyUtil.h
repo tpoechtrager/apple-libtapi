@@ -204,11 +204,11 @@ public:
   }
 
   llvm::iterator_range<reverse_iterator> reverse() {
-    return llvm::reverse(*this);
+    return llvm::make_range(rbegin(), rend());
   }
 
   llvm::iterator_range<const_reverse_iterator> reverse() const {
-    return llvm::reverse(*this);
+    return llvm::make_range(rbegin(), rend());
   }
 
 private:
@@ -240,10 +240,6 @@ class CopyOnWriteVector {
 
     VectorData() = default;
     VectorData(const VectorData &VD) : Vect(VD.Vect) {}
-
-    // The copy assignment operator is defined as deleted pending further
-    // motivation.
-    VectorData &operator=(const VectorData &) = delete;
   };
 
 public:

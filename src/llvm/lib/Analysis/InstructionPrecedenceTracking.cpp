@@ -47,9 +47,9 @@ const Instruction *InstructionPrecedenceTracking::getFirstSpecialInstruction(
     validate(BB);
 #endif
 
-  if (!FirstSpecialInsts.contains(BB)) {
+  if (FirstSpecialInsts.find(BB) == FirstSpecialInsts.end()) {
     fill(BB);
-    assert(FirstSpecialInsts.contains(BB) && "Must be!");
+    assert(FirstSpecialInsts.find(BB) != FirstSpecialInsts.end() && "Must be!");
   }
   return FirstSpecialInsts[BB];
 }

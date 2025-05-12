@@ -13,6 +13,7 @@
 #include "EHStreamer.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Twine.h"
+#include "llvm/ADT/iterator_range.h"
 #include "llvm/BinaryFormat/Dwarf.h"
 #include "llvm/CodeGen/AsmPrinter.h"
 #include "llvm/CodeGen/MachineFunction.h"
@@ -397,7 +398,7 @@ MCSymbol *EHStreamer::emitExceptionTable() {
   computeActionsTable(LandingPads, Actions, FirstActions);
 
   // Compute the call-site table and call-site ranges. Normally, there is only
-  // one call-site-range which covers the whole function. With
+  // one call-site-range which covers the whole funciton. With
   // -basic-block-sections, there is one call-site-range per basic block
   // section.
   SmallVector<CallSiteEntry, 64> CallSites;

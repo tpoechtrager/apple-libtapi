@@ -141,42 +141,24 @@ void MacroExpander::parseDefinition(const std::string &Macro) {
   if (!Tokens.empty()) {
     DefinitionParser Parser(Tokens);
     auto Definition = Parser.parse();
-    if (Definition.ObjectLike) {
-      ObjectLike[Definition.Name] = std::move(Definition);
-    } else {
-      FunctionLike[Definition.Name][Definition.Params.size()] =
-          std::move(Definition);
-    }
+    Definitions[Definition.Name] = std::move(Definition);
   }
 }
 
 bool MacroExpander::defined(llvm::StringRef Name) const {
-  return FunctionLike.contains(Name) || ObjectLike.contains(Name);
+  return Definitions.find(Name) != Definitions.end();
 }
 
 bool MacroExpander::objectLike(llvm::StringRef Name) const {
-  return ObjectLike.contains(Name);
+  return Definitions.find(Name)->second.ObjectLike;
 }
 
-bool MacroExpander::hasArity(llvm::StringRef Name, unsigned Arity) const {
-  auto it = FunctionLike.find(Name);
-  return it != FunctionLike.end() && it->second.contains(Arity);
-}
-
-llvm::SmallVector<FormatToken *, 8>
-MacroExpander::expand(FormatToken *ID,
-                      std::optional<ArgsList> OptionalArgs) const {
-  if (OptionalArgs)
-    assert(hasArity(ID->TokenText, OptionalArgs->size()));
-  else
-    assert(objectLike(ID->TokenText));
-  const Definition &Def = OptionalArgs
-                              ? FunctionLike.find(ID->TokenText)
-                                    ->second.find(OptionalArgs.value().size())
-                                    ->second
-                              : ObjectLike.find(ID->TokenText)->second;
-  ArgsList Args = OptionalArgs ? OptionalArgs.value() : ArgsList();
+llvm::SmallVector<FormatToken *, 8> MacroExpander::expand(FormatToken *ID,
+                                                          ArgsList Args) const {
+  assert(defined(ID->TokenText));
   SmallVector<FormatToken *, 8> Result;
+  const Definition &Def = Definitions.find(ID->TokenText)->second;
+
   // Expand each argument at most once.
   llvm::StringSet<> ExpandedArgs;
 

@@ -31,7 +31,6 @@ driver_executable("llvm-lipo") {
     "//llvm/lib/Option",
     "//llvm/lib/Support",
     "//llvm/lib/Target:TargetsToBuild",
-    "//llvm/lib/TargetParser",
   ]
   sources = [ "llvm-lipo.cpp" ]
 }

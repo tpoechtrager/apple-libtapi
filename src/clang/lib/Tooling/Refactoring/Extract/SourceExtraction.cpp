@@ -12,7 +12,6 @@
 #include "clang/AST/StmtObjC.h"
 #include "clang/Basic/SourceManager.h"
 #include "clang/Lex/Lexer.h"
-#include <optional>
 
 using namespace clang;
 
@@ -101,7 +100,7 @@ ExtractionSemicolonPolicy::compute(const Stmt *S, SourceRange &ExtractedRange,
 
   /// Other statements should generally have a trailing ';'. We can try to find
   /// it and move it together it with the extracted code.
-  std::optional<Token> NextToken = Lexer::findNextToken(End, SM, LangOpts);
+  Optional<Token> NextToken = Lexer::findNextToken(End, SM, LangOpts);
   if (NextToken && NextToken->is(tok::semi) &&
       areOnSameLine(NextToken->getLocation(), End, SM)) {
     ExtractedRange.setEnd(NextToken->getLocation());

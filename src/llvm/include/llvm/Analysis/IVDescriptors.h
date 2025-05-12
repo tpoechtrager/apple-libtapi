@@ -47,8 +47,6 @@ enum class RecurKind {
   FMul,       ///< Product of floats.
   FMin,       ///< FP min implemented in terms of select(cmp()).
   FMax,       ///< FP max implemented in terms of select(cmp()).
-  FMinimum,   ///< FP min with llvm.minimum semantics
-  FMaximum,   ///< FP max with llvm.maximum semantics
   FMulAdd,    ///< Fused multiply-add of floats (a * b + c).
   SelectICmp, ///< Integer select(icmp(),x,y) where one of (x,y) is loop
               ///< invariant
@@ -188,11 +186,14 @@ public:
   /// previous iteration (e.g. if the value is defined in the previous
   /// iteration, we refer to it as first-order recurrence, if it is defined in
   /// the iteration before the previous, we refer to it as second-order
-  /// recurrence and so on). Note that this function optimistically assumes that
-  /// uses of the recurrence can be re-ordered if necessary and users need to
-  /// check and perform the re-ordering.
-  static bool isFixedOrderRecurrence(PHINode *Phi, Loop *TheLoop,
-                                     DominatorTree *DT);
+  /// recurrence and so on). \p SinkAfter includes pairs of instructions where
+  /// the first will be rescheduled to appear after the second if/when the loop
+  /// is vectorized. It may be augmented with additional pairs if needed in
+  /// order to handle Phi as a first-order recurrence.
+  static bool
+  isFixedOrderRecurrence(PHINode *Phi, Loop *TheLoop,
+                         MapVector<Instruction *, Instruction *> &SinkAfter,
+                         DominatorTree *DT);
 
   RecurKind getRecurrenceKind() const { return Kind; }
 
@@ -225,8 +226,7 @@ public:
 
   /// Returns true if the recurrence kind is a floating-point min/max kind.
   static bool isFPMinMaxRecurrenceKind(RecurKind Kind) {
-    return Kind == RecurKind::FMin || Kind == RecurKind::FMax ||
-           Kind == RecurKind::FMinimum || Kind == RecurKind::FMaximum;
+    return Kind == RecurKind::FMin || Kind == RecurKind::FMax;
   }
 
   /// Returns true if the recurrence kind is any min/max kind.
@@ -309,7 +309,7 @@ public:
   enum InductionKind {
     IK_NoInduction,  ///< Not an induction variable.
     IK_IntInduction, ///< Integer induction variable. Step = C.
-    IK_PtrInduction, ///< Pointer induction var. Step = C.
+    IK_PtrInduction, ///< Pointer induction var. Step = C / sizeof(elem).
     IK_FpInduction   ///< Floating point induction variable.
   };
 
@@ -325,9 +325,7 @@ public:
 
   /// Returns true if \p Phi is an induction in the loop \p L. If \p Phi is an
   /// induction, the induction descriptor \p D will contain the data describing
-  /// this induction. Since Induction Phis can only be present inside loop
-  /// headers, the function will assert if it is passed a Phi whose parent is
-  /// not the loop header. If by some other means the caller has a better SCEV
+  /// this induction. If by some other means the caller has a better SCEV
   /// expression for \p Phi than the one returned by the ScalarEvolution
   /// analysis, it can be passed through \p Expr. If the def-use chain
   /// associated with the phi includes casts (that we know we can ignore
@@ -369,6 +367,11 @@ public:
                           : Instruction::BinaryOpsEnd;
   }
 
+  Type *getElementType() const {
+    assert(IK == IK_PtrInduction && "Only pointer induction has element type");
+    return ElementType;
+  }
+
   /// Returns a reference to the type cast instructions in the induction
   /// update chain, that are redundant when guarded with a runtime
   /// SCEV overflow check.
@@ -380,6 +383,7 @@ private:
   /// Private constructor - used by \c isInductionPHI.
   InductionDescriptor(Value *Start, InductionKind K, const SCEV *Step,
                       BinaryOperator *InductionBinOp = nullptr,
+                      Type *ElementType = nullptr,
                       SmallVectorImpl<Instruction *> *Casts = nullptr);
 
   /// Start value.
@@ -390,6 +394,9 @@ private:
   const SCEV *Step = nullptr;
   // Instruction that advances induction variable.
   BinaryOperator *InductionBinOp = nullptr;
+  // Element type for pointer induction variables.
+  // TODO: This can be dropped once support for typed pointers is removed.
+  Type *ElementType = nullptr;
   // Instructions used for type-casts of the induction variable,
   // that are redundant when guarded with a runtime SCEV overflow check.
   SmallVector<Instruction *, 2> RedundantCasts;

@@ -97,12 +97,7 @@ StringRef ScalarTraits<PlatformSet>::input(StringRef Scalar, void *IO,
          "File type is not set in context");
 
   if (Scalar == "zippered") {
-    if (Ctx
-#if 0 // Commented broken check. Ctx->FileKind is always some random value.
-      // This must be a bug in the original code.
-    && Ctx->FileKind == FileType::TBD_V3
-#endif
-    ) {
+    if (Ctx && Ctx->FileKind == FileType::TBD_V3) {
       Values.insert(PLATFORM_MACOS);
       Values.insert(PLATFORM_MACCATALYST);
       return {};
@@ -121,11 +116,9 @@ StringRef ScalarTraits<PlatformSet>::input(StringRef Scalar, void *IO,
                       .Case("driverkit", PLATFORM_DRIVERKIT)
                       .Default(PLATFORM_UNKNOWN);
 
-#if 0 // Commented broken check
   if (Platform == PLATFORM_MACCATALYST)
     if (Ctx && Ctx->FileKind != FileType::TBD_V3)
       return "invalid platform";
-#endif
 
   if (Platform == PLATFORM_UNKNOWN)
     return "unknown platform";

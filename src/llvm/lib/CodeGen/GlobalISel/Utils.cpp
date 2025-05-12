@@ -12,6 +12,7 @@
 #include "llvm/CodeGen/GlobalISel/Utils.h"
 #include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/APInt.h"
+#include "llvm/ADT/Optional.h"
 #include "llvm/CodeGen/CodeGenCommonISel.h"
 #include "llvm/CodeGen/GlobalISel/GISelChangeObserver.h"
 #include "llvm/CodeGen/GlobalISel/GISelKnownBits.h"
@@ -33,7 +34,6 @@
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Transforms/Utils/SizeOpts.h"
 #include <numeric>
-#include <optional>
 
 #define DEBUG_TYPE "globalisel-utils"
 
@@ -57,7 +57,7 @@ Register llvm::constrainOperandRegClass(
     const TargetRegisterClass &RegClass, MachineOperand &RegMO) {
   Register Reg = RegMO.getReg();
   // Assume physical registers are properly constrained.
-  assert(Reg.isVirtual() && "PhysReg not implemented");
+  assert(Register::isVirtualRegister(Reg) && "PhysReg not implemented");
 
   // Save the old register class to check whether
   // the change notifications will be required.
@@ -109,7 +109,7 @@ Register llvm::constrainOperandRegClass(
     MachineOperand &RegMO, unsigned OpIdx) {
   Register Reg = RegMO.getReg();
   // Assume physical registers are properly constrained.
-  assert(Reg.isVirtual() && "PhysReg not implemented");
+  assert(Register::isVirtualRegister(Reg) && "PhysReg not implemented");
 
   const TargetRegisterClass *OpRC = TII.getRegClass(II, OpIdx, &TRI, MF);
   // Some of the target independent instructions, like COPY, may not impose any
@@ -171,7 +171,7 @@ bool llvm::constrainSelectedInstRegOperands(MachineInstr &I,
 
     Register Reg = MO.getReg();
     // Physical registers don't need to be constrained.
-    if (Reg.isPhysical())
+    if (Register::isPhysicalRegister(Reg))
       continue;
 
     // Register operands with a value of 0 (e.g. predicate operands) don't need
@@ -205,15 +205,8 @@ bool llvm::canReplaceReg(Register DstReg, Register SrcReg,
     return false;
   // Replace if either DstReg has no constraints or the register
   // constraints match.
-  const auto &DstRBC = MRI.getRegClassOrRegBank(DstReg);
-  if (!DstRBC || DstRBC == MRI.getRegClassOrRegBank(SrcReg))
-    return true;
-
-  // Otherwise match if the Src is already a regclass that is covered by the Dst
-  // RegBank.
-  return DstRBC.is<const RegisterBank *>() && MRI.getRegClassOrNull(SrcReg) &&
-         DstRBC.get<const RegisterBank *>()->covers(
-             *MRI.getRegClassOrNull(SrcReg));
+  return !MRI.getRegClassOrRegBank(DstReg) ||
+         MRI.getRegClassOrRegBank(DstReg) == MRI.getRegClassOrRegBank(SrcReg);
 }
 
 bool llvm::isTriviallyDead(const MachineInstr &MI,
@@ -237,9 +230,12 @@ bool llvm::isTriviallyDead(const MachineInstr &MI,
     return false;
 
   // Instructions without side-effects are dead iff they only define dead vregs.
-  for (const auto &MO : MI.all_defs()) {
+  for (const auto &MO : MI.operands()) {
+    if (!MO.isReg() || !MO.isDef())
+      continue;
+
     Register Reg = MO.getReg();
-    if (Reg.isPhysical() || !MRI.use_nodbg_empty(Reg))
+    if (Register::isPhysicalRegister(Reg) || !MRI.use_nodbg_empty(Reg))
       return false;
   }
   return true;
@@ -289,31 +285,31 @@ void llvm::reportGISelFailure(MachineFunction &MF, const TargetPassConfig &TPC,
   reportGISelFailure(MF, TPC, MORE, R);
 }
 
-std::optional<APInt> llvm::getIConstantVRegVal(Register VReg,
-                                               const MachineRegisterInfo &MRI) {
-  std::optional<ValueAndVReg> ValAndVReg = getIConstantVRegValWithLookThrough(
+Optional<APInt> llvm::getIConstantVRegVal(Register VReg,
+                                          const MachineRegisterInfo &MRI) {
+  Optional<ValueAndVReg> ValAndVReg = getIConstantVRegValWithLookThrough(
       VReg, MRI, /*LookThroughInstrs*/ false);
   assert((!ValAndVReg || ValAndVReg->VReg == VReg) &&
          "Value found while looking through instrs");
   if (!ValAndVReg)
-    return std::nullopt;
+    return None;
   return ValAndVReg->Value;
 }
 
-std::optional<int64_t>
+Optional<int64_t>
 llvm::getIConstantVRegSExtVal(Register VReg, const MachineRegisterInfo &MRI) {
-  std::optional<APInt> Val = getIConstantVRegVal(VReg, MRI);
+  Optional<APInt> Val = getIConstantVRegVal(VReg, MRI);
   if (Val && Val->getBitWidth() <= 64)
     return Val->getSExtValue();
-  return std::nullopt;
+  return None;
 }
 
 namespace {
 
 typedef std::function<bool(const MachineInstr *)> IsOpcodeFn;
-typedef std::function<std::optional<APInt>(const MachineInstr *MI)> GetAPCstFn;
+typedef std::function<Optional<APInt>(const MachineInstr *MI)> GetAPCstFn;
 
-std::optional<ValueAndVReg> getConstantVRegValWithLookThrough(
+Optional<ValueAndVReg> getConstantVRegValWithLookThrough(
     Register VReg, const MachineRegisterInfo &MRI, IsOpcodeFn IsConstantOpcode,
     GetAPCstFn getAPCstValue, bool LookThroughInstrs = true,
     bool LookThroughAnyExt = false) {
@@ -325,7 +321,7 @@ std::optional<ValueAndVReg> getConstantVRegValWithLookThrough(
     switch (MI->getOpcode()) {
     case TargetOpcode::G_ANYEXT:
       if (!LookThroughAnyExt)
-        return std::nullopt;
+        return None;
       [[fallthrough]];
     case TargetOpcode::G_TRUNC:
     case TargetOpcode::G_SEXT:
@@ -337,22 +333,22 @@ std::optional<ValueAndVReg> getConstantVRegValWithLookThrough(
       break;
     case TargetOpcode::COPY:
       VReg = MI->getOperand(1).getReg();
-      if (VReg.isPhysical())
-        return std::nullopt;
+      if (Register::isPhysicalRegister(VReg))
+        return None;
       break;
     case TargetOpcode::G_INTTOPTR:
       VReg = MI->getOperand(1).getReg();
       break;
     default:
-      return std::nullopt;
+      return None;
     }
   }
   if (!MI || !IsConstantOpcode(MI))
-    return std::nullopt;
+    return None;
 
-  std::optional<APInt> MaybeVal = getAPCstValue(MI);
+  Optional<APInt> MaybeVal = getAPCstValue(MI);
   if (!MaybeVal)
-    return std::nullopt;
+    return None;
   APInt &Val = *MaybeVal;
   while (!SeenOpcodes.empty()) {
     std::pair<unsigned, unsigned> OpcodeAndSize = SeenOpcodes.pop_back_val();
@@ -392,31 +388,31 @@ bool isAnyConstant(const MachineInstr *MI) {
   return Opc == TargetOpcode::G_CONSTANT || Opc == TargetOpcode::G_FCONSTANT;
 }
 
-std::optional<APInt> getCImmAsAPInt(const MachineInstr *MI) {
+Optional<APInt> getCImmAsAPInt(const MachineInstr *MI) {
   const MachineOperand &CstVal = MI->getOperand(1);
   if (CstVal.isCImm())
     return CstVal.getCImm()->getValue();
-  return std::nullopt;
+  return None;
 }
 
-std::optional<APInt> getCImmOrFPImmAsAPInt(const MachineInstr *MI) {
+Optional<APInt> getCImmOrFPImmAsAPInt(const MachineInstr *MI) {
   const MachineOperand &CstVal = MI->getOperand(1);
   if (CstVal.isCImm())
     return CstVal.getCImm()->getValue();
   if (CstVal.isFPImm())
     return CstVal.getFPImm()->getValueAPF().bitcastToAPInt();
-  return std::nullopt;
+  return None;
 }
 
 } // end anonymous namespace
 
-std::optional<ValueAndVReg> llvm::getIConstantVRegValWithLookThrough(
+Optional<ValueAndVReg> llvm::getIConstantVRegValWithLookThrough(
     Register VReg, const MachineRegisterInfo &MRI, bool LookThroughInstrs) {
   return getConstantVRegValWithLookThrough(VReg, MRI, isIConstant,
                                            getCImmAsAPInt, LookThroughInstrs);
 }
 
-std::optional<ValueAndVReg> llvm::getAnyConstantVRegValWithLookThrough(
+Optional<ValueAndVReg> llvm::getAnyConstantVRegValWithLookThrough(
     Register VReg, const MachineRegisterInfo &MRI, bool LookThroughInstrs,
     bool LookThroughAnyExt) {
   return getConstantVRegValWithLookThrough(
@@ -424,12 +420,12 @@ std::optional<ValueAndVReg> llvm::getAnyConstantVRegValWithLookThrough(
       LookThroughAnyExt);
 }
 
-std::optional<FPValueAndVReg> llvm::getFConstantVRegValWithLookThrough(
+Optional<FPValueAndVReg> llvm::getFConstantVRegValWithLookThrough(
     Register VReg, const MachineRegisterInfo &MRI, bool LookThroughInstrs) {
   auto Reg = getConstantVRegValWithLookThrough(
       VReg, MRI, isFConstant, getCImmOrFPImmAsAPInt, LookThroughInstrs);
   if (!Reg)
-    return std::nullopt;
+    return None;
   return FPValueAndVReg{getConstantFPVRegVal(Reg->VReg, MRI)->getValueAPF(),
                         Reg->VReg};
 }
@@ -442,13 +438,13 @@ llvm::getConstantFPVRegVal(Register VReg, const MachineRegisterInfo &MRI) {
   return MI->getOperand(1).getFPImm();
 }
 
-std::optional<DefinitionAndSourceRegister>
+Optional<DefinitionAndSourceRegister>
 llvm::getDefSrcRegIgnoringCopies(Register Reg, const MachineRegisterInfo &MRI) {
   Register DefSrcReg = Reg;
   auto *DefMI = MRI.getVRegDef(Reg);
   auto DstTy = MRI.getType(DefMI->getOperand(0).getReg());
   if (!DstTy.isValid())
-    return std::nullopt;
+    return None;
   unsigned Opc = DefMI->getOpcode();
   while (Opc == TargetOpcode::COPY || isPreISelGenericOptimizationHint(Opc)) {
     Register SrcReg = DefMI->getOperand(1).getReg();
@@ -464,14 +460,14 @@ llvm::getDefSrcRegIgnoringCopies(Register Reg, const MachineRegisterInfo &MRI) {
 
 MachineInstr *llvm::getDefIgnoringCopies(Register Reg,
                                          const MachineRegisterInfo &MRI) {
-  std::optional<DefinitionAndSourceRegister> DefSrcReg =
+  Optional<DefinitionAndSourceRegister> DefSrcReg =
       getDefSrcRegIgnoringCopies(Reg, MRI);
   return DefSrcReg ? DefSrcReg->MI : nullptr;
 }
 
 Register llvm::getSrcRegIgnoringCopies(Register Reg,
                                        const MachineRegisterInfo &MRI) {
-  std::optional<DefinitionAndSourceRegister> DefSrcReg =
+  Optional<DefinitionAndSourceRegister> DefSrcReg =
       getDefSrcRegIgnoringCopies(Reg, MRI);
   return DefSrcReg ? DefSrcReg->Reg : Register();
 }
@@ -495,17 +491,16 @@ APFloat llvm::getAPFloatFromSize(double Val, unsigned Size) {
   return APF;
 }
 
-std::optional<APInt> llvm::ConstantFoldBinOp(unsigned Opcode,
-                                             const Register Op1,
-                                             const Register Op2,
-                                             const MachineRegisterInfo &MRI) {
+Optional<APInt> llvm::ConstantFoldBinOp(unsigned Opcode, const Register Op1,
+                                        const Register Op2,
+                                        const MachineRegisterInfo &MRI) {
   auto MaybeOp2Cst = getAnyConstantVRegValWithLookThrough(Op2, MRI, false);
   if (!MaybeOp2Cst)
-    return std::nullopt;
+    return None;
 
   auto MaybeOp1Cst = getAnyConstantVRegValWithLookThrough(Op1, MRI, false);
   if (!MaybeOp1Cst)
-    return std::nullopt;
+    return None;
 
   const APInt &C1 = MaybeOp1Cst->Value;
   const APInt &C2 = MaybeOp2Cst->Value;
@@ -557,19 +552,19 @@ std::optional<APInt> llvm::ConstantFoldBinOp(unsigned Opcode,
     return APIntOps::umax(C1, C2);
   }
 
-  return std::nullopt;
+  return None;
 }
 
-std::optional<APFloat>
-llvm::ConstantFoldFPBinOp(unsigned Opcode, const Register Op1,
-                          const Register Op2, const MachineRegisterInfo &MRI) {
+Optional<APFloat> llvm::ConstantFoldFPBinOp(unsigned Opcode, const Register Op1,
+                                            const Register Op2,
+                                            const MachineRegisterInfo &MRI) {
   const ConstantFP *Op2Cst = getConstantFPVRegVal(Op2, MRI);
   if (!Op2Cst)
-    return std::nullopt;
+    return None;
 
   const ConstantFP *Op1Cst = getConstantFPVRegVal(Op1, MRI);
   if (!Op1Cst)
-    return std::nullopt;
+    return None;
 
   APFloat C1 = Op1Cst->getValueAPF();
   const APFloat &C2 = Op2Cst->getValueAPF();
@@ -611,7 +606,7 @@ llvm::ConstantFoldFPBinOp(unsigned Opcode, const Register Op1,
     break;
   }
 
-  return std::nullopt;
+  return None;
 }
 
 SmallVector<APInt>
@@ -715,14 +710,14 @@ bool llvm::isKnownNeverNaN(Register Val, const MachineRegisterInfo &MRI,
 
 Align llvm::inferAlignFromPtrInfo(MachineFunction &MF,
                                   const MachinePointerInfo &MPO) {
-  auto PSV = dyn_cast_if_present<const PseudoSourceValue *>(MPO.V);
+  auto PSV = MPO.V.dyn_cast<const PseudoSourceValue *>();
   if (auto FSPV = dyn_cast_or_null<FixedStackPseudoSourceValue>(PSV)) {
     MachineFrameInfo &MFI = MF.getFrameInfo();
     return commonAlignment(MFI.getObjectAlign(FSPV->getFrameIndex()),
                            MPO.Offset);
   }
 
-  if (const Value *V = dyn_cast_if_present<const Value *>(MPO.V)) {
+  if (const Value *V = MPO.V.dyn_cast<const Value *>()) {
     const Module *M = MF.getFunction().getParent();
     return V->getPointerAlignment(M->getDataLayout());
   }
@@ -763,9 +758,9 @@ Register llvm::getFunctionLiveInPhysReg(MachineFunction &MF,
   return LiveIn;
 }
 
-std::optional<APInt> llvm::ConstantFoldExtOp(unsigned Opcode,
-                                             const Register Op1, uint64_t Imm,
-                                             const MachineRegisterInfo &MRI) {
+Optional<APInt> llvm::ConstantFoldExtOp(unsigned Opcode, const Register Op1,
+                                        uint64_t Imm,
+                                        const MachineRegisterInfo &MRI) {
   auto MaybeOp1Cst = getIConstantVRegVal(Op1, MRI);
   if (MaybeOp1Cst) {
     switch (Opcode) {
@@ -777,12 +772,12 @@ std::optional<APInt> llvm::ConstantFoldExtOp(unsigned Opcode,
     }
     }
   }
-  return std::nullopt;
+  return None;
 }
 
-std::optional<APFloat>
-llvm::ConstantFoldIntToFloat(unsigned Opcode, LLT DstTy, Register Src,
-                             const MachineRegisterInfo &MRI) {
+Optional<APFloat> llvm::ConstantFoldIntToFloat(unsigned Opcode, LLT DstTy,
+                                               Register Src,
+                                               const MachineRegisterInfo &MRI) {
   assert(Opcode == TargetOpcode::G_SITOFP || Opcode == TargetOpcode::G_UITOFP);
   if (auto MaybeSrcVal = getIConstantVRegVal(Src, MRI)) {
     APFloat DstVal(getFltSemanticForLLT(DstTy));
@@ -790,30 +785,30 @@ llvm::ConstantFoldIntToFloat(unsigned Opcode, LLT DstTy, Register Src,
                             APFloat::rmNearestTiesToEven);
     return DstVal;
   }
-  return std::nullopt;
+  return None;
 }
 
-std::optional<SmallVector<unsigned>>
+Optional<SmallVector<unsigned>>
 llvm::ConstantFoldCTLZ(Register Src, const MachineRegisterInfo &MRI) {
   LLT Ty = MRI.getType(Src);
   SmallVector<unsigned> FoldedCTLZs;
-  auto tryFoldScalar = [&](Register R) -> std::optional<unsigned> {
+  auto tryFoldScalar = [&](Register R) -> Optional<unsigned> {
     auto MaybeCst = getIConstantVRegVal(R, MRI);
     if (!MaybeCst)
-      return std::nullopt;
-    return MaybeCst->countl_zero();
+      return None;
+    return MaybeCst->countLeadingZeros();
   };
   if (Ty.isVector()) {
     // Try to constant fold each element.
     auto *BV = getOpcodeDef<GBuildVector>(Src, MRI);
     if (!BV)
-      return std::nullopt;
+      return None;
     for (unsigned SrcIdx = 0; SrcIdx < BV->getNumSources(); ++SrcIdx) {
       if (auto MaybeFold = tryFoldScalar(BV->getSourceReg(SrcIdx))) {
         FoldedCTLZs.emplace_back(*MaybeFold);
         continue;
       }
-      return std::nullopt;
+      return None;
     }
     return FoldedCTLZs;
   }
@@ -821,12 +816,12 @@ llvm::ConstantFoldCTLZ(Register Src, const MachineRegisterInfo &MRI) {
     FoldedCTLZs.emplace_back(*MaybeCst);
     return FoldedCTLZs;
   }
-  return std::nullopt;
+  return None;
 }
 
 bool llvm::isKnownToBeAPowerOfTwo(Register Reg, const MachineRegisterInfo &MRI,
                                   GISelKnownBits *KB) {
-  std::optional<DefinitionAndSourceRegister> DefSrcReg =
+  Optional<DefinitionAndSourceRegister> DefSrcReg =
       getDefSrcRegIgnoringCopies(Reg, MRI);
   if (!DefSrcReg)
     return false;
@@ -1004,7 +999,7 @@ LLT llvm::getGCDType(LLT OrigTy, LLT TargetTy) {
   return LLT::scalar(GCD);
 }
 
-std::optional<int> llvm::getSplatIndex(MachineInstr &MI) {
+Optional<int> llvm::getSplatIndex(MachineInstr &MI) {
   assert(MI.getOpcode() == TargetOpcode::G_SHUFFLE_VECTOR &&
          "Only G_SHUFFLE_VECTOR can have a splat index!");
   ArrayRef<int> Mask = MI.getOperand(3).getShuffleMask();
@@ -1020,7 +1015,7 @@ std::optional<int> llvm::getSplatIndex(MachineInstr &MI) {
   int SplatValue = *FirstDefinedIdx;
   if (any_of(make_range(std::next(FirstDefinedIdx), Mask.end()),
              [&SplatValue](int Elt) { return Elt >= 0 && Elt != SplatValue; }))
-    return std::nullopt;
+    return None;
 
   return SplatValue;
 }
@@ -1032,41 +1027,36 @@ static bool isBuildVectorOp(unsigned Opcode) {
 
 namespace {
 
-std::optional<ValueAndVReg> getAnyConstantSplat(Register VReg,
-                                                const MachineRegisterInfo &MRI,
-                                                bool AllowUndef) {
+Optional<ValueAndVReg> getAnyConstantSplat(Register VReg,
+                                           const MachineRegisterInfo &MRI,
+                                           bool AllowUndef) {
   MachineInstr *MI = getDefIgnoringCopies(VReg, MRI);
   if (!MI)
-    return std::nullopt;
+    return None;
 
-  bool isConcatVectorsOp = MI->getOpcode() == TargetOpcode::G_CONCAT_VECTORS;
-  if (!isBuildVectorOp(MI->getOpcode()) && !isConcatVectorsOp)
-    return std::nullopt;
+  if (!isBuildVectorOp(MI->getOpcode()))
+    return None;
 
-  std::optional<ValueAndVReg> SplatValAndReg;
+  Optional<ValueAndVReg> SplatValAndReg;
   for (MachineOperand &Op : MI->uses()) {
     Register Element = Op.getReg();
-    // If we have a G_CONCAT_VECTOR, we recursively look into the
-    // vectors that we're concatenating to see if they're splats.
     auto ElementValAndReg =
-        isConcatVectorsOp
-            ? getAnyConstantSplat(Element, MRI, AllowUndef)
-            : getAnyConstantVRegValWithLookThrough(Element, MRI, true, true);
+        getAnyConstantVRegValWithLookThrough(Element, MRI, true, true);
 
     // If AllowUndef, treat undef as value that will result in a constant splat.
     if (!ElementValAndReg) {
       if (AllowUndef && isa<GImplicitDef>(MRI.getVRegDef(Element)))
         continue;
-      return std::nullopt;
+      return None;
     }
 
     // Record splat value
     if (!SplatValAndReg)
       SplatValAndReg = ElementValAndReg;
 
-    // Different constant than the one already recorded, not a constant splat.
+    // Different constant then the one already recorded, not a constant splat.
     if (SplatValAndReg->Value != ElementValAndReg->Value)
-      return std::nullopt;
+      return None;
   }
 
   return SplatValAndReg;
@@ -1089,45 +1079,44 @@ bool llvm::isBuildVectorConstantSplat(const MachineInstr &MI,
                                     AllowUndef);
 }
 
-std::optional<APInt>
-llvm::getIConstantSplatVal(const Register Reg, const MachineRegisterInfo &MRI) {
+Optional<APInt> llvm::getIConstantSplatVal(const Register Reg,
+                                           const MachineRegisterInfo &MRI) {
   if (auto SplatValAndReg =
           getAnyConstantSplat(Reg, MRI, /* AllowUndef */ false)) {
-    std::optional<ValueAndVReg> ValAndVReg =
+    Optional<ValueAndVReg> ValAndVReg =
         getIConstantVRegValWithLookThrough(SplatValAndReg->VReg, MRI);
     return ValAndVReg->Value;
   }
 
-  return std::nullopt;
+  return None;
 }
 
-std::optional<APInt>
-llvm::getIConstantSplatVal(const MachineInstr &MI,
-                           const MachineRegisterInfo &MRI) {
+Optional<APInt> llvm::getIConstantSplatVal(const MachineInstr &MI,
+                                           const MachineRegisterInfo &MRI) {
   return getIConstantSplatVal(MI.getOperand(0).getReg(), MRI);
 }
 
-std::optional<int64_t>
+Optional<int64_t>
 llvm::getIConstantSplatSExtVal(const Register Reg,
                                const MachineRegisterInfo &MRI) {
   if (auto SplatValAndReg =
           getAnyConstantSplat(Reg, MRI, /* AllowUndef */ false))
     return getIConstantVRegSExtVal(SplatValAndReg->VReg, MRI);
-  return std::nullopt;
+  return None;
 }
 
-std::optional<int64_t>
+Optional<int64_t>
 llvm::getIConstantSplatSExtVal(const MachineInstr &MI,
                                const MachineRegisterInfo &MRI) {
   return getIConstantSplatSExtVal(MI.getOperand(0).getReg(), MRI);
 }
 
-std::optional<FPValueAndVReg>
-llvm::getFConstantSplat(Register VReg, const MachineRegisterInfo &MRI,
-                        bool AllowUndef) {
+Optional<FPValueAndVReg> llvm::getFConstantSplat(Register VReg,
+                                                 const MachineRegisterInfo &MRI,
+                                                 bool AllowUndef) {
   if (auto SplatValAndReg = getAnyConstantSplat(VReg, MRI, AllowUndef))
     return getFConstantVRegValWithLookThrough(SplatValAndReg->VReg, MRI);
-  return std::nullopt;
+  return None;
 }
 
 bool llvm::isBuildVectorAllZeros(const MachineInstr &MI,
@@ -1142,17 +1131,17 @@ bool llvm::isBuildVectorAllOnes(const MachineInstr &MI,
   return isBuildVectorConstantSplat(MI, MRI, -1, AllowUndef);
 }
 
-std::optional<RegOrConstant>
-llvm::getVectorSplat(const MachineInstr &MI, const MachineRegisterInfo &MRI) {
+Optional<RegOrConstant> llvm::getVectorSplat(const MachineInstr &MI,
+                                             const MachineRegisterInfo &MRI) {
   unsigned Opc = MI.getOpcode();
   if (!isBuildVectorOp(Opc))
-    return std::nullopt;
+    return None;
   if (auto Splat = getIConstantSplatSExtVal(MI, MRI))
     return RegOrConstant(*Splat);
   auto Reg = MI.getOperand(1).getReg();
   if (any_of(make_range(MI.operands_begin() + 2, MI.operands_end()),
              [&Reg](const MachineOperand &Op) { return Op.getReg() != Reg; }))
-    return std::nullopt;
+    return None;
   return RegOrConstant(Reg);
 }
 
@@ -1212,7 +1201,7 @@ bool llvm::isConstantOrConstantVector(const MachineInstr &MI,
   return true;
 }
 
-std::optional<APInt>
+Optional<APInt>
 llvm::isConstantOrConstantSplatVector(MachineInstr &MI,
                                       const MachineRegisterInfo &MRI) {
   Register Def = MI.getOperand(0).getReg();
@@ -1220,7 +1209,7 @@ llvm::isConstantOrConstantSplatVector(MachineInstr &MI,
     return C->Value;
   auto MaybeCst = getIConstantSplatSExtVal(MI, MRI);
   if (!MaybeCst)
-    return std::nullopt;
+    return None;
   const unsigned ScalarSize = MRI.getType(Def).getScalarSizeInBits();
   return APInt(ScalarSize, *MaybeCst, true);
 }

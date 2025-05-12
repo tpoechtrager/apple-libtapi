@@ -23,18 +23,12 @@
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/InitializePasses.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Transforms/Utils.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 
 #define DEBUG_TYPE "unify-loop-exits"
 
 using namespace llvm;
-
-static cl::opt<unsigned> MaxBooleansInControlFlowHub(
-    "max-booleans-in-control-flow-hub", cl::init(32), cl::Hidden,
-    cl::desc("Set the maximum number of outgoing blocks for using a boolean "
-             "value to record the exiting block in CreateControlFlowHub."));
 
 namespace {
 struct UnifyLoopExitsLegacyPass : public FunctionPass {
@@ -113,16 +107,16 @@ static void restoreSSA(const DominatorTree &DT, const Loop *L,
     }
   }
 
-  for (const auto &II : ExternalUsers) {
+  for (auto II : ExternalUsers) {
     // For each Def used outside the loop, create NewPhi in
     // LoopExitBlock. NewPhi receives Def only along exiting blocks that
     // dominate it, while the remaining values are undefined since those paths
     // didn't exist in the original CFG.
     auto Def = II.first;
     LLVM_DEBUG(dbgs() << "externally used: " << Def->getName() << "\n");
-    auto NewPhi =
-        PHINode::Create(Def->getType(), Incoming.size(),
-                        Def->getName() + ".moved", &LoopExitBlock->front());
+    auto NewPhi = PHINode::Create(Def->getType(), Incoming.size(),
+                                  Def->getName() + ".moved",
+                                  LoopExitBlock->getTerminator());
     for (auto *In : Incoming) {
       LLVM_DEBUG(dbgs() << "predecessor " << In->getName() << ": ");
       if (Def->getParent() == In || DT.dominates(Def, In)) {
@@ -130,7 +124,7 @@ static void restoreSSA(const DominatorTree &DT, const Loop *L,
         NewPhi->addIncoming(Def, In);
       } else {
         LLVM_DEBUG(dbgs() << "not dominated\n");
-        NewPhi->addIncoming(PoisonValue::get(Def->getType()), In);
+        NewPhi->addIncoming(UndefValue::get(Def->getType()), In);
       }
     }
 
@@ -187,9 +181,8 @@ static bool unifyLoopExits(DominatorTree &DT, LoopInfo &LI, Loop *L) {
 
   SmallVector<BasicBlock *, 8> GuardBlocks;
   DomTreeUpdater DTU(DT, DomTreeUpdater::UpdateStrategy::Eager);
-  auto LoopExitBlock =
-      CreateControlFlowHub(&DTU, GuardBlocks, ExitingBlocks, Exits, "loop.exit",
-                           MaxBooleansInControlFlowHub.getValue());
+  auto LoopExitBlock = CreateControlFlowHub(&DTU, GuardBlocks, ExitingBlocks,
+                                            Exits, "loop.exit");
 
   restoreSSA(DT, L, ExitingBlocks, LoopExitBlock);
 

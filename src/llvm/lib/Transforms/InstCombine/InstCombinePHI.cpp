@@ -20,7 +20,6 @@
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Transforms/InstCombine/InstCombiner.h"
 #include "llvm/Transforms/Utils/Local.h"
-#include <optional>
 
 using namespace llvm;
 using namespace llvm::PatternMatch;
@@ -316,7 +315,7 @@ Instruction *InstCombinerImpl::foldPHIArgIntToPtrToPHI(PHINode &PN) {
   for (unsigned OpNum = 0; OpNum != PN.getNumIncomingValues(); ++OpNum) {
     if (auto *NewOp =
             simplifyIntToPtrRoundTripCast(PN.getIncomingValue(OpNum))) {
-      replaceOperand(PN, OpNum, NewOp);
+      PN.setIncomingValue(OpNum, NewOp);
       OperandWithRoundTripCast = true;
     }
   }
@@ -605,7 +604,7 @@ Instruction *InstCombinerImpl::foldPHIArgGEPIntoPHI(PHINode &PN) {
   Value *Base = FixedOperands[0];
   GetElementPtrInst *NewGEP =
       GetElementPtrInst::Create(FirstInst->getSourceElementType(), Base,
-                                ArrayRef(FixedOperands).slice(1));
+                                makeArrayRef(FixedOperands).slice(1));
   if (AllInBounds) NewGEP->setIsInBounds();
   PHIArgMergedDebugLoc(NewGEP, PN);
   return NewGEP;
@@ -745,7 +744,6 @@ Instruction *InstCombinerImpl::foldPHIArgLoadIntoPHI(PHINode &PN) {
     LLVMContext::MD_dereferenceable,
     LLVMContext::MD_dereferenceable_or_null,
     LLVMContext::MD_access_group,
-    LLVMContext::MD_noundef,
   };
 
   for (unsigned ID : KnownIDs)
@@ -1330,7 +1328,7 @@ static Value *simplifyUsingControlFlow(InstCombiner &Self, PHINode &PN,
 
   // Check that edges outgoing from the idom's terminators dominate respective
   // inputs of the Phi.
-  std::optional<bool> Invert;
+  Optional<bool> Invert;
   for (auto Pair : zip(PN.incoming_values(), PN.blocks())) {
     auto *Input = cast<ConstantInt>(std::get<0>(Pair));
     BasicBlock *Pred = std::get<1>(Pair);
@@ -1389,10 +1387,11 @@ Instruction *InstCombinerImpl::visitPHINode(PHINode &PN) {
 
   // If all PHI operands are the same operation, pull them through the PHI,
   // reducing code size.
-  auto *Inst0 = dyn_cast<Instruction>(PN.getIncomingValue(0));
-  auto *Inst1 = dyn_cast<Instruction>(PN.getIncomingValue(1));
-  if (Inst0 && Inst1 && Inst0->getOpcode() == Inst1->getOpcode() &&
-      Inst0->hasOneUser())
+  if (isa<Instruction>(PN.getIncomingValue(0)) &&
+      isa<Instruction>(PN.getIncomingValue(1)) &&
+      cast<Instruction>(PN.getIncomingValue(0))->getOpcode() ==
+          cast<Instruction>(PN.getIncomingValue(1))->getOpcode() &&
+      PN.getIncomingValue(0)->hasOneUser())
     if (Instruction *Result = foldPHIArgOpIntoPHI(PN))
       return Result;
 

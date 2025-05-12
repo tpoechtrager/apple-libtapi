@@ -79,7 +79,7 @@ static bool getARMFixupKindMachOInfo(unsigned Kind, unsigned &RelocType,
     return true;
   case FK_Data_8:
     Log2Size = llvm::Log2_32(8);
-    return false;
+    return true;
 
     // These fixups are expected to always be resolvable at assembly time and
     // have no relocations supported.
@@ -386,7 +386,8 @@ void ARMMachObjectWriter::recordRelocation(MachObjectWriter *Writer,
     // relocation type for the fixup kind. This happens when it's a fixup that's
     // expected to always be resolvable at assembly time and not have any
     // relocations needed.
-    Asm.getContext().reportError(Fixup.getLoc(), "unsupported relocation type");
+    Asm.getContext().reportError(Fixup.getLoc(),
+                                 "unsupported relocation on symbol");
     return;
   }
 
@@ -427,10 +428,8 @@ void ARMMachObjectWriter::recordRelocation(MachObjectWriter *Writer,
   unsigned Type = 0;
   const MCSymbol *RelSymbol = nullptr;
 
-  if (!A) { // constant
-    // FIXME! This is Target.isAbsolute() case as we check SymB above. We check
-    // !A to ensure that null pointer isn't dereferenced and suppress static
-    // analyzer warnings.
+  if (Target.isAbsolute()) { // constant
+    // FIXME!
     report_fatal_error("FIXME: relocations to absolute targets "
                        "not yet implemented");
   } else {

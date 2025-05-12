@@ -48,7 +48,7 @@ struct FrontendContext {
   void visit(APIVisitor &visitor) const { api->visit(visitor); }
   void visit(APIMutator &visitor) { api->visit(visitor); }
 
-  std::optional<HeaderType> findAndRecordFile(const FileEntry *file);
+  llvm::Optional<HeaderType> findAndRecordFile(const FileEntry *file);
 
 private:
   std::set<const FileEntry *> unusedFiles;

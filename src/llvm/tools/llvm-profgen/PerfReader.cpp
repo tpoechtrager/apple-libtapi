@@ -96,7 +96,8 @@ void VirtualUnwinder::unwindLinear(UnwindState &State, uint64_t Repeat) {
     return;
   }
 
-  if (!isValidFallThroughRange(Target, End, Binary)) {
+  if (!isValidFallThroughRange(Binary->virtualAddrToOffset(Target),
+                               Binary->virtualAddrToOffset(End), Binary)) {
     // Skip unwinding the rest of LBR trace when a bogus range is seen.
     State.setInvalid();
     return;
@@ -185,11 +186,17 @@ void VirtualUnwinder::collectSamplesFromFrame(UnwindState::ProfiledFrame *Cur,
     return;
   auto Ret = CtxCounterMap->emplace(Hashable<ContextKey>(Key), SampleCounter());
   SampleCounter &SCounter = Ret.first->second;
-  for (auto &I : Cur->RangeSamples)
-    SCounter.recordRangeCount(std::get<0>(I), std::get<1>(I), std::get<2>(I));
+  for (auto &Item : Cur->RangeSamples) {
+    uint64_t StartOffset = Binary->virtualAddrToOffset(std::get<0>(Item));
+    uint64_t EndOffset = Binary->virtualAddrToOffset(std::get<1>(Item));
+    SCounter.recordRangeCount(StartOffset, EndOffset, std::get<2>(Item));
+  }
 
-  for (auto &I : Cur->BranchSamples)
-    SCounter.recordBranchCount(std::get<0>(I), std::get<1>(I), std::get<2>(I));
+  for (auto &Item : Cur->BranchSamples) {
+    uint64_t SourceOffset = Binary->virtualAddrToOffset(std::get<0>(Item));
+    uint64_t TargetOffset = Binary->virtualAddrToOffset(std::get<1>(Item));
+    SCounter.recordBranchCount(SourceOffset, TargetOffset, std::get<2>(Item));
+  }
 }
 
 template <typename T>
@@ -319,7 +326,7 @@ bool VirtualUnwinder::unwind(const PerfSample *Sample, uint64_t Repeat) {
 
 std::unique_ptr<PerfReaderBase>
 PerfReaderBase::create(ProfiledBinary *Binary, PerfInputFile &PerfInput,
-                       std::optional<uint32_t> PIDFilter) {
+                       Optional<uint32_t> PIDFilter) {
   std::unique_ptr<PerfReaderBase> PerfReader;
 
   if (PerfInput.Format == PerfFormat::UnsymbolizedProfile) {
@@ -350,10 +357,8 @@ PerfReaderBase::create(ProfiledBinary *Binary, PerfInputFile &PerfInput,
   return PerfReader;
 }
 
-PerfInputFile
-PerfScriptReader::convertPerfDataToTrace(ProfiledBinary *Binary,
-                                         PerfInputFile &File,
-                                         std::optional<uint32_t> PIDFilter) {
+PerfInputFile PerfScriptReader::convertPerfDataToTrace(
+    ProfiledBinary *Binary, PerfInputFile &File, Optional<uint32_t> PIDFilter) {
   StringRef PerfData = File.InputFile;
   // Run perf script to retrieve PIDs matching binary we're interested in.
   auto PerfExecutable = sys::Process::FindInEnvPath("PATH", "perf");
@@ -366,10 +371,10 @@ PerfScriptReader::convertPerfDataToTrace(ProfiledBinary *Binary,
   StringRef ScriptMMapArgs[] = {PerfPath, "script",   "--show-mmap-events",
                                 "-F",     "comm,pid", "-i",
                                 PerfData};
-  std::optional<StringRef> Redirects[] = {std::nullopt,             // Stdin
-                                          StringRef(PerfTraceFile), // Stdout
-                                          StringRef(ErrorFile)};    // Stderr
-  sys::ExecuteAndWait(PerfPath, ScriptMMapArgs, std::nullopt, Redirects);
+  Optional<StringRef> Redirects[] = {llvm::None,               // Stdin
+                                     StringRef(PerfTraceFile), // Stdout
+                                     StringRef(ErrorFile)};    // Stderr
+  sys::ExecuteAndWait(PerfPath, ScriptMMapArgs, llvm::None, Redirects);
 
   // Collect the PIDs
   TraceStream TraceIt(PerfTraceFile);
@@ -398,7 +403,7 @@ PerfScriptReader::convertPerfDataToTrace(ProfiledBinary *Binary,
   StringRef ScriptSampleArgs[] = {PerfPath, "script",     "--show-mmap-events",
                                   "-F",     "ip,brstack", "--pid",
                                   PIDs,     "-i",         PerfData};
-  sys::ExecuteAndWait(PerfPath, ScriptSampleArgs, std::nullopt, Redirects);
+  sys::ExecuteAndWait(PerfPath, ScriptSampleArgs, llvm::None, Redirects);
 
   return {PerfTraceFile, PerfFormat::PerfScript, PerfContent::UnknownContent};
 }
@@ -462,16 +467,10 @@ static std::string getContextKeyStr(ContextKey *K,
     for (uint32_t I = 0; I < CtxKey->Context.size(); I++) {
       if (OContextStr.str().size())
         OContextStr << " @ ";
-      uint64_t Address = CtxKey->Context[I];
-      if (UseOffset) {
-        if (UseLoadableSegmentAsBase)
-          Address -= Binary->getFirstLoadableAddress();
-        else
-          Address -= Binary->getPreferredBaseAddress();
-      }
       OContextStr << "0x"
-                  << utohexstr(Address,
-                               /*LowerCase=*/true);
+                  << utohexstr(
+                         Binary->virtualAddrToOffset(CtxKey->Context[I]),
+                         /*LowerCase=*/true);
     }
     return OContextStr.str();
   } else {
@@ -480,6 +479,8 @@ static std::string getContextKeyStr(ContextKey *K,
 }
 
 void HybridPerfReader::unwindSamples() {
+  if (Binary->useFSDiscriminator())
+    exitWithError("FS discriminator is not supported in CS profile.");
   VirtualUnwinder Unwinder(&SampleCounters, Binary);
   for (const auto &Item : AggregatedSamples) {
     const PerfSample *Sample = Item.first.getPtr();
@@ -569,9 +570,6 @@ bool PerfScriptReader::extractLBRStack(TraceStream &TraceIt,
       break;
     }
 
-    // Canonicalize to use preferred load address as base address.
-    Src = Binary->canonicalizeVirtualAddress(Src);
-    Dst = Binary->canonicalizeVirtualAddress(Dst);
     bool SrcIsInternal = Binary->addressIsCode(Src);
     bool DstIsInternal = Binary->addressIsCode(Dst);
     if (!SrcIsInternal)
@@ -607,8 +605,6 @@ bool PerfScriptReader::extractCallstack(TraceStream &TraceIt,
       return false;
     }
     TraceIt.advance();
-
-    FrameAddr = Binary->canonicalizeVirtualAddress(FrameAddr);
     // Currently intermixed frame from different binaries is not supported.
     if (!Binary->addressIsCode(FrameAddr)) {
       if (CallStack.empty())
@@ -741,14 +737,14 @@ void PerfScriptReader::writeUnsymbolizedProfile(raw_fd_ostream &OS) {
       uint64_t Start = I.first.first;
       uint64_t End = I.first.second;
 
-      if (UseOffset) {
-        if (UseLoadableSegmentAsBase) {
-          Start -= Binary->getFirstLoadableAddress();
-          End -= Binary->getFirstLoadableAddress();
-        } else {
-          Start -= Binary->getPreferredBaseAddress();
-          End -= Binary->getPreferredBaseAddress();
-        }
+      if (!UseOffset || (UseOffset && UseLoadableSegmentAsBase)) {
+        Start = Binary->offsetToVirtualAddr(Start);
+        End = Binary->offsetToVirtualAddr(End);
+      }
+
+      if (UseOffset && UseLoadableSegmentAsBase) {
+        Start -= Binary->getFirstLoadableAddress();
+        End -= Binary->getFirstLoadableAddress();
       }
 
       OS.indent(Indent);
@@ -820,14 +816,13 @@ void UnsymbolizedProfileReader::readSampleCounters(TraceStream &TraceIt,
           Range.second.getAsInteger(16, Target))
         exitWithErrorForTraceLine(TraceIt);
 
-      if (UseOffset) {
-        if (UseLoadableSegmentAsBase) {
-          Source += Binary->getFirstLoadableAddress();
-          Target += Binary->getFirstLoadableAddress();
-        } else {
-          Source += Binary->getPreferredBaseAddress();
-          Target += Binary->getPreferredBaseAddress();
-        }
+      if (!UseOffset || (UseOffset && UseLoadableSegmentAsBase)) {
+        uint64_t BaseAddr = 0;
+        if (UseOffset && UseLoadableSegmentAsBase)
+          BaseAddr = Binary->getFirstLoadableAddress();
+
+        Source = Binary->virtualAddrToOffset(Source + BaseAddr);
+        Target = Binary->virtualAddrToOffset(Target + BaseAddr);
       }
 
       Counter[{Source, Target}] += Count;
@@ -865,26 +860,25 @@ void UnsymbolizedProfileReader::parsePerfTraces() {
 void PerfScriptReader::computeCounterFromLBR(const PerfSample *Sample,
                                              uint64_t Repeat) {
   SampleCounter &Counter = SampleCounters.begin()->second;
-  uint64_t EndAddress = 0;
+  uint64_t EndOffeset = 0;
   for (const LBREntry &LBR : Sample->LBRStack) {
-    uint64_t SourceAddress = LBR.Source;
-    uint64_t TargetAddress = LBR.Target;
+    uint64_t SourceOffset = Binary->virtualAddrToOffset(LBR.Source);
+    uint64_t TargetOffset = Binary->virtualAddrToOffset(LBR.Target);
 
-    // Record the branch if its SourceAddress is external. It can be the case an
+    // Record the branch if its sourceOffset is external. It can be the case an
     // external source call an internal function, later this branch will be used
     // to generate the function's head sample.
-    if (Binary->addressIsCode(TargetAddress)) {
-      Counter.recordBranchCount(SourceAddress, TargetAddress, Repeat);
+    if (Binary->offsetIsCode(TargetOffset)) {
+      Counter.recordBranchCount(SourceOffset, TargetOffset, Repeat);
     }
 
     // If this not the first LBR, update the range count between TO of current
     // LBR and FROM of next LBR.
-    uint64_t StartAddress = TargetAddress;
-    if (Binary->addressIsCode(StartAddress) &&
-        Binary->addressIsCode(EndAddress) &&
-        isValidFallThroughRange(StartAddress, EndAddress, Binary))
-      Counter.recordRangeCount(StartAddress, EndAddress, Repeat);
-    EndAddress = SourceAddress;
+    uint64_t StartOffset = TargetOffset;
+    if (Binary->offsetIsCode(StartOffset) && Binary->offsetIsCode(EndOffeset) &&
+        isValidFallThroughRange(StartOffset, EndOffeset, Binary))
+      Counter.recordRangeCount(StartOffset, EndOffeset, Repeat);
+    EndOffeset = SourceOffset;
   }
 }
 
@@ -1094,13 +1088,13 @@ void PerfScriptReader::warnInvalidRange() {
   for (const auto &Item : AggregatedSamples) {
     const PerfSample *Sample = Item.first.getPtr();
     uint64_t Count = Item.second;
-    uint64_t EndAddress = 0;
+    uint64_t EndOffeset = 0;
     for (const LBREntry &LBR : Sample->LBRStack) {
-      uint64_t SourceAddress = LBR.Source;
-      uint64_t StartAddress = LBR.Target;
-      if (EndAddress != 0)
-        Ranges[{StartAddress, EndAddress}] += Count;
-      EndAddress = SourceAddress;
+      uint64_t SourceOffset = Binary->virtualAddrToOffset(LBR.Source);
+      uint64_t StartOffset = Binary->virtualAddrToOffset(LBR.Target);
+      if (EndOffeset != 0)
+        Ranges[{StartOffset, EndOffeset}] += Count;
+      EndOffeset = SourceOffset;
     }
   }
 
@@ -1109,14 +1103,17 @@ void PerfScriptReader::warnInvalidRange() {
     return;
   }
 
-  auto WarnInvalidRange = [&](uint64_t StartAddress, uint64_t EndAddress,
-                              StringRef Msg) {
-    if (!ShowDetailedWarning)
-      return;
-    WithColor::warning() << "[" << format("%8" PRIx64, StartAddress) << ","
-                         << format("%8" PRIx64, EndAddress) << "]: " << Msg
-                         << "\n";
-  };
+  auto WarnInvalidRange =
+      [&](uint64_t StartOffset, uint64_t EndOffset, StringRef Msg) {
+        if (!ShowDetailedWarning)
+          return;
+        WithColor::warning()
+            << "["
+            << format("%8" PRIx64, Binary->offsetToVirtualAddr(StartOffset))
+            << ","
+            << format("%8" PRIx64, Binary->offsetToVirtualAddr(EndOffset))
+            << "]: " << Msg << "\n";
+      };
 
   const char *EndNotBoundaryMsg = "Range is not on instruction boundary, "
                                   "likely due to profile and binary mismatch.";
@@ -1134,37 +1131,31 @@ void PerfScriptReader::warnInvalidRange() {
   uint64_t BogusRange = 0;
 
   for (auto &I : Ranges) {
-    uint64_t StartAddress = I.first.first;
-    uint64_t EndAddress = I.first.second;
+    uint64_t StartOffset = I.first.first;
+    uint64_t EndOffset = I.first.second;
     TotalRangeNum += I.second;
 
-    if (!Binary->addressIsCode(StartAddress) &&
-        !Binary->addressIsCode(EndAddress))
-      continue;
-
-    if (!Binary->addressIsCode(StartAddress) ||
-        !Binary->addressIsTransfer(EndAddress)) {
+    if (!Binary->offsetIsCode(StartOffset) ||
+        !Binary->offsetIsTransfer(EndOffset)) {
       InstNotBoundary += I.second;
-      WarnInvalidRange(StartAddress, EndAddress, EndNotBoundaryMsg);
+      WarnInvalidRange(StartOffset, EndOffset, EndNotBoundaryMsg);
     }
 
-    auto *FRange = Binary->findFuncRange(StartAddress);
+    auto *FRange = Binary->findFuncRangeForOffset(StartOffset);
     if (!FRange) {
       UnmatchedRange += I.second;
-      WarnInvalidRange(StartAddress, EndAddress, DanglingRangeMsg);
+      WarnInvalidRange(StartOffset, EndOffset, DanglingRangeMsg);
       continue;
     }
 
-    if (EndAddress >= FRange->EndAddress) {
+    if (EndOffset >= FRange->EndOffset) {
       RangeCrossFunc += I.second;
-      WarnInvalidRange(StartAddress, EndAddress, RangeCrossFuncMsg);
+      WarnInvalidRange(StartOffset, EndOffset, RangeCrossFuncMsg);
     }
 
-    if (Binary->addressIsCode(StartAddress) &&
-        Binary->addressIsCode(EndAddress) &&
-        !isValidFallThroughRange(StartAddress, EndAddress, Binary)) {
+    if (!isValidFallThroughRange(StartOffset, EndOffset, Binary)) {
       BogusRange += I.second;
-      WarnInvalidRange(StartAddress, EndAddress, BogusRangeMsg);
+      WarnInvalidRange(StartOffset, EndOffset, BogusRangeMsg);
     }
   }
 

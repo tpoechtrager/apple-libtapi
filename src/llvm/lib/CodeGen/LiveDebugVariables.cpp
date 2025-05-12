@@ -59,7 +59,6 @@
 #include <cassert>
 #include <iterator>
 #include <memory>
-#include <optional>
 #include <utility>
 
 using namespace llvm;
@@ -138,7 +137,8 @@ public:
       // Turn this into an undef debug value list; right now, the simplest form
       // of this is an expression with one arg, and an undef debug operand.
       Expression =
-          DIExpression::get(Expr.getContext(), {dwarf::DW_OP_LLVM_arg, 0});
+          DIExpression::get(Expr.getContext(), {dwarf::DW_OP_LLVM_arg, 0,
+                                                dwarf::DW_OP_stack_value});
       if (auto FragmentInfoOpt = Expr.getFragmentInfo())
         Expression = *DIExpression::createFragmentExpression(
             Expression, FragmentInfoOpt->OffsetInBits,
@@ -286,7 +286,7 @@ class LDVImpl;
 class UserValue {
   const DILocalVariable *Variable; ///< The debug info variable we are part of.
   /// The part of the variable we describe.
-  const std::optional<DIExpression::FragmentInfo> Fragment;
+  const Optional<DIExpression::FragmentInfo> Fragment;
   DebugLoc dl;            ///< The debug location for the variable. This is
                           ///< used by dwarf writer to find lexical scope.
   UserValue *leader;      ///< Equivalence class leader.
@@ -319,7 +319,7 @@ class UserValue {
 public:
   /// Create a new UserValue.
   UserValue(const DILocalVariable *var,
-            std::optional<DIExpression::FragmentInfo> Fragment, DebugLoc L,
+            Optional<DIExpression::FragmentInfo> Fragment, DebugLoc L,
             LocMap::Allocator &alloc)
       : Variable(var), Fragment(Fragment), dl(std::move(L)), leader(this),
         locInts(alloc) {}
@@ -440,12 +440,11 @@ public:
   /// VNInfo.
   /// \param [out] Kills Append end points of VNI's live range to Kills.
   /// \param LIS Live intervals analysis.
-  void
-  extendDef(SlotIndex Idx, DbgVariableValue DbgValue,
-            SmallDenseMap<unsigned, std::pair<LiveRange *, const VNInfo *>>
-                &LiveIntervalInfo,
-            std::optional<std::pair<SlotIndex, SmallVector<unsigned>>> &Kills,
-            LiveIntervals &LIS);
+  void extendDef(SlotIndex Idx, DbgVariableValue DbgValue,
+                 SmallDenseMap<unsigned, std::pair<LiveRange *, const VNInfo *>>
+                     &LiveIntervalInfo,
+                 Optional<std::pair<SlotIndex, SmallVector<unsigned>>> &Kills,
+                 LiveIntervals &LIS);
 
   /// The value in LI may be copies to other registers. Determine if
   /// any of the copies are available at the kill points, and add defs if
@@ -583,7 +582,7 @@ class LDVImpl {
 
   /// Find or create a UserValue.
   UserValue *getUserValue(const DILocalVariable *Var,
-                          std::optional<DIExpression::FragmentInfo> Fragment,
+                          Optional<DIExpression::FragmentInfo> Fragment,
                           const DebugLoc &DL);
 
   /// Find the EC leader for VirtReg or null.
@@ -764,14 +763,14 @@ void LDVImpl::print(raw_ostream &OS) {
 
 void UserValue::mapVirtRegs(LDVImpl *LDV) {
   for (unsigned i = 0, e = locations.size(); i != e; ++i)
-    if (locations[i].isReg() && locations[i].getReg().isVirtual())
+    if (locations[i].isReg() &&
+        Register::isVirtualRegister(locations[i].getReg()))
       LDV->mapVirtReg(locations[i].getReg(), this);
 }
 
-UserValue *
-LDVImpl::getUserValue(const DILocalVariable *Var,
-                      std::optional<DIExpression::FragmentInfo> Fragment,
-                      const DebugLoc &DL) {
+UserValue *LDVImpl::getUserValue(const DILocalVariable *Var,
+                                 Optional<DIExpression::FragmentInfo> Fragment,
+                                 const DebugLoc &DL) {
   // FIXME: Handle partially overlapping fragments. See
   // https://reviews.llvm.org/D70121#1849741.
   DebugVariable ID(Var, Fragment, DL->getInlinedAt());
@@ -785,7 +784,7 @@ LDVImpl::getUserValue(const DILocalVariable *Var,
 }
 
 void LDVImpl::mapVirtReg(Register VirtReg, UserValue *EC) {
-  assert(VirtReg.isVirtual() && "Only map VirtRegs");
+  assert(Register::isVirtualRegister(VirtReg) && "Only map VirtRegs");
   UserValue *&Leader = virtRegToEqClass[VirtReg];
   Leader = UserValue::merge(Leader, EC);
 }
@@ -821,7 +820,7 @@ bool LDVImpl::handleDebugValue(MachineInstr &MI, SlotIndex Idx) {
   // will be incorrect.
   bool Discard = false;
   for (const MachineOperand &Op : MI.debug_operands()) {
-    if (Op.isReg() && Op.getReg().isVirtual()) {
+    if (Op.isReg() && Register::isVirtualRegister(Op.getReg())) {
       const Register Reg = Op.getReg();
       if (!LIS->hasInterval(Reg)) {
         // The DBG_VALUE is described by a virtual register that does not have a
@@ -874,16 +873,12 @@ bool LDVImpl::handleDebugValue(MachineInstr &MI, SlotIndex Idx) {
 
 MachineBasicBlock::iterator LDVImpl::handleDebugInstr(MachineInstr &MI,
                                                       SlotIndex Idx) {
-  assert(MI.isDebugValueLike() || MI.isDebugPHI());
+  assert(MI.isDebugValue() || MI.isDebugRef() || MI.isDebugPHI());
 
   // In instruction referencing mode, there should be no DBG_VALUE instructions
   // that refer to virtual registers. They might still refer to constants.
-  if (MI.isDebugValueLike())
-    assert(none_of(MI.debug_operands(),
-                   [](const MachineOperand &MO) {
-                     return MO.isReg() && MO.getReg().isVirtual();
-                   }) &&
-           "MIs should not refer to Virtual Registers in InstrRef mode.");
+  if (MI.isDebugValue())
+    assert(!MI.getOperand(0).isReg() || !MI.getOperand(0).getReg().isVirtual());
 
   // Unlink the instruction, store it in the debug instructions collection.
   auto NextInst = std::next(MI.getIterator());
@@ -960,7 +955,7 @@ void UserValue::extendDef(
     SlotIndex Idx, DbgVariableValue DbgValue,
     SmallDenseMap<unsigned, std::pair<LiveRange *, const VNInfo *>>
         &LiveIntervalInfo,
-    std::optional<std::pair<SlotIndex, SmallVector<unsigned>>> &Kills,
+    Optional<std::pair<SlotIndex, SmallVector<unsigned>>> &Kills,
     LiveIntervals &LIS) {
   SlotIndex Start = Idx;
   MachineBasicBlock *MBB = LIS.getMBBFromIndex(Start);
@@ -990,7 +985,7 @@ void UserValue::extendDef(
     Start = Start.getNextSlot();
     if (I.value() != DbgValue || I.stop() != Start) {
       // Clear `Kills`, as we have a new def available.
-      Kills = std::nullopt;
+      Kills = None;
       return;
     }
     // This is a one-slot placeholder. Just skip it.
@@ -1001,7 +996,7 @@ void UserValue::extendDef(
   if (I.valid() && I.start() < Stop) {
     Stop = I.start();
     // Clear `Kills`, as we have a new def available.
-    Kills = std::nullopt;
+    Kills = None;
   }
 
   if (Start < Stop) {
@@ -1017,8 +1012,9 @@ void UserValue::addDefsFromCopies(
     SmallVectorImpl<std::pair<SlotIndex, DbgVariableValue>> &NewDefs,
     MachineRegisterInfo &MRI, LiveIntervals &LIS) {
   // Don't track copies from physregs, there are too many uses.
-  if (any_of(LocIntervals,
-             [](auto LocI) { return !LocI.second->reg().isVirtual(); }))
+  if (any_of(LocIntervals, [](auto LocI) {
+        return !Register::isVirtualRegister(LocI.second->reg());
+      }))
     return;
 
   // Collect all the (vreg, valno) pairs that are copies of LI.
@@ -1039,7 +1035,7 @@ void UserValue::addDefsFromCopies(
       // arguments, and the argument registers are always call clobbered. We are
       // better off in the source register which could be a callee-saved
       // register, or it could be spilled.
-      if (!DstReg.isVirtual())
+      if (!Register::isVirtualRegister(DstReg))
         continue;
 
       // Is the value extended to reach this copy? If not, another def may be
@@ -1118,7 +1114,7 @@ void UserValue::computeIntervals(MachineRegisterInfo &MRI,
     bool ShouldExtendDef = false;
     for (unsigned LocNo : DbgValue.loc_nos()) {
       const MachineOperand &LocMO = locations[LocNo];
-      if (!LocMO.isReg() || !LocMO.getReg().isVirtual()) {
+      if (!LocMO.isReg() || !Register::isVirtualRegister(LocMO.getReg())) {
         ShouldExtendDef |= !LocMO.isReg();
         continue;
       }
@@ -1133,7 +1129,7 @@ void UserValue::computeIntervals(MachineRegisterInfo &MRI,
         LIs[LocNo] = {LI, VNI};
     }
     if (ShouldExtendDef) {
-      std::optional<std::pair<SlotIndex, SmallVector<unsigned>>> Kills;
+      Optional<std::pair<SlotIndex, SmallVector<unsigned>>> Kills;
       extendDef(Idx, DbgValue, LIs, Kills, LIS);
 
       if (Kills) {
@@ -1526,7 +1522,8 @@ void UserValue::rewriteLocations(VirtRegMap &VRM, const MachineFunction &MF,
     unsigned SpillOffset = 0;
     MachineOperand Loc = locations[I];
     // Only virtual registers are rewritten.
-    if (Loc.isReg() && Loc.getReg() && Loc.getReg().isVirtual()) {
+    if (Loc.isReg() && Loc.getReg() &&
+        Register::isVirtualRegister(Loc.getReg())) {
       Register VirtReg = Loc.getReg();
       if (VRM.isAssignedReg(VirtReg) &&
           Register::isPhysicalRegister(VRM.getPhys(VirtReg))) {

@@ -31,26 +31,13 @@ public:
   // equivalent of a ValueT.
   //
   // using ValueRefT = ...
-  //
-  // The ConstValueRefT is needed to work with "const Value *", where const
-  // needs to bind to the pointee and not the pointer.
-  //
-  // using ConstValueRefT = ...
-  //
-  // The null value for ValueRefT.
-  //
-  // static constexpr ValueRefT ValueRefNull;
 
-  // An InstructionT usually defines one or more ValueT objects.
+  // An InstT is a subclass of ValueT that itself defines one or more ValueT
+  // objects.
   //
-  // using InstructionT = ... must be a subclass of Value
+  // using InstT = ... must be a subclass of Value
 
-  // A UseT represents a data-edge from the defining instruction to the using
-  // instruction.
-  //
-  // using UseT = ...
-
-  // A BlockT is a sequence of InstructionT, and forms a node of the CFG. It
+  // A BlockT is a sequence of InstT, and forms a node of the CFG. It
   // has global methods predecessors() and successors() that return
   // the list of incoming CFG edges and outgoing CFG edges
   // respectively.
@@ -66,36 +53,15 @@ public:
   // indicated by the compiler.
   using FunctionT = typename _FunctionT::invalidTemplateInstanceError;
 
-  // A dominator tree provides the dominance relation between basic blocks in
-  // a given funciton.
+  // Every FunctionT has a unique BlockT marked as its entry.
   //
-  // using DominatorTreeT = ...
+  // static BlockT* getEntryBlock(FunctionT &F);
 
   // Initialize the SSA context with information about the FunctionT being
   // processed.
   //
   // void setFunction(FunctionT &function);
   // FunctionT* getFunction() const;
-
-  // Every FunctionT has a unique BlockT marked as its entry.
-  //
-  // static BlockT* getEntryBlock(FunctionT &F);
-
-  // Methods to examine basic blocks and values
-  //
-  // static void appendBlockDefs(SmallVectorImpl<ValueRefT> &defs,
-  //                             BlockT &block);
-  // static void appendBlockDefs(SmallVectorImpl<const ValueRefT> &defs,
-  //                             const BlockT &block);
-
-  // static void appendBlockTerms(SmallVectorImpl<InstructionT *> &terms,
-  //                              BlockT &block);
-  // static void appendBlockTerms(SmallVectorImpl<const InstructionT *> &terms,
-  //                              const BlockT &block);
-  //
-  // static bool comesBefore(const InstructionT *lhs, const InstructionT *rhs);
-  // static bool isConstantOrUndefValuePhi(const InstructionT &Instr);
-  // const BlockT *getDefBlock(const ValueRefT value) const;
 
   // Methods to print various objects.
   //

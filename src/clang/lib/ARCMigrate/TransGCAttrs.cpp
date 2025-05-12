@@ -46,7 +46,7 @@ public:
     if (!D || D->isImplicit())
       return true;
 
-    SaveAndRestore Save(FullyMigratable, isMigratable(D));
+    SaveAndRestore<bool> Save(FullyMigratable, isMigratable(D));
 
     if (ObjCPropertyDecl *PropD = dyn_cast<ObjCPropertyDecl>(D)) {
       lookForAttribute(PropD, PropD->getTypeSourceInfo());

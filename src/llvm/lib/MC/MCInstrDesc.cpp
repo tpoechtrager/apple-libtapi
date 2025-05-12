@@ -31,16 +31,17 @@ bool MCInstrDesc::mayAffectControlFlow(const MCInst &MI,
 
 bool MCInstrDesc::hasImplicitDefOfPhysReg(unsigned Reg,
                                           const MCRegisterInfo *MRI) const {
-  for (MCPhysReg ImpDef : implicit_defs())
-    if (ImpDef == Reg || (MRI && MRI->isSubRegister(Reg, ImpDef)))
-      return true;
+  if (const MCPhysReg *ImpDefs = ImplicitDefs)
+    for (; *ImpDefs; ++ImpDefs)
+      if (*ImpDefs == Reg || (MRI && MRI->isSubRegister(Reg, *ImpDefs)))
+        return true;
   return false;
 }
 
 bool MCInstrDesc::hasDefOfPhysReg(const MCInst &MI, unsigned Reg,
                                   const MCRegisterInfo &RI) const {
   for (int i = 0, e = NumDefs; i != e; ++i)
-    if (MI.getOperand(i).isReg() && MI.getOperand(i).getReg() &&
+    if (MI.getOperand(i).isReg() &&
         RI.isSubRegisterEq(Reg, MI.getOperand(i).getReg()))
       return true;
   if (variadicOpsAreDefs())

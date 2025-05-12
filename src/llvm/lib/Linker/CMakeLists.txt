@@ -13,5 +13,4 @@ add_llvm_component_library(LLVMLinker
   Object
   Support
   TransformUtils
-  TargetParser
   )

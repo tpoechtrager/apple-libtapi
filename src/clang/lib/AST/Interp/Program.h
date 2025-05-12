@@ -42,19 +42,11 @@ public:
   Program(Context &Ctx) : Ctx(Ctx) {}
 
   ~Program() {
-    // Manually destroy all the blocks. They are almost all harmless,
-    // but primitive arrays might have an InitMap* heap allocated and
-    // that needs to be freed.
-    for (Global *G : Globals)
-      G->block()->invokeDtor();
-
     // Records might actually allocate memory themselves, but they
     // are allocated using a BumpPtrAllocator. Call their desctructors
     // here manually so they are properly freeing their resources.
-    for (auto RecordPair : Records) {
-      if (Record *R = RecordPair.second)
-        R->~Record();
-    }
+    for (auto RecordPair : Records)
+      RecordPair.second->~Record();
   }
 
   /// Marshals a native pointer to an ID for embedding in bytecode.
@@ -76,25 +68,23 @@ public:
   }
 
   /// Finds a global's index.
-  std::optional<unsigned> getGlobal(const ValueDecl *VD);
+  llvm::Optional<unsigned> getGlobal(const ValueDecl *VD);
 
   /// Returns or creates a global an creates an index to it.
-  std::optional<unsigned> getOrCreateGlobal(const ValueDecl *VD,
-                                            const Expr *Init = nullptr);
+  llvm::Optional<unsigned> getOrCreateGlobal(const ValueDecl *VD);
 
   /// Returns or creates a dummy value for parameters.
-  std::optional<unsigned> getOrCreateDummy(const ParmVarDecl *PD);
+  llvm::Optional<unsigned> getOrCreateDummy(const ParmVarDecl *PD);
 
   /// Creates a global and returns its index.
-  std::optional<unsigned> createGlobal(const ValueDecl *VD, const Expr *E);
+  llvm::Optional<unsigned> createGlobal(const ValueDecl *VD, const Expr *E);
 
   /// Creates a global from a lifetime-extended temporary.
-  std::optional<unsigned> createGlobal(const Expr *E);
+  llvm::Optional<unsigned> createGlobal(const Expr *E);
 
   /// Creates a new function from a code range.
   template <typename... Ts>
   Function *createFunction(const FunctionDecl *Def, Ts &&... Args) {
-    Def = Def->getCanonicalDecl();
     auto *Func = new Function(*this, Def, std::forward<Ts>(Args)...);
     Funcs.insert({Def, std::unique_ptr<Function>(Func)});
     return Func;
@@ -115,15 +105,14 @@ public:
 
   /// Creates a descriptor for a primitive type.
   Descriptor *createDescriptor(const DeclTy &D, PrimType Type,
-                               Descriptor::MetadataSize MDSize = std::nullopt,
-                               bool IsConst = false, bool IsTemporary = false,
+                               bool IsConst = false,
+                               bool IsTemporary = false,
                                bool IsMutable = false) {
-    return allocateDescriptor(D, Type, MDSize, IsConst, IsTemporary, IsMutable);
+    return allocateDescriptor(D, Type, IsConst, IsTemporary, IsMutable);
   }
 
   /// Creates a descriptor for a composite type.
   Descriptor *createDescriptor(const DeclTy &D, const Type *Ty,
-                               Descriptor::MetadataSize MDSize = std::nullopt,
                                bool IsConst = false, bool IsTemporary = false,
                                bool IsMutable = false,
                                const Expr *Init = nullptr);
@@ -131,9 +120,7 @@ public:
   /// Context to manage declaration lifetimes.
   class DeclScope {
   public:
-    DeclScope(Program &P, const ValueDecl *VD) : P(P) {
-      P.startDeclaration(VD);
-    }
+    DeclScope(Program &P, const VarDecl *VD) : P(P) { P.startDeclaration(VD); }
     ~DeclScope() { P.endDeclaration(); }
 
   private:
@@ -141,18 +128,18 @@ public:
   };
 
   /// Returns the current declaration ID.
-  std::optional<unsigned> getCurrentDecl() const {
+  llvm::Optional<unsigned> getCurrentDecl() const {
     if (CurrentDeclaration == NoDeclaration)
-      return std::optional<unsigned>{};
+      return llvm::Optional<unsigned>{};
     return LastDeclaration;
   }
 
 private:
   friend class DeclScope;
 
-  std::optional<unsigned> createGlobal(const DeclTy &D, QualType Ty,
-                                       bool IsStatic, bool IsExtern,
-                                       const Expr *Init = nullptr);
+  llvm::Optional<unsigned> createGlobal(const DeclTy &D, QualType Ty,
+                                        bool IsStatic, bool IsExtern,
+                                        const Expr *Init = nullptr);
 
   /// Reference to the VM context.
   Context &Ctx;
@@ -224,7 +211,7 @@ private:
   unsigned CurrentDeclaration = NoDeclaration;
 
   /// Starts evaluating a declaration.
-  void startDeclaration(const ValueDecl *Decl) {
+  void startDeclaration(const VarDecl *Decl) {
     LastDeclaration += 1;
     CurrentDeclaration = LastDeclaration;
   }

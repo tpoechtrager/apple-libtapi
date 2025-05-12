@@ -26,7 +26,6 @@
 #include "llvm/Support/Allocator.h"
 #include "llvm/Support/Compiler.h"
 #include <cstdint>
-#include <optional>
 #include <utility>
 #include <vector>
 
@@ -56,7 +55,7 @@ class TargetLibraryInfo;
 class Value;
 /// A private "module" namespace for types and utilities used by GVN. These
 /// are implementation details and should not be used by clients.
-namespace LLVM_LIBRARY_VISIBILITY gvn {
+namespace gvn LLVM_LIBRARY_VISIBILITY {
 
 struct AvailableValue;
 struct AvailableValueInBlock;
@@ -72,11 +71,11 @@ class GVNLegacyPass;
 /// Intended use is to create a default object, modify parameters with
 /// additional setters and then pass it to GVN.
 struct GVNOptions {
-  std::optional<bool> AllowPRE;
-  std::optional<bool> AllowLoadPRE;
-  std::optional<bool> AllowLoadInLoopPRE;
-  std::optional<bool> AllowLoadPRESplitBackedge;
-  std::optional<bool> AllowMemDep;
+  Optional<bool> AllowPRE = None;
+  Optional<bool> AllowLoadPRE = None;
+  Optional<bool> AllowLoadInLoopPRE = None;
+  Optional<bool> AllowLoadPRESplitBackedge = None;
+  Optional<bool> AllowMemDep = None;
 
   GVNOptions() = default;
 
@@ -318,9 +317,10 @@ private:
   bool processAssumeIntrinsic(AssumeInst *II);
 
   /// Given a local dependency (Def or Clobber) determine if a value is
-  /// available for the load.
-  std::optional<gvn::AvailableValue>
-  AnalyzeLoadAvailability(LoadInst *Load, MemDepResult DepInfo, Value *Address);
+  /// available for the load.  Returns true if an value is known to be
+  /// available and populates Res.  Returns false otherwise.
+  bool AnalyzeLoadAvailability(LoadInst *Load, MemDepResult DepInfo,
+                               Value *Address, gvn::AvailableValue &Res);
 
   /// Given a list of non-local dependencies, determine if a value is
   /// available for the load in each specified block.  If it is, add it to
@@ -328,11 +328,6 @@ private:
   void AnalyzeLoadAvailability(LoadInst *Load, LoadDepVect &Deps,
                                AvailValInBlkVect &ValuesPerBlock,
                                UnavailBlkVect &UnavailableBlocks);
-
-  /// Given a critical edge from Pred to LoadBB, find a load instruction
-  /// which is identical to Load from another successor of Pred.
-  LoadInst *findLoadToHoistIntoPred(BasicBlock *Pred, BasicBlock *LoadBB,
-                                    LoadInst *Load);
 
   bool PerformLoadPRE(LoadInst *Load, AvailValInBlkVect &ValuesPerBlock,
                       UnavailBlkVect &UnavailableBlocks);
@@ -347,8 +342,7 @@ private:
   /// AvailableLoads (connected by Phis if needed).
   void eliminatePartiallyRedundantLoad(
       LoadInst *Load, AvailValInBlkVect &ValuesPerBlock,
-      MapVector<BasicBlock *, Value *> &AvailableLoads,
-      MapVector<BasicBlock *, LoadInst *> *CriticalEdgePredAndLoad);
+      MapVector<BasicBlock *, Value *> &AvailableLoads);
 
   // Other helper routines
   bool processInstruction(Instruction *I);
@@ -361,7 +355,6 @@ private:
                                  BasicBlock *Curr, unsigned int ValNo);
   Value *findLeader(const BasicBlock *BB, uint32_t num);
   void cleanupGlobalSets();
-  void removeInstruction(Instruction *I);
   void verifyRemoved(const Instruction *I) const;
   bool splitCriticalEdges();
   BasicBlock *splitCriticalEdges(BasicBlock *Pred, BasicBlock *Succ);

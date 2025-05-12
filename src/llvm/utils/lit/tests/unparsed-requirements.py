@@ -5,20 +5,7 @@ from lit.Test import Result, Test, TestSuite
 from lit.TestRunner import parseIntegratedTestScript
 from lit.TestingConfig import TestingConfig
 
-config = TestingConfig(
-    None,
-    "config",
-    [".txt"],
-    None,
-    [],
-    [],
-    False,
-    sys.argv[1],
-    sys.argv[1],
-    [],
-    [],
-    True,
-)
+config = TestingConfig(None, "config", [".txt"], None, [], [], False, sys.argv[1], sys.argv[1], [], [], True)
 suite = TestSuite("suite", sys.argv[1], sys.argv[1], config)
 
 test = Test(suite, ["test.py"], config)

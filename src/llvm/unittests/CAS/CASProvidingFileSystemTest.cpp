@@ -31,32 +31,31 @@ TEST(CASProvidingFileSystemTest, Basic) {
     ErrorOr<std::unique_ptr<vfs::File>> File = CASFS->openFileForRead(Path1);
     ASSERT_TRUE(File);
     ASSERT_TRUE(*File);
-    ErrorOr<std::optional<cas::ObjectRef>> Ref =
-        (*File)->getObjectRefForContent();
+    ErrorOr<Optional<cas::ObjectRef>> Ref = (*File)->getObjectRefForContent();
     ASSERT_TRUE(Ref);
     ASSERT_TRUE(*Ref);
-    std::optional<ObjectProxy> BlobContents;
+    Optional<ObjectProxy> BlobContents;
     ASSERT_THAT_ERROR(DB->getProxy(**Ref).moveInto(BlobContents), Succeeded());
     EXPECT_EQ(BlobContents->getData(), Contents1);
   }
   {
-    ErrorOr<std::optional<cas::ObjectRef>> Ref =
+    ErrorOr<Optional<cas::ObjectRef>> Ref =
         CASFS->getObjectRefForFileContent(Path1);
     ASSERT_TRUE(Ref);
     ASSERT_TRUE(*Ref);
-    std::optional<ObjectProxy> BlobContents;
+    Optional<ObjectProxy> BlobContents;
     ASSERT_THAT_ERROR(DB->getProxy(**Ref).moveInto(BlobContents), Succeeded());
     EXPECT_EQ(BlobContents->getData(), Contents1);
   }
   {
-    std::optional<cas::ObjectRef> CASContents;
+    Optional<cas::ObjectRef> CASContents;
     auto Buf = CASFS->getBufferForFile(Path2, /*FileSize*/ -1,
                                        /*RequiresNullTerminator*/ false,
                                        /*IsVolatile*/ false, &CASContents);
     ASSERT_TRUE(Buf);
     EXPECT_EQ(Contents2, (*Buf)->getBuffer());
     ASSERT_TRUE(CASContents);
-    std::optional<ObjectProxy> BlobContents;
+    Optional<ObjectProxy> BlobContents;
     ASSERT_THAT_ERROR(DB->getProxy(*CASContents).moveInto(BlobContents),
                       Succeeded());
     EXPECT_EQ(BlobContents->getData(), Contents2);
@@ -81,17 +80,16 @@ TEST(CASProvidingFileSystemTest, WithCASSupportingFS) {
   ErrorOr<std::unique_ptr<vfs::File>> File = CASFS->openFileForRead(Path);
   ASSERT_TRUE(File);
   ASSERT_TRUE(*File);
-  ErrorOr<std::optional<cas::ObjectRef>> Ref =
-      (*File)->getObjectRefForContent();
+  ErrorOr<Optional<cas::ObjectRef>> Ref = (*File)->getObjectRefForContent();
   ASSERT_TRUE(Ref);
   ASSERT_TRUE(*Ref);
-  std::optional<ObjectProxy> BlobContents;
+  Optional<ObjectProxy> BlobContents;
   ASSERT_THAT_ERROR(UnderlyingDB->getProxy(**Ref).moveInto(BlobContents),
                     Succeeded());
   EXPECT_EQ(BlobContents->getData(), Contents);
 
   CASID ID = UnderlyingDB->getID(**Ref);
-  std::optional<ObjectProxy> Proxy;
+  Optional<ObjectProxy> Proxy;
   // It didn't have to ingest in DB because the underlying FS provided a CAS
   // reference.
   ASSERT_THAT_ERROR(DB->getProxy(ID).moveInto(Proxy), Failed());

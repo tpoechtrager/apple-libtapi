@@ -20,7 +20,6 @@
 #include <cassert>
 #include <map>
 #include <memory>
-#include <optional>
 #include <string>
 #include <vector>
 
@@ -88,6 +87,9 @@ enum ActionKind {
 
   /// Generate pre-compiled module from a C++ module interface file.
   GenerateModuleInterface,
+
+  /// Generate pre-compiled module from a set of header files.
+  GenerateHeaderModule,
 
   /// Generate a C++20 header unit module from a header file.
   GenerateHeaderUnit,
@@ -157,7 +159,11 @@ private:
 
 public:
   /// The input file format.
-  enum Format { Source, ModuleMap, Precompiled };
+  enum Format {
+    Source,
+    ModuleMap,
+    Precompiled
+  };
 
   // If we are building a header unit, what kind it is; this affects whether
   // we look for the file in the user or system include search paths before
@@ -220,10 +226,10 @@ class FrontendInputFile {
   /// The input, if it comes from a buffer rather than a file. This object
   /// does not own the buffer, and the caller is responsible for ensuring
   /// that it outlives any users.
-  std::optional<llvm::MemoryBufferRef> Buffer;
+  llvm::Optional<llvm::MemoryBufferRef> Buffer;
 
   /// The input, if it comes from \p FrontendOptions::CASIncludeTreeID.
-  std::optional<cas::ObjectRef> IncludeTree;
+  Optional<cas::ObjectRef> IncludeTree;
 
   /// The kind of input, e.g., C source, AST file, LLVM IR.
   InputKind Kind;
@@ -250,9 +256,9 @@ public:
   InputKind getKind() const { return Kind; }
   bool isSystem() const { return IsSystem; }
 
-  bool isEmpty() const { return File.empty() && Buffer == std::nullopt; }
+  bool isEmpty() const { return File.empty() && Buffer == None; }
   bool isFile() const { return !isBuffer(); }
-  bool isBuffer() const { return Buffer != std::nullopt; }
+  bool isBuffer() const { return Buffer != None; }
   bool isIncludeTree() const { return IncludeTree.has_value(); }
   bool isPreprocessed() const { return Kind.isPreprocessed(); }
   bool isHeader() const { return Kind.isHeader(); }
@@ -292,10 +298,11 @@ public:
   /// Show frontend performance metrics and statistics.
   unsigned ShowStats : 1;
 
-  unsigned AppendStats : 1;
-
   /// print the supported cpus for the current target
   unsigned PrintSupportedCPUs : 1;
+
+  /// Output time trace profile.
+  unsigned TimeTrace : 1;
 
   /// Show the -version text.
   unsigned ShowVersion : 1;
@@ -364,45 +371,19 @@ public:
   /// is specified.
   unsigned CacheCompileJob : 1;
 
-  /// Whether this invocation is dependency scanning for include-tree. Used to
-  /// separate module cache for include-tree from cas-fs.
-  unsigned ForIncludeTreeScan : 1;
-
   /// Avoid checking if the compile job is already cached, force compilation and
   /// caching of compilation outputs. This is used for testing purposes.
   unsigned DisableCachedCompileJobReplay : 1;
 
-  /// Whether to preserve the original PCH path in the include-tree, or to
-  /// canonicalize it to a fixed value. Setting this to \c true allows the use
-  /// of gmodules with PCH and include tree.
-  unsigned IncludeTreePreservePCHPath : 1;
-
   /// Keep the diagnostic client open for receiving diagnostics after the source
   /// files have been processed.
   unsigned MayEmitDiagnosticsAfterProcessingSourceFiles : 1;
-
-  /// When using CacheCompileJob, write a CASID for the output file.
-  ///
-  /// FIXME: Add clang tests for this functionality.
-  unsigned WriteOutputAsCASID : 1;
 
   /// Output (and read) PCM files regardless of compiler errors.
   unsigned AllowPCMWithCompilerErrors : 1;
 
   /// Whether to share the FileManager when building modules.
   unsigned ModulesShareFileManager : 1;
-
-  /// Whether to emit symbol graph files as a side effect of compilation.
-  unsigned EmitSymbolGraph : 1;
-
-  /// Whether to emit additional symbol graphs for extended modules.
-  unsigned EmitExtensionSymbolGraphs : 1;
-
-  /// Whether to emit symbol labels for testing in generated symbol graphs
-  unsigned EmitSymbolGraphSymbolLabelsForTesting : 1;
-
-  /// Whether to emit symbol labels for testing in generated symbol graphs
-  unsigned EmitPrettySymbolGraphs : 1;
 
   CodeCompleteOptions CodeCompleteOpts;
 
@@ -461,11 +442,11 @@ public:
     /// Enable converting setter/getter expressions to property-dot syntx.
     ObjCMT_PropertyDotSyntax = 0x1000,
 
-    ObjCMT_MigrateDecls =
-        (ObjCMT_ReadonlyProperty | ObjCMT_ReadwriteProperty |
-         ObjCMT_Annotation | ObjCMT_Instancetype | ObjCMT_NsMacros |
-         ObjCMT_ProtocolConformance | ObjCMT_NsAtomicIOSOnlyProperty |
-         ObjCMT_DesignatedInitializer),
+    ObjCMT_MigrateDecls = (ObjCMT_ReadonlyProperty | ObjCMT_ReadwriteProperty |
+                           ObjCMT_Annotation | ObjCMT_Instancetype |
+                           ObjCMT_NsMacros | ObjCMT_ProtocolConformance |
+                           ObjCMT_NsAtomicIOSOnlyProperty |
+                           ObjCMT_DesignatedInitializer),
     ObjCMT_MigrateAll = (ObjCMT_Literals | ObjCMT_Subscripting |
                          ObjCMT_MigrateDecls | ObjCMT_PropertyDotSyntax)
   };
@@ -527,10 +508,6 @@ public:
   // ignore when extracting documentation.
   std::vector<std::string> ExtractAPIIgnoresFileList;
 
-  // Location of output directory where symbol graph information would
-  // be dumped. This overrides regular -o output file specification
-  std::string SymbolGraphOutputDir;
-
   /// Args to pass to the plugins
   std::map<std::string, std::vector<std::string>> PluginArgs;
 
@@ -572,10 +549,10 @@ public:
   std::string AuxTriple;
 
   /// Auxiliary target CPU for CUDA/HIP compilation.
-  std::optional<std::string> AuxTargetCPU;
+  Optional<std::string> AuxTargetCPU;
 
   /// Auxiliary target features for CUDA/HIP compilation.
-  std::optional<std::vector<std::string>> AuxTargetFeatures;
+  Optional<std::vector<std::string>> AuxTargetFeatures;
 
   /// Filename to write statistics to.
   std::string StatsFile;
@@ -589,7 +566,7 @@ public:
 public:
   FrontendOptions()
       : DisableFree(false), RelocatablePCH(false), ShowHelp(false),
-        ShowStats(false), AppendStats(false), ShowVersion(false),
+        ShowStats(false), TimeTrace(false), ShowVersion(false),
         FixWhatYouCan(false), FixOnlyWarnings(false), FixAndRecompile(false),
         FixToTemporaries(false), ARCMTMigrateEmitARCErrors(false),
         SkipFunctionBodies(false), UseGlobalModuleIndex(true),
@@ -597,14 +574,10 @@ public:
         ASTDumpLookups(false), BuildingImplicitModule(false),
         BuildingImplicitModuleUsesLock(true), ModulesEmbedAllFiles(false),
         IncludeTimestamps(true), UseTemporary(true), CacheCompileJob(false),
-        ForIncludeTreeScan(false), DisableCachedCompileJobReplay(false),
-        IncludeTreePreservePCHPath(false),
+        DisableCachedCompileJobReplay(false),
         MayEmitDiagnosticsAfterProcessingSourceFiles(false),
-        WriteOutputAsCASID(false), AllowPCMWithCompilerErrors(false),
-        ModulesShareFileManager(true), EmitSymbolGraph(false),
-        EmitExtensionSymbolGraphs(false),
-        EmitSymbolGraphSymbolLabelsForTesting(false),
-        EmitPrettySymbolGraphs(false), TimeTraceGranularity(500) {}
+        AllowPCMWithCompilerErrors(false),
+        ModulesShareFileManager(true), TimeTraceGranularity(500) {}
 
   /// getInputKindForExtension - Return the appropriate input kind for a file
   /// extension. For example, "c" would return Language::C.

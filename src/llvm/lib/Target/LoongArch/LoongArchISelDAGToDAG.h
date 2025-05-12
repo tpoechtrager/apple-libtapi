@@ -24,12 +24,12 @@ class LoongArchDAGToDAGISel : public SelectionDAGISel {
   const LoongArchSubtarget *Subtarget = nullptr;
 
 public:
-  static char ID;
-
-  LoongArchDAGToDAGISel() = delete;
-
   explicit LoongArchDAGToDAGISel(LoongArchTargetMachine &TM)
-      : SelectionDAGISel(ID, TM) {}
+      : SelectionDAGISel(TM) {}
+
+  StringRef getPassName() const override {
+    return "LoongArch DAG->DAG Pattern Instruction Selection";
+  }
 
   bool runOnMachineFunction(MachineFunction &MF) override {
     Subtarget = &MF.getSubtarget<LoongArchSubtarget>();
@@ -42,7 +42,6 @@ public:
                                     std::vector<SDValue> &OutOps) override;
 
   bool SelectBaseAddr(SDValue Addr, SDValue &Base);
-  bool SelectAddrConstant(SDValue Addr, SDValue &Base, SDValue &Offset);
   bool selectNonFIBaseAddr(SDValue Addr, SDValue &Base);
 
   bool selectShiftMask(SDValue N, unsigned ShiftWidth, SDValue &ShAmt);

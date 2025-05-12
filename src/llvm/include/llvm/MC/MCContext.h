@@ -10,6 +10,7 @@
 #define LLVM_MC_MCCONTEXT_H
 
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringMap.h"
@@ -34,7 +35,6 @@
 #include <functional>
 #include <map>
 #include <memory>
-#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -101,7 +101,7 @@ private:
   Triple TT;
 
   /// The SourceMgr for this object, if any.
-  const SourceMgr *SrcMgr = nullptr;
+  const SourceMgr *SrcMgr;
 
   /// The SourceMgr for inline assembly, if any.
   std::unique_ptr<SourceMgr> InlineSrcMgr;
@@ -110,16 +110,16 @@ private:
   DiagHandlerTy DiagHandler;
 
   /// The MCAsmInfo for this target.
-  const MCAsmInfo *MAI = nullptr;
+  const MCAsmInfo *MAI;
 
   /// The MCRegisterInfo for this target.
-  const MCRegisterInfo *MRI = nullptr;
+  const MCRegisterInfo *MRI;
 
   /// The MCObjectFileInfo for this target.
-  const MCObjectFileInfo *MOFI = nullptr;
+  const MCObjectFileInfo *MOFI;
 
   /// The MCSubtargetInfo for this target.
-  const MCSubtargetInfo *MSTI = nullptr;
+  const MCSubtargetInfo *MSTI;
 
   std::unique_ptr<CodeViewContext> CVContext;
 
@@ -173,7 +173,7 @@ private:
   unsigned GetInstance(unsigned LocalLabelVal);
 
   /// LLVM_BB_ADDR_MAP version to emit.
-  uint8_t BBAddrMapVersion = 2;
+  uint8_t BBAddrMapVersion = 1;
 
   /// The file name of the log file from the environment variable
   /// AS_SECURE_LOG_FILE.  Which must be set before the .secure_log_unique
@@ -190,7 +190,8 @@ private:
   SmallString<128> CompilationDir;
 
   /// Prefix replacement map for source file information.
-  SmallVector<std::pair<std::string, std::string>, 0> DebugPrefixMap;
+  std::map<std::string, const std::string, std::greater<std::string>>
+      DebugPrefixMap;
 
   /// The main file name if passed in explicitly.
   std::string MainFileName;
@@ -473,11 +474,9 @@ public:
   /// \name Symbol Management
   /// @{
 
-  /// Create a new linker temporary symbol with the specified prefix (Name) or
-  /// "tmp". This creates a "l"-prefixed symbol for Mach-O and is identical to
-  /// createNamedTempSymbol for other object file formats.
+  /// Create and return a new linker temporary symbol with a unique but
+  /// unspecified name.
   MCSymbol *createLinkerPrivateTempSymbol();
-  MCSymbol *createLinkerPrivateSymbol(const Twine &Name);
 
   /// Create a temporary symbol with a unique name. The name will be omitted
   /// in the symbol table if UseNamesOnTempLabels is false (default except
@@ -508,17 +507,17 @@ public:
   /// variable after codegen.
   ///
   /// \param Idx - The index of a local variable passed to \@llvm.localescape.
-  MCSymbol *getOrCreateFrameAllocSymbol(const Twine &FuncName, unsigned Idx);
+  MCSymbol *getOrCreateFrameAllocSymbol(StringRef FuncName, unsigned Idx);
 
-  MCSymbol *getOrCreateParentFrameOffsetSymbol(const Twine &FuncName);
+  MCSymbol *getOrCreateParentFrameOffsetSymbol(StringRef FuncName);
 
-  MCSymbol *getOrCreateLSDASymbol(const Twine &FuncName);
+  MCSymbol *getOrCreateLSDASymbol(StringRef FuncName);
 
   /// Get the symbol for \p Name, or null.
   MCSymbol *lookupSymbol(const Twine &Name) const;
 
   /// Set value for a symbol.
-  void setSymbolValue(MCStreamer &Streamer, const Twine &Sym, uint64_t Val);
+  void setSymbolValue(MCStreamer &Streamer, StringRef Sym, uint64_t Val);
 
   /// getSymbols - Get a reference for the symbol table for clients that
   /// want to, for example, iterate over all symbols. 'const' because we
@@ -616,9 +615,9 @@ public:
 
   /// Return the unique ID of the section with the given name, flags and entry
   /// size, if it exists.
-  std::optional<unsigned> getELFUniqueIDForEntsize(StringRef SectionName,
-                                                   unsigned Flags,
-                                                   unsigned EntrySize);
+  Optional<unsigned> getELFUniqueIDForEntsize(StringRef SectionName,
+                                              unsigned Flags,
+                                              unsigned EntrySize);
 
   MCSectionGOFF *getGOFFSection(StringRef Section, SectionKind Kind,
                                 MCSection *Parent, const MCExpr *SubsectionId);
@@ -666,7 +665,7 @@ public:
   MCSectionWasm *getWasmSection(const Twine &Section, SectionKind K,
                                 unsigned Flags, const MCSymbolWasm *Group,
                                 unsigned UniqueID, const char *BeginSymName);
-
+  
   /// Get the section for the provided Section name
   MCSectionDXContainer *getDXContainerSection(StringRef Section, SectionKind K);
 
@@ -675,10 +674,9 @@ public:
 
   MCSectionXCOFF *getXCOFFSection(
       StringRef Section, SectionKind K,
-      std::optional<XCOFF::CsectProperties> CsectProp = std::nullopt,
+      Optional<XCOFF::CsectProperties> CsectProp = None,
       bool MultiSymbolsAllowed = false, const char *BeginSymName = nullptr,
-      std::optional<XCOFF::DwarfSectionSubtypeFlags> DwarfSubtypeFlags =
-          std::nullopt);
+      Optional<XCOFF::DwarfSectionSubtypeFlags> DwarfSubtypeFlags = None);
 
   // Create and save a copy of STI and return a reference to the copy.
   MCSubtargetInfo &getSubtargetCopy(const MCSubtargetInfo &STI);
@@ -718,9 +716,8 @@ public:
   /// Creates an entry in the dwarf file and directory tables.
   Expected<unsigned> getDwarfFile(StringRef Directory, StringRef FileName,
                                   unsigned FileNumber,
-                                  std::optional<MD5::MD5Result> Checksum,
-                                  std::optional<StringRef> Source,
-                                  unsigned CUID);
+                                  Optional<MD5::MD5Result> Checksum,
+                                  Optional<StringRef> Source, unsigned CUID);
 
   bool isValidDwarfFileNumber(unsigned FileNumber, unsigned CUID = 0);
 
@@ -754,8 +751,8 @@ public:
   /// These are "file 0" and "directory 0" in DWARF v5.
   void setMCLineTableRootFile(unsigned CUID, StringRef CompilationDir,
                               StringRef Filename,
-                              std::optional<MD5::MD5Result> Checksum,
-                              std::optional<StringRef> Source) {
+                              Optional<MD5::MD5Result> Checksum,
+                              Optional<StringRef> Source) {
     getMCDwarfLineTable(CUID).setRootFile(CompilationDir, Filename, Checksum,
                                           Source);
   }
@@ -790,7 +787,6 @@ public:
   void setGenDwarfForAssembly(bool Value) { GenDwarfForAssembly = Value; }
   unsigned getGenDwarfFileNumber() { return GenDwarfFileNumber; }
   EmitDwarfUnwindType emitDwarfUnwindInfo() const;
-  bool emitCompactUnwindNonCanonical() const;
 
   void setGenDwarfFileNumber(unsigned FileNumber) {
     GenDwarfFileNumber = FileNumber;

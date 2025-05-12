@@ -74,7 +74,10 @@ void ModuloScheduleExpander::expand() {
   // stage difference for each use.  Keep the maximum value.
   for (MachineInstr *MI : Schedule.getInstructions()) {
     int DefStage = Schedule.getStage(MI);
-    for (const MachineOperand &Op : MI->all_defs()) {
+    for (const MachineOperand &Op : MI->operands()) {
+      if (!Op.isReg() || !Op.isDef())
+        continue;
+
       Register Reg = Op.getReg();
       unsigned MaxDiff = 0;
       bool PhiIsSwapped = false;
@@ -621,7 +624,8 @@ void ModuloScheduleExpander::generatePhis(
        BBI != BBE; ++BBI) {
     for (unsigned i = 0, e = BBI->getNumOperands(); i != e; ++i) {
       MachineOperand &MO = BBI->getOperand(i);
-      if (!MO.isReg() || !MO.isDef() || !MO.getReg().isVirtual())
+      if (!MO.isReg() || !MO.isDef() ||
+          !Register::isVirtualRegister(MO.getReg()))
         continue;
 
       int StageScheduled = Schedule.getStage(&*BBI);
@@ -740,10 +744,12 @@ void ModuloScheduleExpander::removeDeadInstructions(MachineBasicBlock *KernelBB,
         continue;
       }
       bool used = true;
-      for (const MachineOperand &MO : MI->all_defs()) {
+      for (const MachineOperand &MO : MI->operands()) {
+        if (!MO.isReg() || !MO.isDef())
+          continue;
         Register reg = MO.getReg();
         // Assume physical registers are used, unless they are marked dead.
-        if (reg.isPhysical()) {
+        if (Register::isPhysicalRegister(reg)) {
           used = !MO.isDead();
           if (used)
             break;
@@ -874,7 +880,7 @@ void ModuloScheduleExpander::addBranches(MachineBasicBlock &PreheaderBB,
     MachineBasicBlock *Epilog = EpilogBBs[i];
 
     SmallVector<MachineOperand, 4> Cond;
-    std::optional<bool> StaticallyGreater =
+    Optional<bool> StaticallyGreater =
         LoopInfo->createTripCountGreaterCondition(j + 1, *Prolog, Cond);
     unsigned numAdded = 0;
     if (!StaticallyGreater) {
@@ -992,6 +998,17 @@ MachineInstr *ModuloScheduleExpander::cloneInstr(MachineInstr *OldMI,
                                                  unsigned CurStageNum,
                                                  unsigned InstStageNum) {
   MachineInstr *NewMI = MF.CloneMachineInstr(OldMI);
+  // Check for tied operands in inline asm instructions. This should be handled
+  // elsewhere, but I'm not sure of the best solution.
+  if (OldMI->isInlineAsm())
+    for (unsigned i = 0, e = OldMI->getNumOperands(); i != e; ++i) {
+      const auto &MO = OldMI->getOperand(i);
+      if (MO.isReg() && MO.isUse())
+        break;
+      unsigned UseIdx;
+      if (OldMI->isRegTiedToUseOperand(i, &UseIdx))
+        NewMI->tieOperands(i, UseIdx);
+    }
   updateMemOperands(*NewMI, *OldMI, CurStageNum - InstStageNum);
   return NewMI;
 }
@@ -1026,7 +1043,7 @@ void ModuloScheduleExpander::updateInstruction(MachineInstr *NewMI,
                                                unsigned InstrStageNum,
                                                ValueMapTy *VRMap) {
   for (MachineOperand &MO : NewMI->operands()) {
-    if (!MO.isReg() || !MO.getReg().isVirtual())
+    if (!MO.isReg() || !Register::isVirtualRegister(MO.getReg()))
       continue;
     Register reg = MO.getReg();
     if (MO.isDef()) {
@@ -1275,7 +1292,7 @@ class KernelRewriter {
   // Insert a phi that carries LoopReg from the loop body and InitReg otherwise.
   // If InitReg is not given it is chosen arbitrarily. It will either be undef
   // or will be chosen so as to share another phi.
-  Register phi(Register LoopReg, std::optional<Register> InitReg = {},
+  Register phi(Register LoopReg, Optional<Register> InitReg = {},
                const TargetRegisterClass *RC = nullptr);
   // Create an undef register of the given register class.
   Register undef(const TargetRegisterClass *RC);
@@ -1383,7 +1400,7 @@ Register KernelRewriter::remapUse(Register Reg, MachineInstr &MI) {
 
   // First, dive through the phi chain to find the defaults for the generated
   // phis.
-  SmallVector<std::optional<Register>, 4> Defaults;
+  SmallVector<Optional<Register>, 4> Defaults;
   Register LoopReg = Reg;
   auto LoopProducer = Producer;
   while (LoopProducer->isPHI() && LoopProducer->getParent() == BB) {
@@ -1394,7 +1411,7 @@ Register KernelRewriter::remapUse(Register Reg, MachineInstr &MI) {
   }
   int LoopProducerStage = S.getStage(LoopProducer);
 
-  std::optional<Register> IllegalPhiDefault;
+  Optional<Register> IllegalPhiDefault;
 
   if (LoopProducerStage == -1) {
     // Do nothing.
@@ -1426,9 +1443,9 @@ Register KernelRewriter::remapUse(Register Reg, MachineInstr &MI) {
       // If we need more phis than we have defaults for, pad out with undefs for
       // the earliest phis, which are at the end of the defaults chain (the
       // chain is in reverse order).
-      Defaults.resize(Defaults.size() + StageDiff,
-                      Defaults.empty() ? std::optional<Register>()
-                                       : Defaults.back());
+      Defaults.resize(Defaults.size() + StageDiff, Defaults.empty()
+                                                       ? Optional<Register>()
+                                                       : Defaults.back());
     }
   }
 
@@ -1460,11 +1477,11 @@ Register KernelRewriter::remapUse(Register Reg, MachineInstr &MI) {
   return LoopReg;
 }
 
-Register KernelRewriter::phi(Register LoopReg, std::optional<Register> InitReg,
+Register KernelRewriter::phi(Register LoopReg, Optional<Register> InitReg,
                              const TargetRegisterClass *RC) {
   // If the init register is not undef, try and find an existing phi.
   if (InitReg) {
-    auto I = Phis.find({LoopReg, *InitReg});
+    auto I = Phis.find({LoopReg, InitReg.value()});
     if (I != Phis.end())
       return I->second;
   } else {
@@ -1485,10 +1502,10 @@ Register KernelRewriter::phi(Register LoopReg, std::optional<Register> InitReg,
       return R;
     // Found a phi taking undef as input, so rewrite it to take InitReg.
     MachineInstr *MI = MRI.getVRegDef(R);
-    MI->getOperand(1).setReg(*InitReg);
-    Phis.insert({{LoopReg, *InitReg}, R});
+    MI->getOperand(1).setReg(InitReg.value());
+    Phis.insert({{LoopReg, InitReg.value()}, R});
     const TargetRegisterClass *ConstrainRegClass =
-        MRI.constrainRegClass(R, MRI.getRegClass(*InitReg));
+        MRI.constrainRegClass(R, MRI.getRegClass(InitReg.value()));
     assert(ConstrainRegClass && "Expected a valid constrained register class!");
     (void)ConstrainRegClass;
     UndefPhis.erase(I);
@@ -1957,7 +1974,7 @@ void PeelingModuloScheduleExpander::fixupBranches() {
     MachineBasicBlock *Epilog = *EI;
     SmallVector<MachineOperand, 4> Cond;
     TII->removeBranch(*Prolog);
-    std::optional<bool> StaticallyGreater =
+    Optional<bool> StaticallyGreater =
         LoopInfo->createTripCountGreaterCondition(TC, *Prolog, Cond);
     if (!StaticallyGreater) {
       LLVM_DEBUG(dbgs() << "Dynamic: TC > " << TC << "\n");

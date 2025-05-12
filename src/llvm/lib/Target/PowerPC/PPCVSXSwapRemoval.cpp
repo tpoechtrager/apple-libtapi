@@ -608,7 +608,7 @@ void PPCVSXSwapRemoval::formWebs() {
       if (!isVecReg(Reg) && !isScalarVecReg(Reg))
         continue;
 
-      if (!Reg.isVirtual()) {
+      if (!Register::isVirtualRegister(Reg)) {
         if (!(MI->isCopy() && isScalarVecReg(Reg)))
           SwapVector[EntryIdx].MentionsPhysVR = 1;
         continue;
@@ -618,7 +618,7 @@ void PPCVSXSwapRemoval::formWebs() {
         continue;
 
       MachineInstr* DefMI = MRI->getVRegDef(Reg);
-      assert(SwapMap.contains(DefMI) &&
+      assert(SwapMap.find(DefMI) != SwapMap.end() &&
              "Inconsistency: def of vector reg not found in swap map!");
       int DefIdx = SwapMap[DefMI];
       (void)EC->unionSets(SwapVector[DefIdx].VSEId,

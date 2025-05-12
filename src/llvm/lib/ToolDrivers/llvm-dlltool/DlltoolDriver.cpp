@@ -11,6 +11,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/ToolDrivers/llvm-dlltool/DlltoolDriver.h"
+#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/Object/COFF.h"
 #include "llvm/Object/COFFImportFile.h"
@@ -19,10 +20,9 @@
 #include "llvm/Option/ArgList.h"
 #include "llvm/Option/OptTable.h"
 #include "llvm/Option/Option.h"
+#include "llvm/Support/Host.h"
 #include "llvm/Support/Path.h"
-#include "llvm/TargetParser/Host.h"
 
-#include <optional>
 #include <vector>
 
 using namespace llvm;
@@ -33,27 +33,30 @@ namespace {
 
 enum {
   OPT_INVALID = 0,
-#define OPTION(...) LLVM_MAKE_OPT_ID(__VA_ARGS__),
+#define OPTION(PREFIX, PREFIXED_NAME, ID, KIND, GROUP, ALIAS, ALIASARGS,       \
+               FLAGS, PARAM, HELP, METAVAR, VALUES)                            \
+  LLVM_MAKE_OPT_ID(PREFIX, PREFIXED_NAME, ID, KIND, GROUP, ALIAS, ALIASARGS,   \
+                   FLAGS, PARAM, HELP, METAVAR, VALUES),
 #include "Options.inc"
 #undef OPTION
 };
 
-#define PREFIX(NAME, VALUE)                                                    \
-  static constexpr StringLiteral NAME##_init[] = VALUE;                        \
-  static constexpr ArrayRef<StringLiteral> NAME(NAME##_init,                   \
-                                                std::size(NAME##_init) - 1);
+#define PREFIX(NAME, VALUE) const char *const NAME[] = VALUE;
 #include "Options.inc"
 #undef PREFIX
 
-static constexpr opt::OptTable::Info InfoTable[] = {
-#define OPTION(...) LLVM_CONSTRUCT_OPT_INFO(__VA_ARGS__),
+static const llvm::opt::OptTable::Info InfoTable[] = {
+#define OPTION(PREFIX, PREFIXED_NAME, ID, KIND, GROUP, ALIAS, ALIASARGS,       \
+               FLAGS, PARAM, HELP, METAVAR, VALUES)                            \
+  LLVM_CONSTRUCT_OPT_INFO(PREFIX, PREFIXED_NAME, ID, KIND, GROUP, ALIAS,       \
+                          ALIASARGS, FLAGS, PARAM, HELP, METAVAR, VALUES),
 #include "Options.inc"
 #undef OPTION
 };
 
-class DllOptTable : public opt::GenericOptTable {
+class DllOptTable : public llvm::opt::OptTable {
 public:
-  DllOptTable() : opt::GenericOptTable(InfoTable, false) {}
+  DllOptTable() : OptTable(InfoTable, false) {}
 };
 
 // Opens a file. Path has to be resolved already.
@@ -96,14 +99,14 @@ MachineTypes getDefaultMachine() {
   return getMachine(Triple(sys::getDefaultTargetTriple()));
 }
 
-std::optional<std::string> getPrefix(StringRef Argv0) {
+Optional<std::string> getPrefix(StringRef Argv0) {
   StringRef ProgName = llvm::sys::path::stem(Argv0);
   // x86_64-w64-mingw32-dlltool -> x86_64-w64-mingw32
   // llvm-dlltool -> None
   // aarch64-w64-mingw32-llvm-dlltool-10.exe -> aarch64-w64-mingw32
   ProgName = ProgName.rtrim("0123456789.-");
   if (!ProgName.consume_back_insensitive("dlltool"))
-    return std::nullopt;
+    return None;
   ProgName.consume_back_insensitive("llvm-");
   ProgName.consume_back_insensitive("-");
   return ProgName.str();
@@ -151,7 +154,7 @@ int llvm::dlltoolDriverMain(llvm::ArrayRef<const char *> ArgsArr) {
   }
 
   COFF::MachineTypes Machine = getDefaultMachine();
-  if (std::optional<std::string> Prefix = getPrefix(ArgsArr[0])) {
+  if (Optional<std::string> Prefix = getPrefix(ArgsArr[0])) {
     Triple T(*Prefix);
     if (T.getArch() != Triple::UnknownArch)
       Machine = getMachine(T);
@@ -164,9 +167,8 @@ int llvm::dlltoolDriverMain(llvm::ArrayRef<const char *> ArgsArr) {
     return 1;
   }
 
-  bool AddUnderscores = !Args.hasArg(OPT_no_leading_underscore);
-  Expected<COFFModuleDefinition> Def = parseCOFFModuleDefinition(
-      *MB, Machine, /*MingwDef=*/true, AddUnderscores);
+  Expected<COFFModuleDefinition> Def =
+      parseCOFFModuleDefinition(*MB, Machine, true);
 
   if (!Def) {
     llvm::errs() << "error parsing definition\n"
@@ -197,7 +199,7 @@ int llvm::dlltoolDriverMain(llvm::ArrayRef<const char *> ArgsArr) {
     }
   }
 
-  if (Machine == IMAGE_FILE_MACHINE_I386 && Args.hasArg(OPT_k)) {
+  if (Machine == IMAGE_FILE_MACHINE_I386 && Args.getLastArg(OPT_k)) {
     for (COFFShortExport& E : Def->Exports) {
       if (!E.AliasTarget.empty() || (!E.Name.empty() && E.Name[0] == '?'))
         continue;
@@ -214,8 +216,8 @@ int llvm::dlltoolDriverMain(llvm::ArrayRef<const char *> ArgsArr) {
     }
   }
 
-  if (!Path.empty() && writeImportLibrary(Def->OutputFile, Path, Def->Exports,
-                                          Machine, /*MinGW=*/true))
+  if (!Path.empty() &&
+      writeImportLibrary(Def->OutputFile, Path, Def->Exports, Machine, true))
     return 1;
   return 0;
 }

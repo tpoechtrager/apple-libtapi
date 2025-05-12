@@ -24,12 +24,13 @@ static Triple createTripleWithCOFFFormat(Triple T) {
 }
 
 COFFLinkGraphBuilder::COFFLinkGraphBuilder(
-    const object::COFFObjectFile &Obj, Triple TT, SubtargetFeatures Features,
+    const object::COFFObjectFile &Obj, Triple TT,
     LinkGraph::GetEdgeKindNameFunction GetEdgeKindName)
-    : Obj(Obj), G(std::make_unique<LinkGraph>(
-                    Obj.getFileName().str(), createTripleWithCOFFFormat(TT),
-                    std::move(Features), getPointerSize(Obj),
-                    getEndianness(Obj), std::move(GetEdgeKindName))) {
+    : Obj(Obj),
+      G(std::make_unique<LinkGraph>(Obj.getFileName().str(),
+                                    createTripleWithCOFFFormat(TT),
+                                    getPointerSize(Obj), getEndianness(Obj),
+                                    std::move(GetEdgeKindName))) {
   LLVM_DEBUG({
     dbgs() << "Created COFFLinkGraphBuilder for \"" << Obj.getFileName()
            << "\"\n";
@@ -134,13 +135,6 @@ Error COFFLinkGraphBuilder::graphifySections() {
       SectionName = *SecNameOrErr;
 
     // FIXME: Skip debug info sections
-    if (SectionName == ".voltbl") {
-      LLVM_DEBUG({
-        dbgs() << "    "
-               << "Skipping section \"" << SectionName << "\"\n";
-      });
-      continue;
-    }
 
     LLVM_DEBUG({
       dbgs() << "    "
@@ -158,11 +152,8 @@ Error COFFLinkGraphBuilder::graphifySections() {
 
     // Look for existing sections first.
     auto *GraphSec = G->findSectionByName(SectionName);
-    if (!GraphSec) {
+    if (!GraphSec)
       GraphSec = &G->createSection(SectionName, Prot);
-      if ((*Sec)->Characteristics & COFF::IMAGE_SCN_LNK_REMOVE)
-        GraphSec->setMemLifetimePolicy(orc::MemLifetimePolicy::NoAlloc);
-    }
     if (GraphSec->getMemProt() != Prot)
       return make_error<JITLinkError>("MemProt should match");
 
@@ -296,7 +287,7 @@ Error COFFLinkGraphBuilder::handleDirectiveSection(StringRef Str) {
       break;
     }
     case COFF_OPT_incl: {
-      auto DataCopy = G->allocateContent(S);
+      auto DataCopy = G->allocateString(S);
       StringRef StrCopy(DataCopy.data(), DataCopy.size());
       ExternalSymbols[StrCopy] = &G->addExternalSymbol(StrCopy, 0, false);
       ExternalSymbols[StrCopy]->setLive(true);
@@ -622,7 +613,7 @@ COFFLinkGraphBuilder::exportCOMDATSymbol(COFFSymbolIndex SymIndex,
   setGraphSymbol(Symbol.getSectionNumber(), PendingComdatExport->SymbolIndex,
                  *GSym);
   DefinedSymbols[SymbolName] = GSym;
-  PendingComdatExport = std::nullopt;
+  PendingComdatExport = None;
   return GSym;
 }
 

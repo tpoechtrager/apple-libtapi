@@ -59,18 +59,18 @@ bool isKnownPointerLikeType(QualType Ty, ASTContext &Context);
 
 /// Builds source for an expression, adding parens if needed for unambiguous
 /// parsing.
-std::optional<std::string> buildParens(const Expr &E,
-                                       const ASTContext &Context);
+llvm::Optional<std::string> buildParens(const Expr &E,
+                                        const ASTContext &Context);
 
 /// Builds idiomatic source for the dereferencing of `E`: prefix with `*` but
 /// simplify when it already begins with `&`.  \returns empty string on failure.
-std::optional<std::string> buildDereference(const Expr &E,
-                                            const ASTContext &Context);
+llvm::Optional<std::string> buildDereference(const Expr &E,
+                                             const ASTContext &Context);
 
 /// Builds idiomatic source for taking the address of `E`: prefix with `&` but
 /// simplify when it already begins with `*`.  \returns empty string on failure.
-std::optional<std::string> buildAddressOf(const Expr &E,
-                                          const ASTContext &Context);
+llvm::Optional<std::string> buildAddressOf(const Expr &E,
+                                           const ASTContext &Context);
 
 /// Adds a dot to the end of the given expression, but adds parentheses when
 /// needed by the syntax, and simplifies to `->` when possible, e.g.:
@@ -80,7 +80,7 @@ std::optional<std::string> buildAddressOf(const Expr &E,
 ///  `a+b` becomes `(a+b).`
 ///
 /// DEPRECATED. Use `buildAccess`.
-std::optional<std::string> buildDot(const Expr &E, const ASTContext &Context);
+llvm::Optional<std::string> buildDot(const Expr &E, const ASTContext &Context);
 
 /// Adds an arrow to the end of the given expression, but adds parentheses
 /// when needed by the syntax, and simplifies to `.` when possible, e.g.:
@@ -90,7 +90,8 @@ std::optional<std::string> buildDot(const Expr &E, const ASTContext &Context);
 ///  `a+b` becomes `(a+b)->`
 ///
 /// DEPRECATED. Use `buildAccess`.
-std::optional<std::string> buildArrow(const Expr &E, const ASTContext &Context);
+llvm::Optional<std::string> buildArrow(const Expr &E,
+                                       const ASTContext &Context);
 
 /// Specifies how to classify pointer-like types -- like values or like pointers
 /// -- with regard to generating member-access syntax.
@@ -110,7 +111,7 @@ enum class PLTClass : bool {
 ///  `a+b` becomes `(a+b)->` or `(a+b).`, depending on `E`'s type
 ///  `&a` becomes `a.`
 ///  `*a` becomes `a->`
-std::optional<std::string>
+llvm::Optional<std::string>
 buildAccess(const Expr &E, ASTContext &Context,
             PLTClass Classification = PLTClass::Pointer);
 /// @}

@@ -25,7 +25,6 @@
 #include <vector>
 
 #include <fcntl.h>
-#include <optional>
 #include <sys/epoll.h>
 #include <sys/inotify.h>
 #include <unistd.h>
@@ -73,10 +72,10 @@ struct SemaphorePipe {
   const int FDWrite;
   bool OwnsFDs;
 
-  static std::optional<SemaphorePipe> create() {
+  static llvm::Optional<SemaphorePipe> create() {
     int InotifyPollingStopperFDs[2];
     if (pipe2(InotifyPollingStopperFDs, O_CLOEXEC) == -1)
-      return std::nullopt;
+      return llvm::None;
     return SemaphorePipe(InotifyPollingStopperFDs);
   }
 };

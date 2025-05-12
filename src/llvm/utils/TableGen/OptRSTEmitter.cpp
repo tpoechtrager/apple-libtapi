@@ -10,13 +10,13 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/TableGen/Record.h"
-#include "llvm/TableGen/TableGenBackend.h"
 
 using namespace llvm;
 
 /// OptParserEmitter - This tablegen backend takes an input .td file
 /// describing a list of options and emits a RST man page.
-static void EmitOptRST(RecordKeeper &Records, raw_ostream &OS) {
+namespace llvm {
+void EmitOptRST(RecordKeeper &Records, raw_ostream &OS) {
   llvm::StringMap<std::vector<Record *>> OptionsByGroup;
   std::vector<Record *> OptionsWithoutGroup;
 
@@ -102,6 +102,4 @@ static void EmitOptRST(RecordKeeper &Records, raw_ostream &OS) {
     }
   }
 }
-
-static TableGen::Emitter::Opt X("gen-opt-rst", EmitOptRST,
-                                "Generate option RST");
+} // end namespace llvm

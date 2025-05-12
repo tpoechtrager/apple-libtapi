@@ -12,6 +12,7 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/CachedHashString.h"
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
@@ -21,7 +22,6 @@
 #include "llvm/Support/Regex.h"
 // Necessary for llvm::DebugCompressionType::None
 #include "llvm/Target/TargetOptions.h"
-#include <optional>
 #include <vector>
 
 namespace llvm {
@@ -75,7 +75,7 @@ enum SectionFlag {
 struct SectionRename {
   StringRef OriginalName;
   StringRef NewName;
-  std::optional<SectionFlag> NewFlags;
+  Optional<SectionFlag> NewFlags;
 };
 
 struct SectionFlagsUpdate {
@@ -115,10 +115,10 @@ public:
          llvm::function_ref<Error(Error)> ErrorCallback);
 
   bool isPositiveMatch() const { return IsPositiveMatch; }
-  std::optional<StringRef> getName() const {
+  Optional<StringRef> getName() const {
     if (!R && !G)
       return Name;
-    return std::nullopt;
+    return None;
   }
   bool operator==(StringRef S) const {
     return R ? R->match(S) : G ? G->match(S) : Name == S;
@@ -138,7 +138,7 @@ public:
     if (!Matcher)
       return Matcher.takeError();
     if (Matcher->isPositiveMatch()) {
-      if (std::optional<StringRef> MaybeName = Matcher->getName())
+      if (Optional<StringRef> MaybeName = Matcher->getName())
         PosNames.insert(CachedHashStringRef(*MaybeName));
       else
         PosPatterns.push_back(std::move(*Matcher));
@@ -206,13 +206,13 @@ struct CommonConfig {
   FileFormat OutputFormat = FileFormat::Unspecified;
 
   // Only applicable when --output-format!=binary (e.g. elf64-x86-64).
-  std::optional<MachineInfo> OutputArch;
+  Optional<MachineInfo> OutputArch;
 
   // Advanced options
   StringRef AddGnuDebugLink;
   // Cached gnu_debuglink's target CRC
   uint32_t GnuDebugLinkCRC32;
-  std::optional<StringRef> ExtractPartition;
+  Optional<StringRef> ExtractPartition;
   StringRef SplitDWO;
   StringRef SymbolsPrefix;
   StringRef AllocSectionsPrefix;

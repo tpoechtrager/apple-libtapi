@@ -10,7 +10,6 @@ static_library("Checkers") {
     "//clang/lib/Lex",
     "//clang/lib/StaticAnalyzer/Core",
     "//llvm/lib/Support",
-    "//llvm/lib/TargetParser",
   ]
   include_dirs = [ "." ]
   sources = [

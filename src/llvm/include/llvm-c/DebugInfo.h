@@ -116,29 +116,6 @@ typedef enum {
   LLVMDWARFSourceLanguageFortran08,
   LLVMDWARFSourceLanguageRenderScript,
   LLVMDWARFSourceLanguageBLISS,
-  LLVMDWARFSourceLanguageKotlin,
-  LLVMDWARFSourceLanguageZig,
-  LLVMDWARFSourceLanguageCrystal,
-  LLVMDWARFSourceLanguageC_plus_plus_17,
-  LLVMDWARFSourceLanguageC_plus_plus_20,
-  LLVMDWARFSourceLanguageC17,
-  LLVMDWARFSourceLanguageFortran18,
-  LLVMDWARFSourceLanguageAda2005,
-  LLVMDWARFSourceLanguageAda2012,
-  LLVMDWARFSourceLanguageHIP,
-  LLVMDWARFSourceLanguageAssembly,
-  LLVMDWARFSourceLanguageC_sharp,
-  LLVMDWARFSourceLanguageMojo,
-  LLVMDWARFSourceLanguageGLSL,
-  LLVMDWARFSourceLanguageGLSL_ES,
-  LLVMDWARFSourceLanguageHLSL,
-  LLVMDWARFSourceLanguageOpenCL_CPP,
-  LLVMDWARFSourceLanguageCPP_for_OpenCL,
-  LLVMDWARFSourceLanguageSYCL,
-  LLVMDWARFSourceLanguageRuby,
-  LLVMDWARFSourceLanguageMove,
-  LLVMDWARFSourceLanguageHylo,
-
   // Vendor extensions:
   LLVMDWARFSourceLanguageMips_Assembler,
   LLVMDWARFSourceLanguageGOOGLE_RenderScript,
@@ -192,8 +169,7 @@ enum {
   LLVMDICommonBlockMetadataKind,
   LLVMDIStringTypeMetadataKind,
   LLVMDIGenericSubrangeMetadataKind,
-  LLVMDIArgListMetadataKind,
-  LLVMDIAssignIDMetadataKind,
+  LLVMDIArgListMetadataKind
 };
 typedef unsigned LLVMMetadataKind;
 
@@ -1162,12 +1138,6 @@ LLVMMetadataRef LLVMDIBuilderCreateGlobalVariableExpression(
     size_t NameLen, const char *Linkage, size_t LinkLen, LLVMMetadataRef File,
     unsigned LineNo, LLVMMetadataRef Ty, LLVMBool LocalToUnit,
     LLVMMetadataRef Expr, LLVMMetadataRef Decl, uint32_t AlignInBits);
-
-
-/**
- * Get the dwarf::Tag of a DINode
- */
-uint16_t LLVMGetDINodeTag(LLVMMetadataRef MD);
 
 /**
  * Retrieves the \c DIVariable associated with this global variable expression.

@@ -8,9 +8,12 @@
 
 #include "DebugMap.h"
 #include "BinaryHolder.h"
+#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/ADT/Triple.h"
+#include "llvm/ADT/iterator_range.h"
 #include "llvm/BinaryFormat/MachO.h"
 #include "llvm/Object/ObjectFile.h"
 #include "llvm/Support/Chrono.h"
@@ -21,12 +24,10 @@
 #include "llvm/Support/WithColor.h"
 #include "llvm/Support/YAMLTraits.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/TargetParser/Triple.h"
 #include <algorithm>
 #include <cinttypes>
 #include <cstdint>
 #include <memory>
-#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -42,14 +43,8 @@ DebugMapObject::DebugMapObject(StringRef ObjectFilename,
                                uint8_t Type)
     : Filename(std::string(ObjectFilename)), Timestamp(Timestamp), Type(Type) {}
 
-bool DebugMapObject::addSymbol(StringRef Name,
-                               std::optional<uint64_t> ObjectAddress,
+bool DebugMapObject::addSymbol(StringRef Name, Optional<uint64_t> ObjectAddress,
                                uint64_t LinkedAddress, uint32_t Size) {
-  if (Symbols.count(Name)) {
-    // Symbol was previously added.
-    return true;
-  }
-
   auto InsertResult = Symbols.insert(
       std::make_pair(Name, SymbolMapping(ObjectAddress, LinkedAddress, Size)));
 
@@ -57,12 +52,6 @@ bool DebugMapObject::addSymbol(StringRef Name,
     AddressToMapping[*ObjectAddress] = &*InsertResult.first;
   return InsertResult.second;
 }
-
-void DebugMapObject::setRelocationMap(dsymutil::RelocationMap &RM) {
-  RelocMap.emplace(RM);
-}
-
-void DebugMapObject::setInstallName(StringRef IN) { InstallName.emplace(IN); }
 
 void DebugMapObject::print(raw_ostream &OS) const {
   OS << getObjectFilename() << ":\n";
@@ -169,8 +158,8 @@ struct MappingTraits<dsymutil::DebugMapObject>::YamlDMO {
   std::vector<dsymutil::DebugMapObject::YAMLSymbolMapping> Entries;
 };
 
-void MappingTraits<std::pair<std::string, SymbolMapping>>::mapping(
-    IO &io, std::pair<std::string, SymbolMapping> &s) {
+void MappingTraits<std::pair<std::string, DebugMapObject::SymbolMapping>>::
+    mapping(IO &io, std::pair<std::string, DebugMapObject::SymbolMapping> &s) {
   io.mapRequired("sym", s.first);
   io.mapOptional("objAddr", s.second.ObjectAddress);
   io.mapRequired("binAddr", s.second.BinaryAddress);
@@ -239,7 +228,6 @@ MappingTraits<dsymutil::DebugMapObject>::YamlDMO::YamlDMO(
   for (auto &Entry : Obj.Symbols)
     Entries.push_back(
         std::make_pair(std::string(Entry.getKey()), Entry.getValue()));
-  llvm::sort(Entries, llvm::less_first());
 }
 
 dsymutil::DebugMapObject
@@ -286,16 +274,10 @@ MappingTraits<dsymutil::DebugMapObject>::YamlDMO::denormalize(IO &IO) {
     }
   }
 
-  uint8_t Type = MachO::N_OSO;
-  if (Path.endswith(".dylib")) {
-    // FIXME: find a more resilient way
-    Type = MachO::N_LIB;
-  }
-  dsymutil::DebugMapObject Res(Path, sys::toTimePoint(Timestamp), Type);
-
+  dsymutil::DebugMapObject Res(Path, sys::toTimePoint(Timestamp), MachO::N_OSO);
   for (auto &Entry : Entries) {
     auto &Mapping = Entry.second;
-    std::optional<uint64_t> ObjAddress;
+    Optional<uint64_t> ObjAddress;
     if (Mapping.ObjectAddress)
       ObjAddress = *Mapping.ObjectAddress;
     auto AddressIt = SymbolAddresses.find(Entry.first);

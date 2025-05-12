@@ -9,7 +9,6 @@
 #ifndef LLVM_AVR_MCINST_LOWER_H
 #define LLVM_AVR_MCINST_LOWER_H
 
-#include "AVRSubtarget.h"
 #include "llvm/Support/Compiler.h"
 
 namespace llvm {
@@ -30,8 +29,7 @@ public:
 
   /// Lowers a `MachineInstr` into a `MCInst`.
   void lowerInstruction(const MachineInstr &MI, MCInst &OutMI) const;
-  MCOperand lowerSymbolOperand(const MachineOperand &MO, MCSymbol *Sym,
-                               const AVRSubtarget &Subtarget) const;
+  MCOperand lowerSymbolOperand(const MachineOperand &MO, MCSymbol *Sym) const;
 
 private:
   MCContext &Ctx;

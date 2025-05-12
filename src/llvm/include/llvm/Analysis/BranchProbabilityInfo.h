@@ -189,9 +189,6 @@ public:
   /// unset for source.
   void copyEdgeProbabilities(BasicBlock *Src, BasicBlock *Dst);
 
-  /// Swap outgoing edges probabilities for \p Src with branch terminator
-  void swapSuccEdgesProbabilities(const BasicBlock *Src);
-
   static BranchProbability getBranchProbStackProtector(bool IsLikely) {
     static const BranchProbability LikelyProb((1u << 20) - 1, 1u << 20);
     return IsLikely ? LikelyProb : LikelyProb.getCompl();
@@ -360,24 +357,23 @@ private:
   void getLoopExitBlocks(const LoopBlock &LB,
                          SmallVectorImpl<BasicBlock *> &Exits) const;
 
-  /// Returns estimated weight for \p BB. std::nullopt if \p BB has no estimated
-  /// weight.
-  std::optional<uint32_t> getEstimatedBlockWeight(const BasicBlock *BB) const;
+  /// Returns estimated weight for \p BB. None if \p BB has no estimated weight.
+  Optional<uint32_t> getEstimatedBlockWeight(const BasicBlock *BB) const;
 
   /// Returns estimated weight to enter \p L. In other words it is weight of
-  /// loop's header block not scaled by trip count. Returns std::nullopt if \p L
-  /// has no no estimated weight.
-  std::optional<uint32_t> getEstimatedLoopWeight(const LoopData &L) const;
+  /// loop's header block not scaled by trip count. Returns None if \p L has no
+  /// no estimated weight.
+  Optional<uint32_t> getEstimatedLoopWeight(const LoopData &L) const;
 
-  /// Return estimated weight for \p Edge. Returns std::nullopt if estimated
-  /// weight is unknown.
-  std::optional<uint32_t> getEstimatedEdgeWeight(const LoopEdge &Edge) const;
+  /// Return estimated weight for \p Edge. Returns None if estimated weight is
+  /// unknown.
+  Optional<uint32_t> getEstimatedEdgeWeight(const LoopEdge &Edge) const;
 
   /// Iterates over all edges leading from \p SrcBB to \p Successors and
   /// returns maximum of all estimated weights. If at least one edge has unknown
-  /// estimated weight std::nullopt is returned.
+  /// estimated weight None is returned.
   template <class IterT>
-  std::optional<uint32_t>
+  Optional<uint32_t>
   getMaxEstimatedEdgeWeight(const LoopBlock &SrcBB,
                             iterator_range<IterT> Successors) const;
 
@@ -397,7 +393,7 @@ private:
                                      SmallVectorImpl<LoopBlock> &LoopWorkList);
 
   /// Returns block's weight encoded in the IR.
-  std::optional<uint32_t> getInitialEstimatedBlockWeight(const BasicBlock *BB);
+  Optional<uint32_t> getInitialEstimatedBlockWeight(const BasicBlock *BB);
 
   // Computes estimated weights for all blocks in \p F.
   void computeEestimateBlockWeight(const Function &F, DominatorTree *DT,

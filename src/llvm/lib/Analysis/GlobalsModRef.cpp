@@ -23,6 +23,7 @@
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/InitializePasses.h"
@@ -237,11 +238,11 @@ void GlobalsAAResult::DeletionCallbackHandle::deleted() {
   // This object is now destroyed!
 }
 
-MemoryEffects GlobalsAAResult::getMemoryEffects(const Function *F) {
+FunctionModRefBehavior GlobalsAAResult::getModRefBehavior(const Function *F) {
   if (FunctionInfo *FI = getFunctionInfo(F))
-    return MemoryEffects(FI->getModRefInfo());
+    return FunctionModRefBehavior(FI->getModRefInfo());
 
-  return AAResultBase::getMemoryEffects(F);
+  return AAResultBase::getModRefBehavior(F);
 }
 
 /// Returns the function info for the function, or null if we don't have
@@ -353,31 +354,7 @@ bool GlobalsAAResult::AnalyzeUsesOfPointer(Value *V,
           if (Writers)
             Writers->insert(Call->getParent()->getParent());
         } else {
-          // In general, we return true for unknown calls, but there are
-          // some simple checks that we can do for functions that
-          // will never call back into the module.
-          auto *F = Call->getCalledFunction();
-          // TODO: we should be able to remove isDeclaration() check
-          // and let the function body analysis check for captures,
-          // and collect the mod-ref effects. This information will
-          // be later propagated via the call graph.
-          if (!F || !F->isDeclaration())
-            return true;
-          // Note that the NoCallback check here is a little bit too
-          // conservative. If there are no captures of the global
-          // in the module, then this call may not be a capture even
-          // if it does not have NoCallback.
-          if (!Call->hasFnAttr(Attribute::NoCallback) ||
-              !Call->isArgOperand(&U) ||
-              !Call->doesNotCapture(Call->getArgOperandNo(&U)))
-            return true;
-
-          // Conservatively, assume the call reads and writes the global.
-          // We could use memory attributes to make it more precise.
-          if (Readers)
-            Readers->insert(Call->getParent()->getParent());
-          if (Writers)
-            Writers->insert(Call->getParent()->getParent());
+          return true; // Argument of an unknown call.
         }
       }
     } else if (ICmpInst *ICI = dyn_cast<ICmpInst>(I)) {
@@ -592,8 +569,21 @@ void GlobalsAAResult::AnalyzeCallGraph(CallGraph &CG, Module &M) {
 
         // We handle calls specially because the graph-relevant aspects are
         // handled above.
-        if (isa<CallBase>(&I))
+        if (auto *Call = dyn_cast<CallBase>(&I)) {
+          if (Function *Callee = Call->getCalledFunction()) {
+            // The callgraph doesn't include intrinsic calls.
+            if (Callee->isIntrinsic()) {
+              if (isa<DbgInfoIntrinsic>(Call))
+                // Don't let dbg intrinsics affect alias info.
+                continue;
+
+              FunctionModRefBehavior Behaviour =
+                  AAResultBase::getModRefBehavior(Callee);
+              FI.addModRefInfo(Behaviour.getModRef());
+            }
+          }
           continue;
+        }
 
         // All non-call instructions we use the primary predicates for whether
         // they read or write memory.
@@ -815,7 +805,7 @@ bool GlobalsAAResult::invalidate(Module &, const PreservedAnalyses &PA,
 /// address of the global isn't taken.
 AliasResult GlobalsAAResult::alias(const MemoryLocation &LocA,
                                    const MemoryLocation &LocB,
-                                   AAQueryInfo &AAQI, const Instruction *) {
+                                   AAQueryInfo &AAQI) {
   // Get the base object these pointers point to.
   const Value *UV1 =
       getUnderlyingObject(LocA.Ptr->stripPointerCastsForAliasAnalysis());
@@ -892,7 +882,7 @@ AliasResult GlobalsAAResult::alias(const MemoryLocation &LocA,
     if ((GV1 || GV2) && GV1 != GV2)
       return AliasResult::NoAlias;
 
-  return AAResultBase::alias(LocA, LocB, AAQI, nullptr);
+  return AAResultBase::alias(LocA, LocB, AAQI);
 }
 
 ModRefInfo GlobalsAAResult::getModRefInfoForArgument(const CallBase *Call,
@@ -914,8 +904,8 @@ ModRefInfo GlobalsAAResult::getModRefInfoForArgument(const CallBase *Call,
         // Try ::alias to see if all objects are known not to alias GV.
         !all_of(Objects, [&](const Value *V) {
           return this->alias(MemoryLocation::getBeforeOrAfter(V),
-                             MemoryLocation::getBeforeOrAfter(GV), AAQI,
-                             nullptr) == AliasResult::NoAlias;
+                             MemoryLocation::getBeforeOrAfter(GV),
+                             AAQI) == AliasResult::NoAlias;
         }))
       return ConservativeResult;
 

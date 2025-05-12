@@ -31,27 +31,30 @@ import subprocess
 import tempfile
 
 parser = argparse.ArgumentParser(
-    description="Automatic opt pipeline reducer. Unrecognized arguments are forwarded to opt."
+    description=
+    'Automatic opt pipeline reducer. Unrecognized arguments are forwarded to opt.'
 )
-parser.add_argument("--opt-binary", action="store", dest="opt_binary", default="opt")
-parser.add_argument("--passes", action="store", dest="passes", required=True)
-parser.add_argument("--input", action="store", dest="input", required=True)
-parser.add_argument("--output", action="store", dest="output")
+parser.add_argument('--opt-binary',
+                    action='store',
+                    dest='opt_binary',
+                    default='opt')
+parser.add_argument('--passes', action='store', dest='passes', required=True)
+parser.add_argument('--input', action='store', dest='input', required=True)
+parser.add_argument('--output', action='store', dest='output')
+parser.add_argument('--dont-expand-passes',
+                    action='store_true',
+                    dest='dont_expand_passes',
+                    help='Do not expand pipeline before starting reduction.')
 parser.add_argument(
-    "--dont-expand-passes",
-    action="store_true",
-    dest="dont_expand_passes",
-    help="Do not expand pipeline before starting reduction.",
-)
-parser.add_argument(
-    "--dont-remove-empty-pm",
-    action="store_true",
-    dest="dont_remove_empty_pm",
-    help="Do not remove empty pass-managers from the pipeline during reduction.",
+    '--dont-remove-empty-pm',
+    action='store_true',
+    dest='dont_remove_empty_pm',
+    help='Do not remove empty pass-managers from the pipeline during reduction.'
 )
 [args, extra_opt_args] = parser.parse_known_args()
 
-print("The following extra args will be passed to opt: {}".format(extra_opt_args))
+print('The following extra args will be passed to opt: {}'.format(
+    extra_opt_args))
 
 lst = pipeline.fromStr(args.passes)
 ll_input = args.input
@@ -62,42 +65,38 @@ ll_input = args.input
 # '-passes=default<O3>').
 if not args.dont_expand_passes:
     run_args = [
-        args.opt_binary,
-        "-disable-symbolication",
-        "-disable-output",
-        "-print-pipeline-passes",
-        "-passes={}".format(pipeline.toStr(lst)),
-        ll_input,
+        args.opt_binary, '-disable-symbolication', '-disable-output',
+        '-print-pipeline-passes', '-passes={}'.format(pipeline.toStr(lst)),
+        ll_input
     ]
     run_args.extend(extra_opt_args)
-    opt = subprocess.run(run_args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    opt = subprocess.run(run_args,
+                         stdout=subprocess.PIPE,
+                         stderr=subprocess.PIPE)
     if opt.returncode != 0:
-        print("Failed to expand passes. Aborting.")
+        print('Failed to expand passes. Aborting.')
         print(run_args)
-        print("exitcode: {}".format(opt.returncode))
+        print('exitcode: {}'.format(opt.returncode))
         print(opt.stderr.decode())
         exit(1)
     stdout = opt.stdout.decode()
-    stdout = stdout[: stdout.rfind("\n")]
+    stdout = stdout[:stdout.rfind('\n')]
     lst = pipeline.fromStr(stdout)
-    print("Expanded pass sequence: {}".format(pipeline.toStr(lst)))
+    print('Expanded pass sequence: {}'.format(pipeline.toStr(lst)))
 
 # Step #0
 # Confirm that the given input, passes and options result in failure.
-print("---Starting step #0---")
+print('---Starting step #0---')
 run_args = [
-    args.opt_binary,
-    "-disable-symbolication",
-    "-disable-output",
-    "-passes={}".format(pipeline.toStr(lst)),
-    ll_input,
+    args.opt_binary, '-disable-symbolication', '-disable-output',
+    '-passes={}'.format(pipeline.toStr(lst)), ll_input
 ]
 run_args.extend(extra_opt_args)
 opt = subprocess.run(run_args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 if opt.returncode >= 0:
-    print("Input does not result in failure as expected. Aborting.")
+    print('Input does not result in failure as expected. Aborting.')
     print(run_args)
-    print("exitcode: {}".format(opt.returncode))
+    print('exitcode: {}'.format(opt.returncode))
     print(opt.stderr.decode())
     exit(1)
 
@@ -112,7 +111,7 @@ print('-passes="{}"'.format(pipeline.toStr(lst)))
 # the expected error. This will accomplish two things first the input IR will be
 # further reduced and second, with that IR, the reduced pipeline for invocation
 # B will be sufficient to reproduce.
-print("---Starting step #1---")
+print('---Starting step #1---')
 prevLstB = None
 prevIntermediate = None
 tmpd = tempfile.TemporaryDirectory()
@@ -123,29 +122,26 @@ for idx in range(pipeline.count(lst)):
         lstA = pipeline.prune(lstA)
         lstB = pipeline.prune(lstB)
 
-    intermediate = "intermediate-0.ll" if idx % 2 else "intermediate-1.ll"
-    intermediate = tmpd.name + "/" + intermediate
+    intermediate = 'intermediate-0.ll' if idx % 2 else 'intermediate-1.ll'
+    intermediate = tmpd.name + '/' + intermediate
     run_args = [
-        args.opt_binary,
-        "-disable-symbolication",
-        "-S",
-        "-o",
-        intermediate,
-        "-passes={}".format(pipeline.toStr(lstA)),
-        ll_input,
+        args.opt_binary, '-disable-symbolication', '-S', '-o', intermediate,
+        '-passes={}'.format(pipeline.toStr(lstA)), ll_input
     ]
     run_args.extend(extra_opt_args)
-    optA = subprocess.run(run_args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    optA = subprocess.run(run_args,
+                          stdout=subprocess.PIPE,
+                          stderr=subprocess.PIPE)
     run_args = [
-        args.opt_binary,
-        "-disable-symbolication",
-        "-disable-output",
-        "-passes={}".format(pipeline.toStr(lstB)),
-        intermediate,
+        args.opt_binary, '-disable-symbolication', '-disable-output',
+        '-passes={}'.format(pipeline.toStr(lstB)), intermediate
     ]
     run_args.extend(extra_opt_args)
-    optB = subprocess.run(run_args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    if not (optA.returncode == 0 and optB.returncode == expected_error_returncode):
+    optB = subprocess.run(run_args,
+                          stdout=subprocess.PIPE,
+                          stderr=subprocess.PIPE)
+    if not (optA.returncode == 0
+            and optB.returncode == expected_error_returncode):
         break
     prevLstB = lstB
     prevIntermediate = intermediate
@@ -157,21 +153,20 @@ print('-passes="{}"'.format(pipeline.toStr(lst)))
 # Step #2
 # Try removing passes from the end of the remaining pipeline while still
 # reproducing the error.
-print("---Starting step #2---")
+print('---Starting step #2---')
 prevLstA = None
 for idx in reversed(range(pipeline.count(lst))):
     [lstA, lstB] = pipeline.split(lst, idx)
     if not args.dont_remove_empty_pm:
         lstA = pipeline.prune(lstA)
     run_args = [
-        args.opt_binary,
-        "-disable-symbolication",
-        "-disable-output",
-        "-passes={}".format(pipeline.toStr(lstA)),
-        ll_input,
+        args.opt_binary, '-disable-symbolication', '-disable-output',
+        '-passes={}'.format(pipeline.toStr(lstA)), ll_input
     ]
     run_args.extend(extra_opt_args)
-    optA = subprocess.run(run_args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    optA = subprocess.run(run_args,
+                          stdout=subprocess.PIPE,
+                          stderr=subprocess.PIPE)
     if optA.returncode != expected_error_returncode:
         break
     prevLstA = lstA
@@ -183,7 +178,7 @@ print('-passes="{}"'.format(pipeline.toStr(lst)))
 # Now that we have a pipeline that is reduced both front and back we do
 # exhaustive sweeps over the remainder trying to remove one pass at a time.
 # Repeat as long as reduction is possible.
-print("---Starting step #3---")
+print('---Starting step #3---')
 while True:
     keepGoing = False
     for idx in range(pipeline.count(lst)):
@@ -191,14 +186,13 @@ while True:
         if not args.dont_remove_empty_pm:
             candLst = pipeline.prune(candLst)
         run_args = [
-            args.opt_binary,
-            "-disable-symbolication",
-            "-disable-output",
-            "-passes={}".format(pipeline.toStr(candLst)),
-            ll_input,
+            args.opt_binary, '-disable-symbolication', '-disable-output',
+            '-passes={}'.format(pipeline.toStr(candLst)), ll_input
         ]
         run_args.extend(extra_opt_args)
-        opt = subprocess.run(run_args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        opt = subprocess.run(run_args,
+                             stdout=subprocess.PIPE,
+                             stderr=subprocess.PIPE)
         if opt.returncode == expected_error_returncode:
             lst = candLst
             keepGoing = True
@@ -206,9 +200,9 @@ while True:
         break
 print('-passes="{}"'.format(pipeline.toStr(lst)))
 
-print("---FINISHED---")
+print('---FINISHED---')
 if args.output:
     shutil.copy(ll_input, args.output)
-    print("Wrote output to '{}'.".format(args.output))
+    print('Wrote output to \'{}\'.'.format(args.output))
 print('-passes="{}"'.format(pipeline.toStr(lst)))
 exit(0)

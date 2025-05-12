@@ -1,7 +1,6 @@
 set(LLVM_LINK_COMPONENTS
   Core
   Support
-  TargetParser
   )
 
 add_clang_executable(clang-import-test

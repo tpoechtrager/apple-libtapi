@@ -10,7 +10,6 @@
 #define LLVM_LIB_TARGET_AMDGPU_SIFRAMELOWERING_H
 
 #include "AMDGPUFrameLowering.h"
-#include "SIRegisterInfo.h"
 
 namespace llvm {
 
@@ -34,16 +33,6 @@ public:
                             RegScavenger *RS = nullptr) const override;
   void determineCalleeSavesSGPR(MachineFunction &MF, BitVector &SavedRegs,
                                 RegScavenger *RS = nullptr) const;
-  void determinePrologEpilogSGPRSaves(MachineFunction &MF, BitVector &SavedRegs,
-                                      bool NeedExecCopyReservedReg) const;
-  void emitCSRSpillStores(MachineFunction &MF, MachineBasicBlock &MBB,
-                          MachineBasicBlock::iterator MBBI, DebugLoc &DL,
-                          LivePhysRegs &LiveRegs, Register FrameReg,
-                          Register FramePtrRegScratchCopy) const;
-  void emitCSRSpillRestores(MachineFunction &MF, MachineBasicBlock &MBB,
-                            MachineBasicBlock::iterator MBBI, DebugLoc &DL,
-                            LivePhysRegs &LiveRegs, Register FrameReg,
-                            Register FramePtrRegScratchCopy) const;
   bool
   assignCalleeSavedSpillSlots(MachineFunction &MF,
                               const TargetRegisterInfo *TRI,

@@ -10,13 +10,11 @@
 #include "llvm/ExecutionEngine/Orc/COFFPlatform.h"
 #include "llvm/ExecutionEngine/Orc/ELFNixPlatform.h"
 #include "llvm/ExecutionEngine/Orc/MachOPlatform.h"
-#include "llvm/ExecutionEngine/Orc/Shared/ObjectFormats.h"
 #include "llvm/Object/COFF.h"
 #include "llvm/Object/ELFObjectFile.h"
 #include "llvm/Object/MachO.h"
 #include "llvm/Object/ObjectFile.h"
 #include "llvm/Support/Debug.h"
-#include <optional>
 
 #define DEBUG_TYPE "orc"
 
@@ -86,7 +84,7 @@ getMachOObjectFileSymbolInfo(ExecutionSession &ES,
     }
     auto SegName = Obj.getSectionFinalSegmentName(Sec.getRawDataRefImpl());
     auto SecName = cantFail(Obj.getSectionName(Sec.getRawDataRefImpl()));
-    if (isMachOInitializerSection(SegName, SecName)) {
+    if (MachOPlatform::isInitializerSection(SegName, SecName)) {
       addInitSymbol(I, ES, Obj.getFileName());
       break;
     }
@@ -139,7 +137,7 @@ getELFObjectFileSymbolInfo(ExecutionSession &ES,
   SymbolStringPtr InitSymbol;
   for (auto &Sec : Obj.sections()) {
     if (auto SecName = Sec.getName()) {
-      if (isELFInitializerSection(*SecName)) {
+      if (ELFNixPlatform::isInitializerSection(*SecName)) {
         addInitSymbol(I, ES, Obj.getFileName());
         break;
       }
@@ -153,7 +151,7 @@ static Expected<MaterializationUnit::Interface>
 getCOFFObjectFileSymbolInfo(ExecutionSession &ES,
                             const object::COFFObjectFile &Obj) {
   MaterializationUnit::Interface I;
-  std::vector<std::optional<object::coff_aux_section_definition>> ComdatDefs(
+  std::vector<Optional<object::coff_aux_section_definition>> ComdatDefs(
       Obj.getNumberOfSections() + 1);
   for (auto &Sym : Obj.symbols()) {
     Expected<uint32_t> SymFlagsOrErr = Sym.getFlags();
@@ -180,7 +178,7 @@ getCOFFObjectFileSymbolInfo(ExecutionSession &ES,
       if (Def->Selection != COFF::IMAGE_COMDAT_SELECT_NODUPLICATES) {
         IsWeak = true;
       }
-      ComdatDefs[COFFSym.getSectionNumber()] = std::nullopt;
+      ComdatDefs[COFFSym.getSectionNumber()] = None;
     } else {
       // Skip symbols not defined in this object file.
       if (*SymFlagsOrErr & object::BasicSymbolRef::SF_Undefined)
@@ -220,7 +218,7 @@ getCOFFObjectFileSymbolInfo(ExecutionSession &ES,
   SymbolStringPtr InitSymbol;
   for (auto &Sec : Obj.sections()) {
     if (auto SecName = Sec.getName()) {
-      if (isCOFFInitializerSection(*SecName)) {
+      if (COFFPlatform::isInitializerSection(*SecName)) {
         addInitSymbol(I, ES, Obj.getFileName());
         break;
       }

@@ -17,6 +17,8 @@
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/PassManager.h"
+#include "llvm/InitializePasses.h"
+#include "llvm/Pass.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/MemoryBuffer.h"
@@ -43,15 +45,20 @@ class BlockExtractor {
 public:
   BlockExtractor(bool EraseFunctions) : EraseFunctions(EraseFunctions) {}
   bool runOnModule(Module &M);
-  void
-  init(const std::vector<std::vector<BasicBlock *>> &GroupsOfBlocksToExtract) {
-    GroupsOfBlocks = GroupsOfBlocksToExtract;
+  void init(const SmallVectorImpl<SmallVector<BasicBlock *, 16>>
+                &GroupsOfBlocksToExtract) {
+    for (const SmallVectorImpl<BasicBlock *> &GroupOfBlocks :
+         GroupsOfBlocksToExtract) {
+      SmallVector<BasicBlock *, 16> NewGroup;
+      NewGroup.append(GroupOfBlocks.begin(), GroupOfBlocks.end());
+      GroupsOfBlocks.emplace_back(NewGroup);
+    }
     if (!BlockExtractorFile.empty())
       loadFile();
   }
 
 private:
-  std::vector<std::vector<BasicBlock *>> GroupsOfBlocks;
+  SmallVector<SmallVector<BasicBlock *, 16>, 4> GroupsOfBlocks;
   bool EraseFunctions;
   /// Map a function name to groups of blocks.
   SmallVector<std::pair<std::string, SmallVector<std::string, 4>>, 4>
@@ -61,7 +68,55 @@ private:
   void splitLandingPadPreds(Function &F);
 };
 
+class BlockExtractorLegacyPass : public ModulePass {
+  BlockExtractor BE;
+  bool runOnModule(Module &M) override;
+
+public:
+  static char ID;
+  BlockExtractorLegacyPass(const SmallVectorImpl<BasicBlock *> &BlocksToExtract,
+                           bool EraseFunctions)
+      : ModulePass(ID), BE(EraseFunctions) {
+    // We want one group per element of the input list.
+    SmallVector<SmallVector<BasicBlock *, 16>, 4> MassagedGroupsOfBlocks;
+    for (BasicBlock *BB : BlocksToExtract) {
+      SmallVector<BasicBlock *, 16> NewGroup;
+      NewGroup.push_back(BB);
+      MassagedGroupsOfBlocks.push_back(NewGroup);
+    }
+    BE.init(MassagedGroupsOfBlocks);
+  }
+
+  BlockExtractorLegacyPass(const SmallVectorImpl<SmallVector<BasicBlock *, 16>>
+                               &GroupsOfBlocksToExtract,
+                           bool EraseFunctions)
+      : ModulePass(ID), BE(EraseFunctions) {
+    BE.init(GroupsOfBlocksToExtract);
+  }
+
+  BlockExtractorLegacyPass()
+      : BlockExtractorLegacyPass(SmallVector<BasicBlock *, 0>(), false) {}
+};
+
 } // end anonymous namespace
+
+char BlockExtractorLegacyPass::ID = 0;
+INITIALIZE_PASS(BlockExtractorLegacyPass, "extract-blocks",
+                "Extract basic blocks from module", false, false)
+
+ModulePass *llvm::createBlockExtractorPass() {
+  return new BlockExtractorLegacyPass();
+}
+ModulePass *llvm::createBlockExtractorPass(
+    const SmallVectorImpl<BasicBlock *> &BlocksToExtract, bool EraseFunctions) {
+  return new BlockExtractorLegacyPass(BlocksToExtract, EraseFunctions);
+}
+ModulePass *llvm::createBlockExtractorPass(
+    const SmallVectorImpl<SmallVector<BasicBlock *, 16>>
+        &GroupsOfBlocksToExtract,
+    bool EraseFunctions) {
+  return new BlockExtractorLegacyPass(GroupsOfBlocksToExtract, EraseFunctions);
+}
 
 /// Gets all of the blocks specified in the input file.
 void BlockExtractor::loadFile() {
@@ -124,6 +179,7 @@ void BlockExtractor::splitLandingPadPreds(Function &F) {
 }
 
 bool BlockExtractor::runOnModule(Module &M) {
+
   bool Changed = false;
 
   // Get all the functions.
@@ -195,15 +251,14 @@ bool BlockExtractor::runOnModule(Module &M) {
   return Changed;
 }
 
-BlockExtractorPass::BlockExtractorPass(
-    std::vector<std::vector<BasicBlock *>> &&GroupsOfBlocks,
-    bool EraseFunctions)
-    : GroupsOfBlocks(GroupsOfBlocks), EraseFunctions(EraseFunctions) {}
+bool BlockExtractorLegacyPass::runOnModule(Module &M) {
+  return BE.runOnModule(M);
+}
 
 PreservedAnalyses BlockExtractorPass::run(Module &M,
                                           ModuleAnalysisManager &AM) {
-  BlockExtractor BE(EraseFunctions);
-  BE.init(GroupsOfBlocks);
+  BlockExtractor BE(false);
+  BE.init(SmallVector<SmallVector<BasicBlock *, 16>, 0>());
   return BE.runOnModule(M) ? PreservedAnalyses::none()
                            : PreservedAnalyses::all();
 }

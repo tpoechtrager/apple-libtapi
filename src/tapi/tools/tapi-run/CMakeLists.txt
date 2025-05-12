@@ -8,9 +8,9 @@ target_link_libraries(tapi-run
   )
 
 if(APPLE)
-  set_property(TARGET tapi-run APPEND_STRING
-    PROPERTY
-    LINK_FLAGS " -client_name ld"
+set_property(TARGET tapi-run APPEND_STRING
+  PROPERTY
+  LINK_FLAGS " -client_name ld"
   )
 endif()
 

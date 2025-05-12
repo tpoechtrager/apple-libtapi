@@ -102,7 +102,7 @@ class MigrationProcess {
 public:
   bool HadARCErrors;
 
-  MigrationProcess(CompilerInvocation &CI,
+  MigrationProcess(const CompilerInvocation &CI,
                    std::shared_ptr<PCHContainerOperations> PCHContainerOps,
                    DiagnosticConsumer *diagClient,
                    StringRef outputDir = StringRef());

@@ -31,10 +31,10 @@ namespace symbolize {
 class SourceCode {
   std::unique_ptr<MemoryBuffer> MemBuf;
 
-  std::optional<StringRef>
-  load(StringRef FileName, const std::optional<StringRef> &EmbeddedSource) {
+  Optional<StringRef> load(StringRef FileName,
+                           const Optional<StringRef> &EmbeddedSource) {
     if (Lines <= 0)
-      return std::nullopt;
+      return None;
 
     if (EmbeddedSource)
       return EmbeddedSource;
@@ -42,15 +42,15 @@ class SourceCode {
       ErrorOr<std::unique_ptr<MemoryBuffer>> BufOrErr =
           MemoryBuffer::getFile(FileName);
       if (!BufOrErr)
-        return std::nullopt;
+        return None;
       MemBuf = std::move(*BufOrErr);
       return MemBuf->getBuffer();
     }
   }
 
-  std::optional<StringRef> pruneSource(const std::optional<StringRef> &Source) {
+  Optional<StringRef> pruneSource(const Optional<StringRef> &Source) {
     if (!Source)
-      return std::nullopt;
+      return None;
     size_t FirstLinePos = StringRef::npos, Pos = 0;
     for (int64_t L = 1; L <= LastLine; ++L, ++Pos) {
       if (L == FirstLine)
@@ -60,7 +60,7 @@ class SourceCode {
         break;
     }
     if (FirstLinePos == StringRef::npos)
-      return std::nullopt;
+      return None;
     return Source->substr(FirstLinePos, (Pos == StringRef::npos)
                                             ? StringRef::npos
                                             : Pos - FirstLinePos);
@@ -71,11 +71,11 @@ public:
   const int Lines;
   const int64_t FirstLine;
   const int64_t LastLine;
-  const std::optional<StringRef> PrunedSource;
+  const Optional<StringRef> PrunedSource;
 
-  SourceCode(StringRef FileName, int64_t Line, int Lines,
-             const std::optional<StringRef> &EmbeddedSource =
-                 std::optional<StringRef>())
+  SourceCode(
+      StringRef FileName, int64_t Line, int Lines,
+      const Optional<StringRef> &EmbeddedSource = Optional<StringRef>())
       : Line(Line), Lines(Lines),
         FirstLine(std::max(static_cast<int64_t>(1), Line - Lines / 2)),
         LastLine(FirstLine + Lines - 1),
@@ -266,8 +266,11 @@ void PlainPrinterBase::printInvalidCommand(const Request &Request,
 }
 
 bool PlainPrinterBase::printError(const Request &Request,
-                                  const ErrorInfoBase &ErrorInfo) {
-  ErrHandler(ErrorInfo, Request.ModuleName);
+                                  const ErrorInfoBase &ErrorInfo,
+                                  StringRef ErrorBanner) {
+  ES << ErrorBanner;
+  ErrorInfo.log(ES);
+  ES << '\n';
   // Print an empty struct too.
   return true;
 }
@@ -285,24 +288,6 @@ static json::Object toJSON(const Request &Request, StringRef ErrorMsg = "") {
   return Json;
 }
 
-static json::Object toJSON(const DILineInfo &LineInfo) {
-  return json::Object(
-      {{"FunctionName", LineInfo.FunctionName != DILineInfo::BadString
-                            ? LineInfo.FunctionName
-                            : ""},
-       {"StartFileName", LineInfo.StartFileName != DILineInfo::BadString
-                             ? LineInfo.StartFileName
-                             : ""},
-       {"StartLine", LineInfo.StartLine},
-       {"StartAddress",
-        LineInfo.StartAddress ? toHex(*LineInfo.StartAddress) : ""},
-       {"FileName",
-        LineInfo.FileName != DILineInfo::BadString ? LineInfo.FileName : ""},
-       {"Line", LineInfo.Line},
-       {"Column", LineInfo.Column},
-       {"Discriminator", LineInfo.Discriminator}});
-}
-
 void JSONPrinter::print(const Request &Request, const DILineInfo &Info) {
   DIInliningInfo InliningInfo;
   InliningInfo.addFrame(Info);
@@ -313,7 +298,21 @@ void JSONPrinter::print(const Request &Request, const DIInliningInfo &Info) {
   json::Array Array;
   for (uint32_t I = 0, N = Info.getNumberOfFrames(); I < N; ++I) {
     const DILineInfo &LineInfo = Info.getFrame(I);
-    json::Object Object = toJSON(LineInfo);
+    json::Object Object(
+        {{"FunctionName", LineInfo.FunctionName != DILineInfo::BadString
+                              ? LineInfo.FunctionName
+                              : ""},
+         {"StartFileName", LineInfo.StartFileName != DILineInfo::BadString
+                               ? LineInfo.StartFileName
+                               : ""},
+         {"StartLine", LineInfo.StartLine},
+         {"StartAddress",
+          LineInfo.StartAddress ? toHex(*LineInfo.StartAddress) : ""},
+         {"FileName",
+          LineInfo.FileName != DILineInfo::BadString ? LineInfo.FileName : ""},
+         {"Line", LineInfo.Line},
+         {"Column", LineInfo.Column},
+         {"Discriminator", LineInfo.Discriminator}});
     SourceCode SourceCode(LineInfo.FileName, LineInfo.Line,
                           Config.SourceContextLines, LineInfo.Source);
     std::string FormattedSource;
@@ -371,11 +370,13 @@ void JSONPrinter::printInvalidCommand(const Request &Request,
                                       StringRef Command) {
   printError(Request,
              StringError("unable to parse arguments: " + Command,
-                         std::make_error_code(std::errc::invalid_argument)));
+                         std::make_error_code(std::errc::invalid_argument)),
+             "");
 }
 
 bool JSONPrinter::printError(const Request &Request,
-                             const ErrorInfoBase &ErrorInfo) {
+                             const ErrorInfoBase &ErrorInfo,
+                             StringRef ErrorBanner) {
   json::Object Json = toJSON(Request, ErrorInfo.message());
   if (ObjectList)
     ObjectList->push_back(std::move(Json));

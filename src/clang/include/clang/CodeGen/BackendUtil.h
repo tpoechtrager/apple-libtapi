@@ -31,7 +31,6 @@ namespace clang {
   class CodeGenOptions;
   class TargetOptions;
   class LangOptions;
-  class CASOptions; // MCCAS
 
   enum BackendAction {
     Backend_EmitAssembly,  ///< Emit native assembly files
@@ -45,11 +44,9 @@ namespace clang {
   void EmitBackendOutput(DiagnosticsEngine &Diags, const HeaderSearchOptions &,
                          const CodeGenOptions &CGOpts,
                          const TargetOptions &TOpts, const LangOptions &LOpts,
-                         const CASOptions &CASOpts, // MCCAS
                          StringRef TDesc, llvm::Module *M, BackendAction Action,
                          llvm::IntrusiveRefCntPtr<llvm::vfs::FileSystem> VFS,
-                         std::unique_ptr<raw_pwrite_stream> OS,
-                         std::unique_ptr<raw_pwrite_stream> CasidOS = nullptr);
+                         std::unique_ptr<raw_pwrite_stream> OS);
 
   void EmbedBitcode(llvm::Module *M, const CodeGenOptions &CGOpts,
                     llvm::MemoryBufferRef Buf);

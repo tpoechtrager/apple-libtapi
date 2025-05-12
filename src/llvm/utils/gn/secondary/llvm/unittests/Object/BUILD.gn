@@ -1,11 +1,10 @@
-import("//third-party/unittest/unittest.gni")
+import("//llvm/utils/unittest/unittest.gni")
 
 unittest("ObjectTests") {
   deps = [
     "//llvm/lib/BinaryFormat",
     "//llvm/lib/Object",
     "//llvm/lib/ObjectYAML",
-    "//llvm/lib/TargetParser",
     "//llvm/lib/Testing/Support",
   ]
   sources = [
@@ -14,7 +13,6 @@ unittest("ObjectTests") {
     "ELFObjectFileTest.cpp",
     "ELFTest.cpp",
     "ELFTypesTest.cpp",
-    "GOFFObjectFileTest.cpp",
     "MinidumpTest.cpp",
     "ObjectFileTest.cpp",
     "OffloadingTest.cpp",

@@ -19,7 +19,6 @@
 #define LLVM_CLANG_AST_FORMATSTRING_H
 
 #include "clang/AST/CanonicalType.h"
-#include <optional>
 
 namespace clang {
 
@@ -242,7 +241,7 @@ public:
 
   bool isPrintfKind() const { return IsPrintf; }
 
-  std::optional<ConversionSpecifier> getStandardSpecifier() const;
+  Optional<ConversionSpecifier> getStandardSpecifier() const;
 
 protected:
   bool IsPrintf;
@@ -467,7 +466,7 @@ public:
 
   bool hasStandardLengthModifier() const;
 
-  std::optional<LengthModifier> getCorrectedLengthModifier() const;
+  Optional<LengthModifier> getCorrectedLengthModifier() const;
 
   bool hasStandardConversionSpecifier(const LangOptions &LangOpt) const;
 

@@ -20,5 +20,4 @@ clang_target_link_libraries(clang-refactor
   clangTooling
   clangToolingCore
   clangToolingRefactoring
-  clangToolingSyntax
   )

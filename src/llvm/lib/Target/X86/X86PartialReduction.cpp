@@ -33,8 +33,8 @@ using namespace llvm;
 namespace {
 
 class X86PartialReduction : public FunctionPass {
-  const DataLayout *DL = nullptr;
-  const X86Subtarget *ST = nullptr;
+  const DataLayout *DL;
+  const X86Subtarget *ST;
 
 public:
   static char ID; // Pass identification, replacement for typeid.

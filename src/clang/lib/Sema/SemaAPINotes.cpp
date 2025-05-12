@@ -133,9 +133,8 @@ static StringRef CopyString(ASTContext &ctx, StringRef string) {
 static AttributeCommonInfo getDummyAttrInfo() {
   return AttributeCommonInfo(SourceRange(),
                              AttributeCommonInfo::UnknownAttribute,
-                             {AttributeCommonInfo::AS_GNU,
-                              /*Spelling*/ 0, /*IsAlignas*/ false,
-                              /*IsRegularKeywordAttribute*/ false});
+                             AttributeCommonInfo::AS_GNU,
+                             /*Spelling*/0);
 }
 
 namespace {
@@ -233,7 +232,7 @@ static void handleAPINotedRetainCountAttribute(Sema &S, Decl *D,
 
 static void handleAPINotedRetainCountConvention(
     Sema &S, Decl *D, VersionedInfoMetadata metadata,
-    std::optional<api_notes::RetainCountConventionKind> convention) {
+    Optional<api_notes::RetainCountConventionKind> convention) {
   if (!convention)
     return;
   switch (*convention) {
@@ -321,7 +320,7 @@ static void ProcessAPINotes(Sema &S, Decl *D,
       auto &C = S.getASTContext();
       ParsedAttr *SNA = AP.create(&C.Idents.get("swift_name"), SourceRange(),
                                   nullptr, SourceLocation(), nullptr, nullptr,
-                                  nullptr, ParsedAttr::Form::GNU());
+                                  nullptr, ParsedAttr::AS_GNU);
 
       if (!S.DiagnoseSwiftName(D, info.SwiftName, D->getLocation(), *SNA, /*IsAsync=*/false)) {
         return nullptr;
@@ -630,17 +629,17 @@ static void ProcessAPINotes(Sema &S, TagDecl *D,
                             VersionedInfoMetadata metadata) {
   if (auto ImportAs = info.SwiftImportAs) {
     auto str = "import_" + ImportAs.value();
-    auto attr = SwiftAttrAttr::Create(S.Context, str);
+    auto attr = SwiftAttrAttr::Create(S.Context, str, AttributeCommonInfo(clang::SourceRange()));
     D->addAttr(attr);
   }
   if (auto RetainOp = info.SwiftRetainOp) {
     auto str = "retain:" + RetainOp.value();
-    auto attr = SwiftAttrAttr::Create(S.Context, str);
+    auto attr = SwiftAttrAttr::Create(S.Context, str, AttributeCommonInfo(clang::SourceRange()));
     D->addAttr(attr);
   }
   if (auto ReleaseOp = info.SwiftReleaseOp) {
     auto str = "release:" + ReleaseOp.value();
-    auto attr = SwiftAttrAttr::Create(S.Context, str);
+    auto attr = SwiftAttrAttr::Create(S.Context, str, AttributeCommonInfo(clang::SourceRange()));
     D->addAttr(attr);
   }
 
@@ -702,11 +701,10 @@ static void ProcessAPINotes(Sema &S, TypedefNameDecl *D,
           kind = SwiftNewTypeAttr::NK_Enum;
           break;
         }
-        AttributeCommonInfo syntaxInfo{
-            SourceRange(),
-            AttributeCommonInfo::AT_SwiftNewType,
-            {AttributeCommonInfo::AS_GNU, SwiftNewTypeAttr::GNU_swift_wrapper,
-             /*IsAlignas*/ false, /*IsRegularKeywordAttribute*/ false}};
+        AttributeCommonInfo syntaxInfo{SourceRange(),
+                                       AttributeCommonInfo::AT_SwiftNewType,
+                                       AttributeCommonInfo::AS_GNU,
+                                       SwiftNewTypeAttr::GNU_swift_wrapper};
         return new (S.Context) SwiftNewTypeAttr(S.Context, syntaxInfo, kind);
     });
   }
@@ -847,7 +845,7 @@ void Sema::ProcessAPINotes(Decl *D) {
               NamespaceStack.push(CurrentNamespace);
           }
         }
-        std::optional<api_notes::ContextID> NamespaceID;
+        Optional<api_notes::ContextID> NamespaceID;
         while (!NamespaceStack.empty()) {
           auto CurrentNamespace = NamespaceStack.top();
           NamespaceStack.pop();
@@ -908,15 +906,7 @@ void Sema::ProcessAPINotes(Decl *D) {
 
     // Tags
     if (auto Tag = dyn_cast<TagDecl>(D)) {
-      // Determine the name of the entity to search for. If this is an
-      // anonymous tag that gets its linked name from a typedef, look for the
-      // typedef name. This allows tag-specific information to be added
-      // to the declaration.
-      std::string LookupName;
-      if (auto typedefName = Tag->getTypedefNameForAnonDecl())
-        LookupName = typedefName->getName().str();
-      else
-        LookupName = Tag->getName().str();
+      std::string LookupName = Tag->getName().str();
 
       // Use the source location to discern if this Tag is an OPTIONS macro.
       // For now we would like to limit this trick of looking up the APINote tag
@@ -975,44 +965,44 @@ void Sema::ProcessAPINotes(Decl *D) {
   if (auto ObjCContainer = dyn_cast<ObjCContainerDecl>(D->getDeclContext())) {
     // Location function that looks up an Objective-C context.
     auto GetContext = [&](api_notes::APINotesReader *Reader)
-        -> std::optional<api_notes::ContextID> {
+                        -> Optional<api_notes::ContextID> {
       if (auto Protocol = dyn_cast<ObjCProtocolDecl>(ObjCContainer)) {
         if (auto Found = Reader->lookupObjCProtocolID(Protocol->getName()))
           return *Found;
 
-        return std::nullopt;
+        return None;
       }
 
       if (auto Impl = dyn_cast<ObjCCategoryImplDecl>(ObjCContainer)) {
         if (auto Cat = Impl->getCategoryDecl())
           ObjCContainer = Cat;
         else
-          return std::nullopt;
+          return None;
       }
 
       if (auto Category = dyn_cast<ObjCCategoryDecl>(ObjCContainer)) {
         if (Category->getClassInterface())
           ObjCContainer = Category->getClassInterface();
         else
-          return std::nullopt;
+          return None;
       }
 
       if (auto Impl = dyn_cast<ObjCImplDecl>(ObjCContainer)) {
         if (Impl->getClassInterface())
           ObjCContainer = Impl->getClassInterface();
         else
-          return std::nullopt;
+          return None;
       }
 
       if (auto Class = dyn_cast<ObjCInterfaceDecl>(ObjCContainer)) {
         if (auto Found = Reader->lookupObjCClassID(Class->getName()))
           return *Found;
 
-        return std::nullopt;
+        return None;
 
       }
 
-      return std::nullopt;
+      return None;
     };
 
     // Objective-C methods.

@@ -12,7 +12,7 @@
 #include "clang/Frontend/TextDiagnosticBuffer.h"
 #include "clang/Lex/PreprocessorOptions.h"
 #include "clang/Serialization/ModuleFileExtension.h"
-#include "llvm/TargetParser/Host.h"
+#include "llvm/Support/Host.h"
 
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
@@ -102,63 +102,23 @@ TEST(ContainsN, Two) {
 
 TEST(CompilerInvocationTest, DeepCopyConstructor) {
   CompilerInvocation A;
-  A.getAnalyzerOpts().Config["Key"] = "Old";
+  A.getAnalyzerOpts()->Config["Key"] = "Old";
 
   CompilerInvocation B(A);
-  B.getAnalyzerOpts().Config["Key"] = "New";
+  B.getAnalyzerOpts()->Config["Key"] = "New";
 
-  ASSERT_EQ(A.getAnalyzerOpts().Config["Key"], "Old");
+  ASSERT_EQ(A.getAnalyzerOpts()->Config["Key"], "Old");
 }
 
 TEST(CompilerInvocationTest, DeepCopyAssignment) {
   CompilerInvocation A;
-  A.getAnalyzerOpts().Config["Key"] = "Old";
+  A.getAnalyzerOpts()->Config["Key"] = "Old";
 
   CompilerInvocation B;
   B = A;
-  B.getAnalyzerOpts().Config["Key"] = "New";
+  B.getAnalyzerOpts()->Config["Key"] = "New";
 
-  ASSERT_EQ(A.getAnalyzerOpts().Config["Key"], "Old");
-}
-
-TEST(CompilerInvocationTest, CopyOnWriteConstructor) {
-  CowCompilerInvocation A;
-  A.getMutFrontendOpts().OutputFile = "x.o";
-
-  // B's FrontendOptions are initially shared with A.
-  CowCompilerInvocation B(A);
-  EXPECT_EQ(&A.getFrontendOpts(), &B.getFrontendOpts());
-
-  // Modifying A's FrontendOptions creates new copy, does not affect other opts.
-  A.getMutFrontendOpts().OutputFile = "y.o";
-  EXPECT_NE(&A.getFrontendOpts(), &B.getFrontendOpts());
-  EXPECT_EQ(&A.getCodeGenOpts(), &B.getCodeGenOpts());
-
-  // The new copy reflects the modification, old instance remains unchanged.
-  EXPECT_EQ(A.getFrontendOpts().OutputFile, "y.o");
-  EXPECT_EQ(B.getFrontendOpts().OutputFile, "x.o");
-}
-
-TEST(CompilerInvocationTest, CopyOnWriteAssignment) {
-  CowCompilerInvocation A;
-  A.getMutFrontendOpts().OutputFile = "x.o";
-
-  // B's FrontendOptions are initially independent of A.
-  CowCompilerInvocation B;
-  EXPECT_NE(&A.getFrontendOpts(), &B.getFrontendOpts());
-
-  // B's FrontendOptions are shared with A after assignment.
-  B = A;
-  EXPECT_EQ(&A.getFrontendOpts(), &B.getFrontendOpts());
-
-  // Modifying A's FrontendOptions creates new copy, does not affect other opts.
-  A.getMutFrontendOpts().OutputFile = "y.o";
-  EXPECT_NE(&A.getFrontendOpts(), &B.getFrontendOpts());
-  EXPECT_EQ(&A.getCodeGenOpts(), &B.getCodeGenOpts());
-
-  // The new copy reflects the modification, old instance remains unchanged.
-  EXPECT_EQ(A.getFrontendOpts().OutputFile, "y.o");
-  EXPECT_EQ(B.getFrontendOpts().OutputFile, "x.o");
+  ASSERT_EQ(A.getAnalyzerOpts()->Config["Key"], "Old");
 }
 
 // Boolean option with a keypath that defaults to true.
@@ -546,7 +506,7 @@ TEST_F(CommandLineTest, StringVectorCommaJoinedNone) {
   const char *Args[] = {""};
 
   ASSERT_TRUE(CompilerInvocation::CreateFromArgs(Invocation, Args, *Diags));
-  ASSERT_TRUE(Invocation.getLangOpts().CommentOpts.BlockCommandNames.empty());
+  ASSERT_TRUE(Invocation.getLangOpts()->CommentOpts.BlockCommandNames.empty());
 
   Invocation.generateCC1CommandLine(GeneratedArgs, *this);
 
@@ -558,7 +518,7 @@ TEST_F(CommandLineTest, StringVectorCommaJoinedSingle) {
   const char *Args[] = {"-fcomment-block-commands=x,y"};
 
   ASSERT_TRUE(CompilerInvocation::CreateFromArgs(Invocation, Args, *Diags));
-  ASSERT_EQ(Invocation.getLangOpts().CommentOpts.BlockCommandNames,
+  ASSERT_EQ(Invocation.getLangOpts()->CommentOpts.BlockCommandNames,
             std::vector<std::string>({"x", "y"}));
 
   Invocation.generateCC1CommandLine(GeneratedArgs, *this);
@@ -572,7 +532,7 @@ TEST_F(CommandLineTest, StringVectorCommaJoinedMultiple) {
                         "-fcomment-block-commands=a,b"};
 
   ASSERT_TRUE(CompilerInvocation::CreateFromArgs(Invocation, Args, *Diags));
-  ASSERT_EQ(Invocation.getLangOpts().CommentOpts.BlockCommandNames,
+  ASSERT_EQ(Invocation.getLangOpts()->CommentOpts.BlockCommandNames,
             std::vector<std::string>({"x", "y", "a", "b"}));
 
   Invocation.generateCC1CommandLine(GeneratedArgs, *this);
@@ -589,9 +549,9 @@ TEST_F(CommandLineTest, ConditionalParsingIfFalseFlagNotPresent) {
   CompilerInvocation::CreateFromArgs(Invocation, Args, *Diags);
 
   ASSERT_FALSE(Diags->hasErrorOccurred());
-  ASSERT_FALSE(Invocation.getLangOpts().SYCLIsDevice);
-  ASSERT_FALSE(Invocation.getLangOpts().SYCLIsHost);
-  ASSERT_EQ(Invocation.getLangOpts().getSYCLVersion(), LangOptions::SYCL_None);
+  ASSERT_FALSE(Invocation.getLangOpts()->SYCLIsDevice);
+  ASSERT_FALSE(Invocation.getLangOpts()->SYCLIsHost);
+  ASSERT_EQ(Invocation.getLangOpts()->getSYCLVersion(), LangOptions::SYCL_None);
 
   Invocation.generateCC1CommandLine(GeneratedArgs, *this);
 
@@ -605,9 +565,9 @@ TEST_F(CommandLineTest, ConditionalParsingIfFalseFlagPresent) {
   CompilerInvocation::CreateFromArgs(Invocation, Args, *Diags);
 
   ASSERT_FALSE(Diags->hasErrorOccurred());
-  ASSERT_FALSE(Invocation.getLangOpts().SYCLIsDevice);
-  ASSERT_FALSE(Invocation.getLangOpts().SYCLIsHost);
-  ASSERT_EQ(Invocation.getLangOpts().getSYCLVersion(), LangOptions::SYCL_None);
+  ASSERT_FALSE(Invocation.getLangOpts()->SYCLIsDevice);
+  ASSERT_FALSE(Invocation.getLangOpts()->SYCLIsHost);
+  ASSERT_EQ(Invocation.getLangOpts()->getSYCLVersion(), LangOptions::SYCL_None);
 
   Invocation.generateCC1CommandLine(GeneratedArgs, *this);
 
@@ -622,9 +582,9 @@ TEST_F(CommandLineTest, ConditionalParsingIfNonsenseSyclStdArg) {
   CompilerInvocation::CreateFromArgs(Invocation, Args, *Diags);
 
   ASSERT_TRUE(Diags->hasErrorOccurred());
-  ASSERT_TRUE(Invocation.getLangOpts().SYCLIsDevice);
-  ASSERT_FALSE(Invocation.getLangOpts().SYCLIsHost);
-  ASSERT_EQ(Invocation.getLangOpts().getSYCLVersion(), LangOptions::SYCL_None);
+  ASSERT_TRUE(Invocation.getLangOpts()->SYCLIsDevice);
+  ASSERT_FALSE(Invocation.getLangOpts()->SYCLIsHost);
+  ASSERT_EQ(Invocation.getLangOpts()->getSYCLVersion(), LangOptions::SYCL_None);
 
   Invocation.generateCC1CommandLine(GeneratedArgs, *this);
 
@@ -639,9 +599,9 @@ TEST_F(CommandLineTest, ConditionalParsingIfOddSyclStdArg1) {
   CompilerInvocation::CreateFromArgs(Invocation, Args, *Diags);
 
   ASSERT_FALSE(Diags->hasErrorOccurred());
-  ASSERT_TRUE(Invocation.getLangOpts().SYCLIsDevice);
-  ASSERT_FALSE(Invocation.getLangOpts().SYCLIsHost);
-  ASSERT_EQ(Invocation.getLangOpts().getSYCLVersion(), LangOptions::SYCL_2017);
+  ASSERT_TRUE(Invocation.getLangOpts()->SYCLIsDevice);
+  ASSERT_FALSE(Invocation.getLangOpts()->SYCLIsHost);
+  ASSERT_EQ(Invocation.getLangOpts()->getSYCLVersion(), LangOptions::SYCL_2017);
 
   Invocation.generateCC1CommandLine(GeneratedArgs, *this);
 
@@ -656,9 +616,9 @@ TEST_F(CommandLineTest, ConditionalParsingIfOddSyclStdArg2) {
   CompilerInvocation::CreateFromArgs(Invocation, Args, *Diags);
 
   ASSERT_FALSE(Diags->hasErrorOccurred());
-  ASSERT_TRUE(Invocation.getLangOpts().SYCLIsDevice);
-  ASSERT_FALSE(Invocation.getLangOpts().SYCLIsHost);
-  ASSERT_EQ(Invocation.getLangOpts().getSYCLVersion(), LangOptions::SYCL_2017);
+  ASSERT_TRUE(Invocation.getLangOpts()->SYCLIsDevice);
+  ASSERT_FALSE(Invocation.getLangOpts()->SYCLIsHost);
+  ASSERT_EQ(Invocation.getLangOpts()->getSYCLVersion(), LangOptions::SYCL_2017);
 
   Invocation.generateCC1CommandLine(GeneratedArgs, *this);
 
@@ -673,9 +633,9 @@ TEST_F(CommandLineTest, ConditionalParsingIfOddSyclStdArg3) {
   CompilerInvocation::CreateFromArgs(Invocation, Args, *Diags);
 
   ASSERT_FALSE(Diags->hasErrorOccurred());
-  ASSERT_TRUE(Invocation.getLangOpts().SYCLIsDevice);
-  ASSERT_FALSE(Invocation.getLangOpts().SYCLIsHost);
-  ASSERT_EQ(Invocation.getLangOpts().getSYCLVersion(), LangOptions::SYCL_2017);
+  ASSERT_TRUE(Invocation.getLangOpts()->SYCLIsDevice);
+  ASSERT_FALSE(Invocation.getLangOpts()->SYCLIsHost);
+  ASSERT_EQ(Invocation.getLangOpts()->getSYCLVersion(), LangOptions::SYCL_2017);
 
   Invocation.generateCC1CommandLine(GeneratedArgs, *this);
 
@@ -690,7 +650,7 @@ TEST_F(CommandLineTest, ConditionalParsingIfTrueFlagNotPresentHost) {
   CompilerInvocation::CreateFromArgs(Invocation, Args, *Diags);
 
   ASSERT_FALSE(Diags->hasErrorOccurred());
-  ASSERT_EQ(Invocation.getLangOpts().getSYCLVersion(),
+  ASSERT_EQ(Invocation.getLangOpts()->getSYCLVersion(),
             LangOptions::SYCL_Default);
 
   Invocation.generateCC1CommandLine(GeneratedArgs, *this);
@@ -705,7 +665,7 @@ TEST_F(CommandLineTest, ConditionalParsingIfTrueFlagNotPresentDevice) {
   CompilerInvocation::CreateFromArgs(Invocation, Args, *Diags);
 
   ASSERT_FALSE(Diags->hasErrorOccurred());
-  ASSERT_EQ(Invocation.getLangOpts().getSYCLVersion(),
+  ASSERT_EQ(Invocation.getLangOpts()->getSYCLVersion(),
             LangOptions::SYCL_Default);
 
   Invocation.generateCC1CommandLine(GeneratedArgs, *this);
@@ -720,7 +680,7 @@ TEST_F(CommandLineTest, ConditionalParsingIfTrueFlagPresent) {
   CompilerInvocation::CreateFromArgs(Invocation, Args, *Diags);
 
   ASSERT_FALSE(Diags->hasErrorOccurred());
-  ASSERT_EQ(Invocation.getLangOpts().getSYCLVersion(), LangOptions::SYCL_2017);
+  ASSERT_EQ(Invocation.getLangOpts()->getSYCLVersion(), LangOptions::SYCL_2017);
 
   Invocation.generateCC1CommandLine(GeneratedArgs, *this);
 
@@ -745,17 +705,17 @@ TEST_F(CommandLineTest, WideIntegerHighValue) {
 //
 //   * -cl-unsafe-math-optimizations
 //     * -cl-mad-enable
-//     * -funsafe-math-optimizations
+//     * -menable-unsafe-fp-math
 //       * -freciprocal-math
 
 TEST_F(CommandLineTest, ImpliedBoolOptionsNoFlagPresent) {
   const char *Args[] = {""};
 
   ASSERT_TRUE(CompilerInvocation::CreateFromArgs(Invocation, Args, *Diags));
-  ASSERT_FALSE(Invocation.getLangOpts().CLUnsafeMath);
+  ASSERT_FALSE(Invocation.getLangOpts()->CLUnsafeMath);
   ASSERT_FALSE(Invocation.getCodeGenOpts().LessPreciseFPMAD);
-  ASSERT_FALSE(Invocation.getLangOpts().UnsafeFPMath);
-  ASSERT_FALSE(Invocation.getLangOpts().AllowRecip);
+  ASSERT_FALSE(Invocation.getLangOpts()->UnsafeFPMath);
+  ASSERT_FALSE(Invocation.getLangOpts()->AllowRecip);
 
   Invocation.generateCC1CommandLine(GeneratedArgs, *this);
 
@@ -763,8 +723,7 @@ TEST_F(CommandLineTest, ImpliedBoolOptionsNoFlagPresent) {
   ASSERT_THAT(GeneratedArgs,
               Not(Contains(StrEq("-cl-unsafe-math-optimizations"))));
   ASSERT_THAT(GeneratedArgs, Not(Contains(StrEq("-cl-mad-enable"))));
-  ASSERT_THAT(GeneratedArgs,
-              Not(Contains(StrEq("-funsafe-math-optimizations"))));
+  ASSERT_THAT(GeneratedArgs, Not(Contains(StrEq("-menable-unsafe-fp-math"))));
   ASSERT_THAT(GeneratedArgs, Not(Contains(StrEq("-freciprocal-math"))));
 }
 
@@ -773,12 +732,12 @@ TEST_F(CommandLineTest, ImpliedBoolOptionsRootFlagPresent) {
 
   ASSERT_TRUE(CompilerInvocation::CreateFromArgs(Invocation, Args, *Diags));
   // Explicitly provided root flag.
-  ASSERT_TRUE(Invocation.getLangOpts().CLUnsafeMath);
+  ASSERT_TRUE(Invocation.getLangOpts()->CLUnsafeMath);
   // Directly implied by explicitly provided root flag.
   ASSERT_TRUE(Invocation.getCodeGenOpts().LessPreciseFPMAD);
-  ASSERT_TRUE(Invocation.getLangOpts().UnsafeFPMath);
+  ASSERT_TRUE(Invocation.getLangOpts()->UnsafeFPMath);
   // Transitively implied by explicitly provided root flag.
-  ASSERT_TRUE(Invocation.getLangOpts().AllowRecip);
+  ASSERT_TRUE(Invocation.getLangOpts()->AllowRecip);
 
   Invocation.generateCC1CommandLine(GeneratedArgs, *this);
 
@@ -786,20 +745,19 @@ TEST_F(CommandLineTest, ImpliedBoolOptionsRootFlagPresent) {
   ASSERT_THAT(GeneratedArgs, Contains(StrEq("-cl-unsafe-math-optimizations")));
   // Not generated - implied by the generated root flag.
   ASSERT_THAT(GeneratedArgs, Not(Contains(StrEq("-cl-mad-enable"))));
-  ASSERT_THAT(GeneratedArgs,
-              Not(Contains(StrEq("-funsafe-math-optimizations"))));
+  ASSERT_THAT(GeneratedArgs, Not(Contains(StrEq("-menable-unsafe-fp-math"))));
   ASSERT_THAT(GeneratedArgs, Not(Contains(StrEq("-freciprocal-math"))));
 }
 
 TEST_F(CommandLineTest, ImpliedBoolOptionsAllFlagsPresent) {
   const char *Args[] = {"-cl-unsafe-math-optimizations", "-cl-mad-enable",
-                        "-funsafe-math-optimizations", "-freciprocal-math"};
+                        "-menable-unsafe-fp-math", "-freciprocal-math"};
 
   ASSERT_TRUE(CompilerInvocation::CreateFromArgs(Invocation, Args, *Diags));
-  ASSERT_TRUE(Invocation.getLangOpts().CLUnsafeMath);
+  ASSERT_TRUE(Invocation.getLangOpts()->CLUnsafeMath);
   ASSERT_TRUE(Invocation.getCodeGenOpts().LessPreciseFPMAD);
-  ASSERT_TRUE(Invocation.getLangOpts().UnsafeFPMath);
-  ASSERT_TRUE(Invocation.getLangOpts().AllowRecip);
+  ASSERT_TRUE(Invocation.getLangOpts()->UnsafeFPMath);
+  ASSERT_TRUE(Invocation.getLangOpts()->AllowRecip);
 
   Invocation.generateCC1CommandLine(GeneratedArgs, *this);
 
@@ -807,20 +765,19 @@ TEST_F(CommandLineTest, ImpliedBoolOptionsAllFlagsPresent) {
   ASSERT_THAT(GeneratedArgs, Contains(StrEq("-cl-unsafe-math-optimizations")));
   // Not generated - implied by their generated parent.
   ASSERT_THAT(GeneratedArgs, Not(Contains(StrEq("-cl-mad-enable"))));
-  ASSERT_THAT(GeneratedArgs,
-              Not(Contains(StrEq("-funsafe-math-optimizations"))));
+  ASSERT_THAT(GeneratedArgs, Not(Contains(StrEq("-menable-unsafe-fp-math"))));
   ASSERT_THAT(GeneratedArgs, Not(Contains(StrEq("-freciprocal-math"))));
 }
 
 TEST_F(CommandLineTest, ImpliedBoolOptionsImpliedFlagsPresent) {
-  const char *Args[] = {"-cl-mad-enable", "-funsafe-math-optimizations",
+  const char *Args[] = {"-cl-mad-enable", "-menable-unsafe-fp-math",
                         "-freciprocal-math"};
 
   ASSERT_TRUE(CompilerInvocation::CreateFromArgs(Invocation, Args, *Diags));
-  ASSERT_FALSE(Invocation.getLangOpts().CLUnsafeMath);
+  ASSERT_FALSE(Invocation.getLangOpts()->CLUnsafeMath);
   ASSERT_TRUE(Invocation.getCodeGenOpts().LessPreciseFPMAD);
-  ASSERT_TRUE(Invocation.getLangOpts().UnsafeFPMath);
-  ASSERT_TRUE(Invocation.getLangOpts().AllowRecip);
+  ASSERT_TRUE(Invocation.getLangOpts()->UnsafeFPMath);
+  ASSERT_TRUE(Invocation.getLangOpts()->AllowRecip);
 
   Invocation.generateCC1CommandLine(GeneratedArgs, *this);
   // Not generated - missing.
@@ -828,13 +785,13 @@ TEST_F(CommandLineTest, ImpliedBoolOptionsImpliedFlagsPresent) {
               Not(Contains(StrEq("-cl-unsafe-math-optimizations"))));
   // Generated - explicitly provided.
   ASSERT_THAT(GeneratedArgs, Contains(StrEq("-cl-mad-enable")));
-  ASSERT_THAT(GeneratedArgs, Contains(StrEq("-funsafe-math-optimizations")));
+  ASSERT_THAT(GeneratedArgs, Contains(StrEq("-menable-unsafe-fp-math")));
   // Not generated - implied by its generated parent.
   ASSERT_THAT(GeneratedArgs, Not(Contains(StrEq("-freciprocal-math"))));
 }
 
 TEST_F(CommandLineTest, PresentAndNotImpliedGenerated) {
-  const char *Args[] = {"-cl-mad-enable", "-funsafe-math-optimizations"};
+  const char *Args[] = {"-cl-mad-enable", "-menable-unsafe-fp-math"};
 
   ASSERT_TRUE(CompilerInvocation::CreateFromArgs(Invocation, Args, *Diags));
 
@@ -842,7 +799,7 @@ TEST_F(CommandLineTest, PresentAndNotImpliedGenerated) {
 
   // Present options that were not implied are generated.
   ASSERT_THAT(GeneratedArgs, Contains(StrEq("-cl-mad-enable")));
-  ASSERT_THAT(GeneratedArgs, Contains(StrEq("-funsafe-math-optimizations")));
+  ASSERT_THAT(GeneratedArgs, Contains(StrEq("-menable-unsafe-fp-math")));
 }
 
 // Diagnostic option.
@@ -866,7 +823,7 @@ TEST_F(CommandLineTest, DigraphsImplied) {
   const char *Args[] = {""};
 
   ASSERT_TRUE(CompilerInvocation::CreateFromArgs(Invocation, Args, *Diags));
-  ASSERT_TRUE(Invocation.getLangOpts().Digraphs);
+  ASSERT_TRUE(Invocation.getLangOpts()->Digraphs);
 
   Invocation.generateCC1CommandLine(GeneratedArgs, *this);
   ASSERT_THAT(GeneratedArgs, Not(Contains(StrEq("-fno-digraphs"))));
@@ -877,7 +834,7 @@ TEST_F(CommandLineTest, DigraphsDisabled) {
   const char *Args[] = {"-fno-digraphs"};
 
   ASSERT_TRUE(CompilerInvocation::CreateFromArgs(Invocation, Args, *Diags));
-  ASSERT_FALSE(Invocation.getLangOpts().Digraphs);
+  ASSERT_FALSE(Invocation.getLangOpts()->Digraphs);
 
   Invocation.generateCC1CommandLine(GeneratedArgs, *this);
   ASSERT_THAT(GeneratedArgs, Contains(StrEq("-fno-digraphs")));
@@ -888,7 +845,7 @@ TEST_F(CommandLineTest, DigraphsNotImplied) {
   const char *Args[] = {"-std=c89"};
 
   ASSERT_TRUE(CompilerInvocation::CreateFromArgs(Invocation, Args, *Diags));
-  ASSERT_FALSE(Invocation.getLangOpts().Digraphs);
+  ASSERT_FALSE(Invocation.getLangOpts()->Digraphs);
 
   Invocation.generateCC1CommandLine(GeneratedArgs, *this);
   ASSERT_THAT(GeneratedArgs, Not(Contains(StrEq("-fno-digraphs"))));
@@ -899,7 +856,7 @@ TEST_F(CommandLineTest, DigraphsEnabled) {
   const char *Args[] = {"-std=c89", "-fdigraphs"};
 
   ASSERT_TRUE(CompilerInvocation::CreateFromArgs(Invocation, Args, *Diags));
-  ASSERT_TRUE(Invocation.getLangOpts().Digraphs);
+  ASSERT_TRUE(Invocation.getLangOpts()->Digraphs);
 
   Invocation.generateCC1CommandLine(GeneratedArgs, *this);
   ASSERT_THAT(GeneratedArgs, Contains(StrEq("-fdigraphs")));
@@ -1004,8 +961,8 @@ TEST_F(CommandLineTest, RoundTrip) {
 
   ASSERT_TRUE(CompilerInvocation::CreateFromArgs(Invocation, Args, *Diags));
 
-  ASSERT_TRUE(Invocation.getLangOpts().C17);
-  ASSERT_EQ(Invocation.getLangOpts().MaxTokens, 10u);
+  ASSERT_TRUE(Invocation.getLangOpts()->C17);
+  ASSERT_EQ(Invocation.getLangOpts()->MaxTokens, 10u);
 
   ASSERT_EQ(Invocation.getTargetOpts().SDKVersion, llvm::VersionTuple(1, 2, 3));
   ASSERT_EQ(Invocation.getTargetOpts().EABIVersion, EABI::EABI4);
@@ -1022,8 +979,8 @@ TEST_F(CommandLineTest, RoundTrip) {
               Contains(std::make_pair(std::string("XY=AB"), false)));
   ASSERT_EQ(Invocation.getPreprocessorOpts().ImplicitPCHInclude, "a.pch");
 
-  ASSERT_EQ(Invocation.getAnalyzerOpts().Config["ctu-import-threshold"], "42");
-  ASSERT_TRUE(Invocation.getAnalyzerOpts().UnoptimizedCFG);
+  ASSERT_EQ(Invocation.getAnalyzerOpts()->Config["ctu-import-threshold"], "42");
+  ASSERT_TRUE(Invocation.getAnalyzerOpts()->UnoptimizedCFG);
 
   ASSERT_TRUE(Invocation.getMigratorOpts().NoNSAllocReallocError);
 

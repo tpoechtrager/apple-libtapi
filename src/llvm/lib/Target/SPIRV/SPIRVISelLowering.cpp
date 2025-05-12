@@ -27,8 +27,6 @@ unsigned SPIRVTargetLowering::getNumRegistersForCallingConv(
       (VT.getVectorElementType() == MVT::i1 ||
        VT.getVectorElementType() == MVT::i8))
     return 1;
-  if (!VT.isVector() && VT.isInteger() && VT.getSizeInBits() <= 64)
-    return 1;
   return getNumRegisters(Context, VT);
 }
 
@@ -55,7 +53,7 @@ bool SPIRVTargetLowering::getTgtMemIntrinsic(IntrinsicInfo &Info,
   switch (Intrinsic) {
   case Intrinsic::spv_load:
     AlignIdx = 2;
-    [[fallthrough]];
+    LLVM_FALLTHROUGH;
   case Intrinsic::spv_store: {
     if (I.getNumOperands() >= AlignIdx + 1) {
       auto *AlignOp = cast<ConstantInt>(I.getOperand(AlignIdx));

@@ -148,8 +148,8 @@ void ExprEngine::VisitObjCMessage(const ObjCMessageExpr *ME,
                                   ExplodedNode *Pred,
                                   ExplodedNodeSet &Dst) {
   CallEventManager &CEMgr = getStateManager().getCallEventManager();
-  CallEventRef<ObjCMethodCall> Msg = CEMgr.getObjCMethodCall(
-      ME, Pred->getState(), Pred->getLocationContext(), getCFGElementRef());
+  CallEventRef<ObjCMethodCall> Msg =
+    CEMgr.getObjCMethodCall(ME, Pred->getState(), Pred->getLocationContext());
 
   // There are three cases for the receiver:
   //   (1) it is definitely nil,

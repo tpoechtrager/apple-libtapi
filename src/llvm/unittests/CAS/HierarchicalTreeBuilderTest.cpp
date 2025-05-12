@@ -36,14 +36,14 @@ TEST(HierarchicalTreeBuilderTest, Flat) {
   std::unique_ptr<ObjectStore> CAS = createInMemoryCAS();
 
   auto make = [&](StringRef Content) {
-    return *expectedToOptional(CAS->storeFromString(std::nullopt, Content));
+    return *expectedToOptional(CAS->storeFromString(None, Content));
   };
 
   HierarchicalTreeBuilder Builder;
   Builder.push(make("1"), TreeEntry::Regular, "/file1");
   Builder.push(make("1"), TreeEntry::Regular, "/1");
   Builder.push(make("2"), TreeEntry::Regular, "/2");
-  std::optional<ObjectProxy> Root = expectedToOptional(Builder.create(*CAS));
+  Optional<ObjectProxy> Root = expectedToOptional(Builder.create(*CAS));
   ASSERT_TRUE(Root);
 
   std::unique_ptr<vfs::FileSystem> CASFS =
@@ -71,7 +71,7 @@ TEST(HierarchicalTreeBuilderTest, Nested) {
   std::unique_ptr<ObjectStore> CAS = createInMemoryCAS();
 
   auto make = [&](StringRef Content) {
-    return *expectedToOptional(CAS->storeFromString(std::nullopt, Content));
+    return *expectedToOptional(CAS->storeFromString(None, Content));
   };
 
   HierarchicalTreeBuilder Builder;
@@ -81,7 +81,7 @@ TEST(HierarchicalTreeBuilderTest, Nested) {
   Builder.push(make("blob1"), TreeEntry::Regular, "/t3/t1nested/d1");
   Builder.push(make("blob1"), TreeEntry::Regular, "/t3/t2/d1also");
   Builder.push(make("blob2"), TreeEntry::Regular, "/t3/t2/d2");
-  std::optional<ObjectProxy> Root = expectedToOptional(Builder.create(*CAS));
+  Optional<ObjectProxy> Root = expectedToOptional(Builder.create(*CAS));
   ASSERT_TRUE(Root);
 
   std::unique_ptr<vfs::FileSystem> CASFS =
@@ -115,24 +115,24 @@ TEST(HierarchicalTreeBuilderTest, MergeDirectories) {
   std::unique_ptr<ObjectStore> CAS = createInMemoryCAS();
 
   auto make = [&](StringRef Content) {
-    return *expectedToOptional(CAS->storeFromString(std::nullopt, Content));
+    return *expectedToOptional(CAS->storeFromString(None, Content));
   };
 
   auto createRoot = [&](StringRef Blob, StringRef Path,
-                        std::optional<ObjectRef> &Root) {
+                        Optional<ObjectRef> &Root) {
     HierarchicalTreeBuilder Builder;
     Builder.push(make(Blob), TreeEntry::Regular, Path);
 
-    std::optional<ObjectProxy> H;
+    Optional<ObjectProxy> H;
     ASSERT_THAT_ERROR(Builder.create(*CAS).moveInto(H), Succeeded());
     Root = CAS->getReference(*H);
   };
 
-  std::optional<ObjectRef> Root1;
+  Optional<ObjectRef> Root1;
   createRoot("blob1", "/t1/d1", Root1);
-  std::optional<ObjectRef> Root2;
+  Optional<ObjectRef> Root2;
   createRoot("blob2", "/t1/d2", Root2);
-  std::optional<ObjectRef> Root3;
+  Optional<ObjectRef> Root3;
   createRoot("blob3", "/t1/nested/d1", Root3);
 
   HierarchicalTreeBuilder Builder;
@@ -141,7 +141,7 @@ TEST(HierarchicalTreeBuilderTest, MergeDirectories) {
   Builder.pushTreeContent(*Root3, "/");
   Builder.pushTreeContent(*Root1, "");
   Builder.pushTreeContent(*Root1, "other1/nest");
-  std::optional<ObjectProxy> Root;
+  Optional<ObjectProxy> Root;
   ASSERT_THAT_ERROR(Builder.create(*CAS).moveInto(Root), Succeeded());
 
   std::unique_ptr<vfs::FileSystem> CASFS =
@@ -175,28 +175,28 @@ TEST(HierarchicalTreeBuilderTest, MergeDirectoriesConflict) {
   std::unique_ptr<ObjectStore> CAS = createInMemoryCAS();
 
   auto make = [&](StringRef Content) {
-    return *expectedToOptional(CAS->storeFromString(std::nullopt, Content));
+    return *expectedToOptional(CAS->storeFromString(None, Content));
   };
 
   auto createRoot = [&](StringRef Blob, StringRef Path,
-                        std::optional<ObjectProxy> &Root) {
+                        Optional<ObjectProxy> &Root) {
     HierarchicalTreeBuilder Builder;
     Builder.push(make(Blob), TreeEntry::Regular, Path);
     ASSERT_THAT_ERROR(Builder.create(*CAS).moveInto(Root), Succeeded());
   };
 
-  std::optional<ObjectProxy> Root1;
+  Optional<ObjectProxy> Root1;
   createRoot("blob1", "/t1/d1", Root1);
-  std::optional<ObjectProxy> Root2;
+  Optional<ObjectProxy> Root2;
   createRoot("blob2", "/t1/d1", Root2);
-  std::optional<ObjectProxy> Root3;
+  Optional<ObjectProxy> Root3;
   createRoot("blob3", "/t1/d1/nested", Root3);
 
   {
     HierarchicalTreeBuilder Builder;
     Builder.pushTreeContent(Root1->getRef(), "");
     Builder.pushTreeContent(Root2->getRef(), "");
-    std::optional<ObjectProxy> Root;
+    Optional<ObjectProxy> Root;
     EXPECT_THAT_ERROR(
         Builder.create(*CAS).moveInto(Root),
         FailedWithMessage("duplicate path '/t1/d1' with different ID"));
@@ -205,7 +205,7 @@ TEST(HierarchicalTreeBuilderTest, MergeDirectoriesConflict) {
     HierarchicalTreeBuilder Builder;
     Builder.pushTreeContent(Root1->getRef(), "");
     Builder.pushTreeContent(Root3->getRef(), "");
-    std::optional<ObjectProxy> Root;
+    Optional<ObjectProxy> Root;
     EXPECT_THAT_ERROR(Builder.create(*CAS).moveInto(Root),
                       FailedWithMessage("duplicate path '/t1/d1'"));
   }

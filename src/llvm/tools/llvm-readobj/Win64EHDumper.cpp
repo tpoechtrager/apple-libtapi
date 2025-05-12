@@ -315,11 +315,11 @@ void Dumper::printUnwindInfo(const Context &Ctx, const coff_section *Section,
                              off_t Offset, const UnwindInfo &UI) {
   DictScope UIS(SW, "UnwindInfo");
   SW.printNumber("Version", UI.getVersion());
-  SW.printFlags("Flags", UI.getFlags(), ArrayRef(UnwindFlags));
+  SW.printFlags("Flags", UI.getFlags(), makeArrayRef(UnwindFlags));
   SW.printNumber("PrologSize", UI.PrologSize);
   if (UI.getFrameRegister()) {
     SW.printEnum("FrameRegister", UI.getFrameRegister(),
-                 ArrayRef(UnwindOpInfo));
+                 makeArrayRef(UnwindOpInfo));
     SW.printHex("FrameOffset", UI.getFrameOffset());
   } else {
     SW.printString("FrameRegister", StringRef("-"));
@@ -337,7 +337,7 @@ void Dumper::printUnwindInfo(const Context &Ctx, const coff_section *Section,
         return;
       }
 
-      printUnwindCode(UI, ArrayRef(UCI, UCE));
+      printUnwindCode(UI, makeArrayRef(UCI, UCE));
       UCI = UCI + UsedSlots - 1;
     }
   }

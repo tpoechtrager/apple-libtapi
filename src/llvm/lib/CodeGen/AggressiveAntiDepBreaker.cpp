@@ -23,7 +23,6 @@
 #include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/CodeGen/MachineOperand.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
-#include "llvm/CodeGen/MachineValueType.h"
 #include "llvm/CodeGen/RegisterClassInfo.h"
 #include "llvm/CodeGen/ScheduleDAG.h"
 #include "llvm/CodeGen/TargetInstrInfo.h"
@@ -32,6 +31,7 @@
 #include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/MachineValueType.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cassert>
 #include <utility>
@@ -200,7 +200,7 @@ void AggressiveAntiDepBreaker::Observe(MachineInstr &MI, unsigned Count,
   LLVM_DEBUG(dbgs() << "\tRegs:");
 
   std::vector<unsigned> &DefIndices = State->GetDefIndices();
-  for (unsigned Reg = 1; Reg != TRI->getNumRegs(); ++Reg) {
+  for (unsigned Reg = 0; Reg != TRI->getNumRegs(); ++Reg) {
     // If Reg is current live, then mark that it can't be renamed as
     // we don't know the extent of its live-range anymore (now that it
     // has been scheduled). If it is not live but was defined in the
@@ -246,8 +246,9 @@ void AggressiveAntiDepBreaker::GetPassthruRegs(
     if ((MO.isDef() && MI.isRegTiedToUseOperand(i)) ||
         IsImplicitDefUse(MI, MO)) {
       const Register Reg = MO.getReg();
-      for (MCPhysReg SubReg : TRI->subregs_inclusive(Reg))
-        PassthruRegs.insert(SubReg);
+      for (MCSubRegIterator SubRegs(Reg, TRI, /*IncludeSelf=*/true);
+           SubRegs.isValid(); ++SubRegs)
+        PassthruRegs.insert(*SubRegs);
     }
   }
 }
@@ -321,7 +322,8 @@ void AggressiveAntiDepBreaker::HandleLastUse(unsigned Reg, unsigned KillIdx,
     // was not live because otherwise, regardless whether we have an explicit
     // use of the subregister, the subregister's contents are needed for the
     // uses of the superregister.
-    for (MCPhysReg SubregReg : TRI->subregs(Reg)) {
+    for (MCSubRegIterator SubRegs(Reg, TRI); SubRegs.isValid(); ++SubRegs) {
+      unsigned SubregReg = *SubRegs;
       if (!State->IsLive(SubregReg)) {
         KillIndices[SubregReg] = KillIdx;
         DefIndices[SubregReg] = ~0u;
@@ -351,7 +353,8 @@ void AggressiveAntiDepBreaker::PrescanInstruction(
   // dead, or because only a subregister is live at the def. If we
   // don't do this the dead def will be incorrectly merged into the
   // previous def.
-  for (const MachineOperand &MO : MI.all_defs()) {
+  for (const MachineOperand &MO : MI.operands()) {
+    if (!MO.isReg() || !MO.isDef()) continue;
     Register Reg = MO.getReg();
     if (Reg == 0) continue;
 
@@ -775,7 +778,7 @@ unsigned AggressiveAntiDepBreaker::BreakAntiDependencies(
 #ifndef NDEBUG
   LLVM_DEBUG(dbgs() << "\n===== Aggressive anti-dependency breaking\n");
   LLVM_DEBUG(dbgs() << "Available regs:");
-  for (unsigned Reg = 1; Reg < TRI->getNumRegs(); ++Reg) {
+  for (unsigned Reg = 0; Reg < TRI->getNumRegs(); ++Reg) {
     if (!State->IsLive(Reg))
       LLVM_DEBUG(dbgs() << " " << printReg(Reg, TRI));
   }
@@ -919,6 +922,7 @@ unsigned AggressiveAntiDepBreaker::BreakAntiDependencies(
         }
 
         assert(AntiDepReg != 0);
+        if (AntiDepReg == 0) continue;
 
         // Determine AntiDepReg's register group.
         const unsigned GroupIndex = State->GetGroup(AntiDepReg);

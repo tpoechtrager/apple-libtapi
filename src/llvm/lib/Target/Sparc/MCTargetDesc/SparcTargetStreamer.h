@@ -22,9 +22,9 @@ class SparcTargetStreamer : public MCTargetStreamer {
 public:
   SparcTargetStreamer(MCStreamer &S);
   /// Emit ".register <reg>, #ignore".
-  virtual void emitSparcRegisterIgnore(unsigned reg){};
+  virtual void emitSparcRegisterIgnore(unsigned reg) = 0;
   /// Emit ".register <reg>, #scratch".
-  virtual void emitSparcRegisterScratch(unsigned reg){};
+  virtual void emitSparcRegisterScratch(unsigned reg) = 0;
 };
 
 // This part is for ascii assembly output

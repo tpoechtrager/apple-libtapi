@@ -112,26 +112,26 @@ STATISTIC(NumNotHoistedDueToHotness,
 namespace {
 
   class MachineLICMBase : public MachineFunctionPass {
-    const TargetInstrInfo *TII = nullptr;
-    const TargetLoweringBase *TLI = nullptr;
-    const TargetRegisterInfo *TRI = nullptr;
-    const MachineFrameInfo *MFI = nullptr;
-    MachineRegisterInfo *MRI = nullptr;
+    const TargetInstrInfo *TII;
+    const TargetLoweringBase *TLI;
+    const TargetRegisterInfo *TRI;
+    const MachineFrameInfo *MFI;
+    MachineRegisterInfo *MRI;
     TargetSchedModel SchedModel;
-    bool PreRegAlloc = false;
-    bool HasProfileData = false;
+    bool PreRegAlloc;
+    bool HasProfileData;
 
     // Various analyses that we use...
-    AliasAnalysis *AA = nullptr;               // Alias analysis info.
-    MachineBlockFrequencyInfo *MBFI = nullptr; // Machine block frequncy info
-    MachineLoopInfo *MLI = nullptr;            // Current MachineLoopInfo
-    MachineDominatorTree *DT = nullptr; // Machine dominator tree for the cur loop
+    AliasAnalysis        *AA;      // Alias analysis info.
+    MachineBlockFrequencyInfo *MBFI; // Machine block frequncy info
+    MachineLoopInfo      *MLI;     // Current MachineLoopInfo
+    MachineDominatorTree *DT;      // Machine dominator tree for the cur loop
 
     // State that is updated as we process loops
-    bool Changed = false;           // True if a loop is changed.
-    bool FirstInLoop = false;       // True if it's the first LICM in the loop.
-    MachineLoop *CurLoop = nullptr; // The current loop we are working on.
-    MachineBasicBlock *CurPreheader = nullptr; // The preheader for CurLoop.
+    bool         Changed;          // True if a loop is changed.
+    bool         FirstInLoop;      // True if it's the first LICM in the loop.
+    MachineLoop *CurLoop;          // The current loop we are working on.
+    MachineBasicBlock *CurPreheader; // The preheader for CurLoop.
 
     // Exit blocks for CurLoop.
     SmallVector<MachineBasicBlock *, 8> ExitBlocks;
@@ -163,7 +163,7 @@ namespace {
     // If a MBB does not dominate loop exiting blocks then it may not safe
     // to hoist loads from this block.
     // Tri-state: 0 - false, 1 - true, 2 - unknown
-    unsigned SpeculationState = SpeculateUnknown;
+    unsigned SpeculationState;
 
   public:
     MachineLICMBase(char &PassID, bool PreRegAlloc)
@@ -452,7 +452,8 @@ void MachineLICMBase::ProcessMI(MachineInstr *MI,
     Register Reg = MO.getReg();
     if (!Reg)
       continue;
-    assert(Reg.isPhysical() && "Not expecting virtual register!");
+    assert(Register::isPhysicalRegister(Reg) &&
+           "Not expecting virtual register!");
 
     if (!MO.isDef()) {
       if (Reg && (PhysRegDefs.test(Reg) || PhysRegClobbers.test(Reg)))
@@ -538,10 +539,6 @@ void MachineLICMBase::HoistRegionPostRA() {
         PhysRegDefs.set(*AI);
     }
 
-    // Funclet entry blocks will clobber all registers
-    if (const uint32_t *Mask = BB->getBeginClobberMask(TRI))
-      PhysRegClobbers.setBitsNotInMask(Mask);
-
     SpeculationState = SpeculateUnknown;
     for (MachineInstr &MI : *BB)
       ProcessMI(&MI, PhysRegDefs, PhysRegClobbers, StoredFIs, Candidates);
@@ -579,8 +576,8 @@ void MachineLICMBase::HoistRegionPostRA() {
     if (!PhysRegClobbers.test(Def) && !TermRegs.test(Def)) {
       bool Safe = true;
       MachineInstr *MI = Candidate.MI;
-      for (const MachineOperand &MO : MI->all_uses()) {
-        if (!MO.getReg())
+      for (const MachineOperand &MO : MI->operands()) {
+        if (!MO.isReg() || MO.isDef() || !MO.getReg())
           continue;
         Register Reg = MO.getReg();
         if (PhysRegDefs.test(Reg) ||
@@ -604,9 +601,8 @@ void MachineLICMBase::AddToLiveIns(MCRegister Reg) {
     if (!BB->isLiveIn(Reg))
       BB->addLiveIn(Reg);
     for (MachineInstr &MI : *BB) {
-      for (MachineOperand &MO : MI.all_uses()) {
-        if (!MO.getReg())
-          continue;
+      for (MachineOperand &MO : MI.operands()) {
+        if (!MO.isReg() || !MO.getReg() || MO.isDef()) continue;
         if (MO.getReg() == Reg || TRI->isSuperRegister(Reg, MO.getReg()))
           MO.setIsKill(false);
       }
@@ -674,8 +670,8 @@ bool MachineLICMBase::isTriviallyReMaterializable(
   if (!TII->isTriviallyReMaterializable(MI))
     return false;
 
-  for (const MachineOperand &MO : MI.all_uses()) {
-    if (MO.getReg().isVirtual())
+  for (const MachineOperand &MO : MI.operands()) {
+    if (MO.isReg() && MO.isUse() && MO.getReg().isVirtual())
       return false;
   }
 
@@ -848,7 +844,7 @@ MachineLICMBase::calcRegisterCost(const MachineInstr *MI, bool ConsiderSeen,
     if (!MO.isReg() || MO.isImplicit())
       continue;
     Register Reg = MO.getReg();
-    if (!Reg.isVirtual())
+    if (!Register::isVirtualRegister(Reg))
       continue;
 
     // FIXME: It seems bad to use RegSeen only for some of these calculations.
@@ -871,7 +867,7 @@ MachineLICMBase::calcRegisterCost(const MachineInstr *MI, bool ConsiderSeen,
       continue;
     const int *PS = TRI->getRegClassPressureSets(RC);
     for (; *PS != -1; ++PS) {
-      if (!Cost.contains(*PS))
+      if (Cost.find(*PS) == Cost.end())
         Cost[*PS] = RCCost;
       else
         Cost[*PS] += RCCost;
@@ -920,9 +916,9 @@ static bool isInvariantStore(const MachineInstr &MI,
       Register Reg = MO.getReg();
       // If operand is a virtual register, check if it comes from a copy of a
       // physical register.
-      if (Reg.isVirtual())
+      if (Register::isVirtualRegister(Reg))
         Reg = TRI->lookThruCopyLike(MO.getReg(), MRI);
-      if (Reg.isVirtual())
+      if (Register::isVirtualRegister(Reg))
         return false;
       if (!TRI->isCallerPreservedPhysReg(Reg.asMCReg(), *MI.getMF()))
         return false;
@@ -951,7 +947,7 @@ static bool isCopyFeedingInvariantStore(const MachineInstr &MI,
   const MachineFunction *MF = MI.getMF();
   // Check that we are copying a constant physical register.
   Register CopySrcReg = MI.getOperand(1).getReg();
-  if (CopySrcReg.isVirtual())
+  if (Register::isVirtualRegister(CopySrcReg))
     return false;
 
   if (!TRI->isCallerPreservedPhysReg(CopySrcReg.asMCReg(), *MF))
@@ -959,7 +955,8 @@ static bool isCopyFeedingInvariantStore(const MachineInstr &MI,
 
   Register CopyDstReg = MI.getOperand(0).getReg();
   // Check if any of the uses of the copy are invariant stores.
-  assert(CopyDstReg.isVirtual() && "copy dst is not a virtual reg");
+  assert(Register::isVirtualRegister(CopyDstReg) &&
+         "copy dst is not a virtual reg");
 
   for (MachineInstr &UseMI : MRI->use_instructions(CopyDstReg)) {
     if (UseMI.mayStore() && isInvariantStore(UseMI, TRI, MRI))
@@ -1019,9 +1016,11 @@ bool MachineLICMBase::HasLoopPHIUse(const MachineInstr *MI) const {
   SmallVector<const MachineInstr*, 8> Work(1, MI);
   do {
     MI = Work.pop_back_val();
-    for (const MachineOperand &MO : MI->all_defs()) {
+    for (const MachineOperand &MO : MI->operands()) {
+      if (!MO.isReg() || !MO.isDef())
+        continue;
       Register Reg = MO.getReg();
-      if (!Reg.isVirtual())
+      if (!Register::isVirtualRegister(Reg))
         continue;
       for (MachineInstr &UseMI : MRI->use_instructions(Reg)) {
         // A PHI may cause a copy to be inserted.
@@ -1091,7 +1090,7 @@ bool MachineLICMBase::IsCheapInstruction(MachineInstr &MI) const {
       continue;
     --NumDefs;
     Register Reg = DefMO.getReg();
-    if (Reg.isPhysical())
+    if (Register::isPhysicalRegister(Reg))
       continue;
 
     if (!TII->hasLowDefLatency(SchedModel, MI, i))
@@ -1184,7 +1183,7 @@ bool MachineLICMBase::IsProfitableToHoist(MachineInstr &MI) {
     if (!MO.isReg() || MO.isImplicit())
       continue;
     Register Reg = MO.getReg();
-    if (!Reg.isVirtual())
+    if (!Register::isVirtualRegister(Reg))
       continue;
     if (MO.isDef() && HasHighOperandLatency(MI, i, Reg)) {
       LLVM_DEBUG(dbgs() << "Hoist High Latency: " << MI);
@@ -1341,11 +1340,13 @@ bool MachineLICMBase::EliminateCSE(
       const MachineOperand &MO = MI->getOperand(i);
 
       // Physical registers may not differ here.
-      assert((!MO.isReg() || MO.getReg() == 0 || !MO.getReg().isPhysical() ||
+      assert((!MO.isReg() || MO.getReg() == 0 ||
+              !Register::isPhysicalRegister(MO.getReg()) ||
               MO.getReg() == Dup->getOperand(i).getReg()) &&
              "Instructions with different phys regs are not identical!");
 
-      if (MO.isReg() && MO.isDef() && !MO.getReg().isPhysical())
+      if (MO.isReg() && MO.isDef() &&
+          !Register::isPhysicalRegister(MO.getReg()))
         Defs.push_back(i);
     }
 
@@ -1458,8 +1459,8 @@ bool MachineLICMBase::Hoist(MachineInstr *MI, MachineBasicBlock *Preheader) {
     // Clear the kill flags of any register this instruction defines,
     // since they may need to be live throughout the entire loop
     // rather than just live for part of it.
-    for (MachineOperand &MO : MI->all_defs())
-      if (!MO.isDead())
+    for (MachineOperand &MO : MI->operands())
+      if (MO.isReg() && MO.isDef() && !MO.isDead())
         MRI->clearKillFlags(MO.getReg());
 
     // Add to the CSE map.

@@ -24,7 +24,7 @@
 using namespace llvm;
 
 #define RISCV_EXPAND_ATOMIC_PSEUDO_NAME                                        \
-  "RISC-V atomic pseudo instruction expansion pass"
+  "RISCV atomic pseudo instruction expansion pass"
 
 namespace {
 
@@ -58,34 +58,15 @@ private:
   bool expandAtomicCmpXchg(MachineBasicBlock &MBB,
                            MachineBasicBlock::iterator MBBI, bool IsMasked,
                            int Width, MachineBasicBlock::iterator &NextMBBI);
-#ifndef NDEBUG
-  unsigned getInstSizeInBytes(const MachineFunction &MF) const {
-    unsigned Size = 0;
-    for (auto &MBB : MF)
-      for (auto &MI : MBB)
-        Size += TII->getInstSizeInBytes(MI);
-    return Size;
-  }
-#endif
 };
 
 char RISCVExpandAtomicPseudo::ID = 0;
 
 bool RISCVExpandAtomicPseudo::runOnMachineFunction(MachineFunction &MF) {
-  TII = MF.getSubtarget<RISCVSubtarget>().getInstrInfo();
-
-#ifndef NDEBUG
-  const unsigned OldSize = getInstSizeInBytes(MF);
-#endif
-
+  TII = static_cast<const RISCVInstrInfo *>(MF.getSubtarget().getInstrInfo());
   bool Modified = false;
   for (auto &MBB : MF)
     Modified |= expandMBB(MBB);
-
-#ifndef NDEBUG
-  const unsigned NewSize = getInstSizeInBytes(MF);
-  assert(OldSize >= NewSize);
-#endif
   return Modified;
 }
 
@@ -178,7 +159,7 @@ static unsigned getSCForRMW32(AtomicOrdering Ordering) {
   case AtomicOrdering::AcquireRelease:
     return RISCV::SC_W_RL;
   case AtomicOrdering::SequentiallyConsistent:
-    return RISCV::SC_W_RL;
+    return RISCV::SC_W_AQ_RL;
   }
 }
 
@@ -212,7 +193,7 @@ static unsigned getSCForRMW64(AtomicOrdering Ordering) {
   case AtomicOrdering::AcquireRelease:
     return RISCV::SC_D_RL;
   case AtomicOrdering::SequentiallyConsistent:
-    return RISCV::SC_D_RL;
+    return RISCV::SC_D_AQ_RL;
   }
 }
 
@@ -572,15 +553,6 @@ bool tryToFoldBNEOnCmpXchgResult(MachineBasicBlock &MBB,
   if (!(BNEOp0 == DestReg && BNEOp1 == CmpValReg) &&
       !(BNEOp0 == CmpValReg && BNEOp1 == DestReg))
     return false;
-
-  // Make sure the branch is the only user of the AND.
-  if (MaskReg.isValid()) {
-    if (BNEOp0 == DestReg && !MBBI->getOperand(0).isKill())
-      return false;
-    if (BNEOp1 == DestReg && !MBBI->getOperand(1).isKill())
-      return false;
-  }
-
   ToErase.push_back(&*MBBI);
   LoopHeadBNETarget = MBBI->getOperand(2).getMBB();
   MBBI = skipDebugInstructionsForward(std::next(MBBI), E);

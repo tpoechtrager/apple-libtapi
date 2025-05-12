@@ -237,11 +237,11 @@ uint64_t getJumpTableNumCases(const SmallVectorImpl<unsigned> &TotalCases,
                               unsigned First, unsigned Last);
 
 struct SwitchWorkListItem {
-  MachineBasicBlock *MBB = nullptr;
+  MachineBasicBlock *MBB;
   CaseClusterIt FirstCluster;
   CaseClusterIt LastCluster;
-  const ConstantInt *GE = nullptr;
-  const ConstantInt *LT = nullptr;
+  const ConstantInt *GE;
+  const ConstantInt *LT;
   BranchProbability DefaultProb;
 };
 using SwitchWorkList = SmallVector<SwitchWorkListItem, 4>;
@@ -292,9 +292,9 @@ public:
   virtual ~SwitchLowering() = default;
 
 private:
-  const TargetLowering *TLI = nullptr;
-  const TargetMachine *TM = nullptr;
-  const DataLayout *DL = nullptr;
+  const TargetLowering *TLI;
+  const TargetMachine *TM;
+  const DataLayout *DL;
   FunctionLoweringInfo &FuncInfo;
 };
 

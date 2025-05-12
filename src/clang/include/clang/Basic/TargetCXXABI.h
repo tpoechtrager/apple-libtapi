@@ -19,8 +19,8 @@
 
 #include "clang/Basic/LLVM.h"
 #include "llvm/ADT/StringMap.h"
+#include "llvm/ADT/Triple.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/TargetParser/Triple.h"
 
 namespace clang {
 
@@ -60,7 +60,9 @@ public:
   static const auto &getSpelling(Kind ABIKind) {
     return getSpellingMap().find(ABIKind)->second;
   }
-  static bool isABI(StringRef Name) { return getABIMap().contains(Name); }
+  static bool isABI(StringRef Name) {
+    return getABIMap().find(Name) != getABIMap().end();
+  }
 
   // Return true if this target should use the relative vtables C++ ABI by
   // default.

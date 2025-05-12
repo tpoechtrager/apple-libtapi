@@ -12,7 +12,6 @@
 
 #include "llvm/CodeGen/GlobalISel/Combiner.h"
 #include "llvm/ADT/PostOrderIterator.h"
-#include "llvm/ADT/SetVector.h"
 #include "llvm/CodeGen/GlobalISel/CSEInfo.h"
 #include "llvm/CodeGen/GlobalISel/CSEMIRBuilder.h"
 #include "llvm/CodeGen/GlobalISel/CombinerInfo.h"
@@ -53,9 +52,7 @@ class WorkListMaintainer : public GISelChangeObserver {
   WorkListTy &WorkList;
   /// The instructions that have been created but we want to report once they
   /// have their operands. This is only maintained if debug output is requested.
-#ifndef NDEBUG
-  SetVector<const MachineInstr *> CreatedInstrs;
-#endif
+  SmallPtrSet<const MachineInstr *, 4> CreatedInstrs;
 
 public:
   WorkListMaintainer(WorkListTy &WorkList) : WorkList(WorkList) {}

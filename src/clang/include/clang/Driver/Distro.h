@@ -9,8 +9,8 @@
 #ifndef LLVM_CLANG_DRIVER_DISTRO_H
 #define LLVM_CLANG_DRIVER_DISTRO_H
 
+#include "llvm/ADT/Triple.h"
 #include "llvm/Support/VirtualFileSystem.h"
-#include "llvm/TargetParser/Triple.h"
 
 namespace clang {
 namespace driver {
@@ -76,8 +76,6 @@ public:
     UbuntuImpish,
     UbuntuJammy,
     UbuntuKinetic,
-    UbuntuLunar,
-    UbuntuMantic,
     UnknownDistro
   };
 
@@ -129,7 +127,7 @@ public:
   }
 
   bool IsUbuntu() const {
-    return DistroVal >= UbuntuHardy && DistroVal <= UbuntuMantic;
+    return DistroVal >= UbuntuHardy && DistroVal <= UbuntuKinetic;
   }
 
   bool IsAlpineLinux() const { return DistroVal == AlpineLinux; }

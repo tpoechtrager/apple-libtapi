@@ -9,7 +9,6 @@
 #include "CursorVisitor.h"
 #include "CLog.h"
 #include "CXCursor.h"
-#include "CXFile.h"
 #include "CXSourceLocation.h"
 #include "CXTranslationUnit.h"
 #include "clang/AST/DeclObjC.h"
@@ -433,7 +432,7 @@ CXResult clang_findReferencesInFile(CXCursor cursor, CXFile file,
   }
 
   if (Log)
-    *Log << cursor << " @" << *cxfile::getFileEntryRef(file);
+    *Log << cursor << " @" << static_cast<const FileEntry *>(file);
 
   ASTUnit *CXXUnit = cxcursor::getCursorASTUnit(cursor);
   if (!CXXUnit)
@@ -445,7 +444,7 @@ CXResult clang_findReferencesInFile(CXCursor cursor, CXFile file,
       cursor.kind == CXCursor_MacroExpansion) {
     if (findMacroRefsInFile(cxcursor::getCursorTU(cursor),
                             cursor,
-                            *cxfile::getFileEntryRef(file),
+                            static_cast<const FileEntry *>(file),
                             visitor))
       return CXResult_VisitBreak;
     return CXResult_Success;
@@ -470,7 +469,7 @@ CXResult clang_findReferencesInFile(CXCursor cursor, CXFile file,
 
   if (findIdRefsInFile(cxcursor::getCursorTU(cursor),
                        refCursor,
-                       *cxfile::getFileEntryRef(file),
+                       static_cast<const FileEntry *>(file),
                        visitor))
     return CXResult_VisitBreak;
   return CXResult_Success;
@@ -496,7 +495,7 @@ CXResult clang_findIncludesInFile(CXTranslationUnit TU, CXFile file,
   }
 
   if (Log)
-    *Log << TU << " @" << *cxfile::getFileEntryRef(file);
+    *Log << TU << " @" << static_cast<const FileEntry *>(file);
 
   ASTUnit *CXXUnit = cxtu::getASTUnit(TU);
   if (!CXXUnit)
@@ -504,7 +503,7 @@ CXResult clang_findIncludesInFile(CXTranslationUnit TU, CXFile file,
 
   ASTUnit::ConcurrencyCheck Check(*CXXUnit);
 
-  if (findIncludesInFile(TU, *cxfile::getFileEntryRef(file), visitor))
+  if (findIncludesInFile(TU, static_cast<const FileEntry *>(file), visitor))
     return CXResult_VisitBreak;
   return CXResult_Success;
 }

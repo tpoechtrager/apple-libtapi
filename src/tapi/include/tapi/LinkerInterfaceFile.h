@@ -215,14 +215,6 @@ public:
   bool isApplicationExtensionSafe() const noexcept;
 
   ///
-  /// \brief Query if the library has set not_for_dyld_shared_cache.
-  /// Which is only applicable to system libraries.
-  /// \return Returns true if the library is shared cache ineligible.
-  /// \since 2.3
-  ///
-  bool isNotForDyldSharedCache() const noexcept;
-
-  ///
   /// \brief Query if the library has any allowable clients.
   /// \return Return true if there are any allowable clients.
   /// \since 1.0
@@ -271,13 +263,6 @@ public:
   /// \since 2.2
   ///
   const std::vector<std::string> &rPaths() const noexcept;
-
-  ///
-  /// \brief Obtain the list of relinked libraries.
-  /// \return Returns a list of relinked libraries.
-  /// \since 2.2
-  ///
-  const std::vector<std::string> &relinkedLibraries() const noexcept;
 
   ///
   /// \brief Obtain a list of all symbols to be ignored.

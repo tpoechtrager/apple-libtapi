@@ -21,7 +21,6 @@
 #include "llvm/Support/Path.h"
 
 #include <functional>
-#include <optional>
 #include <sstream>
 #include <string>
 
@@ -122,7 +121,7 @@ static std::string GetEnclosingDeclContextSignature(const Decl *D) {
   return "";
 }
 
-static StringRef GetNthLineOfFile(std::optional<llvm::MemoryBufferRef> Buffer,
+static StringRef GetNthLineOfFile(llvm::Optional<llvm::MemoryBufferRef> Buffer,
                                   int Line) {
   if (!Buffer)
     return "";
@@ -147,7 +146,7 @@ static std::string NormalizeLine(const SourceManager &SM, const FullSourceLoc &L
     col++;
   SourceLocation StartOfLine =
       SM.translateLineCol(SM.getFileID(L), L.getExpansionLineNumber(), col);
-  std::optional<llvm::MemoryBufferRef> Buffer =
+  Optional<llvm::MemoryBufferRef> Buffer =
       SM.getBufferOrNone(SM.getFileID(StartOfLine), StartOfLine);
   if (!Buffer)
     return {};

@@ -31,6 +31,8 @@ struct WebAssemblyFunctionInfo;
 /// This class is derived from MachineFunctionInfo and contains private
 /// WebAssembly-specific information for each MachineFunction.
 class WebAssemblyFunctionInfo final : public MachineFunctionInfo {
+  const MachineFunction *MF;
+
   std::vector<MVT> Params;
   std::vector<MVT> Results;
   std::vector<MVT> Locals;
@@ -64,9 +66,12 @@ class WebAssemblyFunctionInfo final : public MachineFunctionInfo {
   // Function properties.
   bool CFGStackified = false;
 
+  // Catchpad unwind destination info for wasm EH.
+  WasmEHFuncInfo *WasmEHInfo = nullptr;
+
 public:
-  explicit WebAssemblyFunctionInfo(const Function &F,
-                                   const TargetSubtargetInfo *STI) {}
+  explicit WebAssemblyFunctionInfo(MachineFunction &MF_)
+      : MF(&MF_), WasmEHInfo(MF_.getWasmEHFuncInfo()) {}
   ~WebAssemblyFunctionInfo() override;
 
   MachineFunctionInfo *
@@ -74,8 +79,9 @@ public:
         const DenseMap<MachineBasicBlock *, MachineBasicBlock *> &Src2DstMBB)
       const override;
 
-  void initializeBaseYamlFields(MachineFunction &MF,
-                                const yaml::WebAssemblyFunctionInfo &YamlMFI);
+  const MachineFunction &getMachineFunction() const { return *MF; }
+
+  void initializeBaseYamlFields(const yaml::WebAssemblyFunctionInfo &YamlMFI);
 
   void addParam(MVT VT) { Params.push_back(VT); }
   const std::vector<MVT> &getParams() const { return Params; }
@@ -160,6 +166,9 @@ public:
 
   bool isCFGStackified() const { return CFGStackified; }
   void setCFGStackified(bool Value = true) { CFGStackified = Value; }
+
+  WasmEHFuncInfo *getWasmEHFuncInfo() const { return WasmEHInfo; }
+  void setWasmEHFuncInfo(WasmEHFuncInfo *Info) { WasmEHInfo = Info; }
 };
 
 void computeLegalValueVTs(const WebAssemblyTargetLowering &TLI,
@@ -196,8 +205,7 @@ struct WebAssemblyFunctionInfo final : public yaml::MachineFunctionInfo {
   BBNumberMap SrcToUnwindDest;
 
   WebAssemblyFunctionInfo() = default;
-  WebAssemblyFunctionInfo(const llvm::MachineFunction &MF,
-                          const llvm::WebAssemblyFunctionInfo &MFI);
+  WebAssemblyFunctionInfo(const llvm::WebAssemblyFunctionInfo &MFI);
 
   void mappingImpl(yaml::IO &YamlIO) override;
   ~WebAssemblyFunctionInfo() = default;

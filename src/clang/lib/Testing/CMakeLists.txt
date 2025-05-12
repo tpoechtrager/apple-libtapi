@@ -11,7 +11,6 @@ add_llvm_library(clangTesting
   BUILDTREE_ONLY
 
   LINK_COMPONENTS
-  MC
   Support
   )
 

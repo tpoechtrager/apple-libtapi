@@ -202,5 +202,10 @@ void ExegesisEmitter::run(raw_ostream &OS) const {
 
 } // end anonymous namespace
 
-static TableGen::Emitter::OptClass<ExegesisEmitter>
-    X("gen-exegesis", "Generate llvm-exegesis tables");
+namespace llvm {
+
+void EmitExegesis(RecordKeeper &RK, raw_ostream &OS) {
+  ExegesisEmitter(RK).run(OS);
+}
+
+} // end namespace llvm

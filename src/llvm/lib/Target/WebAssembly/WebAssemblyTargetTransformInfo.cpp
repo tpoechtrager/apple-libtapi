@@ -80,12 +80,11 @@ InstructionCost WebAssemblyTTIImpl::getArithmeticInstrCost(
   return Cost;
 }
 
-InstructionCost
-WebAssemblyTTIImpl::getVectorInstrCost(unsigned Opcode, Type *Val,
-                                       TTI::TargetCostKind CostKind,
-                                       unsigned Index, Value *Op0, Value *Op1) {
-  InstructionCost Cost = BasicTTIImplBase::getVectorInstrCost(
-      Opcode, Val, CostKind, Index, Op0, Op1);
+InstructionCost WebAssemblyTTIImpl::getVectorInstrCost(unsigned Opcode,
+                                                       Type *Val,
+                                                       unsigned Index) {
+  InstructionCost Cost =
+      BasicTTIImplBase::getVectorInstrCost(Opcode, Val, Index);
 
   // SIMD128's insert/extract currently only take constant indices.
   if (Index == -1u)

@@ -191,7 +191,6 @@
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/PatternMatch.h"
-#include "llvm/IR/ProfDataUtils.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/CommandLine.h"
@@ -201,7 +200,6 @@
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
 #include "llvm/Transforms/Utils/ScalarEvolutionExpander.h"
-#include <optional>
 
 #define DEBUG_TYPE "loop-predication"
 
@@ -272,8 +270,8 @@ class LoopPredication {
   LoopICmp LatchCheck;
 
   bool isSupportedStep(const SCEV* Step);
-  std::optional<LoopICmp> parseLoopICmp(ICmpInst *ICI);
-  std::optional<LoopICmp> parseLoopLatchICmp();
+  Optional<LoopICmp> parseLoopICmp(ICmpInst *ICI);
+  Optional<LoopICmp> parseLoopLatchICmp();
 
   /// Return an insertion point suitable for inserting a safe to speculate
   /// instruction whose only user will be 'User' which has operands 'Ops'.  A
@@ -296,17 +294,16 @@ class LoopPredication {
                      ICmpInst::Predicate Pred, const SCEV *LHS,
                      const SCEV *RHS);
 
-  std::optional<Value *> widenICmpRangeCheck(ICmpInst *ICI,
-                                             SCEVExpander &Expander,
-                                             Instruction *Guard);
-  std::optional<Value *>
-  widenICmpRangeCheckIncrementingLoop(LoopICmp LatchCheck, LoopICmp RangeCheck,
-                                      SCEVExpander &Expander,
-                                      Instruction *Guard);
-  std::optional<Value *>
-  widenICmpRangeCheckDecrementingLoop(LoopICmp LatchCheck, LoopICmp RangeCheck,
-                                      SCEVExpander &Expander,
-                                      Instruction *Guard);
+  Optional<Value *> widenICmpRangeCheck(ICmpInst *ICI, SCEVExpander &Expander,
+                                        Instruction *Guard);
+  Optional<Value *> widenICmpRangeCheckIncrementingLoop(LoopICmp LatchCheck,
+                                                        LoopICmp RangeCheck,
+                                                        SCEVExpander &Expander,
+                                                        Instruction *Guard);
+  Optional<Value *> widenICmpRangeCheckDecrementingLoop(LoopICmp LatchCheck,
+                                                        LoopICmp RangeCheck,
+                                                        SCEVExpander &Expander,
+                                                        Instruction *Guard);
   unsigned collectChecks(SmallVectorImpl<Value *> &Checks, Value *Condition,
                          SCEVExpander &Expander, Instruction *Guard);
   bool widenGuardConditions(IntrinsicInst *II, SCEVExpander &Expander);
@@ -386,17 +383,18 @@ PreservedAnalyses LoopPredicationPass::run(Loop &L, LoopAnalysisManager &AM,
   return PA;
 }
 
-std::optional<LoopICmp> LoopPredication::parseLoopICmp(ICmpInst *ICI) {
+Optional<LoopICmp>
+LoopPredication::parseLoopICmp(ICmpInst *ICI) {
   auto Pred = ICI->getPredicate();
   auto *LHS = ICI->getOperand(0);
   auto *RHS = ICI->getOperand(1);
 
   const SCEV *LHSS = SE->getSCEV(LHS);
   if (isa<SCEVCouldNotCompute>(LHSS))
-    return std::nullopt;
+    return None;
   const SCEV *RHSS = SE->getSCEV(RHS);
   if (isa<SCEVCouldNotCompute>(RHSS))
-    return std::nullopt;
+    return None;
 
   // Canonicalize RHS to be loop invariant bound, LHS - a loop computable IV
   if (SE->isLoopInvariant(LHSS, L)) {
@@ -407,7 +405,7 @@ std::optional<LoopICmp> LoopPredication::parseLoopICmp(ICmpInst *ICI) {
 
   const SCEVAddRecExpr *AR = dyn_cast<SCEVAddRecExpr>(LHSS);
   if (!AR || AR->getLoop() != L)
-    return std::nullopt;
+    return None;
 
   return LoopICmp(Pred, AR, RHSS);
 }
@@ -455,8 +453,8 @@ static bool isSafeToTruncateWideIVType(const DataLayout &DL,
                                        Type *RangeCheckType) {
   if (!EnableIVTruncation)
     return false;
-  assert(DL.getTypeSizeInBits(LatchCheck.IV->getType()).getFixedValue() >
-             DL.getTypeSizeInBits(RangeCheckType).getFixedValue() &&
+  assert(DL.getTypeSizeInBits(LatchCheck.IV->getType()).getFixedSize() >
+             DL.getTypeSizeInBits(RangeCheckType).getFixedSize() &&
          "Expected latch check IV type to be larger than range check operand "
          "type!");
   // The start and end values of the IV should be known. This is to guarantee
@@ -476,7 +474,7 @@ static bool isSafeToTruncateWideIVType(const DataLayout &DL,
   // guarantees that truncating the latch check to RangeCheckType is a safe
   // operation.
   auto RangeCheckTypeBitSize =
-      DL.getTypeSizeInBits(RangeCheckType).getFixedValue();
+      DL.getTypeSizeInBits(RangeCheckType).getFixedSize();
   return Start->getAPInt().getActiveBits() < RangeCheckTypeBitSize &&
          Limit->getAPInt().getActiveBits() < RangeCheckTypeBitSize;
 }
@@ -484,20 +482,20 @@ static bool isSafeToTruncateWideIVType(const DataLayout &DL,
 
 // Return an LoopICmp describing a latch check equivlent to LatchCheck but with
 // the requested type if safe to do so.  May involve the use of a new IV.
-static std::optional<LoopICmp> generateLoopLatchCheck(const DataLayout &DL,
-                                                      ScalarEvolution &SE,
-                                                      const LoopICmp LatchCheck,
-                                                      Type *RangeCheckType) {
+static Optional<LoopICmp> generateLoopLatchCheck(const DataLayout &DL,
+                                                 ScalarEvolution &SE,
+                                                 const LoopICmp LatchCheck,
+                                                 Type *RangeCheckType) {
 
   auto *LatchType = LatchCheck.IV->getType();
   if (RangeCheckType == LatchType)
     return LatchCheck;
   // For now, bail out if latch type is narrower than range type.
-  if (DL.getTypeSizeInBits(LatchType).getFixedValue() <
-      DL.getTypeSizeInBits(RangeCheckType).getFixedValue())
-    return std::nullopt;
+  if (DL.getTypeSizeInBits(LatchType).getFixedSize() <
+      DL.getTypeSizeInBits(RangeCheckType).getFixedSize())
+    return None;
   if (!isSafeToTruncateWideIVType(DL, SE, LatchCheck, RangeCheckType))
-    return std::nullopt;
+    return None;
   // We can now safely identify the truncated version of the IV and limit for
   // RangeCheckType.
   LoopICmp NewLatchCheck;
@@ -505,7 +503,7 @@ static std::optional<LoopICmp> generateLoopLatchCheck(const DataLayout &DL,
   NewLatchCheck.IV = dyn_cast<SCEVAddRecExpr>(
       SE.getTruncateExpr(LatchCheck.IV, RangeCheckType));
   if (!NewLatchCheck.IV)
-    return std::nullopt;
+    return None;
   NewLatchCheck.Limit = SE.getTruncateExpr(LatchCheck.Limit, RangeCheckType);
   LLVM_DEBUG(dbgs() << "IV of type: " << *LatchType
                     << "can be represented as range check type:"
@@ -571,15 +569,15 @@ bool LoopPredication::isLoopInvariantValue(const SCEV* S) {
   if (const SCEVUnknown *U = dyn_cast<SCEVUnknown>(S))
     if (const auto *LI = dyn_cast<LoadInst>(U->getValue()))
       if (LI->isUnordered() && L->hasLoopInvariantOperands(LI))
-        if (!isModSet(AA->getModRefInfoMask(LI->getOperand(0))) ||
+        if (AA->pointsToConstantMemory(LI->getOperand(0)) ||
             LI->hasMetadata(LLVMContext::MD_invariant_load))
           return true;
   return false;
 }
 
-std::optional<Value *> LoopPredication::widenICmpRangeCheckIncrementingLoop(
-    LoopICmp LatchCheck, LoopICmp RangeCheck, SCEVExpander &Expander,
-    Instruction *Guard) {
+Optional<Value *> LoopPredication::widenICmpRangeCheckIncrementingLoop(
+    LoopICmp LatchCheck, LoopICmp RangeCheck,
+    SCEVExpander &Expander, Instruction *Guard) {
   auto *Ty = RangeCheck.IV->getType();
   // Generate the widened condition for the forward loop:
   //   guardStart u< guardLimit &&
@@ -599,12 +597,12 @@ std::optional<Value *> LoopPredication::widenICmpRangeCheckIncrementingLoop(
       !isLoopInvariantValue(LatchStart) ||
       !isLoopInvariantValue(LatchLimit)) {
     LLVM_DEBUG(dbgs() << "Can't expand limit check!\n");
-    return std::nullopt;
+    return None;
   }
   if (!Expander.isSafeToExpandAt(LatchStart, Guard) ||
       !Expander.isSafeToExpandAt(LatchLimit, Guard)) {
     LLVM_DEBUG(dbgs() << "Can't expand limit check!\n");
-    return std::nullopt;
+    return None;
   }
 
   // guardLimit - guardStart + latchStart - 1
@@ -623,13 +621,12 @@ std::optional<Value *> LoopPredication::widenICmpRangeCheckIncrementingLoop(
   auto *FirstIterationCheck = expandCheck(Expander, Guard, RangeCheck.Pred,
                                           GuardStart, GuardLimit);
   IRBuilder<> Builder(findInsertPt(Guard, {FirstIterationCheck, LimitCheck}));
-  return Builder.CreateFreeze(
-      Builder.CreateAnd(FirstIterationCheck, LimitCheck));
+  return Builder.CreateAnd(FirstIterationCheck, LimitCheck);
 }
 
-std::optional<Value *> LoopPredication::widenICmpRangeCheckDecrementingLoop(
-    LoopICmp LatchCheck, LoopICmp RangeCheck, SCEVExpander &Expander,
-    Instruction *Guard) {
+Optional<Value *> LoopPredication::widenICmpRangeCheckDecrementingLoop(
+    LoopICmp LatchCheck, LoopICmp RangeCheck,
+    SCEVExpander &Expander, Instruction *Guard) {
   auto *Ty = RangeCheck.IV->getType();
   const SCEV *GuardStart = RangeCheck.IV->getStart();
   const SCEV *GuardLimit = RangeCheck.Limit;
@@ -643,12 +640,12 @@ std::optional<Value *> LoopPredication::widenICmpRangeCheckDecrementingLoop(
       !isLoopInvariantValue(LatchStart) ||
       !isLoopInvariantValue(LatchLimit)) {
     LLVM_DEBUG(dbgs() << "Can't expand limit check!\n");
-    return std::nullopt;
+    return None;
   }
   if (!Expander.isSafeToExpandAt(LatchStart, Guard) ||
       !Expander.isSafeToExpandAt(LatchLimit, Guard)) {
     LLVM_DEBUG(dbgs() << "Can't expand limit check!\n");
-    return std::nullopt;
+    return None;
   }
   // The decrement of the latch check IV should be the same as the
   // rangeCheckIV.
@@ -657,7 +654,7 @@ std::optional<Value *> LoopPredication::widenICmpRangeCheckDecrementingLoop(
     LLVM_DEBUG(dbgs() << "Not the same. PostDecLatchCheckIV: "
                       << *PostDecLatchCheckIV
                       << "  and RangeCheckIV: " << *RangeCheck.IV << "\n");
-    return std::nullopt;
+    return None;
   }
 
   // Generate the widened condition for CountDownLoop:
@@ -672,8 +669,7 @@ std::optional<Value *> LoopPredication::widenICmpRangeCheckDecrementingLoop(
   auto *LimitCheck = expandCheck(Expander, Guard, LimitCheckPred, LatchLimit,
                                  SE->getOne(Ty));
   IRBuilder<> Builder(findInsertPt(Guard, {FirstIterationCheck, LimitCheck}));
-  return Builder.CreateFreeze(
-      Builder.CreateAnd(FirstIterationCheck, LimitCheck));
+  return Builder.CreateAnd(FirstIterationCheck, LimitCheck);
 }
 
 static void normalizePredicate(ScalarEvolution *SE, Loop *L,
@@ -687,12 +683,13 @@ static void normalizePredicate(ScalarEvolution *SE, Loop *L,
       ICmpInst::ICMP_ULT : ICmpInst::ICMP_UGE;
 }
 
+
 /// If ICI can be widened to a loop invariant condition emits the loop
 /// invariant condition in the loop preheader and return it, otherwise
-/// returns std::nullopt.
-std::optional<Value *>
-LoopPredication::widenICmpRangeCheck(ICmpInst *ICI, SCEVExpander &Expander,
-                                     Instruction *Guard) {
+/// returns None.
+Optional<Value *> LoopPredication::widenICmpRangeCheck(ICmpInst *ICI,
+                                                       SCEVExpander &Expander,
+                                                       Instruction *Guard) {
   LLVM_DEBUG(dbgs() << "Analyzing ICmpInst condition:\n");
   LLVM_DEBUG(ICI->dump());
 
@@ -703,26 +700,26 @@ LoopPredication::widenICmpRangeCheck(ICmpInst *ICI, SCEVExpander &Expander,
   auto RangeCheck = parseLoopICmp(ICI);
   if (!RangeCheck) {
     LLVM_DEBUG(dbgs() << "Failed to parse the loop latch condition!\n");
-    return std::nullopt;
+    return None;
   }
   LLVM_DEBUG(dbgs() << "Guard check:\n");
   LLVM_DEBUG(RangeCheck->dump());
   if (RangeCheck->Pred != ICmpInst::ICMP_ULT) {
     LLVM_DEBUG(dbgs() << "Unsupported range check predicate("
                       << RangeCheck->Pred << ")!\n");
-    return std::nullopt;
+    return None;
   }
   auto *RangeCheckIV = RangeCheck->IV;
   if (!RangeCheckIV->isAffine()) {
     LLVM_DEBUG(dbgs() << "Range check IV is not affine!\n");
-    return std::nullopt;
+    return None;
   }
   auto *Step = RangeCheckIV->getStepRecurrence(*SE);
   // We cannot just compare with latch IV step because the latch and range IVs
   // may have different types.
   if (!isSupportedStep(Step)) {
     LLVM_DEBUG(dbgs() << "Range check and latch have IVs different steps!\n");
-    return std::nullopt;
+    return None;
   }
   auto *Ty = RangeCheckIV->getType();
   auto CurrLatchCheckOpt = generateLoopLatchCheck(*DL, *SE, LatchCheck, Ty);
@@ -730,7 +727,7 @@ LoopPredication::widenICmpRangeCheck(ICmpInst *ICI, SCEVExpander &Expander,
     LLVM_DEBUG(dbgs() << "Failed to generate a loop latch check "
                          "corresponding to range type: "
                       << *Ty << "\n");
-    return std::nullopt;
+    return None;
   }
 
   LoopICmp CurrLatchCheck = *CurrLatchCheckOpt;
@@ -741,7 +738,7 @@ LoopPredication::widenICmpRangeCheck(ICmpInst *ICI, SCEVExpander &Expander,
          "Range and latch steps should be of same type!");
   if (Step != CurrLatchCheck.IV->getStepRecurrence(*SE)) {
     LLVM_DEBUG(dbgs() << "Range and latch have different step values!\n");
-    return std::nullopt;
+    return None;
   }
 
   if (Step->isOne())
@@ -766,17 +763,17 @@ unsigned LoopPredication::collectChecks(SmallVectorImpl<Value *> &Checks,
   // resulting list of subconditions in Checks vector.
   SmallVector<Value *, 4> Worklist(1, Condition);
   SmallPtrSet<Value *, 4> Visited;
-  Visited.insert(Condition);
   Value *WideableCond = nullptr;
   do {
     Value *Condition = Worklist.pop_back_val();
+    if (!Visited.insert(Condition).second)
+      continue;
+
     Value *LHS, *RHS;
     using namespace llvm::PatternMatch;
     if (match(Condition, m_And(m_Value(LHS), m_Value(RHS)))) {
-      if (Visited.insert(LHS).second)
-        Worklist.push_back(LHS);
-      if (Visited.insert(RHS).second)
-        Worklist.push_back(RHS);
+      Worklist.push_back(LHS);
+      Worklist.push_back(RHS);
       continue;
     }
 
@@ -865,19 +862,7 @@ bool LoopPredication::widenWidenableBranchGuardConditions(
   BI->setCondition(AllChecks);
   if (InsertAssumesOfPredicatedGuardsConditions) {
     Builder.SetInsertPoint(IfTrueBB, IfTrueBB->getFirstInsertionPt());
-    // If this block has other predecessors, we might not be able to use Cond.
-    // In this case, create a Phi where every other input is `true` and input
-    // from guard block is Cond.
-    Value *AssumeCond = Cond;
-    if (!IfTrueBB->getUniquePredecessor()) {
-      auto *GuardBB = BI->getParent();
-      auto *PN = Builder.CreatePHI(Cond->getType(), pred_size(IfTrueBB),
-                                   "assume.cond");
-      for (auto *Pred : predecessors(IfTrueBB))
-        PN->addIncoming(Pred == GuardBB ? Cond : Builder.getTrue(), Pred);
-      AssumeCond = PN;
-    }
-    Builder.CreateAssumption(AssumeCond);
+    Builder.CreateAssumption(Cond);
   }
   RecursivelyDeleteTriviallyDeadInstructions(OldCond, nullptr /* TLI */, MSSAU);
   assert(isGuardAsWidenableBranch(BI) &&
@@ -887,19 +872,19 @@ bool LoopPredication::widenWidenableBranchGuardConditions(
   return true;
 }
 
-std::optional<LoopICmp> LoopPredication::parseLoopLatchICmp() {
+Optional<LoopICmp> LoopPredication::parseLoopLatchICmp() {
   using namespace PatternMatch;
 
   BasicBlock *LoopLatch = L->getLoopLatch();
   if (!LoopLatch) {
     LLVM_DEBUG(dbgs() << "The loop doesn't have a single latch!\n");
-    return std::nullopt;
+    return None;
   }
 
   auto *BI = dyn_cast<BranchInst>(LoopLatch->getTerminator());
   if (!BI || !BI->isConditional()) {
     LLVM_DEBUG(dbgs() << "Failed to match the latch terminator!\n");
-    return std::nullopt;
+    return None;
   }
   BasicBlock *TrueDest = BI->getSuccessor(0);
   assert(
@@ -909,12 +894,12 @@ std::optional<LoopICmp> LoopPredication::parseLoopLatchICmp() {
   auto *ICI = dyn_cast<ICmpInst>(BI->getCondition());
   if (!ICI) {
     LLVM_DEBUG(dbgs() << "Failed to match the latch condition!\n");
-    return std::nullopt;
+    return None;
   }
   auto Result = parseLoopICmp(ICI);
   if (!Result) {
     LLVM_DEBUG(dbgs() << "Failed to parse the loop latch condition!\n");
-    return std::nullopt;
+    return None;
   }
 
   if (TrueDest != L->getHeader())
@@ -924,13 +909,13 @@ std::optional<LoopICmp> LoopPredication::parseLoopLatchICmp() {
   // recurrence.
   if (!Result->IV->isAffine()) {
     LLVM_DEBUG(dbgs() << "The induction variable is not affine!\n");
-    return std::nullopt;
+    return None;
   }
 
   auto *Step = Result->IV->getStepRecurrence(*SE);
   if (!isSupportedStep(Step)) {
     LLVM_DEBUG(dbgs() << "Unsupported loop stride(" << *Step << ")!\n");
-    return std::nullopt;
+    return None;
   }
 
   auto IsUnsupportedPredicate = [](const SCEV *Step, ICmpInst::Predicate Pred) {
@@ -948,11 +933,12 @@ std::optional<LoopICmp> LoopPredication::parseLoopLatchICmp() {
   if (IsUnsupportedPredicate(Step, Result->Pred)) {
     LLVM_DEBUG(dbgs() << "Unsupported loop latch predicate(" << Result->Pred
                       << ")!\n");
-    return std::nullopt;
+    return None;
   }
 
   return Result;
 }
+
 
 bool LoopPredication::isLoopProfitableToPredicate() {
   if (SkipProfitabilityChecks)
@@ -989,24 +975,37 @@ bool LoopPredication::isLoopProfitableToPredicate() {
       LatchExitBlock->getTerminatingDeoptimizeCall())
     return false;
 
+  auto IsValidProfileData = [](MDNode *ProfileData, const Instruction *Term) {
+    if (!ProfileData || !ProfileData->getOperand(0))
+      return false;
+    if (MDString *MDS = dyn_cast<MDString>(ProfileData->getOperand(0)))
+      if (!MDS->getString().equals("branch_weights"))
+        return false;
+    if (ProfileData->getNumOperands() != 1 + Term->getNumSuccessors())
+      return false;
+    return true;
+  };
+  MDNode *LatchProfileData = LatchTerm->getMetadata(LLVMContext::MD_prof);
   // Latch terminator has no valid profile data, so nothing to check
   // profitability on.
-  if (!hasValidBranchWeightMD(*LatchTerm))
+  if (!IsValidProfileData(LatchProfileData, LatchTerm))
     return true;
 
   auto ComputeBranchProbability =
       [&](const BasicBlock *ExitingBlock,
           const BasicBlock *ExitBlock) -> BranchProbability {
     auto *Term = ExitingBlock->getTerminator();
+    MDNode *ProfileData = Term->getMetadata(LLVMContext::MD_prof);
     unsigned NumSucc = Term->getNumSuccessors();
-    if (MDNode *ProfileData = getValidBranchWeightMDNode(*Term)) {
-      SmallVector<uint32_t> Weights;
-      extractBranchWeights(ProfileData, Weights);
-      uint64_t Numerator = 0, Denominator = 0;
-      for (auto [i, Weight] : llvm::enumerate(Weights)) {
+    if (IsValidProfileData(ProfileData, Term)) {
+      uint64_t Numerator = 0, Denominator = 0, ProfVal = 0;
+      for (unsigned i = 0; i < NumSucc; i++) {
+        ConstantInt *CI =
+            mdconst::extract<ConstantInt>(ProfileData->getOperand(i + 1));
+        ProfVal = CI->getValue().getZExtValue();
         if (Term->getSuccessor(i) == ExitBlock)
-          Numerator += Weight;
-        Denominator += Weight;
+          Numerator += ProfVal;
+        Denominator += ProfVal;
       }
       return BranchProbability::getBranchProbability(Numerator, Denominator);
     } else {
@@ -1175,11 +1174,6 @@ bool LoopPredication::predicateLoopExits(Loop *L, SCEVExpander &Rewriter) {
   if (ChangedLoop)
     SE->forgetLoop(L);
 
-  // The insertion point for the widening should be at the widenably call, not
-  // at the WidenableBR. If we do this at the widenableBR, we can incorrectly
-  // change a loop-invariant condition to a loop-varying one.
-  auto *IP = cast<Instruction>(WidenableBR->getCondition());
-
   // The use of umin(all analyzeable exits) instead of latch is subtle, but
   // important for profitability.  We may have a loop which hasn't been fully
   // canonicalized just yet.  If the exit we chose to widen is provably never
@@ -1189,9 +1183,21 @@ bool LoopPredication::predicateLoopExits(Loop *L, SCEVExpander &Rewriter) {
   const SCEV *MinEC = getMinAnalyzeableBackedgeTakenCount(*SE, *DT, L);
   if (isa<SCEVCouldNotCompute>(MinEC) || MinEC->getType()->isPointerTy() ||
       !SE->isLoopInvariant(MinEC, L) ||
-      !Rewriter.isSafeToExpandAt(MinEC, IP))
+      !Rewriter.isSafeToExpandAt(MinEC, WidenableBR))
     return ChangedLoop;
 
+  // Subtlety: We need to avoid inserting additional uses of the WC.  We know
+  // that it can only have one transitive use at the moment, and thus moving
+  // that use to just before the branch and inserting code before it and then
+  // modifying the operand is legal.
+  auto *IP = cast<Instruction>(WidenableBR->getCondition());
+  // Here we unconditionally modify the IR, so after this point we should return
+  // only `true`!
+  IP->moveBefore(WidenableBR);
+  if (MSSAU)
+    if (auto *MUD = MSSAU->getMemorySSA()->getMemoryAccess(IP))
+       MSSAU->moveToPlace(MUD, WidenableBR->getParent(),
+                          MemorySSA::BeforeTerminator);
   Rewriter.setInsertPoint(IP);
   IRBuilder<> B(IP);
 

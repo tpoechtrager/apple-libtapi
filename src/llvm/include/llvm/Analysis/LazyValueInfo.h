@@ -95,10 +95,6 @@ public:
   ConstantRange getConstantRange(Value *V, Instruction *CxtI,
                                  bool UndefAllowed = true);
 
-  /// Return the ConstantRange constraint that is known to hold for the value
-  /// at a specific use-site.
-  ConstantRange getConstantRangeAtUse(const Use &U, bool UndefAllowed = true);
-
   /// Determine whether the specified value is known to be a
   /// constant on the specified edge.  Return null if not.
   Constant *getConstantOnEdge(Value *V, BasicBlock *FromBB, BasicBlock *ToBB,
@@ -114,9 +110,6 @@ public:
   /// Inform the analysis cache that we have threaded an edge from
   /// PredBB to OldSucc to be from PredBB to NewSucc instead.
   void threadEdge(BasicBlock *PredBB, BasicBlock *OldSucc, BasicBlock *NewSucc);
-
-  /// Remove information related to this value from the cache.
-  void forgetValue(Value *V);
 
   /// Inform the analysis cache that we have erased a block.
   void eraseBlock(BasicBlock *BB);

@@ -141,15 +141,10 @@ public:
     setNumTombstones(0);
   }
 
-  /// Return true if the specified key is in the map, false otherwise.
-  bool contains(const_arg_type_t<KeyT> Val) const {
-    const BucketT *TheBucket;
-    return LookupBucketFor(Val, TheBucket);
-  }
-
   /// Return 1 if the specified key is in the map, 0 otherwise.
   size_type count(const_arg_type_t<KeyT> Val) const {
-    return contains(Val) ? 1 : 0;
+    const BucketT *TheBucket;
+    return LookupBucketFor(Val, TheBucket) ? 1 : 0;
   }
 
   iterator find(const_arg_type_t<KeyT> Val) {
@@ -204,14 +199,6 @@ public:
     if (LookupBucketFor(Val, TheBucket))
       return TheBucket->getSecond();
     return ValueT();
-  }
-
-  /// at - Return the entry for the specified key, or abort if no such
-  /// entry exists.
-  const ValueT &at(const_arg_type_t<KeyT> Val) const {
-    auto Iter = this->find(std::move(Val));
-    assert(Iter != this->end() && "DenseMap::at failed due to a missing key");
-    return Iter->second;
   }
 
   // Inserts key,value pair into the map if the key isn't already in the map.
@@ -310,20 +297,6 @@ public:
   void insert(InputIt I, InputIt E) {
     for (; I != E; ++I)
       insert(*I);
-  }
-
-  /// Returns the value associated to the key in the map if it exists. If it
-  /// does not exist, emplace a default value for the key and returns a
-  /// reference to the newly created value.
-  ValueT &getOrInsertDefault(KeyT &&Key) {
-    return try_emplace(Key).first->second;
-  }
-
-  /// Returns the value associated to the key in the map if it exists. If it
-  /// does not exist, emplace a default value for the key and returns a
-  /// reference to the newly created value.
-  ValueT &getOrInsertDefault(const KeyT &Key) {
-    return try_emplace(Key).first->second;
   }
 
   bool erase(const KeyT &Val) {
@@ -933,7 +906,7 @@ class SmallDenseMap
 public:
   explicit SmallDenseMap(unsigned NumInitBuckets = 0) {
     if (NumInitBuckets > InlineBuckets)
-      NumInitBuckets = llvm::bit_ceil(NumInitBuckets);
+      NumInitBuckets = NextPowerOf2(NumInitBuckets - 1);
     init(NumInitBuckets);
   }
 

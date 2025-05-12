@@ -10,6 +10,7 @@
 #define LLVM_CLANG_SERIALIZATION_INMEMORYMODULECACHE_H
 
 #include "llvm/ADT/IntrusiveRefCntPtr.h"
+#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include <memory>

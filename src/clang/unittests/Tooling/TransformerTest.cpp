@@ -17,7 +17,6 @@
 #include "llvm/Support/Error.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
-#include <optional>
 
 using namespace clang;
 using namespace tooling;
@@ -84,7 +83,7 @@ static std::string format(StringRef Code) {
 }
 
 static void compareSnippets(StringRef Expected,
-                            const std::optional<std::string> &MaybeActual) {
+                            const llvm::Optional<std::string> &MaybeActual) {
   ASSERT_TRUE(MaybeActual) << "Rewrite failed. Expecting: " << Expected;
   auto Actual = *MaybeActual;
   std::string HL = "#include \"header.h\"\n";
@@ -103,7 +102,7 @@ protected:
     FileContents.emplace_back(std::string(Filename), std::string(Content));
   }
 
-  std::optional<std::string> rewrite(StringRef Input) {
+  llvm::Optional<std::string> rewrite(StringRef Input) {
     std::string Code = ("#include \"header.h\"\n" + Input).str();
     auto Factory = newFrontendActionFactory(&MatchFinder);
     if (!runToolOnCodeWithArgs(
@@ -111,18 +110,18 @@ protected:
             "clang-tool", std::make_shared<PCHContainerOperations>(),
             FileContents)) {
       llvm::errs() << "Running tool failed.\n";
-      return std::nullopt;
+      return None;
     }
     if (ErrorCount != 0) {
       llvm::errs() << "Generating changes failed.\n";
-      return std::nullopt;
+      return None;
     }
     auto ChangedCode =
         applyAtomicChanges("input.cc", Code, Changes, ApplyChangesSpec());
     if (!ChangedCode) {
       llvm::errs() << "Applying changes failed: "
                    << llvm::toString(ChangedCode.takeError()) << "\n";
-      return std::nullopt;
+      return None;
     }
     return *ChangedCode;
   }
@@ -807,7 +806,7 @@ TEST_F(TransformerTest, WithMetadata) {
       "clang-tool", std::make_shared<PCHContainerOperations>(), {}));
   ASSERT_EQ(Changes.size(), 1u);
   const llvm::Any &Metadata = Changes[0].getMetadata();
-  ASSERT_TRUE(llvm::any_cast<int>(&Metadata));
+  ASSERT_TRUE(llvm::any_isa<int>(Metadata));
   EXPECT_THAT(llvm::any_cast<int>(Metadata), 5);
 }
 

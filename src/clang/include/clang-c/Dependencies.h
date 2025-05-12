@@ -74,11 +74,6 @@ typedef struct {
 
   /**
    * The canonical command line to build this module.
-   *
-   * If getFileDependencies_v3 or later was used to get this dependency, it is
-   * a complete command line. When using getFileDependencies_v2, it excludes
-   * arguments containing modules-related paths:
-   * "-fmodule-file=", "-o", "-fmodule-map-file=".
    */
   CXStringSet *BuildArguments;
 } CXModuleDependency;
@@ -187,7 +182,7 @@ typedef struct CXOpaqueDependencyScannerServiceOptions
  * clang_experimental_DependencyScannerServiceOptions_dispose.
  */
 CINDEX_LINKAGE CXDependencyScannerServiceOptions
-clang_experimental_DependencyScannerServiceOptions_create(void);
+clang_experimental_DependencyScannerServiceOptions_create();
 
 /**
  * Dispose of a \c CXDependencyScannerServiceOptions object.
@@ -308,7 +303,7 @@ typedef void CXModuleDiscoveredCallback(void *Context,
  * \param ContextHash the context hash of the dependent module.
  *                    See \c CXModuleDependency::ContextHash.
  & \param OutputKind the kind of module output to lookup.
- * \param[out] Output the output path(s) or name, whose total size must be <=
+ * \param Output[out] the output path(s) or name, whose total size must be <=
  *                    \p MaxLen. In the case of multiple outputs of the same
  *                    kind, this can be a null-separated list.
  * \param MaxLen the maximum size of Output.
@@ -321,18 +316,6 @@ typedef size_t CXModuleLookupOutputCallback(void *Context,
                                             const char *ContextHash,
                                             CXOutputKind OutputKind,
                                             char *Output, size_t MaxLen);
-
-/**
- * Deprecated, use \c clang_experimental_DependencyScannerWorker_getDepGraph.
- *
- * See \c clang_experimental_DependencyScannerWorker_getFileDependencies_v4.
- */
-CINDEX_LINKAGE CXFileDependencies *
-clang_experimental_DependencyScannerWorker_getFileDependencies_v3(
-    CXDependencyScannerWorker Worker, int argc, const char *const *argv,
-    const char *ModuleName, const char *WorkingDirectory, void *MDCContext,
-    CXModuleDiscoveredCallback *MDC, void *MLOContext,
-    CXModuleLookupOutputCallback *MLO, unsigned Options, CXString *error);
 
 /**
  * Deprecated, use \c clang_experimental_DependencyScannerWorker_getDepGraph.

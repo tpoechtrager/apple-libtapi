@@ -19,7 +19,6 @@
 #include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/CodeGen/TargetRegisterInfo.h"
 #include "llvm/IR/DebugInfoMetadata.h"
-#include <optional>
 
 #include "LiveDebugValues.h"
 
@@ -246,11 +245,6 @@ public:
     IsVariadic = MI.isDebugValueList();
     DIExpr = MI.getDebugExpression();
     Indirect = MI.isDebugOffsetImm();
-  }
-
-  bool isJoinable(const DbgValueProperties &Other) const {
-    return DIExpression::isEqualExpression(DIExpr, Indirect, Other.DIExpr,
-                                           Other.Indirect);
   }
 
   bool operator==(const DbgValueProperties &Other) const {
@@ -656,7 +650,7 @@ public:
 
   // If we discover a new machine location, assign it an mphi with this
   // block number.
-  unsigned CurBB = -1;
+  unsigned CurBB;
 
   /// Cached local copy of the number of registers the target has.
   unsigned NumRegs;
@@ -740,7 +734,7 @@ public:
   unsigned getLocID(SpillLocationNo Spill, StackSlotPos Idx) {
     unsigned SlotNo = Spill.id() - 1;
     SlotNo *= NumSlotIdxes;
-    assert(StackSlotIdxes.contains(Idx));
+    assert(StackSlotIdxes.find(Idx) != StackSlotIdxes.end());
     SlotNo += StackSlotIdxes[Idx];
     SlotNo += NumRegs;
     return SlotNo;
@@ -895,9 +889,9 @@ public:
   void writeRegMask(const MachineOperand *MO, unsigned CurBB, unsigned InstID);
 
   /// Find LocIdx for SpillLoc \p L, creating a new one if it's not tracked.
-  /// Returns std::nullopt when in scenarios where a spill slot could be
-  /// tracked, but we would likely run into resource limitations.
-  std::optional<SpillLocationNo> getOrTrackSpillLoc(SpillLoc L);
+  /// Returns None when in scenarios where a spill slot could be tracked, but
+  /// we would likely run into resource limitations.
+  Optional<SpillLocationNo> getOrTrackSpillLoc(SpillLoc L);
 
   // Get LocIdx of a spill ID.
   LocIdx getSpillMLoc(unsigned SpillID) {
@@ -984,7 +978,7 @@ public:
 
   void defVar(const MachineInstr &MI, const DbgValueProperties &Properties,
               const SmallVectorImpl<DbgOpID> &DebugOps) {
-    assert(MI.isDebugValueLike());
+    assert(MI.isDebugValue() || MI.isDebugRef());
     DebugVariable Var(MI.getDebugVariable(), MI.getDebugExpression(),
                       MI.getDebugLoc()->getInlinedAt());
     DbgValue Rec = (DebugOps.size() > 0)
@@ -1011,9 +1005,9 @@ public:
       // The "empty" fragment is stored as DebugVariable::DefaultFragment, so
       // that it overlaps with everything, however its cannonical representation
       // in a DebugVariable is as "None".
-      std::optional<DIExpression::FragmentInfo> OptFragmentInfo = FragmentInfo;
+      Optional<DIExpression::FragmentInfo> OptFragmentInfo = FragmentInfo;
       if (DebugVariable::isDefaultFragment(FragmentInfo))
-        OptFragmentInfo = std::nullopt;
+        OptFragmentInfo = None;
 
       DebugVariable Overlapped(Var.getVariable(), OptFragmentInfo,
                                Var.getInlinedAt());
@@ -1039,7 +1033,7 @@ public:
   friend class ::InstrRefLDVTest;
 
   using FragmentInfo = DIExpression::FragmentInfo;
-  using OptFragmentInfo = std::optional<DIExpression::FragmentInfo>;
+  using OptFragmentInfo = Optional<DIExpression::FragmentInfo>;
 
   // Helper while building OverlapMap, a map of all fragments seen for a given
   // DILocalVariable.
@@ -1094,7 +1088,7 @@ private:
   MLocTracker *MTracker = nullptr;
 
   /// Number of the current block LiveDebugValues is stepping through.
-  unsigned CurBB = -1;
+  unsigned CurBB;
 
   /// Number of the current instruction LiveDebugValues is evaluating.
   unsigned CurInst;
@@ -1137,12 +1131,12 @@ private:
     uint64_t InstrNum;
     /// Block where DBG_PHI occurred.
     MachineBasicBlock *MBB;
-    /// The value number read by the DBG_PHI -- or std::nullopt if it didn't
-    /// refer to a value.
-    std::optional<ValueIDNum> ValueRead;
-    /// Register/Stack location the DBG_PHI reads -- or std::nullopt if it
-    /// referred to something unexpected.
-    std::optional<LocIdx> ReadLoc;
+    /// The value number read by the DBG_PHI -- or None if it didn't refer to
+    /// a value.
+    Optional<ValueIDNum> ValueRead;
+    /// Register/Stack location the DBG_PHI reads -- or None if it referred to
+    /// something unexpected.
+    Optional<LocIdx> ReadLoc;
 
     operator unsigned() const { return InstrNum; }
   };
@@ -1161,8 +1155,7 @@ private:
   /// DBG_INSTR_REFs that call resolveDbgPHIs. These variable references solve
   /// a mini SSA problem caused by DBG_PHIs being cloned, this collection caches
   /// the result.
-  DenseMap<std::pair<MachineInstr *, unsigned>, std::optional<ValueIDNum>>
-      SeenDbgPHIs;
+  DenseMap<MachineInstr *, Optional<ValueIDNum>> SeenDbgPHIs;
 
   DbgOpIDMap DbgOpStore;
 
@@ -1177,8 +1170,8 @@ private:
   StringRef StackProbeSymbolName;
 
   /// Tests whether this instruction is a spill to a stack slot.
-  std::optional<SpillLocationNo> isSpillInstruction(const MachineInstr &MI,
-                                                    MachineFunction *MF);
+  Optional<SpillLocationNo> isSpillInstruction(const MachineInstr &MI,
+                                               MachineFunction *MF);
 
   /// Decide if @MI is a spill instruction and return true if it is. We use 2
   /// criteria to make this decision:
@@ -1191,22 +1184,13 @@ private:
 
   /// If a given instruction is identified as a spill, return the spill slot
   /// and set \p Reg to the spilled register.
-  std::optional<SpillLocationNo> isRestoreInstruction(const MachineInstr &MI,
-                                                      MachineFunction *MF,
-                                                      unsigned &Reg);
+  Optional<SpillLocationNo> isRestoreInstruction(const MachineInstr &MI,
+                                          MachineFunction *MF, unsigned &Reg);
 
   /// Given a spill instruction, extract the spill slot information, ensure it's
   /// tracked, and return the spill number.
-  std::optional<SpillLocationNo>
+  Optional<SpillLocationNo>
   extractSpillBaseRegAndOffset(const MachineInstr &MI);
-
-  /// For an instruction reference given by \p InstNo and \p OpNo in instruction
-  /// \p MI returns the Value pointed to by that instruction reference if any
-  /// exists, otherwise returns std::nullopt.
-  std::optional<ValueIDNum> getValueForInstrRef(unsigned InstNo, unsigned OpNo,
-                                                MachineInstr &MI,
-                                                const ValueTable *MLiveOuts,
-                                                const ValueTable *MLiveIns);
 
   /// Observe a single instruction while stepping through a block.
   void process(MachineInstr &MI, const ValueTable *MLiveOuts,
@@ -1249,18 +1233,17 @@ private:
   /// forming another mini-ssa problem to solve.
   /// \p Here the position of a DBG_INSTR_REF seeking a machine value number
   /// \p InstrNum Debug instruction number defined by DBG_PHI instructions.
-  /// \returns The machine value number at position Here, or std::nullopt.
-  std::optional<ValueIDNum> resolveDbgPHIs(MachineFunction &MF,
-                                           const ValueTable *MLiveOuts,
-                                           const ValueTable *MLiveIns,
-                                           MachineInstr &Here,
-                                           uint64_t InstrNum);
+  /// \returns The machine value number at position Here, or None.
+  Optional<ValueIDNum> resolveDbgPHIs(MachineFunction &MF,
+                                      const ValueTable *MLiveOuts,
+                                      const ValueTable *MLiveIns,
+                                      MachineInstr &Here, uint64_t InstrNum);
 
-  std::optional<ValueIDNum> resolveDbgPHIsImpl(MachineFunction &MF,
-                                               const ValueTable *MLiveOuts,
-                                               const ValueTable *MLiveIns,
-                                               MachineInstr &Here,
-                                               uint64_t InstrNum);
+  Optional<ValueIDNum> resolveDbgPHIsImpl(MachineFunction &MF,
+                                          const ValueTable *MLiveOuts,
+                                          const ValueTable *MLiveIns,
+                                          MachineInstr &Here,
+                                          uint64_t InstrNum);
 
   /// Step through the function, recording register definitions and movements
   /// in an MLocTracker. Convert the observations into a per-block transfer
@@ -1374,7 +1357,7 @@ private:
               const LiveIdxT &LiveOuts, FuncValueTable &MOutLocs,
               const SmallVectorImpl<const MachineBasicBlock *> &BlockOrders);
 
-  std::optional<ValueIDNum> pickOperandPHILoc(
+  Optional<ValueIDNum> pickOperandPHILoc(
       unsigned DbgOpIdx, const MachineBasicBlock &MBB, const LiveIdxT &LiveOuts,
       FuncValueTable &MOutLocs,
       const SmallVectorImpl<const MachineBasicBlock *> &BlockOrders);
@@ -1438,7 +1421,7 @@ public:
            && !MemOperand->getPseudoValue()->isAliased(MFI);
   }
 
-  std::optional<LocIdx> findLocationForMemOperand(const MachineInstr &MI);
+  Optional<LocIdx> findLocationForMemOperand(const MachineInstr &MI);
 };
 
 } // namespace LiveDebugValues

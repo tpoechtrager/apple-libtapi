@@ -33,8 +33,7 @@ enum CSKYCPKind {
   CPExtSymbol,
   CPBlockAddress,
   CPMachineBasicBlock,
-  CPJT,
-  CPConstPool
+  CPJT
 };
 
 enum CSKYCPModifier { NO_MOD, ADDR, GOT, GOTOFF, PLT, TLSLE, TLSIE, TLSGD };
@@ -70,7 +69,6 @@ public:
     return Kind == CSKYCP::CPMachineBasicBlock;
   }
   bool isJT() const { return Kind == CSKYCP::CPJT; }
-  bool isConstPool() const { return Kind == CSKYCP::CPConstPool; }
 
   int getExistingMachineCPValue(MachineConstantPool *CP,
                                 Align Alignment) override;
@@ -107,7 +105,7 @@ public:
 class CSKYConstantPoolConstant : public CSKYConstantPoolValue {
   const Constant *CVal; // Constant being loaded.
 
-  CSKYConstantPoolConstant(const Constant *C, Type *Ty, CSKYCP::CSKYCPKind Kind,
+  CSKYConstantPoolConstant(const Constant *C, CSKYCP::CSKYCPKind Kind,
                            unsigned PCAdjust, CSKYCP::CSKYCPModifier Modifier,
                            bool AddCurrentAddress, unsigned ID);
 
@@ -116,13 +114,8 @@ public:
   Create(const Constant *C, CSKYCP::CSKYCPKind Kind, unsigned PCAdjust,
          CSKYCP::CSKYCPModifier Modifier, bool AddCurrentAddress,
          unsigned ID = 0);
-  static CSKYConstantPoolConstant *
-  Create(const Constant *C, Type *Ty, CSKYCP::CSKYCPKind Kind,
-         unsigned PCAdjust, CSKYCP::CSKYCPModifier Modifier,
-         bool AddCurrentAddress, unsigned ID = 0);
   const GlobalValue *getGV() const;
   const BlockAddress *getBlockAddress() const;
-  const Constant *getConstantPool() const;
 
   int getExistingMachineCPValue(MachineConstantPool *CP,
                                 Align Alignment) override;
@@ -134,7 +127,7 @@ public:
   }
 
   static bool classof(const CSKYConstantPoolValue *APV) {
-    return APV->isGlobalValue() || APV->isBlockAddress() || APV->isConstPool();
+    return APV->isGlobalValue() || APV->isBlockAddress();
   }
 };
 

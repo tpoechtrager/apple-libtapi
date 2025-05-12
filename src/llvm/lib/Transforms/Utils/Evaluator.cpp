@@ -121,7 +121,7 @@ isSimpleEnoughValueToCommit(Constant *C,
 }
 
 void Evaluator::MutableValue::clear() {
-  if (auto *Agg = dyn_cast_if_present<MutableAggregate *>(Val))
+  if (auto *Agg = Val.dyn_cast<MutableAggregate *>())
     delete Agg;
   Val = nullptr;
 }
@@ -130,9 +130,9 @@ Constant *Evaluator::MutableValue::read(Type *Ty, APInt Offset,
                                         const DataLayout &DL) const {
   TypeSize TySize = DL.getTypeStoreSize(Ty);
   const MutableValue *V = this;
-  while (const auto *Agg = dyn_cast_if_present<MutableAggregate *>(V->Val)) {
+  while (const auto *Agg = V->Val.dyn_cast<MutableAggregate *>()) {
     Type *AggTy = Agg->Ty;
-    std::optional<APInt> Index = DL.getGEPIndexForOffset(AggTy, Offset);
+    Optional<APInt> Index = DL.getGEPIndexForOffset(AggTy, Offset);
     if (!Index || Index->uge(Agg->Elements.size()) ||
         !TypeSize::isKnownLE(TySize, DL.getTypeStoreSize(AggTy)))
       return nullptr;
@@ -140,11 +140,11 @@ Constant *Evaluator::MutableValue::read(Type *Ty, APInt Offset,
     V = &Agg->Elements[Index->getZExtValue()];
   }
 
-  return ConstantFoldLoadFromConst(cast<Constant *>(V->Val), Ty, Offset, DL);
+  return ConstantFoldLoadFromConst(V->Val.get<Constant *>(), Ty, Offset, DL);
 }
 
 bool Evaluator::MutableValue::makeMutable() {
-  Constant *C = cast<Constant *>(Val);
+  Constant *C = Val.get<Constant *>();
   Type *Ty = C->getType();
   unsigned NumElements;
   if (auto *VT = dyn_cast<FixedVectorType>(Ty)) {
@@ -171,12 +171,12 @@ bool Evaluator::MutableValue::write(Constant *V, APInt Offset,
   MutableValue *MV = this;
   while (Offset != 0 ||
          !CastInst::isBitOrNoopPointerCastable(Ty, MV->getType(), DL)) {
-    if (isa<Constant *>(MV->Val) && !MV->makeMutable())
+    if (MV->Val.is<Constant *>() && !MV->makeMutable())
       return false;
 
-    MutableAggregate *Agg = cast<MutableAggregate *>(MV->Val);
+    MutableAggregate *Agg = MV->Val.get<MutableAggregate *>();
     Type *AggTy = Agg->Ty;
-    std::optional<APInt> Index = DL.getGEPIndexForOffset(AggTy, Offset);
+    Optional<APInt> Index = DL.getGEPIndexForOffset(AggTy, Offset);
     if (!Index || Index->uge(Agg->Elements.size()) ||
         !TypeSize::isKnownLE(TySize, DL.getTypeStoreSize(AggTy)))
       return false;
@@ -413,28 +413,16 @@ bool Evaluator::EvaluateBlock(BasicBlock::iterator CurInst, BasicBlock *&NextBB,
           }
 
           Constant *Val = getVal(MSI->getValue());
-          // Avoid the byte-per-byte scan if we're memseting a zeroinitializer
-          // to zero.
-          if (!Val->isNullValue() || MutatedMemory.contains(GV) ||
-              !GV->hasDefinitiveInitializer() ||
-              !GV->getInitializer()->isNullValue()) {
-            APInt Len = LenC->getValue();
-            if (Len.ugt(64 * 1024)) {
-              LLVM_DEBUG(dbgs() << "Not evaluating large memset of size "
-                                << Len << "\n");
+          APInt Len = LenC->getValue();
+          while (Len != 0) {
+            Constant *DestVal = ComputeLoadResult(GV, Val->getType(), Offset);
+            if (DestVal != Val) {
+              LLVM_DEBUG(dbgs() << "Memset is not a no-op at offset "
+                                << Offset << " of " << *GV << ".\n");
               return false;
             }
-
-            while (Len != 0) {
-              Constant *DestVal = ComputeLoadResult(GV, Val->getType(), Offset);
-              if (DestVal != Val) {
-                LLVM_DEBUG(dbgs() << "Memset is not a no-op at offset "
-                                  << Offset << " of " << *GV << ".\n");
-                return false;
-              }
-              ++Offset;
-              --Len;
-            }
+            ++Offset;
+            --Len;
           }
 
           LLVM_DEBUG(dbgs() << "Ignoring no-op memset.\n");

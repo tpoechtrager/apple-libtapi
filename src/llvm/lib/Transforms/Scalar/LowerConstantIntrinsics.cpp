@@ -29,10 +29,8 @@
 #include "llvm/IR/PatternMatch.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/Debug.h"
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Utils/Local.h"
-#include <optional>
 
 using namespace llvm;
 using namespace llvm::PatternMatch;
@@ -98,7 +96,7 @@ static bool replaceConditionalBranchesOnConstant(Instruction *II,
 
 static bool lowerConstantIntrinsics(Function &F, const TargetLibraryInfo &TLI,
                                     DominatorTree *DT) {
-  std::optional<DomTreeUpdater> DTU;
+  Optional<DomTreeUpdater> DTU;
   if (DT)
     DTU.emplace(DT, DomTreeUpdater::UpdateStrategy::Lazy);
 
@@ -137,20 +135,18 @@ static bool lowerConstantIntrinsics(Function &F, const TargetLibraryInfo &TLI,
       continue;
     case Intrinsic::is_constant:
       NewValue = lowerIsConstantIntrinsic(II);
-      LLVM_DEBUG(dbgs() << "Folding " << *II << " to " << *NewValue << "\n");
       IsConstantIntrinsicsHandled++;
       break;
     case Intrinsic::objectsize:
       NewValue = lowerObjectSizeCall(II, DL, &TLI, true);
-      LLVM_DEBUG(dbgs() << "Folding " << *II << " to " << *NewValue << "\n");
       ObjectSizeIntrinsicsHandled++;
       break;
     }
     HasDeadBlocks |= replaceConditionalBranchesOnConstant(
-        II, NewValue, DTU ? &*DTU : nullptr);
+        II, NewValue, DTU ? DTU.getPointer() : nullptr);
   }
   if (HasDeadBlocks)
-    removeUnreachableBlocks(F, DTU ? &*DTU : nullptr);
+    removeUnreachableBlocks(F, DTU ? DTU.getPointer() : nullptr);
   return !Worklist.empty();
 }
 

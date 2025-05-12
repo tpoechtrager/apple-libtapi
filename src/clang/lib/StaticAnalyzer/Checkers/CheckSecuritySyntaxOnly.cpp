@@ -974,8 +974,6 @@ void WalkAST::checkMsg_decodeValueOfObjCType(const ObjCMessageExpr *ME) {
     if (VT < VersionTuple(11, 0))
       return;
     break;
-  case llvm::Triple::XROS:
-    break;
   default:
     return;
   }

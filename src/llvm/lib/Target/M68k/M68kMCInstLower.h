@@ -44,8 +44,8 @@ public:
 
   MCOperand LowerSymbolOperand(const MachineOperand &MO, MCSymbol *Sym) const;
 
-  std::optional<MCOperand> LowerOperand(const MachineInstr *MI,
-                                        const MachineOperand &MO) const;
+  Optional<MCOperand> LowerOperand(const MachineInstr *MI,
+                                   const MachineOperand &MO) const;
 
   void Lower(const MachineInstr *MI, MCInst &OutMI) const;
 };

@@ -26,8 +26,7 @@ class FileManager;
 class InterfaceFileManager {
 public:
   InterfaceFileManager(FileManager &fm, bool isVolatile);
-  Expected<APIs &> readFile(const std::string &path,
-                            ReadFlags flags = ReadFlags::Symbols);
+  Expected<APIs &> readFile(const std::string &path);
   Error writeFile(const std::string &path, const InterfaceFile *file,
                   FileType fileType) const;
 

@@ -9,6 +9,7 @@
 #ifndef LLVM_MC_MCDISASSEMBLER_MCDISASSEMBLER_H
 #define LLVM_MC_MCDISASSEMBLER_MCDISASSEMBLER_H
 
+#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/BinaryFormat/XCOFF.h"
 #include "llvm/MC/MCDisassembler/MCSymbolizer.h"
@@ -18,19 +19,24 @@
 
 namespace llvm {
 
-struct XCOFFSymbolInfoTy {
-  std::optional<XCOFF::StorageMappingClass> StorageMappingClass;
-  std::optional<uint32_t> Index;
-  bool IsLabel = false;
-  bool operator<(const XCOFFSymbolInfoTy &SymInfo) const;
+struct XCOFFSymbolInfo {
+  Optional<XCOFF::StorageMappingClass> StorageMappingClass;
+  Optional<uint32_t> Index;
+  bool IsLabel;
+  XCOFFSymbolInfo(Optional<XCOFF::StorageMappingClass> Smc,
+                  Optional<uint32_t> Idx, bool Label)
+      : StorageMappingClass(Smc), Index(Idx), IsLabel(Label) {}
+
+  bool operator<(const XCOFFSymbolInfo &SymInfo) const;
 };
 
 struct SymbolInfoTy {
   uint64_t Addr;
   StringRef Name;
-  // XCOFF uses XCOFFSymInfo. Other targets use Type.
-  XCOFFSymbolInfoTy XCOFFSymInfo;
-  uint8_t Type;
+  union {
+    uint8_t Type;
+    XCOFFSymbolInfo XCOFFSymInfo;
+  };
 
 private:
   bool IsXCOFF;
@@ -38,10 +44,10 @@ private:
 
 public:
   SymbolInfoTy(uint64_t Addr, StringRef Name,
-               std::optional<XCOFF::StorageMappingClass> Smc,
-               std::optional<uint32_t> Idx, bool Label)
-      : Addr(Addr), Name(Name), XCOFFSymInfo{Smc, Idx, Label}, Type(0),
-        IsXCOFF(true), HasType(false) {}
+               Optional<XCOFF::StorageMappingClass> Smc, Optional<uint32_t> Idx,
+               bool Label)
+      : Addr(Addr), Name(Name), XCOFFSymInfo(Smc, Idx, Label), IsXCOFF(true),
+        HasType(false) {}
   SymbolInfoTy(uint64_t Addr, StringRef Name, uint8_t Type,
                bool IsXCOFF = false)
       : Addr(Addr), Name(Name), Type(Type), IsXCOFF(IsXCOFF), HasType(true) {}
@@ -135,8 +141,8 @@ public:
   /// start of a symbol, or the entire symbol.
   /// This is used for example by WebAssembly to decode preludes.
   ///
-  /// Base implementation returns std::nullopt. So all targets by default ignore
-  /// to treat symbols separately.
+  /// Base implementation returns None. So all targets by default ignore to
+  /// treat symbols separately.
   ///
   /// \param Symbol   - The symbol.
   /// \param Size     - The number of bytes consumed.
@@ -151,10 +157,9 @@ public:
   ///                   must hold the number of bytes that were decoded before
   ///                   failing. The target must print nothing. This can be
   ///                   done by buffering the output if needed.
-  ///                 - std::nullopt if the target doesn't want to handle the
-  ///                   symbol separately. Value of Size is ignored in this
-  ///                   case.
-  virtual std::optional<DecodeStatus>
+  ///                 - None if the target doesn't want to handle the symbol
+  ///                   separately. Value of Size is ignored in this case.
+  virtual Optional<DecodeStatus>
   onSymbolStart(SymbolInfoTy &Symbol, uint64_t &Size, ArrayRef<uint8_t> Bytes,
                 uint64_t Address, raw_ostream &CStream) const;
   // TODO:

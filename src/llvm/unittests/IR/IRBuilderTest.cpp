@@ -6,7 +6,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "llvm/Analysis/InstSimplifyFolder.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/DIBuilder.h"
@@ -21,8 +20,6 @@
 #include "llvm/IR/Verifier.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
-
-#include <type_traits>
 
 using namespace llvm;
 using ::testing::UnorderedElementsAre;
@@ -436,7 +433,7 @@ TEST_F(IRBuilderTest, ConstrainedFPFunctionCall) {
   // Now call the empty constrained FP function.
   Builder.setIsFPConstrained(true);
   Builder.setConstrainedFPFunctionAttr();
-  CallInst *FCall = Builder.CreateCall(Callee, std::nullopt);
+  CallInst *FCall = Builder.CreateCall(Callee, None);
 
   // Check the attributes to verify the strictfp attribute is on the call.
   EXPECT_TRUE(
@@ -551,7 +548,7 @@ TEST_F(IRBuilderTest, UnaryOperators) {
 TEST_F(IRBuilderTest, FastMathFlags) {
   IRBuilder<> Builder(BB);
   Value *F, *FC;
-  Instruction *FDiv, *FAdd, *FCmp, *FCall, *FNeg, *FSub, *FMul, *FRem;
+  Instruction *FDiv, *FAdd, *FCmp, *FCall;
 
   F = Builder.CreateLoad(GV->getValueType(), GV);
   F = Builder.CreateFAdd(F, F);
@@ -696,24 +693,24 @@ TEST_F(IRBuilderTest, FastMathFlags) {
   auto Callee =
       Function::Create(CalleeTy, Function::ExternalLinkage, "", M.get());
 
-  FCall = Builder.CreateCall(Callee, std::nullopt);
+  FCall = Builder.CreateCall(Callee, None);
   EXPECT_FALSE(FCall->hasNoNaNs());
 
   Function *V =
       Function::Create(CalleeTy, Function::ExternalLinkage, "", M.get());
-  FCall = Builder.CreateCall(V, std::nullopt);
+  FCall = Builder.CreateCall(V, None);
   EXPECT_FALSE(FCall->hasNoNaNs());
 
   FMF.clear();
   FMF.setNoNaNs();
   Builder.setFastMathFlags(FMF);
 
-  FCall = Builder.CreateCall(Callee, std::nullopt);
+  FCall = Builder.CreateCall(Callee, None);
   EXPECT_TRUE(Builder.getFastMathFlags().any());
   EXPECT_TRUE(Builder.getFastMathFlags().NoNaNs);
   EXPECT_TRUE(FCall->hasNoNaNs());
 
-  FCall = Builder.CreateCall(V, std::nullopt);
+  FCall = Builder.CreateCall(V, None);
   EXPECT_TRUE(Builder.getFastMathFlags().any());
   EXPECT_TRUE(Builder.getFastMathFlags().NoNaNs);
   EXPECT_TRUE(FCall->hasNoNaNs());
@@ -732,36 +729,6 @@ TEST_F(IRBuilderTest, FastMathFlags) {
   EXPECT_TRUE(FDiv->hasNoNaNs());
   EXPECT_FALSE(FDiv->hasAllowReciprocal());
 
-  // Test that CreateF*FMF functions copy flags from the source instruction
-  // instead of using the builder default.
-  Instruction *const FMFSource = FAdd;
-  EXPECT_FALSE(Builder.getFastMathFlags().noNaNs());
-  EXPECT_TRUE(FMFSource->hasNoNaNs());
-
-  F = Builder.CreateFNegFMF(F, FMFSource);
-  ASSERT_TRUE(isa<Instruction>(F));
-  FNeg = cast<Instruction>(F);
-  EXPECT_TRUE(FNeg->hasNoNaNs());
-  F = Builder.CreateFAddFMF(F, F, FMFSource);
-  ASSERT_TRUE(isa<Instruction>(F));
-  FAdd = cast<Instruction>(F);
-  EXPECT_TRUE(FAdd->hasNoNaNs());
-  F = Builder.CreateFSubFMF(F, F, FMFSource);
-  ASSERT_TRUE(isa<Instruction>(F));
-  FSub = cast<Instruction>(F);
-  EXPECT_TRUE(FSub->hasNoNaNs());
-  F = Builder.CreateFMulFMF(F, F, FMFSource);
-  ASSERT_TRUE(isa<Instruction>(F));
-  FMul = cast<Instruction>(F);
-  EXPECT_TRUE(FMul->hasNoNaNs());
-  F = Builder.CreateFDivFMF(F, F, FMFSource);
-  ASSERT_TRUE(isa<Instruction>(F));
-  FDiv = cast<Instruction>(F);
-  EXPECT_TRUE(FDiv->hasNoNaNs());
-  F = Builder.CreateFRemFMF(F, F, FMFSource);
-  ASSERT_TRUE(isa<Instruction>(F));
-  FRem = cast<Instruction>(F);
-  EXPECT_TRUE(FRem->hasNoNaNs());
 }
 
 TEST_F(IRBuilderTest, WrapFlags) {
@@ -855,7 +822,7 @@ TEST_F(IRBuilderTest, createFunction) {
   auto File = DIB.createFile("error.swift", "/");
   auto CU =
       DIB.createCompileUnit(dwarf::DW_LANG_Swift, File, "swiftc", true, "", 0);
-  auto Type = DIB.createSubroutineType(DIB.getOrCreateTypeArray(std::nullopt));
+  auto Type = DIB.createSubroutineType(DIB.getOrCreateTypeArray(None));
   auto NoErr = DIB.createFunction(
       CU, "noerr", "", File, 1, Type, 1, DINode::FlagZero,
       DISubprogram::SPFlagDefinition | DISubprogram::SPFlagOptimized);
@@ -877,7 +844,7 @@ TEST_F(IRBuilderTest, DIBuilder) {
   auto CU = DIB.createCompileUnit(dwarf::DW_LANG_Cobol74,
                                   DIB.createFile("F.CBL", "/"), "llvm-cobol74",
                                   true, "", 0);
-  auto Type = DIB.createSubroutineType(DIB.getOrCreateTypeArray(std::nullopt));
+  auto Type = DIB.createSubroutineType(DIB.getOrCreateTypeArray(None));
   auto SP = DIB.createFunction(
       CU, "foo", "", File, 1, Type, 1, DINode::FlagZero,
       DISubprogram::SPFlagDefinition | DISubprogram::SPFlagOptimized);
@@ -899,7 +866,7 @@ TEST_F(IRBuilderTest, createArtificialSubprogram) {
   auto CU = DIB.createCompileUnit(dwarf::DW_LANG_C, File, "clang",
                                   /*isOptimized=*/true, /*Flags=*/"",
                                   /*Runtime Version=*/0);
-  auto Type = DIB.createSubroutineType(DIB.getOrCreateTypeArray(std::nullopt));
+  auto Type = DIB.createSubroutineType(DIB.getOrCreateTypeArray(None));
   auto SP = DIB.createFunction(
       CU, "foo", /*LinkageName=*/"", File,
       /*LineNo=*/1, Type, /*ScopeLine=*/2, DINode::FlagZero,
@@ -1068,8 +1035,7 @@ TEST_F(IRBuilderTest, DebugLoc) {
   auto CU = DIB.createCompileUnit(dwarf::DW_LANG_C_plus_plus_11,
                                   DIB.createFile("tmp.cpp", "/"), "", true, "",
                                   0);
-  auto SPType =
-      DIB.createSubroutineType(DIB.getOrCreateTypeArray(std::nullopt));
+  auto SPType = DIB.createSubroutineType(DIB.getOrCreateTypeArray(None));
   auto SP =
       DIB.createFunction(CU, "foo", "foo", File, 1, SPType, 1, DINode::FlagZero,
                          DISubprogram::SPFlagDefinition);
@@ -1083,13 +1049,13 @@ TEST_F(IRBuilderTest, DebugLoc) {
   IRBuilder<> Builder(Ctx);
   Builder.SetInsertPoint(Br);
   EXPECT_EQ(DL1, Builder.getCurrentDebugLocation());
-  auto Call1 = Builder.CreateCall(Callee, std::nullopt);
+  auto Call1 = Builder.CreateCall(Callee, None);
   EXPECT_EQ(DL1, Call1->getDebugLoc());
 
   Call1->setDebugLoc(DL2);
   Builder.SetInsertPoint(Call1->getParent(), Call1->getIterator());
   EXPECT_EQ(DL2, Builder.getCurrentDebugLocation());
-  auto Call2 = Builder.CreateCall(Callee, std::nullopt);
+  auto Call2 = Builder.CreateCall(Callee, None);
   EXPECT_EQ(DL2, Call2->getDebugLoc());
 
   DIB.finalize();
@@ -1102,7 +1068,7 @@ TEST_F(IRBuilderTest, DIImportedEntity) {
   auto CU = DIB.createCompileUnit(dwarf::DW_LANG_Cobol74,
                                   F, "llvm-cobol74",
                                   true, "", 0);
-  MDTuple *Elements = MDTuple::getDistinct(Ctx, std::nullopt);
+  MDTuple *Elements = MDTuple::getDistinct(Ctx, None);
 
   DIB.createImportedDeclaration(CU, nullptr, F, 1);
   DIB.createImportedDeclaration(CU, nullptr, F, 1);
@@ -1189,31 +1155,5 @@ TEST_F(IRBuilderTest, NoFolderNames) {
   auto *Add =
       Builder.CreateAdd(Builder.getInt32(1), Builder.getInt32(2), "add");
   EXPECT_EQ(Add->getName(), "add");
-}
-
-TEST_F(IRBuilderTest, CTAD) {
-  struct TestInserter : public IRBuilderDefaultInserter {
-    TestInserter() = default;
-  };
-  InstSimplifyFolder Folder(M->getDataLayout());
-
-  IRBuilder Builder1(Ctx, Folder, TestInserter());
-  static_assert(std::is_same_v<decltype(Builder1),
-                               IRBuilder<InstSimplifyFolder, TestInserter>>);
-  IRBuilder Builder2(Ctx);
-  static_assert(std::is_same_v<decltype(Builder2), IRBuilder<>>);
-  IRBuilder Builder3(BB, Folder);
-  static_assert(
-      std::is_same_v<decltype(Builder3), IRBuilder<InstSimplifyFolder>>);
-  IRBuilder Builder4(BB);
-  static_assert(std::is_same_v<decltype(Builder4), IRBuilder<>>);
-  // The block BB is empty, so don't test this one.
-  // IRBuilder Builder5(BB->getTerminator());
-  // static_assert(std::is_same_v<decltype(Builder5), IRBuilder<>>);
-  IRBuilder Builder6(BB, BB->end(), Folder);
-  static_assert(
-      std::is_same_v<decltype(Builder6), IRBuilder<InstSimplifyFolder>>);
-  IRBuilder Builder7(BB, BB->end());
-  static_assert(std::is_same_v<decltype(Builder7), IRBuilder<>>);
 }
 }

@@ -39,7 +39,7 @@ StackLifetime::getLiveRange(const AllocaInst *AI) const {
 }
 
 bool StackLifetime::isReachable(const Instruction *I) const {
-  return BlockInstRange.contains(I->getParent());
+  return BlockInstRange.find(I->getParent()) != BlockInstRange.end();
 }
 
 bool StackLifetime::isAliveAfter(const AllocaInst *AI,
@@ -67,16 +67,17 @@ static const AllocaInst *findMatchingAlloca(const IntrinsicInst &II,
   if (!AI)
     return nullptr;
 
-  auto AllocaSize = AI->getAllocationSize(DL);
-  if (!AllocaSize)
+  auto AllocaSizeInBits = AI->getAllocationSizeInBits(DL);
+  if (!AllocaSizeInBits)
     return nullptr;
+  int64_t AllocaSize = *AllocaSizeInBits / 8;
 
   auto *Size = dyn_cast<ConstantInt>(II.getArgOperand(0));
   if (!Size)
     return nullptr;
   int64_t LifetimeSize = Size->getSExtValue();
 
-  if (LifetimeSize != -1 && uint64_t(LifetimeSize) != *AllocaSize)
+  if (LifetimeSize != -1 && LifetimeSize != AllocaSize)
     return nullptr;
 
   return AI;
@@ -414,7 +415,7 @@ void StackLifetimePrinterPass::printPipeline(
     raw_ostream &OS, function_ref<StringRef(StringRef)> MapClassName2PassName) {
   static_cast<PassInfoMixin<StackLifetimePrinterPass> *>(this)->printPipeline(
       OS, MapClassName2PassName);
-  OS << '<';
+  OS << "<";
   switch (Type) {
   case StackLifetime::LivenessType::May:
     OS << "may";
@@ -423,5 +424,5 @@ void StackLifetimePrinterPass::printPipeline(
     OS << "must";
     break;
   }
-  OS << '>';
+  OS << ">";
 }

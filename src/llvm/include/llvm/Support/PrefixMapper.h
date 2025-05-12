@@ -13,7 +13,6 @@
 #include "llvm/ADT/IntrusiveRefCntPtr.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/Path.h"
-#include <optional>
 
 namespace llvm {
 class StringSaver;
@@ -38,7 +37,7 @@ struct MappedPrefix {
   }
   bool operator!=(const MappedPrefix &RHS) const { return !(*this == RHS); }
 
-  static std::optional<MappedPrefix> getFromJoined(StringRef JoinedMapping);
+  static Optional<MappedPrefix> getFromJoined(StringRef JoinedMapping);
 
   static Error transformJoined(ArrayRef<StringRef> Joined,
                                SmallVectorImpl<MappedPrefix> &Split);
@@ -85,7 +84,7 @@ protected:
   /// unless it's an exact match.
   ///
   /// \pre \p Path is not a reference into \p Storage.
-  virtual std::optional<StringRef> mapImpl(StringRef Path,
+  virtual Optional<StringRef> mapImpl(StringRef Path,
                                       SmallVectorImpl<char> &Storage);
 
 public:
@@ -161,7 +160,7 @@ private:
 /// an empty string always maps to itself.
 class TreePathPrefixMapper : public PrefixMapper {
 private:
-  std::optional<StringRef> mapImpl(StringRef Path,
+  Optional<StringRef> mapImpl(StringRef Path,
                               SmallVectorImpl<char> &Storage) override;
 
   /// Find the tree path for \p Path, getting the real path for its parent

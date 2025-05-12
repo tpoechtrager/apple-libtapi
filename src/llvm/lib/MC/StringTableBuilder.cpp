@@ -52,7 +52,7 @@ void StringTableBuilder::initSize() {
   }
 }
 
-StringTableBuilder::StringTableBuilder(Kind K, Align Alignment)
+StringTableBuilder::StringTableBuilder(Kind K, unsigned Alignment)
     : K(K), Alignment(Alignment) {
   initSize();
 }
@@ -151,7 +151,7 @@ void StringTableBuilder::finalizeStringTable(bool Optimize) {
       StringRef S = P->first.val();
       if (Previous.endswith(S)) {
         size_t Pos = Size - S.size() - (K != RAW);
-        if (isAligned(Alignment, Pos)) {
+        if (!(Pos & (Alignment - 1))) {
           P->second = Pos;
           continue;
         }

@@ -34,7 +34,6 @@
 using namespace llvm;
 
 #define DEBUG_TYPE "lanai-isel"
-#define PASS_NAME "Lanai DAG->DAG Pattern Instruction Selection"
 
 //===----------------------------------------------------------------------===//
 // Instruction Selector Implementation
@@ -48,15 +47,16 @@ namespace {
 
 class LanaiDAGToDAGISel : public SelectionDAGISel {
 public:
-  static char ID;
-
-  LanaiDAGToDAGISel() = delete;
-
   explicit LanaiDAGToDAGISel(LanaiTargetMachine &TargetMachine)
-      : SelectionDAGISel(ID, TargetMachine) {}
+      : SelectionDAGISel(TargetMachine) {}
 
   bool runOnMachineFunction(MachineFunction &MF) override {
     return SelectionDAGISel::runOnMachineFunction(MF);
+  }
+
+  // Pass Name
+  StringRef getPassName() const override {
+    return "Lanai DAG->DAG Pattern Instruction Selection";
   }
 
   bool SelectInlineAsmMemoryOperand(const SDValue &Op, unsigned ConstraintCode,
@@ -97,10 +97,6 @@ bool canBeRepresentedAsSls(const ConstantSDNode &CN) {
 }
 
 } // namespace
-
-char LanaiDAGToDAGISel::ID = 0;
-
-INITIALIZE_PASS(LanaiDAGToDAGISel, DEBUG_TYPE, PASS_NAME, false, false)
 
 // Helper functions for ComplexPattern used on LanaiInstrInfo
 // Used on Lanai Load/Store instructions.

@@ -36,7 +36,6 @@
 //
 #include "X86.h"
 #include "llvm/ADT/SmallSet.h"
-#include "llvm/ADT/StringExtras.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
@@ -200,8 +199,7 @@ void X86PreAMXConfig::addTileConfig(Instruction *ModelStart,
 
   preWriteTileCfg(I8Ptr, Builder, Shapes);
 
-  Builder.CreateIntrinsic(Intrinsic::x86_ldtilecfg_internal, std::nullopt,
-                          {I8Ptr});
+  Builder.CreateIntrinsic(Intrinsic::x86_ldtilecfg_internal, None, {I8Ptr});
 }
 
 // Todo: We may need to handle "more than one store" case in the future.

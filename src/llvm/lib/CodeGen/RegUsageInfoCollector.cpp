@@ -208,8 +208,8 @@ computeCalleeSavedRegs(BitVector &SavedRegs, MachineFunction &MF) {
     MCPhysReg Reg = CSRegs[i];
     if (SavedRegs.test(Reg)) {
       // Save subregisters
-      for (MCPhysReg SR : TRI.subregs(Reg))
-        SavedRegs.set(SR);
+      for (MCSubRegIterator SR(Reg, &TRI); SR.isValid(); ++SR)
+        SavedRegs.set(*SR);
     }
   }
 }

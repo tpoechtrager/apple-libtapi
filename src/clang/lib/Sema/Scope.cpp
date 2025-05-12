@@ -43,9 +43,6 @@ void Scope::setFlags(Scope *parent, unsigned flags) {
                   FunctionPrototypeScope | AtCatchScope | ObjCMethodScope)) ==
         0)
       Flags |= parent->getFlags() & OpenMPSimdDirectiveScope;
-    // transmit the parent's 'order' flag, if exists
-    if (parent->getFlags() & OpenMPOrderClauseScope)
-      Flags |= OpenMPOrderClauseScope;
   } else {
     Depth = 0;
     PrototypeDepth = 0;
@@ -70,10 +67,8 @@ void Scope::setFlags(Scope *parent, unsigned flags) {
   if (flags & BlockScope)         BlockParent = this;
   if (flags & TemplateParamScope) TemplateParamParent = this;
 
-  // If this is a prototype scope, record that. Lambdas have an extra prototype
-  // scope that doesn't add any depth.
-  if (flags & FunctionPrototypeScope && !(flags & LambdaScope))
-    PrototypeDepth++;
+  // If this is a prototype scope, record that.
+  if (flags & FunctionPrototypeScope) PrototypeDepth++;
 
   if (flags & DeclScope) {
     if (flags & FunctionPrototypeScope)
@@ -96,7 +91,7 @@ void Scope::Init(Scope *parent, unsigned flags) {
   UsingDirectives.clear();
   Entity = nullptr;
   ErrorTrap.reset();
-  NRVO = std::nullopt;
+  NRVO = None;
 }
 
 bool Scope::containedInPrototypeScope() const {
@@ -165,7 +160,7 @@ void Scope::applyNRVO() {
     return;
 
   if (*NRVO && isDeclScope(*NRVO))
-    (*NRVO)->setNRVOVariable(true);
+    NRVO.value()->setNRVOVariable(true);
 
   // It's necessary to propagate NRVO candidate to the parent scope for cases
   // when the parent scope doesn't contain a return statement.

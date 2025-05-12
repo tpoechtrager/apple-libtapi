@@ -17,6 +17,9 @@ namespace driver {
 namespace tools {
 namespace SPIRV {
 
+void addTranslatorArgs(const llvm::opt::ArgList &InArgs,
+                       llvm::opt::ArgStringList &OutArgs);
+
 void constructTranslateCommand(Compilation &C, const Tool &T,
                                const JobAction &JA, const InputInfo &Output,
                                const InputInfo &Input,

@@ -26,13 +26,11 @@ class LoongArchAsmBackend : public MCAsmBackend {
   const MCSubtargetInfo &STI;
   uint8_t OSABI;
   bool Is64Bit;
-  const MCTargetOptions &TargetOptions;
 
 public:
-  LoongArchAsmBackend(const MCSubtargetInfo &STI, uint8_t OSABI, bool Is64Bit,
-                      const MCTargetOptions &Options)
-      : MCAsmBackend(support::little), STI(STI), OSABI(OSABI), Is64Bit(Is64Bit),
-        TargetOptions(Options) {}
+  LoongArchAsmBackend(const MCSubtargetInfo &STI, uint8_t OSABI, bool Is64Bit)
+      : MCAsmBackend(support::little), STI(STI), OSABI(OSABI),
+        Is64Bit(Is64Bit) {}
   ~LoongArchAsmBackend() override {}
 
   void applyFixup(const MCAssembler &Asm, const MCFixup &Fixup,
@@ -53,7 +51,7 @@ public:
     return LoongArch::NumTargetFixupKinds;
   }
 
-  std::optional<MCFixupKind> getFixupKind(StringRef Name) const override;
+  Optional<MCFixupKind> getFixupKind(StringRef Name) const override;
 
   const MCFixupKindInfo &getFixupKindInfo(MCFixupKind Kind) const override;
 
@@ -65,7 +63,6 @@ public:
 
   std::unique_ptr<MCObjectTargetWriter>
   createObjectTargetWriter() const override;
-  const MCTargetOptions &getTargetOptions() const { return TargetOptions; }
 };
 } // end namespace llvm
 

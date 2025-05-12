@@ -27,7 +27,6 @@
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/JSON.h"
-#include <optional>
 
 #define DEBUG_TYPE "debugify"
 
@@ -115,8 +114,7 @@ bool llvm::applyDebugifyMetadata(
       continue;
 
     bool InsertedDbgVal = false;
-    auto SPType =
-        DIB.createSubroutineType(DIB.getOrCreateTypeArray(std::nullopt));
+    auto SPType = DIB.createSubroutineType(DIB.getOrCreateTypeArray(None));
     DISubprogram::DISPFlags SPFlags =
         DISubprogram::SPFlagDefinition | DISubprogram::SPFlagOptimized;
     if (F.hasPrivateLinkage() || F.hasInternalLinkage())
@@ -245,15 +243,10 @@ applyDebugify(Module &M,
 bool llvm::stripDebugifyMetadata(Module &M) {
   bool Changed = false;
 
-  // Remove the llvm.debugify and llvm.mir.debugify module-level named metadata.
+  // Remove the llvm.debugify module-level named metadata.
   NamedMDNode *DebugifyMD = M.getNamedMetadata("llvm.debugify");
   if (DebugifyMD) {
     M.eraseNamedMetadata(DebugifyMD);
-    Changed = true;
-  }
-
-  if (auto *MIRDebugifyMD = M.getNamedMetadata("llvm.mir.debugify")) {
-    M.eraseNamedMetadata(MIRDebugifyMD);
     Changed = true;
   }
 
@@ -345,7 +338,7 @@ bool llvm::collectDebugInfoMetadata(Module &M,
             if (I.getDebugLoc().getInlinedAt())
               continue;
             // Skip undef values.
-            if (DVI->isKillLocation())
+            if (DVI->isUndef())
               continue;
 
             auto *Var = DVI->getVariable();
@@ -588,7 +581,7 @@ bool llvm::checkDebugInfoMetadata(Module &M,
             if (I.getDebugLoc().getInlinedAt())
               continue;
             // Skip undef values.
-            if (DVI->isKillLocation())
+            if (DVI->isUndef())
               continue;
 
             auto *Var = DVI->getVariable();
@@ -681,7 +674,7 @@ bool diagnoseMisSizedDbgValue(Module &M, DbgValueInst *DVI) {
 
   Type *Ty = V->getType();
   uint64_t ValueOperandSize = getAllocSizeInBits(M, Ty);
-  std::optional<uint64_t> DbgVarSize = DVI->getFragmentSizeInBits();
+  Optional<uint64_t> DbgVarSize = DVI->getFragmentSizeInBits();
   if (!ValueOperandSize || !DbgVarSize)
     return false;
 
@@ -979,9 +972,7 @@ PreservedAnalyses NewPMDebugifyPass::run(Module &M, ModuleAnalysisManager &) {
     collectDebugInfoMetadata(M, M.functions(), *DebugInfoBeforePass,
                              "ModuleDebugify (original debuginfo)",
                               NameOfWrappedPass);
-  PreservedAnalyses PA;
-  PA.preserveSet<CFGAnalyses>();
-  return PA;
+  return PreservedAnalyses::all();
 }
 
 ModulePass *createCheckDebugifyModulePass(
@@ -1029,58 +1020,45 @@ static bool isIgnoredPass(StringRef PassID) {
 }
 
 void DebugifyEachInstrumentation::registerCallbacks(
-    PassInstrumentationCallbacks &PIC, ModuleAnalysisManager &MAM) {
-  PIC.registerBeforeNonSkippedPassCallback([this, &MAM](StringRef P, Any IR) {
+    PassInstrumentationCallbacks &PIC) {
+  PIC.registerBeforeNonSkippedPassCallback([this](StringRef P, Any IR) {
     if (isIgnoredPass(P))
       return;
-    PreservedAnalyses PA;
-    PA.preserveSet<CFGAnalyses>();
-    if (const auto **CF = any_cast<const Function *>(&IR)) {
-      Function &F = *const_cast<Function *>(*CF);
-      applyDebugify(F, Mode, DebugInfoBeforePass, P);
-      MAM.getResult<FunctionAnalysisManagerModuleProxy>(*F.getParent())
-          .getManager()
-          .invalidate(F, PA);
-    } else if (const auto **CM = any_cast<const Module *>(&IR)) {
-      Module &M = *const_cast<Module *>(*CM);
-      applyDebugify(M, Mode, DebugInfoBeforePass, P);
-      MAM.invalidate(M, PA);
+    if (any_isa<const Function *>(IR))
+      applyDebugify(*const_cast<Function *>(any_cast<const Function *>(IR)),
+                    Mode, DebugInfoBeforePass, P);
+    else if (any_isa<const Module *>(IR))
+      applyDebugify(*const_cast<Module *>(any_cast<const Module *>(IR)),
+                    Mode, DebugInfoBeforePass, P);
+  });
+  PIC.registerAfterPassCallback([this](StringRef P, Any IR,
+                                       const PreservedAnalyses &PassPA) {
+    if (isIgnoredPass(P))
+      return;
+    if (any_isa<const Function *>(IR)) {
+      auto &F = *const_cast<Function *>(any_cast<const Function *>(IR));
+      Module &M = *F.getParent();
+      auto It = F.getIterator();
+      if (Mode == DebugifyMode::SyntheticDebugInfo)
+        checkDebugifyMetadata(M, make_range(It, std::next(It)), P,
+                              "CheckFunctionDebugify", /*Strip=*/true, DIStatsMap);
+      else
+        checkDebugInfoMetadata(
+          M, make_range(It, std::next(It)), *DebugInfoBeforePass,
+          "CheckModuleDebugify (original debuginfo)",
+          P, OrigDIVerifyBugsReportFilePath);
+    } else if (any_isa<const Module *>(IR)) {
+      auto &M = *const_cast<Module *>(any_cast<const Module *>(IR));
+      if (Mode == DebugifyMode::SyntheticDebugInfo)
+       checkDebugifyMetadata(M, M.functions(), P, "CheckModuleDebugify",
+                            /*Strip=*/true, DIStatsMap);
+      else
+        checkDebugInfoMetadata(
+          M, M.functions(), *DebugInfoBeforePass,
+          "CheckModuleDebugify (original debuginfo)",
+          P, OrigDIVerifyBugsReportFilePath);
     }
   });
-  PIC.registerAfterPassCallback(
-      [this, &MAM](StringRef P, Any IR, const PreservedAnalyses &PassPA) {
-        if (isIgnoredPass(P))
-          return;
-        PreservedAnalyses PA;
-        PA.preserveSet<CFGAnalyses>();
-        if (const auto **CF = any_cast<const Function *>(&IR)) {
-          auto &F = *const_cast<Function *>(*CF);
-          Module &M = *F.getParent();
-          auto It = F.getIterator();
-          if (Mode == DebugifyMode::SyntheticDebugInfo)
-            checkDebugifyMetadata(M, make_range(It, std::next(It)), P,
-                                  "CheckFunctionDebugify", /*Strip=*/true,
-                                  DIStatsMap);
-          else
-            checkDebugInfoMetadata(M, make_range(It, std::next(It)),
-                                   *DebugInfoBeforePass,
-                                   "CheckModuleDebugify (original debuginfo)",
-                                   P, OrigDIVerifyBugsReportFilePath);
-          MAM.getResult<FunctionAnalysisManagerModuleProxy>(*F.getParent())
-              .getManager()
-              .invalidate(F, PA);
-        } else if (const auto **CM = any_cast<const Module *>(&IR)) {
-          Module &M = *const_cast<Module *>(*CM);
-          if (Mode == DebugifyMode::SyntheticDebugInfo)
-            checkDebugifyMetadata(M, M.functions(), P, "CheckModuleDebugify",
-                                  /*Strip=*/true, DIStatsMap);
-          else
-            checkDebugInfoMetadata(M, M.functions(), *DebugInfoBeforePass,
-                                   "CheckModuleDebugify (original debuginfo)",
-                                   P, OrigDIVerifyBugsReportFilePath);
-          MAM.invalidate(M, PA);
-        }
-      });
 }
 
 char DebugifyModulePass::ID = 0;

@@ -11,7 +11,6 @@
 #include "TypeReferenceTracker.h"
 
 #include "llvm-pdbutil.h"
-#include "llvm/ADT/StringExtras.h"
 #include "llvm/DebugInfo/CodeView/CVRecord.h"
 #include "llvm/DebugInfo/CodeView/CVTypeVisitor.h"
 #include "llvm/DebugInfo/CodeView/CodeView.h"

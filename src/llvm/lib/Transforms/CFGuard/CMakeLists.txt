@@ -10,5 +10,4 @@ add_llvm_component_library(LLVMCFGuard
   LINK_COMPONENTS
   Core
   Support
-  TargetParser
   )

@@ -13,15 +13,14 @@
 #ifndef LLVM_OBJECTYAML_COFFYAML_H
 #define LLVM_OBJECTYAML_COFFYAML_H
 
+#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/BinaryFormat/COFF.h"
-#include "llvm/Object/COFF.h"
 #include "llvm/ObjectYAML/CodeViewYAMLDebugSections.h"
 #include "llvm/ObjectYAML/CodeViewYAMLTypeHashing.h"
 #include "llvm/ObjectYAML/CodeViewYAMLTypes.h"
 #include "llvm/ObjectYAML/YAML.h"
 #include <cstdint>
-#include <optional>
 #include <vector>
 
 namespace llvm {
@@ -64,14 +63,12 @@ struct Relocation {
   // specified), allowing disambiguating between multiple symbols with the
   // same name or crafting intentionally broken files for testing.
   StringRef SymbolName;
-  std::optional<uint32_t> SymbolTableIndex;
+  Optional<uint32_t> SymbolTableIndex;
 };
 
 struct SectionDataEntry {
-  std::optional<uint32_t> UInt32;
+  Optional<uint32_t> UInt32;
   yaml::BinaryRef Binary;
-  std::optional<object::coff_load_configuration32> LoadConfig32;
-  std::optional<object::coff_load_configuration64> LoadConfig64;
 
   size_t size() const;
   void writeAsBinary(raw_ostream &OS) const;
@@ -84,7 +81,7 @@ struct Section {
   std::vector<CodeViewYAML::YAMLDebugSubsection> DebugS;
   std::vector<CodeViewYAML::LeafRecord> DebugT;
   std::vector<CodeViewYAML::LeafRecord> DebugP;
-  std::optional<CodeViewYAML::DebugHSection> DebugH;
+  Optional<CodeViewYAML::DebugHSection> DebugH;
   std::vector<SectionDataEntry> StructuredData;
   std::vector<Relocation> Relocations;
   StringRef Name;
@@ -96,12 +93,12 @@ struct Symbol {
   COFF::symbol Header;
   COFF::SymbolBaseType SimpleType = COFF::IMAGE_SYM_TYPE_NULL;
   COFF::SymbolComplexType ComplexType = COFF::IMAGE_SYM_DTYPE_NULL;
-  std::optional<COFF::AuxiliaryFunctionDefinition> FunctionDefinition;
-  std::optional<COFF::AuxiliarybfAndefSymbol> bfAndefSymbol;
-  std::optional<COFF::AuxiliaryWeakExternal> WeakExternal;
+  Optional<COFF::AuxiliaryFunctionDefinition> FunctionDefinition;
+  Optional<COFF::AuxiliarybfAndefSymbol> bfAndefSymbol;
+  Optional<COFF::AuxiliaryWeakExternal> WeakExternal;
   StringRef File;
-  std::optional<COFF::AuxiliarySectionDefinition> SectionDefinition;
-  std::optional<COFF::AuxiliaryCLRToken> CLRToken;
+  Optional<COFF::AuxiliarySectionDefinition> SectionDefinition;
+  Optional<COFF::AuxiliaryCLRToken> CLRToken;
   StringRef Name;
 
   Symbol();
@@ -109,12 +106,11 @@ struct Symbol {
 
 struct PEHeader {
   COFF::PE32Header Header;
-  std::optional<COFF::DataDirectory>
-      DataDirectories[COFF::NUM_DATA_DIRECTORIES];
+  Optional<COFF::DataDirectory> DataDirectories[COFF::NUM_DATA_DIRECTORIES];
 };
 
 struct Object {
-  std::optional<PEHeader> OptionalHeader;
+  Optional<PEHeader> OptionalHeader;
   COFF::header Header;
   std::vector<Section> Sections;
   std::vector<Symbol> Symbols;
@@ -247,18 +243,6 @@ template <> struct MappingTraits<COFF::AuxiliarySectionDefinition> {
 
 template <> struct MappingTraits<COFF::AuxiliaryCLRToken> {
   static void mapping(IO &IO, COFF::AuxiliaryCLRToken &ACT);
-};
-
-template <> struct MappingTraits<object::coff_load_configuration32> {
-  static void mapping(IO &IO, object::coff_load_configuration32 &ACT);
-};
-
-template <> struct MappingTraits<object::coff_load_configuration64> {
-  static void mapping(IO &IO, object::coff_load_configuration64 &ACT);
-};
-
-template <> struct MappingTraits<object::coff_load_config_code_integrity> {
-  static void mapping(IO &IO, object::coff_load_config_code_integrity &ACT);
 };
 
 template <>

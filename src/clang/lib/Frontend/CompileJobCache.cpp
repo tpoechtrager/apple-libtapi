@@ -17,11 +17,8 @@
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/CAS/ActionCache.h"
 #include "llvm/CAS/CASOutputBackend.h"
-#include "llvm/CASUtil/Utils.h"
-#include "llvm/MCCAS/MCCASObjectV1.h"
 #include "llvm/RemoteCachingService/Client.h"
 #include "llvm/Support/FileOutputBuffer.h"
-#include "llvm/Support/Path.h"
 #include "llvm/Support/PrefixMapper.h"
 #include "llvm/Support/Process.h"
 #include "llvm/Support/ScopedDurationTimer.h"
@@ -37,9 +34,7 @@ class CompileJobCache::CachingOutputs {
 public:
   using OutputKind = clang::cas::CompileJobCacheResult::OutputKind;
 
-  CachingOutputs(CompilerInstance &Clang, StringRef Workingdir,
-                 llvm::PrefixMapper Mapper, bool WriteOutputAsCASID,
-                 bool UseCASBackend);
+  CachingOutputs(CompilerInstance &Clang, llvm::PrefixMapper Mapper);
   virtual ~CachingOutputs() = default;
 
   /// \returns true if result was found and replayed, false otherwise.
@@ -50,11 +45,6 @@ public:
   virtual bool prepareOutputCollection() = 0;
 
   void stopDiagnosticsCapture();
-
-  /// This is for an output file that was written directly on the file system.
-  /// It's a workaround until all compilation consumers adopt
-  /// \c llvm::vfs::OutputBackend.
-  virtual Error addNonVirtualOutputFile(StringRef FilePath) = 0;
 
   /// Finish writing outputs from a computed result, after a cache miss.
   /// If SkipCache is true, it should not insert the ResultCacheKey into
@@ -71,8 +61,6 @@ protected:
 
   CompilerInstance &Clang;
   const llvm::PrefixMapper PrefixMapper;
-  const bool WriteOutputAsCASID;
-  const bool UseCASBackend;
   clang::cas::CompileJobCacheResult::Builder CachedResultBuilder;
   std::string OutputFile;
   std::string DependenciesFile;
@@ -85,16 +73,11 @@ namespace {
 /// \p llvm::cas::ActionCache.
 class ObjectStoreCachingOutputs : public CompileJobCache::CachingOutputs {
 public:
-  ObjectStoreCachingOutputs(CompilerInstance &Clang, StringRef WorkingDir,
-                            llvm::PrefixMapper Mapper, bool WriteOutputAsCASID,
-                            bool UseCASBackend,
-                            std::optional<llvm::cas::CASID> &MCOutputID,
+  ObjectStoreCachingOutputs(CompilerInstance &Clang, llvm::PrefixMapper Mapper,
                             std::shared_ptr<llvm::cas::ObjectStore> DB,
                             std::shared_ptr<llvm::cas::ActionCache> Cache)
-      : CachingOutputs(Clang, WorkingDir, std::move(Mapper), WriteOutputAsCASID,
-                       UseCASBackend),
-        ComputedJobNeedsReplay(WriteOutputAsCASID || UseCASBackend),
-        MCOutputID(MCOutputID), CAS(std::move(DB)), Cache(std::move(Cache)) {
+      : CachingOutputs(Clang, std::move(Mapper)), CAS(std::move(DB)),
+        Cache(std::move(Cache)) {
     if (CAS)
       CASOutputs = llvm::makeIntrusiveRefCnt<llvm::cas::CASOutputBackend>(*CAS);
   }
@@ -110,8 +93,6 @@ private:
 
   bool prepareOutputCollection() override;
 
-  Error addNonVirtualOutputFile(StringRef FilePath) override;
-
   Error finishComputedResult(const llvm::cas::CASID &ResultCacheKey,
                              bool SkipCache) override;
 
@@ -120,17 +101,15 @@ private:
 
   /// Replay a cache hit.
   ///
-  /// Return status if should exit immediately, otherwise std::nullopt.
+  /// Return status if should exit immediately, otherwise None.
   std::optional<int> replayCachedResult(const llvm::cas::CASID &ResultCacheKey,
                                         llvm::cas::ObjectRef ResultID,
                                         bool JustComputedResult);
 
-  const bool ComputedJobNeedsReplay;
-  std::optional<llvm::cas::CASID> &MCOutputID;
   std::shared_ptr<llvm::cas::ObjectStore> CAS;
   std::shared_ptr<llvm::cas::ActionCache> Cache;
   IntrusiveRefCntPtr<llvm::cas::CASOutputBackend> CASOutputs;
-  std::optional<llvm::cas::ObjectRef> DependenciesOutput;
+  Optional<llvm::cas::ObjectRef> DependenciesOutput;
 };
 
 /// An \p OutputBackend that just records the list of output paths/names.
@@ -148,11 +127,6 @@ public:
   /// the \p Kind string instead of its path.
   void addKindMap(StringRef Kind, StringRef Path) {
     KindMaps.push_back({Saver.save(Kind), Saver.save(Path)});
-  }
-
-  void addOutput(StringRef Path) {
-    StringRef Name = tryRemapPath(Path);
-    OutputNames.push_back(Name.str());
   }
 
 private:
@@ -177,8 +151,9 @@ private:
 
   Expected<std::unique_ptr<llvm::vfs::OutputFileImpl>>
   createFileImpl(StringRef Path,
-                 std::optional<llvm::vfs::OutputConfig> Config) override {
-    addOutput(Path);
+                 Optional<llvm::vfs::OutputConfig> Config) override {
+    StringRef Name = tryRemapPath(Path);
+    OutputNames.push_back(Name.str());
     return ProxyOutputBackend::createFileImpl(Path, std::move(Config));
   }
 
@@ -192,12 +167,9 @@ private:
 /// and \p llvm::cas::KeyValueDBClient.
 class RemoteCachingOutputs : public CompileJobCache::CachingOutputs {
 public:
-  RemoteCachingOutputs(CompilerInstance &Clang, StringRef WorkingDir,
-                       llvm::PrefixMapper Mapper,
+  RemoteCachingOutputs(CompilerInstance &Clang, llvm::PrefixMapper Mapper,
                        llvm::cas::remote::ClientServices Clients)
-      : CachingOutputs(Clang, WorkingDir, std::move(Mapper),
-                       /*WriteOutputAsCASID*/ false,
-                       /*UseCASBackend*/ false) {
+      : CachingOutputs(Clang, std::move(Mapper)) {
     RemoteKVClient = std::move(Clients.KVDB);
     RemoteCASClient = std::move(Clients.CASDB);
     CollectingOutputs = llvm::makeIntrusiveRefCnt<CollectingOutputBackend>();
@@ -208,8 +180,6 @@ private:
   tryReplayCachedResult(const llvm::cas::CASID &ResultCacheKey) override;
 
   bool prepareOutputCollection() override;
-
-  Error addNonVirtualOutputFile(StringRef FilePath) override;
 
   Error finishComputedResult(const llvm::cas::CASID &ResultCacheKey,
                              bool SkipCache) override;
@@ -226,7 +196,7 @@ private:
   void tryReleaseLLBuildExecutionLane();
 
   static StringRef getOutputKindName(OutputKind Kind);
-  /// \returns \p std::nullopt if \p Name doesn't match one of the output kind names.
+  /// \returns \p None if \p Name doesn't match one of the output kind names.
   static std::optional<OutputKind> getOutputKindForName(StringRef Name);
 
   std::unique_ptr<llvm::cas::remote::KeyValueDBClient> RemoteKVClient;
@@ -249,23 +219,13 @@ CompileJobCache::CachingOutputs::getPathForOutputKind(OutputKind Kind) {
   }
 }
 
-static std::string fixupRelativePath(const std::string &Path, FileManager &FM,
-                                     StringRef WorkingDir) {
-  if (llvm::sys::path::is_absolute(Path) || Path.empty() || Path == "-")
-    return Path;
-
-  // Apply -working-dir compiler option.
+static std::string fixupRelativePath(const std::string &Path, FileManager &FM) {
   // FIXME: this needs to stay in sync with createOutputFileImpl. Ideally, clang
   // would create output files by their "kind" rather than by path.
-  SmallString<128> PathStorage(Path);
-  if (FM.FixupRelativePath(PathStorage))
-    return std::string(PathStorage);
-
-  // Apply "normal" working directory.
-  if (!WorkingDir.empty()) {
-    SmallString<128> Tmp(Path);
-    llvm::sys::fs::make_absolute(WorkingDir, Tmp);
-    return std::string(Tmp);
+  if (!Path.empty() && Path != "-" && !llvm::sys::path::is_absolute(Path)) {
+    SmallString<128> PathStorage(Path);
+    if (FM.FixupRelativePath(PathStorage))
+      return std::string(PathStorage);
   }
   return Path;
 }
@@ -311,11 +271,6 @@ std::optional<int> CompileJobCache::initialize(CompilerInstance &Clang) {
   }
 
   DisableCachedCompileJobReplay = CacheOpts.DisableCachedCompileJobReplay;
-  bool UseCASBackend = Invocation.getCodeGenOpts().UseCASBackend;
-  Invocation.getCodeGenOpts().MCCallBack = [&](const llvm::cas::CASID &ID) {
-    MCOutputID = ID;
-    return Error::success();
-  };
 
   llvm::PrefixMapper PrefixMapper;
   llvm::SmallVector<llvm::MappedPrefix> Split;
@@ -334,35 +289,27 @@ std::optional<int> CompileJobCache::initialize(CompilerInstance &Clang) {
     if (!Clients)
       return reportCachingBackendError(Clang.getDiagnostics(),
                                        Clients.takeError());
-    assert(!CacheOpts.WriteOutputAsCASID &&
-           "combination of options not rejected earlier?");
-    assert(!UseCASBackend && "combination of options not rejected earlier?");
     CacheBackend = std::make_unique<RemoteCachingOutputs>(
-        Clang, /*WorkingDir=*/"", std::move(PrefixMapper), std::move(*Clients));
+        Clang, std::move(PrefixMapper), std::move(*Clients));
   } else {
     CacheBackend = std::make_unique<ObjectStoreCachingOutputs>(
-        Clang, /*WorkingDir=*/"", std::move(PrefixMapper),
-        CacheOpts.WriteOutputAsCASID, UseCASBackend, MCOutputID, CAS, Cache);
+        Clang, std::move(PrefixMapper), CAS, Cache);
   }
 
   return std::nullopt;
 }
 
 CompileJobCache::CachingOutputs::CachingOutputs(CompilerInstance &Clang,
-                                                StringRef WorkingDir,
-                                                llvm::PrefixMapper Mapper,
-                                                bool WriteOutputAsCASID,
-                                                bool UseCASBackend)
-    : Clang(Clang), PrefixMapper(std::move(Mapper)),
-      WriteOutputAsCASID(WriteOutputAsCASID), UseCASBackend(UseCASBackend) {
+                                                llvm::PrefixMapper Mapper)
+    : Clang(Clang), PrefixMapper(std::move(Mapper)) {
   CompilerInvocation &Invocation = Clang.getInvocation();
   FrontendOptions &FrontendOpts = Invocation.getFrontendOpts();
   if (!Clang.hasFileManager())
     Clang.createFileManager();
   FileManager &FM = Clang.getFileManager();
-  OutputFile = fixupRelativePath(FrontendOpts.OutputFile, FM, WorkingDir);
-  DependenciesFile = fixupRelativePath(
-      Invocation.getDependencyOutputOpts().OutputFile, FM, WorkingDir);
+  OutputFile = fixupRelativePath(FrontendOpts.OutputFile, FM);
+  DependenciesFile =
+      fixupRelativePath(Invocation.getDependencyOutputOpts().OutputFile, FM);
   DiagProcessor = std::make_unique<clang::cas::CachingDiagnosticsProcessor>(
       PrefixMapper, FM);
 }
@@ -371,7 +318,7 @@ Expected<bool> ObjectStoreCachingOutputs::tryReplayCachedResult(
     const llvm::cas::CASID &ResultCacheKey) {
   DiagnosticsEngine &Diags = Clang.getDiagnostics();
 
-  std::optional<llvm::cas::CASID> Result;
+  Optional<llvm::cas::CASID> Result;
   {
     llvm::ScopedDurationTimer ScopedTime([&Diags](double Seconds) {
       Diags.Report(diag::remark_compile_job_cache_timing_backend_key_query)
@@ -393,7 +340,7 @@ Expected<bool> ObjectStoreCachingOutputs::tryReplayCachedResult(
         << llvm::format("%.6fs", Seconds);
   });
 
-  std::optional<llvm::cas::ObjectRef> ResultRef = CAS->getReference(*Result);
+  Optional<llvm::cas::ObjectRef> ResultRef = CAS->getReference(*Result);
   if (!ResultRef) {
     Diags.Report(diag::remark_compile_job_cache_miss_result_not_found)
         << ResultCacheKey.toString() << "result not in CAS";
@@ -448,13 +395,6 @@ bool CompileJobCache::CachingOutputs::prepareOutputCollectionCommon(
   // it'll be handled during replay.
   IntrusiveRefCntPtr<llvm::vfs::OutputBackend> OnDiskOutputs =
       llvm::makeIntrusiveRefCnt<llvm::vfs::OnDiskOutputBackend>();
-  if (WriteOutputAsCASID) {
-    OnDiskOutputs = llvm::vfs::makeFilteringOutputBackend(
-        OnDiskOutputs,
-        [this](StringRef ResolvedPath, std::optional<llvm::vfs::OutputConfig>) {
-          return ResolvedPath != this->OutputFile;
-        });
-  }
 
   // Set up the output backend so we can save / cache the result after.
   for (OutputKind K : clang::cas::CompileJobCacheResult::getAllOutputKinds()) {
@@ -463,13 +403,12 @@ bool CompileJobCache::CachingOutputs::prepareOutputCollectionCommon(
       CachedResultBuilder.addKindMap(K, OutPath);
   }
 
-  // When use CAS backend, filter out the output object file. Always filter out
-  // the dependencies file, since we build a CAS-specific object for it.
+  // Always filter out the dependencies file, since we build a CAS-specific
+  // object for it.
   auto FilterBackend = llvm::vfs::makeFilteringOutputBackend(
       CacheOutputs,
-      [&](StringRef Path, std::optional<llvm::vfs::OutputConfig> Config) {
-        return !(UseCASBackend && Path.equals(OutputFile)) &&
-               Path != DependenciesFile;
+      [&](StringRef Path, Optional<llvm::vfs::OutputConfig> Config) {
+        return Path != DependenciesFile;
       });
 
   Clang.setOutputBackend(llvm::vfs::makeMirroringOutputBackend(
@@ -502,7 +441,7 @@ bool ObjectStoreCachingOutputs::prepareOutputCollection() {
   if (!Clang.getDependencyOutputOpts().OutputFile.empty())
     Clang.addDependencyCollector(std::make_shared<CASDependencyCollector>(
         Clang.getDependencyOutputOpts(), *CAS,
-        [this](std::optional<llvm::cas::ObjectRef> Deps) {
+        [this](Optional<llvm::cas::ObjectRef> Deps) {
           DependenciesOutput = Deps;
         }));
 
@@ -527,18 +466,9 @@ bool CompileJobCache::finishComputedResult(CompilerInstance &Clang,
 
   DiagnosticsEngine &Diags = Clang.getDiagnostics();
 
-  bool UnsupportedOutput;
-  if (Error E = maybeIngestNonVirtualOutputFromFileSystem(Clang).moveInto(
-          UnsupportedOutput)) {
-    reportCachingBackendError(Diags, std::move(E));
-    return false;
-  }
-
   // Check if we encounter any source that would generate non-reproducible
   // outputs.
-  bool SkipCache =
-      (Clang.hasPreprocessor() && Clang.isSourceNonReproducible()) ||
-      UnsupportedOutput;
+  bool SkipCache = Clang.hasPreprocessor() && Clang.isSourceNonReproducible();
   if (SkipCache) {
     switch (Clang.getPreprocessorOpts().CachingDiagOption) {
     case CachingDiagKind::None:
@@ -560,47 +490,15 @@ bool CompileJobCache::finishComputedResult(CompilerInstance &Clang,
   return true;
 }
 
-Expected<bool> CompileJobCache::maybeIngestNonVirtualOutputFromFileSystem(
-    CompilerInstance &Clang) {
-  // FIXME: All consumers should adopt \c llvm::vfs::OutputBackend and this
-  // function should go away.
-
-  const auto &FrontendOpts = Clang.getFrontendOpts();
-  if (FrontendOpts.ProgramAction == frontend::RunAnalysis) {
-    StringRef OutputPath = FrontendOpts.OutputFile;
-    if (OutputPath.empty())
-      return false;
-    if (llvm::sys::fs::is_directory(OutputPath)) {
-      // FIXME: A directory is produced for the 'html' output of the analyzer,
-      // support it for caching purposes.
-      Clang.getDiagnostics().Report(diag::warn_clang_cache_disabled_caching)
-          << "analyzer output is not supported";
-      return true;
-    }
-    if (Error E = CacheBackend->addNonVirtualOutputFile(OutputPath))
-      return std::move(E);
-    return false;
-  }
-
-  return false;
-}
-
 Expected<std::optional<int>> CompileJobCache::replayCachedResult(
-    std::shared_ptr<CompilerInvocation> Invok, StringRef WorkingDir,
-    const llvm::cas::CASID &CacheKey, cas::CompileJobCacheResult &CachedResult,
-    SmallVectorImpl<char> &DiagText, bool WriteOutputAsCASID,
-    std::optional<llvm::cas::CASID> *OutMCOutputID) {
+    std::shared_ptr<CompilerInvocation> Invok, const llvm::cas::CASID &CacheKey,
+    cas::CompileJobCacheResult &CachedResult, SmallVectorImpl<char> &DiagText) {
   CompilerInstance Clang;
   Clang.setInvocation(std::move(Invok));
   llvm::raw_svector_ostream DiagOS(DiagText);
   Clang.createDiagnostics(
       new TextDiagnosticPrinter(DiagOS, &Clang.getDiagnosticOpts()));
   Clang.setVerboseOutputStream(DiagOS);
-
-  // FIXME: we should create an include-tree filesystem based on the cache key
-  // to guarantee that the filesystem used during diagnostic replay will match
-  // the cached diagnostics. Currently we rely on the invocation having a
-  // matching -fcas-include-tree option.
 
   auto FinishDiagnosticClient =
       llvm::make_scope_exit([&]() { Clang.getDiagnosticClient().finish(); });
@@ -617,20 +515,15 @@ Expected<std::optional<int>> CompileJobCache::replayCachedResult(
 
   assert(!Clang.getDiagnostics().hasErrorOccurred());
 
-  std::optional<llvm::cas::CASID> MCOutputID;
-  ObjectStoreCachingOutputs CachingOutputs(
-      Clang, WorkingDir, std::move(PrefixMapper), WriteOutputAsCASID,
-      Clang.getInvocation().getCodeGenOpts().UseCASBackend, MCOutputID,
-      /*CAS*/ nullptr, /*Cache*/ nullptr);
-  if (OutMCOutputID)
-    *OutMCOutputID = std::move(MCOutputID);
+  ObjectStoreCachingOutputs CachingOutputs(Clang, std::move(PrefixMapper),
+                                           /*CAS*/ nullptr, /*Cache*/ nullptr);
 
   std::optional<int> Ret;
   if (Error E = CachingOutputs
                     .replayCachedResult(CacheKey, CachedResult,
                                         /*JustComputedResult*/ false)
                     .moveInto(Ret))
-    return std::move(E);
+    return E;
 
   if (Clang.getDiagnostics().hasErrorOccurred())
     return llvm::createStringError(llvm::inconvertibleErrorCode(),
@@ -647,13 +540,6 @@ Expected<llvm::cas::ObjectRef> ObjectStoreCachingOutputs::writeOutputs(
     Diags.Report(diag::remark_compile_job_cache_timing_backend_store)
         << llvm::format("%.6fs", Seconds);
   });
-
-  // Add the MC output to the CAS Outputs.
-  if (MCOutputID) {
-    auto MCOutputRef = CAS->getReference(*MCOutputID);
-    if (MCOutputRef)
-      CachedResultBuilder.addOutput(OutputKind::MainOutput, *MCOutputRef);
-  }
 
   Expected<std::optional<std::string>> SerialDiags =
       DiagProcessor->serializeEmittedDiagnostics();
@@ -678,20 +564,6 @@ Expected<llvm::cas::ObjectRef> ObjectStoreCachingOutputs::writeOutputs(
 
   // Cache the result.
   return CachedResultBuilder.build(*CAS);
-}
-
-Error ObjectStoreCachingOutputs::addNonVirtualOutputFile(StringRef FilePath) {
-  auto F = llvm::sys::fs::openNativeFileForRead(FilePath);
-  if (!F)
-    return F.takeError();
-  auto CloseOnExit =
-      llvm::make_scope_exit([&F]() { llvm::sys::fs::closeFile(*F); });
-
-  std::optional<llvm::cas::ObjectRef> ObjRef;
-  if (Error E = CAS->storeFromOpenFile(*F).moveInto(ObjRef))
-    return E;
-  CASOutputs->addObject(FilePath, *ObjRef);
-  return Error::success();
 }
 
 Error ObjectStoreCachingOutputs::finishComputedResult(
@@ -724,7 +596,7 @@ Error ObjectStoreCachingOutputs::finishComputedResult(
 std::optional<int> ObjectStoreCachingOutputs::replayCachedResult(
     const llvm::cas::CASID &ResultCacheKey, llvm::cas::ObjectRef ResultID,
     bool JustComputedResult) {
-  if (JustComputedResult && !ComputedJobNeedsReplay)
+  if (JustComputedResult)
     return std::nullopt;
 
   // FIXME: Stop calling report_fatal_error().
@@ -745,10 +617,7 @@ std::optional<int> ObjectStoreCachingOutputs::replayCachedResult(
 Expected<std::optional<int>> ObjectStoreCachingOutputs::replayCachedResult(
     const llvm::cas::CASID &ResultCacheKey,
     clang::cas::CompileJobCacheResult &Result, bool JustComputedResult) {
-  // FIXME: The correct fix for MCCAS replay is that you have an official CASID
-  // file output going all the way down into ObjectWriter, we can remove this
-  // callback and special case.
-  if (JustComputedResult && !ComputedJobNeedsReplay)
+  if (JustComputedResult)
     return std::nullopt;
 
   llvm::cas::ObjectStore &CAS = Result.getCAS();
@@ -786,34 +655,9 @@ Expected<std::optional<int>> ObjectStoreCachingOutputs::replayCachedResult(
     if (!ParentPath.empty())
       llvm::sys::fs::create_directories(ParentPath);
 
-    bool IsOutputFile = O.Kind == OutputKind::MainOutput;
-
     std::optional<StringRef> Contents;
     SmallString<50> ContentsStorage;
-    if (IsOutputFile && ComputedJobNeedsReplay) {
-      llvm::raw_svector_ostream OS(ContentsStorage);
-      if (WriteOutputAsCASID)
-        llvm::cas::writeCASIDBuffer(CAS.getID(O.Object), OS);
-      else if (UseCASBackend) {
-        // Replay by write out object file.
-        // When the environmental variable is set, save the backend CASID for
-        // analysis later.
-        if (llvm::sys::Process::GetEnv("CLANG_CAS_BACKEND_SAVE_CASID_FILE")) {
-          std::string CASIDPath = Path + ".casid";
-          std::error_code EC;
-          llvm::raw_fd_ostream IDOS(CASIDPath, EC);
-          if (EC)
-            return llvm::errorCodeToError(EC);
-          writeCASIDBuffer(CAS.getID(O.Object), IDOS);
-        }
-        auto Schema = std::make_unique<llvm::mccasformats::v1::MCSchema>(CAS);
-        if (auto E = Schema->serializeObjectFile(*Obj, OS))
-          return E;
-      }
-      Contents = ContentsStorage;
-    } else if (JustComputedResult) {
-      return Error::success(); // continue
-    } else if (O.Kind == OutputKind::Dependencies) {
+    if (O.Kind == OutputKind::Dependencies) {
       llvm::raw_svector_ostream OS(ContentsStorage);
       if (auto E = CASDependencyCollector::replay(
               Clang.getDependencyOutputOpts(), CAS, *Obj, OS))
@@ -971,7 +815,7 @@ Expected<bool> RemoteCachingOutputs::replayCachedResult(
   }
 
   bool HasMissingOutput = false;
-  std::optional<std::string> SerialDiags;
+  Optional<std::string> SerialDiags;
 
   while (LoadQueue.hasPending()) {
     auto Response = LoadQueue.receiveNext();
@@ -1076,11 +920,6 @@ RemoteCachingOutputs::saveOutputs(const llvm::cas::CASID &ResultCacheKey) {
   }
 
   return std::move(CompResult);
-}
-
-Error RemoteCachingOutputs::addNonVirtualOutputFile(StringRef FilePath) {
-  CollectingOutputs->addOutput(FilePath);
-  return Error::success();
 }
 
 Error RemoteCachingOutputs::finishComputedResult(

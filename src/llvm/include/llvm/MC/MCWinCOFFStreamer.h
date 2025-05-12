@@ -55,14 +55,14 @@ public:
   void emitCOFFSecRel32(MCSymbol const *Symbol, uint64_t Offset) override;
   void emitCOFFImgRel32(MCSymbol const *Symbol, int64_t Offset) override;
   void emitCommonSymbol(MCSymbol *Symbol, uint64_t Size,
-                        Align ByteAlignment) override;
+                        unsigned ByteAlignment) override;
   void emitLocalCommonSymbol(MCSymbol *Symbol, uint64_t Size,
-                             Align ByteAlignment) override;
+                             unsigned ByteAlignment) override;
   void emitWeakReference(MCSymbol *Alias, const MCSymbol *Symbol) override;
   void emitZerofill(MCSection *Section, MCSymbol *Symbol, uint64_t Size,
-                    Align ByteAlignment, SMLoc Loc = SMLoc()) override;
+                    unsigned ByteAlignment, SMLoc Loc = SMLoc()) override;
   void emitTBSSSymbol(MCSection *Section, MCSymbol *Symbol, uint64_t Size,
-                      Align ByteAlignment) override;
+                      unsigned ByteAlignment) override;
   void emitIdent(StringRef IdentString) override;
   void emitWinEHHandlerData(SMLoc Loc) override;
   void emitCGProfileEntry(const MCSymbolRefExpr *From,

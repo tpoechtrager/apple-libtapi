@@ -35,7 +35,6 @@
 #include "clang/StaticAnalyzer/Core/Checker.h"
 #include "clang/StaticAnalyzer/Core/CheckerManager.h"
 #include "clang/AST/ParentMap.h"
-#include <optional>
 
 using namespace clang;
 using namespace ento;
@@ -155,8 +154,8 @@ void VforkChecker::checkPostCall(const CallEvent &Call,
 
   // Get return value of vfork.
   SVal VforkRetVal = Call.getReturnValue();
-  std::optional<DefinedOrUnknownSVal> DVal =
-      VforkRetVal.getAs<DefinedOrUnknownSVal>();
+  Optional<DefinedOrUnknownSVal> DVal =
+    VforkRetVal.getAs<DefinedOrUnknownSVal>();
   if (!DVal)
     return;
 

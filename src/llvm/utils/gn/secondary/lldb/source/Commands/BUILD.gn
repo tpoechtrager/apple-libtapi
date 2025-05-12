@@ -34,8 +34,6 @@ static_library("Commands") {
     "CommandObjectBreakpoint.cpp",
     "CommandObjectBreakpointCommand.cpp",
     "CommandObjectCommands.cpp",
-    "CommandObjectDWIMPrint.cpp",
-    "CommandObjectDiagnostics.cpp",
     "CommandObjectDisassemble.cpp",
     "CommandObjectExpression.cpp",
     "CommandObjectFrame.cpp",
@@ -66,7 +64,6 @@ static_library("Commands") {
     "CommandObjectWatchpoint.cpp",
     "CommandObjectWatchpointCommand.cpp",
     "CommandOptionArgumentTable.cpp",
-    "CommandOptionsProcessAttach.cpp",
     "CommandOptionsProcessLaunch.cpp",
   ]
 }

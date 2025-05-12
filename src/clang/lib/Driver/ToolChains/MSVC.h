@@ -11,11 +11,10 @@
 
 #include "AMDGPU.h"
 #include "Cuda.h"
-#include "LazyDetector.h"
+#include "clang/Basic/DebugInfoOptions.h"
 #include "clang/Driver/Compilation.h"
 #include "clang/Driver/Tool.h"
 #include "clang/Driver/ToolChain.h"
-#include "llvm/Frontend/Debug/Options.h"
 #include "llvm/WindowsDriver/MSVCPaths.h"
 
 namespace clang {
@@ -51,6 +50,7 @@ public:
   TranslateArgs(const llvm::opt::DerivedArgList &Args, StringRef BoundArch,
                 Action::OffloadKind DeviceOffloadKind) const override;
 
+  bool IsIntegratedAssemblerDefault() const override;
   UnwindTableLevel
   getDefaultUnwindTableLevel(const llvm::opt::ArgList &Args) const override;
   bool isPICDefault() const override;
@@ -60,10 +60,9 @@ public:
   /// Set CodeView as the default debug info format for non-MachO binary
   /// formats, and to DWARF otherwise. Users can use -gcodeview and -gdwarf to
   /// override the default.
-  llvm::codegenoptions::DebugInfoFormat getDefaultDebugFormat() const override {
-    return getTriple().isOSBinFormatMachO()
-               ? llvm::codegenoptions::DIF_DWARF
-               : llvm::codegenoptions::DIF_CodeView;
+  codegenoptions::DebugInfoFormat getDefaultDebugFormat() const override {
+    return getTriple().isOSBinFormatMachO() ? codegenoptions::DIF_DWARF
+                                            : codegenoptions::DIF_CodeView;
   }
 
   /// Set the debugger tuning to "default", since we're definitely not tuning
@@ -134,11 +133,11 @@ protected:
   Tool *buildLinker() const override;
   Tool *buildAssembler() const override;
 private:
-  std::optional<llvm::StringRef> WinSdkDir, WinSdkVersion, WinSysRoot;
+  llvm::Optional<llvm::StringRef> WinSdkDir, WinSdkVersion, WinSysRoot;
   std::string VCToolChainPath;
   llvm::ToolsetLayout VSLayout = llvm::ToolsetLayout::OlderVS;
-  LazyDetector<CudaInstallationDetector> CudaInstallation;
-  LazyDetector<RocmInstallationDetector> RocmInstallation;
+  CudaInstallationDetector CudaInstallation;
+  RocmInstallationDetector RocmInstallation;
 };
 
 } // end namespace toolchains

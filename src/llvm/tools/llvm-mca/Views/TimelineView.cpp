@@ -315,10 +315,6 @@ json::Value TimelineView::toJSON() const {
   json::Array TimelineInfo;
 
   for (const TimelineViewEntry &TLE : Timeline) {
-    // Check if the timeline-max-cycles has been reached.
-    if (!TLE.CycleRetired && TLE.CycleExecuted)
-      break;
-
     TimelineInfo.push_back(
         json::Object({{"CycleDispatched", TLE.CycleDispatched},
                       {"CycleReady", TLE.CycleReady},

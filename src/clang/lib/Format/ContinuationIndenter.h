@@ -20,7 +20,6 @@
 #include "clang/Format/Format.h"
 #include "llvm/Support/Regex.h"
 #include <map>
-#include <optional>
 #include <tuple>
 
 namespace clang {
@@ -42,9 +41,9 @@ struct RawStringFormatStyleManager {
 
   RawStringFormatStyleManager(const FormatStyle &CodeStyle);
 
-  std::optional<FormatStyle> getDelimiterStyle(StringRef Delimiter) const;
+  llvm::Optional<FormatStyle> getDelimiterStyle(StringRef Delimiter) const;
 
-  std::optional<FormatStyle>
+  llvm::Optional<FormatStyle>
   getEnclosingFunctionStyle(StringRef EnclosingFunction) const;
 };
 
@@ -121,8 +120,8 @@ private:
 
   /// If \p Current is a raw string that is configured to be reformatted,
   /// return the style to be used.
-  std::optional<FormatStyle> getRawStringStyle(const FormatToken &Current,
-                                               const LineState &State);
+  llvm::Optional<FormatStyle> getRawStringStyle(const FormatToken &Current,
+                                                const LineState &State);
 
   /// If the current token sticks out over the end of the line, break
   /// it if possible.

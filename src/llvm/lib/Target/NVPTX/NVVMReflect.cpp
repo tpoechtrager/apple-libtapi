@@ -40,7 +40,6 @@
 #include <sstream>
 #include <string>
 #define NVVM_REFLECT_FUNCTION "__nvvm_reflect"
-#define NVVM_REFLECT_OCL_FUNCTION "__nvvm_reflect_ocl"
 
 using namespace llvm;
 
@@ -79,8 +78,7 @@ static bool runNVVMReflect(Function &F, unsigned SmVersion) {
   if (!NVVMReflectEnabled)
     return false;
 
-  if (F.getName() == NVVM_REFLECT_FUNCTION ||
-      F.getName() == NVVM_REFLECT_OCL_FUNCTION) {
+  if (F.getName() == NVVM_REFLECT_FUNCTION) {
     assert(F.isDeclaration() && "_reflect function should not have a body");
     assert(F.getReturnType()->isIntegerTy() &&
            "_reflect's return type should be integer");
@@ -121,7 +119,6 @@ static bool runNVVMReflect(Function &F, unsigned SmVersion) {
       continue;
     Function *Callee = Call->getCalledFunction();
     if (!Callee || (Callee->getName() != NVVM_REFLECT_FUNCTION &&
-                    Callee->getName() != NVVM_REFLECT_OCL_FUNCTION &&
                     Callee->getIntrinsicID() != Intrinsic::nvvm_reflect))
       continue;
 

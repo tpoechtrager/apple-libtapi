@@ -14,7 +14,7 @@
 #include "clang-c/Refactor.h"
 #include "clang/Basic/LangOptions.h"
 #include "clang/Frontend/CommandLineSourceLoc.h"
-#include "clang/Tooling/Refactoring/Rename/SymbolName.h"
+#include "clang/Tooling/Refactor/SymbolName.h"
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/FileSystem.h"
@@ -362,8 +362,8 @@ static int apply(ArrayRef<CXRefactoringReplacement> Replacements,
 /// this occurrence.
 static std::string
 occurrenceToString(const CXSymbolOccurrence &Occurrence, bool IsLocal,
-                   const tooling::SymbolName &NewName,
-                   const tooling::SymbolName &ExpectedReplacementStrings,
+                   const tooling::OldSymbolName &NewName,
+                   const tooling::OldSymbolName &ExpectedReplacementStrings,
                    StringRef Filename) {
   std::string Str;
   llvm::raw_string_ostream OS(Str);
@@ -374,16 +374,15 @@ occurrenceToString(const CXSymbolOccurrence &Occurrence, bool IsLocal,
     OS << '"' << Filename << "\" ";
 
   bool FirstRange = true;
-  assert(NewName.getNamePieces().size() >= Occurrence.NumNamePieces &&
+  assert(NewName.size() >= Occurrence.NumNamePieces &&
          "new name doesn't match the number of pieces");
   for (unsigned J = 0; J != Occurrence.NumNamePieces; ++J) {
     if (!FirstRange) // TODO
       OS << ", ";
 
     // Print the replacement string if it doesn't match the expected string.
-    if (NewName.getNamePieces()[J] !=
-        ExpectedReplacementStrings.getNamePieces()[J])
-      OS << '"' << NewName.getNamePieces()[J] << "\" ";
+    if (NewName[J] != ExpectedReplacementStrings[J])
+      OS << '"' << NewName[J] << "\" ";
 
     CXFileRange Range = Occurrence.NamePieces[J];
     OS << Range.Begin.Line << ":" << Range.Begin.Column << " -> "
@@ -438,7 +437,7 @@ parseIndexedOccurrence(StringRef IndexedOccurrence,
 static bool compareOccurrences(ArrayRef<std::string> ExpectedReplacements,
                                CXSymbolOccurrencesResult Occurrences,
                                bool IsLocal,
-                               const tooling::SymbolName &NewSymbolName,
+                               const tooling::OldSymbolName &NewSymbolName,
                                bool PrintFilenames) {
   unsigned NumFiles = clang_SymbolOccurrences_getNumFiles(Occurrences);
   size_t ExpectedReplacementIndex = 0;
@@ -595,7 +594,7 @@ int rename(CXTranslationUnit TU, CXIndex CIdx, ArrayRef<const char *> Args) {
     // FIXME: This is a hack
     LangOptions LangOpts;
     LangOpts.ObjC = true;
-    tooling::SymbolName NewSymbolName(opts::rename::NewName, LangOpts);
+    tooling::OldSymbolName NewSymbolName(opts::rename::NewName, LangOpts);
 
     if (ExpectedReplacements.empty()) {
       if (opts::Apply) {
@@ -730,7 +729,7 @@ int renameIndexedFile(CXIndex CIdx, ArrayRef<const char *> Args) {
 
   LangOptions LangOpts;
   LangOpts.ObjC = true;
-  tooling::SymbolName ExpectedReplacementStrings(
+  tooling::OldSymbolName ExpectedReplacementStrings(
       opts::rename::IndexedNewNames[0], LangOpts);
 
   // Print the occurrences.
@@ -751,7 +750,7 @@ int renameIndexedFile(CXIndex CIdx, ArrayRef<const char *> Args) {
               .c_str();
       LangOptions LangOpts;
       LangOpts.ObjC = true;
-      tooling::SymbolName NewSymbolName(NewName, LangOpts);
+      tooling::OldSymbolName NewSymbolName(NewName, LangOpts);
 
       outs() << occurrenceToString(FileResult.Occurrences[I], /*IsLocal*/ false,
                                    NewSymbolName, ExpectedReplacementStrings,
@@ -786,7 +785,7 @@ struct ParsedSourceLineRange : ParsedSourceLocation {
   ParsedSourceLineRange(const ParsedSourceLocation &Loc)
       : ParsedSourceLocation(Loc), MaxColumn(Loc.Column) {}
 
-  static std::optional<ParsedSourceLineRange> FromString(StringRef Str) {
+  static Optional<ParsedSourceLineRange> FromString(StringRef Str) {
     std::pair<StringRef, StringRef> RangeSplit = Str.rsplit('-');
     auto PSL = ParsedSourceLocation::FromString(RangeSplit.first);
     ParsedSourceLineRange Result;
@@ -794,13 +793,13 @@ struct ParsedSourceLineRange : ParsedSourceLocation {
     Result.Line = PSL.Line;
     Result.Column = PSL.Column;
     if (Result.FileName.empty())
-      return std::nullopt;
+      return None;
     if (RangeSplit.second == "end")
       Result.MaxColumn = lastColumnForFile(Result.FileName, Result.Line);
     else if (RangeSplit.second.getAsInteger(10, Result.MaxColumn))
-      return std::nullopt;
+      return None;
     if (Result.MaxColumn < Result.Column)
-      return std::nullopt;
+      return None;
     return Result;
   }
 };
@@ -812,15 +811,15 @@ struct OldParsedSourceRange {
                     const ParsedSourceLocation &End)
       : Begin(Begin), End(End) {}
 
-  static std::optional<OldParsedSourceRange> FromString(StringRef Str) {
+  static Optional<OldParsedSourceRange> FromString(StringRef Str) {
     std::pair<StringRef, StringRef> RangeSplit = Str.rsplit('-');
     auto Begin = ParsedSourceLocation::FromString(RangeSplit.first);
     if (Begin.FileName.empty())
-      return std::nullopt;
+      return None;
     std::string EndString = Begin.FileName + ":" + RangeSplit.second.str();
     auto End = ParsedSourceLocation::FromString(EndString);
     if (End.FileName.empty())
-      return std::nullopt;
+      return None;
     return OldParsedSourceRange(Begin, End);
   }
 };
@@ -943,7 +942,7 @@ bool printRefactoringReplacements(
     const CXRefactoringFileReplacementSet &FileSet =
         Replacements.FileReplacementSets[FileIndex];
     if (opts::Apply) {
-      apply(ArrayRef(FileSet.Replacements, FileSet.NumReplacements),
+      apply(llvm::makeArrayRef(FileSet.Replacements, FileSet.NumReplacements),
             clang_getCString(FileSet.Filename));
       continue;
     }
@@ -965,14 +964,14 @@ bool printRefactoringReplacements(
             clang_RefactoringReplacement_getAssociatedSymbolOccurrences(
                 Replacement);
         for (const CXSymbolOccurrence &SymbolOccurrence :
-             ArrayRef(Info.AssociatedSymbolOccurrences,
+             llvm::makeArrayRef(Info.AssociatedSymbolOccurrences,
                                 Info.NumAssociatedSymbolOccurrences)) {
           outs() << " [Symbol " << renameOccurrenceKindString(
                                        SymbolOccurrence.Kind, /*IsLocal*/ false,
                                        SymbolOccurrence.IsMacroExpansion)
                  << ' ' << SymbolOccurrence.SymbolIndex;
           for (const auto &Piece :
-               ArrayRef(SymbolOccurrence.NamePieces,
+               llvm::makeArrayRef(SymbolOccurrence.NamePieces,
                                   SymbolOccurrence.NumNamePieces)) {
             outs() << ' ' << Piece.Begin.Line << ":" << Piece.Begin.Column
                    << " -> " << Piece.End.Line << ":" << Piece.End.Column;
@@ -1004,17 +1003,17 @@ static std::string queryResultsForFile(StringRef Filename, StringRef Name,
                                Sub1);
 }
 
-static std::optional<std::pair<unsigned, unsigned>>
+static Optional<std::pair<unsigned, unsigned>>
 findSelectionLocInSource(StringRef Buffer, StringRef Label) {
   size_t I = Buffer.find(Label);
   if (I == StringRef::npos)
-    return std::nullopt;
+    return None;
   I = I + Label.size();
   auto LocParts =
       Buffer.substr(I, Buffer.find_first_of("\n/", I) - I).trim().split(":");
   unsigned CurrentLine = Buffer.take_front(I).count('\n') + 1;
   if (LocParts.second.empty())
-    return std::nullopt;
+    return None;
   StringRef LineString = LocParts.first;
   unsigned Line, Column;
   enum ExprKind { Literal, Add, Sub };
@@ -1022,27 +1021,27 @@ findSelectionLocInSource(StringRef Buffer, StringRef Label) {
                       ? Add
                       : LineString.startswith("-") ? Sub : Literal;
   if (LineString.drop_front(Expr != Literal ? 1 : 0).getAsInteger(10, Line))
-    return std::nullopt;
+    return None;
   if (Expr == Add)
     Line += CurrentLine;
   else if (Expr == Sub)
     Line = CurrentLine - Line;
   if (LocParts.second.getAsInteger(10, Column))
-    return std::nullopt;
+    return None;
   return std::make_pair(Line, Column);
 }
 
-static std::optional<ParsedSourceLocation>
-selectionLocForFile(StringRef Filename, StringRef Name) {
+static Optional<ParsedSourceLocation> selectionLocForFile(StringRef Filename,
+                                                          StringRef Name) {
   auto Buf = llvm::MemoryBuffer::getFile(Filename);
   if (!Buf)
-    return std::nullopt;
+    return None;
 
   StringRef Buffer = (*Buf)->getBuffer();
   std::string Label = Name.str() + ":";
   auto Start = findSelectionLocInSource(Buffer, Label);
   if (!Start)
-    return std::nullopt;
+    return None;
   // Create the resulting source location.
   // FIXME: Parse can be avoided.
   std::string Str;
@@ -1051,11 +1050,11 @@ selectionLocForFile(StringRef Filename, StringRef Name) {
   return ParsedSourceLocation::FromString(OS.str());
 }
 
-static std::optional<OldParsedSourceRange>
-selectionRangeForFile(StringRef Filename, StringRef Name) {
+static Optional<OldParsedSourceRange> selectionRangeForFile(StringRef Filename,
+                                                         StringRef Name) {
   auto Buf = llvm::MemoryBuffer::getFile(Filename);
   if (!Buf)
-    return std::nullopt;
+    return None;
 
   StringRef Buffer = (*Buf)->getBuffer();
   std::string BeginLabel = Name.str() + "-begin:";
@@ -1063,7 +1062,7 @@ selectionRangeForFile(StringRef Filename, StringRef Name) {
   auto Start = findSelectionLocInSource(Buffer, BeginLabel);
   auto End = findSelectionLocInSource(Buffer, EndLabel);
   if (!Start || !End)
-    return std::nullopt;
+    return None;
   // Create the resulting source range.
   // FIXME: Parse can be avoided.
   std::string Str;
@@ -1217,14 +1216,14 @@ int initiateAndPerformAction(CXTranslationUnit TU, ArrayRef<const char *> Args,
     return 1;
   }
 
-  auto ActionTypeOrNone = StringSwitch<std::optional<CXRefactoringActionType>>(
+  auto ActionTypeOrNone = StringSwitch<Optional<CXRefactoringActionType>>(
                               opts::initiateAndPerform::ActionName)
 #define REFACTORING_OPERATION_ACTION(Name, Spelling, Command)                  \
   .Case(Command, CXRefactor_##Name)
 #define REFACTORING_OPERATION_SUB_ACTION(Name, Parent, Spelling, Command)      \
   .Case(Command, CXRefactor_##Parent##_##Name)
 #include "clang/Tooling/Refactor/RefactoringActions.def"
-                              .Default(std::nullopt);
+                              .Default(None);
   if (!ActionTypeOrNone) {
     errs() << "error: invalid action '" << opts::initiateAndPerform::ActionName
            << "'\n";
@@ -1232,13 +1231,12 @@ int initiateAndPerformAction(CXTranslationUnit TU, ArrayRef<const char *> Args,
   }
   CXRefactoringActionType ActionType = *ActionTypeOrNone;
 
-  std::optional<bool> Initiated;
-  std::optional<std::string> InitiationFailureReason;
-  std::optional<std::string> LocationCandidateInformation;
+  Optional<bool> Initiated;
+  Optional<std::string> InitiationFailureReason;
+  Optional<std::string> LocationCandidateInformation;
   auto InitiateAndPerform =
       [&](const ParsedSourceLocation &Location, unsigned Column,
-          std::optional<OldParsedSourceRange> SelectionRange =
-              std::nullopt) -> bool {
+          Optional<OldParsedSourceRange> SelectionRange = None) -> bool {
     CXSourceLocation Loc =
         clang_getLocation(TU, clang_getFile(TU, Location.FileName.c_str()),
                           Location.Line, Column);

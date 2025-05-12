@@ -36,7 +36,7 @@ namespace {
     IntrusiveRefCntPtr<llvm::vfs::FileSystem> FS; // Only used for debug info.
     const HeaderSearchOptions &HeaderSearchOpts; // Only used for debug info.
     const PreprocessorOptions &PreprocessorOpts; // Only used for debug info.
-    const CodeGenOptions &CodeGenOpts;
+    const CodeGenOptions CodeGenOpts;  // Intentionally copied in.
 
     unsigned HandlingTopLevelDecls;
 
@@ -179,7 +179,6 @@ namespace {
     }
 
     bool HandleTopLevelDecl(DeclGroupRef DG) override {
-      // FIXME: Why not return false and abort parsing?
       if (Diags.hasErrorOccurred())
         return true;
 

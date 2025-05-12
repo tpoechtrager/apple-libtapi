@@ -1,6 +1,5 @@
 set(LLVM_LINK_COMPONENTS
   Support
-  TargetParser
   )
 
 add_clang_library(clangExtractAPI
@@ -9,6 +8,7 @@ add_clang_library(clangExtractAPI
   AvailabilityInfo.cpp
   ExtractAPIConsumer.cpp
   DeclarationFragments.cpp
+  Serialization/SerializerBase.cpp
   Serialization/SymbolGraphSerializer.cpp
   TypedefUnderlyingTypeResolver.cpp
 

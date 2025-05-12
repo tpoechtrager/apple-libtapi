@@ -1,7 +1,8 @@
 set(LLVM_LINK_COMPONENTS
   Core
-  Object
   ProfileData
+  Object
+  DebugInfoDWARF
   Support
   )
 

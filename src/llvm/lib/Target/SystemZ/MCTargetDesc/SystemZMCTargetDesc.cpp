@@ -236,11 +236,6 @@ createObjectTargetStreamer(MCStreamer &S, const MCSubtargetInfo &STI) {
   return new SystemZTargetELFStreamer(S);
 }
 
-static MCTargetStreamer *
-createNullTargetStreamer(MCStreamer &S) {
-  return new SystemZTargetStreamer(S);
-}
-
 extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeSystemZTargetMC() {
   // Register the MCAsmInfo.
   TargetRegistry::RegisterMCAsmInfo(getTheSystemZTarget(),
@@ -277,8 +272,4 @@ extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeSystemZTargetMC() {
   // Register the obj streamer
   TargetRegistry::RegisterObjectTargetStreamer(getTheSystemZTarget(),
                                                createObjectTargetStreamer);
-
-  // Register the null streamer
-  TargetRegistry::RegisterNullTargetStreamer(getTheSystemZTarget(),
-                                             createNullTargetStreamer);
 }

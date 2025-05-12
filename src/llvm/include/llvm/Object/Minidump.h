@@ -40,10 +40,9 @@ public:
     return getData().slice(Stream.Location.RVA, Stream.Location.DataSize);
   }
 
-  /// Returns the raw contents of the stream of the given type, or std::nullopt
-  /// if the file does not contain a stream of this type.
-  std::optional<ArrayRef<uint8_t>>
-  getRawStream(minidump::StreamType Type) const;
+  /// Returns the raw contents of the stream of the given type, or None if the
+  /// file does not contain a stream of this type.
+  Optional<ArrayRef<uint8_t>> getRawStream(minidump::StreamType Type) const;
 
   /// Returns the raw contents of an object given by the LocationDescriptor. An
   /// error is returned if the descriptor points outside of the minidump file.
@@ -189,7 +188,7 @@ private:
 
 template <typename T>
 Expected<const T &> MinidumpFile::getStream(minidump::StreamType Type) const {
-  if (std::optional<ArrayRef<uint8_t>> Stream = getRawStream(Type)) {
+  if (Optional<ArrayRef<uint8_t>> Stream = getRawStream(Type)) {
     if (Stream->size() >= sizeof(T))
       return *reinterpret_cast<const T *>(Stream->data());
     return createEOFError();

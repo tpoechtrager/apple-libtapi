@@ -71,6 +71,8 @@ static cl::opt<bool> DisableTriangleR("disable-ifcvt-triangle-rev",
                                       cl::init(false), cl::Hidden);
 static cl::opt<bool> DisableTriangleF("disable-ifcvt-triangle-false",
                                       cl::init(false), cl::Hidden);
+static cl::opt<bool> DisableTriangleFR("disable-ifcvt-triangle-false-rev",
+                                       cl::init(false), cl::Hidden);
 static cl::opt<bool> DisableDiamond("disable-ifcvt-diamond",
                                     cl::init(false), cl::Hidden);
 static cl::opt<bool> DisableForkedDiamond("disable-ifcvt-forked-diamond",
@@ -187,16 +189,16 @@ namespace {
     std::vector<BBInfo> BBAnalysis;
     TargetSchedModel SchedModel;
 
-    const TargetLoweringBase *TLI = nullptr;
-    const TargetInstrInfo *TII = nullptr;
-    const TargetRegisterInfo *TRI = nullptr;
-    const MachineBranchProbabilityInfo *MBPI = nullptr;
-    MachineRegisterInfo *MRI = nullptr;
+    const TargetLoweringBase *TLI;
+    const TargetInstrInfo *TII;
+    const TargetRegisterInfo *TRI;
+    const MachineBranchProbabilityInfo *MBPI;
+    MachineRegisterInfo *MRI;
 
     LivePhysRegs Redefs;
 
-    bool PreRegAlloc = true;
-    bool MadeChange = false;
+    bool PreRegAlloc;
+    bool MadeChange;
     int FnNum = -1;
     std::function<bool(const MachineFunction &)> PredicateFtor;
 
@@ -530,6 +532,7 @@ bool IfConverter::runOnMachineFunction(MachineFunction &MF) {
         if (DisableTriangle && !isFalse && !isRev) break;
         if (DisableTriangleR && !isFalse && isRev) break;
         if (DisableTriangleF && isFalse && !isRev) break;
+        if (DisableTriangleFR && isFalse && isRev) break;
         LLVM_DEBUG(dbgs() << "Ifcvt (Triangle");
         if (isFalse)
           LLVM_DEBUG(dbgs() << " false");
@@ -1509,9 +1512,19 @@ static void UpdatePredRedefs(MachineInstr &MI, LivePhysRegs &Redefs) {
       MIB.addReg(Reg, RegState::Implicit | RegState::Define);
       continue;
     }
-    if (any_of(TRI->subregs_inclusive(Reg),
-               [&](MCPhysReg S) { return LiveBeforeMI.count(S); }))
+    if (LiveBeforeMI.count(Reg))
       MIB.addReg(Reg, RegState::Implicit);
+    else {
+      bool HasLiveSubReg = false;
+      for (MCSubRegIterator S(Reg, TRI); S.isValid(); ++S) {
+        if (!LiveBeforeMI.count(*S))
+          continue;
+        HasLiveSubReg = true;
+        break;
+      }
+      if (HasLiveSubReg)
+        MIB.addReg(Reg, RegState::Implicit);
+    }
   }
 }
 
@@ -1945,15 +1958,17 @@ bool IfConverter::IfConvertDiamondCommon(
         } else if (!RedefsByFalse.count(Reg)) {
           // These are defined before ctrl flow reach the 'false' instructions.
           // They cannot be modified by the 'true' instructions.
-          for (MCPhysReg SubReg : TRI->subregs_inclusive(Reg))
-            ExtUses.insert(SubReg);
+          for (MCSubRegIterator SubRegs(Reg, TRI, /*IncludeSelf=*/true);
+               SubRegs.isValid(); ++SubRegs)
+            ExtUses.insert(*SubRegs);
         }
       }
 
       for (MCPhysReg Reg : Defs) {
         if (!ExtUses.count(Reg)) {
-          for (MCPhysReg SubReg : TRI->subregs_inclusive(Reg))
-            RedefsByFalse.insert(SubReg);
+          for (MCSubRegIterator SubRegs(Reg, TRI, /*IncludeSelf=*/true);
+               SubRegs.isValid(); ++SubRegs)
+            RedefsByFalse.insert(*SubRegs);
         }
       }
     }
@@ -2228,15 +2243,6 @@ void IfConverter::MergeBlocks(BBInfo &ToBBI, BBInfo &FromBBI, bool AddEdges) {
   MachineBasicBlock &FromMBB = *FromBBI.BB;
   assert(!FromMBB.hasAddressTaken() &&
          "Removing a BB whose address is taken!");
-
-  // If we're about to splice an INLINEASM_BR from FromBBI, we need to update
-  // ToBBI's successor list accordingly.
-  if (FromMBB.mayHaveInlineAsmBr())
-    for (MachineInstr &MI : FromMBB)
-      if (MI.getOpcode() == TargetOpcode::INLINEASM_BR)
-        for (MachineOperand &MO : MI.operands())
-          if (MO.isMBB() && !ToBBI.BB->isSuccessor(MO.getMBB()))
-            ToBBI.BB->addSuccessor(MO.getMBB(), BranchProbability::getZero());
 
   // In case FromMBB contains terminators (e.g. return instruction),
   // first move the non-terminator instructions, then the terminators.

@@ -24,7 +24,6 @@
 #include "clang/Basic/OperatorKinds.h"
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/Support/Debug.h"
-#include <optional>
 
 #define DEBUG_TYPE "body-farm"
 
@@ -698,9 +697,9 @@ static Stmt *create_OSAtomicCompareAndSwap(ASTContext &C, const FunctionDecl *D)
 }
 
 Stmt *BodyFarm::getBody(const FunctionDecl *D) {
-  std::optional<Stmt *> &Val = Bodies[D];
+  Optional<Stmt *> &Val = Bodies[D];
   if (Val)
-    return *Val;
+    return Val.value();
 
   Val = nullptr;
 
@@ -717,7 +716,6 @@ Stmt *BodyFarm::getBody(const FunctionDecl *D) {
     switch (BuiltinID) {
     case Builtin::BIas_const:
     case Builtin::BIforward:
-    case Builtin::BIforward_like:
     case Builtin::BImove:
     case Builtin::BImove_if_noexcept:
       FF = create_std_move_forward;
@@ -874,9 +872,9 @@ Stmt *BodyFarm::getBody(const ObjCMethodDecl *D) {
   if (!D->isImplicit())
     return nullptr;
 
-  std::optional<Stmt *> &Val = Bodies[D];
+  Optional<Stmt *> &Val = Bodies[D];
   if (Val)
-    return *Val;
+    return Val.value();
   Val = nullptr;
 
   // For now, we only synthesize getters.

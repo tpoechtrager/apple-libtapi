@@ -596,6 +596,20 @@ static void checkAsyncFuncPointer(const Instruction *I, Value *V) {
   auto *AsyncFuncPtrAddr = dyn_cast<GlobalVariable>(V->stripPointerCasts());
   if (!AsyncFuncPtrAddr)
     fail(I, "llvm.coro.id.async async function pointer not a global", V);
+
+  if (AsyncFuncPtrAddr->getType()->isOpaquePointerTy())
+    return;
+
+  auto *StructTy = cast<StructType>(
+      AsyncFuncPtrAddr->getType()->getNonOpaquePointerElementType());
+  if (StructTy->isOpaque() || !StructTy->isPacked() ||
+      StructTy->getNumElements() != 2 ||
+      !StructTy->getElementType(0)->isIntegerTy(32) ||
+      !StructTy->getElementType(1)->isIntegerTy(32))
+    fail(I,
+         "llvm.coro.id.async async function pointer argument's type is not "
+         "<{i32, i32}>",
+         V);
 }
 
 void CoroIdAsyncInst::checkWellFormed() const {
@@ -611,15 +625,19 @@ void CoroIdAsyncInst::checkWellFormed() const {
 static void checkAsyncContextProjectFunction(const Instruction *I,
                                              Function *F) {
   auto *FunTy = cast<FunctionType>(F->getValueType());
-  if (!FunTy->getReturnType()->isPointerTy())
+  Type *Int8Ty = Type::getInt8Ty(F->getContext());
+  auto *RetPtrTy = dyn_cast<PointerType>(FunTy->getReturnType());
+  if (!RetPtrTy || !RetPtrTy->isOpaqueOrPointeeTypeMatches(Int8Ty))
     fail(I,
          "llvm.coro.suspend.async resume function projection function must "
-         "return a ptr type",
+         "return an i8* type",
          F);
-  if (FunTy->getNumParams() != 1 || !FunTy->getParamType(0)->isPointerTy())
+  if (FunTy->getNumParams() != 1 || !FunTy->getParamType(0)->isPointerTy() ||
+      !cast<PointerType>(FunTy->getParamType(0))
+           ->isOpaqueOrPointeeTypeMatches(Int8Ty))
     fail(I,
          "llvm.coro.suspend.async resume function projection function must "
-         "take one ptr type as parameter",
+         "take one i8* type as parameter",
          F);
 }
 

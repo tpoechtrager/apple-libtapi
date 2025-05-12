@@ -12,9 +12,12 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Transforms/Instrumentation.h"
+#include "llvm-c/Initialization.h"
+#include "llvm/ADT/Triple.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Module.h"
-#include "llvm/TargetParser/Triple.h"
+#include "llvm/InitializePasses.h"
+#include "llvm/PassRegistry.h"
 
 using namespace llvm;
 
@@ -83,4 +86,20 @@ Comdat *llvm::getOrCreateFunctionComdat(Function &F, Triple &T) {
     C->setSelectionKind(Comdat::NoDeduplicate);
   F.setComdat(C);
   return C;
+}
+
+/// initializeInstrumentation - Initialize all passes in the TransformUtils
+/// library.
+void llvm::initializeInstrumentation(PassRegistry &Registry) {
+  initializeMemProfilerLegacyPassPass(Registry);
+  initializeModuleMemProfilerLegacyPassPass(Registry);
+  initializeBoundsCheckingLegacyPassPass(Registry);
+  initializeDataFlowSanitizerLegacyPassPass(Registry);
+  initializeSoftPointerAuthLegacyPassPass(Registry);
+}
+
+/// LLVMInitializeInstrumentation - C binding for
+/// initializeInstrumentation.
+void LLVMInitializeInstrumentation(LLVMPassRegistryRef R) {
+  initializeInstrumentation(*unwrap(R));
 }

@@ -47,16 +47,19 @@ std::future<AsyncErrorValue> ActionCache::putFuture(const CacheKey &ActionKey,
 
 void ActionCache::getImplAsync(
     ArrayRef<uint8_t> ResolvedKey, bool Globally,
-    unique_function<void(Expected<std::optional<CASID>>)> Callback,
-    std::unique_ptr<Cancellable> *) const {
+    unique_function<void(Expected<std::optional<CASID>>)> Callback) const {
   // The default implementation is synchronous.
-  return Callback(getImpl(ResolvedKey, Globally));
+  Optional<CASID> Val;
+  if (Error E = getImpl(ResolvedKey, Globally).moveInto(Val))
+    return Callback(std::move(E));
+  if (Val)
+    return Callback(std::move(*Val));
+  return Callback(std::nullopt);
 }
 
 void ActionCache::putImplAsync(ArrayRef<uint8_t> ResolvedKey,
                                const CASID &Result, bool Globally,
-                               unique_function<void(Error)> Callback,
-                               std::unique_ptr<Cancellable> *) {
+                               unique_function<void(Error)> Callback) {
   // The default implementation is synchronous.
   return Callback(putImpl(ResolvedKey, Result, Globally));
 }

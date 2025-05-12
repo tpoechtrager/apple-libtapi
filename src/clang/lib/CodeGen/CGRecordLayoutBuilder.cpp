@@ -162,7 +162,7 @@ struct CGRecordLowering {
     return CharUnits::fromQuantity(DataLayout.getTypeAllocSize(Type));
   }
   CharUnits getAlignment(llvm::Type *Type) {
-    return CharUnits::fromQuantity(DataLayout.getABITypeAlign(Type));
+    return CharUnits::fromQuantity(DataLayout.getABITypeAlignment(Type));
   }
   bool isZeroInitializable(const FieldDecl *FD) {
     return Types.isZeroInitializable(FD->getType());
@@ -182,7 +182,7 @@ struct CGRecordLowering {
                        llvm::Type *StorageType);
   /// Lowers an ASTRecordLayout to a llvm type.
   void lower(bool NonVirtualBaseType);
-  void lowerUnion(bool isNoUniqueAddress);
+  void lowerUnion();
   void accumulateFields();
   void accumulateBitFields(RecordDecl::field_iterator Field,
                            RecordDecl::field_iterator FieldEnd);
@@ -280,7 +280,7 @@ void CGRecordLowering::lower(bool NVBaseType) {
   //    CodeGenTypes::ComputeRecordLayout.
   CharUnits Size = NVBaseType ? Layout.getNonVirtualSize() : Layout.getSize();
   if (D->isUnion()) {
-    lowerUnion(NVBaseType);
+    lowerUnion();
     computeVolatileBitfields();
     return;
   }
@@ -308,9 +308,8 @@ void CGRecordLowering::lower(bool NVBaseType) {
   computeVolatileBitfields();
 }
 
-void CGRecordLowering::lowerUnion(bool isNoUniqueAddress) {
-  CharUnits LayoutSize =
-      isNoUniqueAddress ? Layout.getDataSize() : Layout.getSize();
+void CGRecordLowering::lowerUnion() {
+  CharUnits LayoutSize = Layout.getSize();
   llvm::Type *StorageType = nullptr;
   bool SeenNamedMember = false;
   // Iterate through the fields setting bitFieldInfo and the Fields array. Also
@@ -366,12 +365,7 @@ void CGRecordLowering::lowerUnion(bool isNoUniqueAddress) {
   FieldTypes.push_back(StorageType);
   appendPaddingBytes(LayoutSize - getSize(StorageType));
   // Set packed if we need it.
-  const auto StorageAlignment = getAlignment(StorageType);
-  assert((Layout.getSize() % StorageAlignment == 0 ||
-          Layout.getDataSize() % StorageAlignment) &&
-         "Union's standard layout and no_unique_address layout must agree on "
-         "packedness");
-  if (Layout.getDataSize() % StorageAlignment)
+  if (LayoutSize % getAlignment(StorageType))
     Packed = true;
 }
 
@@ -385,14 +379,9 @@ void CGRecordLowering::accumulateFields() {
       for (++Field; Field != FieldEnd && Field->isBitField(); ++Field);
       accumulateBitFields(Start, Field);
     } else if (!Field->isZeroSize(Context)) {
-      // Use base subobject layout for the potentially-overlapping field,
-      // as it is done in RecordLayoutBuilder
       Members.push_back(MemberInfo(
           bitsToCharUnits(getFieldBitOffset(*Field)), MemberInfo::Field,
-          Field->isPotentiallyOverlapping()
-              ? getStorageType(Field->getType()->getAsCXXRecordDecl())
-              : getStorageType(*Field),
-          *Field));
+          getStorageType(*Field), *Field));
       ++Field;
     } else {
       ++Field;
@@ -893,7 +882,7 @@ CodeGenTypes::ComputeRecordLayout(const RecordDecl *D, llvm::StructType *Ty) {
 
   // If we're in C++, compute the base subobject type.
   llvm::StructType *BaseTy = nullptr;
-  if (isa<CXXRecordDecl>(D)) {
+  if (isa<CXXRecordDecl>(D) && !D->isUnion() && !D->hasAttr<FinalAttr>()) {
     BaseTy = Ty;
     if (Builder.Layout.getNonVirtualSize() != Builder.Layout.getSize()) {
       CGRecordLowering BaseBuilder(*this, D, /*Packed=*/Builder.Packed);

@@ -22,7 +22,7 @@
 namespace llvm {
 
 class EdgeBundles : public MachineFunctionPass {
-  const MachineFunction *MF = nullptr;
+  const MachineFunction *MF;
 
   /// EC - Each edge bundle is an equivalence class. The keys are:
   ///   2*BB->getNumber()   -> Ingoing bundle.

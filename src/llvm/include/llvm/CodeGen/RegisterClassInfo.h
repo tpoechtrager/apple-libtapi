@@ -38,7 +38,7 @@ class RegisterClassInfo {
     RCInfo() = default;
 
     operator ArrayRef<MCPhysReg>() const {
-      return ArrayRef(Order.get(), NumRegs);
+      return makeArrayRef(Order.get(), NumRegs);
     }
   };
 

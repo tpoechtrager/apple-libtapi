@@ -20,6 +20,14 @@ namespace driver {
 namespace tools {
 namespace m68k {
 
+enum class FloatABI {
+  Invalid,
+  Soft,
+  Hard,
+};
+
+FloatABI getM68kFloatABI(const Driver &D, const llvm::opt::ArgList &Args);
+
 std::string getM68kTargetCPU(const llvm::opt::ArgList &Args);
 
 void getM68kTargetFeatures(const Driver &D, const llvm::Triple &Triple,

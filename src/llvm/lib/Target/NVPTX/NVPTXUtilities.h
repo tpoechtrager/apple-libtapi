@@ -24,8 +24,6 @@
 
 namespace llvm {
 
-class TargetMachine;
-
 void clearAnnotationCache(const Module *);
 
 bool findOneNVVMAnnotation(const GlobalValue *, const std::string &,
@@ -72,8 +70,6 @@ inline unsigned promoteScalarArgumentSize(unsigned size) {
   else
     return size;
 }
-
-bool shouldEmitPTXNoReturn(const Value *V, const TargetMachine &TM);
 }
 
 #endif

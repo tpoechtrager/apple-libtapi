@@ -16,7 +16,7 @@
 #include "clang/AST/OperationKinds.h"
 #include "clang/AST/Stmt.h"
 #include "clang/Basic/OperatorKinds.h"
-#include <optional>
+#include "llvm/ADT/Optional.h"
 #include <tuple>
 
 namespace clang {
@@ -67,9 +67,8 @@ Nullability getNullabilityAnnotation(QualType Type);
 
 /// Try to parse the value of a defined preprocessor macro. We can only parse
 /// simple expressions that consist of an optional minus sign token and then a
-/// token for an integer. If we cannot parse the value then std::nullopt is
-/// returned.
-std::optional<int> tryExpandAsInteger(StringRef Macro, const Preprocessor &PP);
+/// token for an integer. If we cannot parse the value then None is returned.
+llvm::Optional<int> tryExpandAsInteger(StringRef Macro, const Preprocessor &PP);
 
 class OperatorKind {
   union {
@@ -88,7 +87,7 @@ public:
     return Op.Bin;
   }
 
-  std::optional<BinaryOperatorKind> GetBinaryOp() const {
+  Optional<BinaryOperatorKind> GetBinaryOp() const {
     if (IsBinary)
       return Op.Bin;
     return {};
@@ -100,7 +99,7 @@ public:
     return Op.Un;
   }
 
-  std::optional<UnaryOperatorKind> GetUnaryOp() const {
+  Optional<UnaryOperatorKind> GetUnaryOp() const {
     if (!IsBinary)
       return Op.Un;
     return {};

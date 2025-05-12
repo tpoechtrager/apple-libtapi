@@ -25,11 +25,11 @@
 #include "clang/Frontend/TextDiagnosticPrinter.h"
 #include "clang/Lex/HeaderMap.h"
 #include "clang/Lex/PreprocessorOptions.h"
+#include "llvm/ADT/Triple.h"
 #include "llvm/Option/ArgList.h"
 #include "llvm/Option/Option.h"
+#include "llvm/Support/Host.h"
 #include "llvm/Support/Path.h"
-#include "llvm/TargetParser/Host.h"
-#include "llvm/TargetParser/Triple.h"
 #include "llvm/TextAPI/TextAPIError.h"
 
 using namespace llvm;
@@ -154,7 +154,7 @@ static bool runClang(FrontendContext &context, ArrayRef<std::string> options,
   // Since the input might only be virtual, don't check whether it exists.
   driver->setCheckInputsExist(false);
   const std::unique_ptr<clang::driver::Compilation> compilation(
-      driver->BuildCompilation(llvm::ArrayRef(argv)));
+      driver->BuildCompilation(llvm::makeArrayRef(argv)));
   if (!compilation)
     return false;
   const llvm::opt::ArgStringList *const cc1Args =
@@ -203,7 +203,8 @@ static std::string getClangExecutablePath() {
   // the default search PATH.
   auto mainExecutable = sys::fs::getMainExecutable("tapi", &staticSymbol);
   StringRef toolchainBinDir = sys::path::parent_path(mainExecutable);
-  auto clangBinary = sys::findProgramByName("clang", ArrayRef(toolchainBinDir));
+  auto clangBinary =
+      sys::findProgramByName("clang", makeArrayRef(toolchainBinDir));
   if (clangBinary.getError())
     clangBinary = sys::findProgramByName("clang");
   if (auto ec = clangBinary.getError())
@@ -326,7 +327,7 @@ extern Expected<FrontendContext> runFrontend(const FrontendJob &job,
     return make_error<TextAPIError>(TextAPIErrorCode::EmptyResults);
 
   if (job.verbose && input)
-    outs() << job.label << " Headers:\n" << input->getBuffer() << "\n";
+    outs() << getName(job.type) << " Headers:\n" << input->getBuffer() << "\n";
 
   std::string clangExecutablePath;
   if (job.clangExecutablePath)
@@ -379,9 +380,6 @@ extern Expected<FrontendContext> runFrontend(const FrontendJob &job,
   // Add a default macro for TAPI.
   args.emplace_back("-D__clang_tapi__=1");
 
-  // FIXME: Disable implicit definitions for TARGET_OS* rdar://121206188
-  args.emplace_back("-fno-define-target-os-macros");
-
   for (auto &macro : job.macros) {
     if (macro.second)
       args.emplace_back("-U" + macro.first);
@@ -410,10 +408,6 @@ extern Expected<FrontendContext> runFrontend(const FrontendJob &job,
   for (const auto &path : job.systemIncludePaths)
     args.emplace_back("-isystem" + path);
 
-  // Add AFTER header search paths.
-  for (const auto &path : job.afterIncludePaths)
-    args.emplace_back("-idirafter" + path);
-
   // Add the framework search paths.
   for (const auto &path : job.frameworkPaths)
     args.emplace_back("-F" + path);
@@ -436,6 +430,17 @@ extern Expected<FrontendContext> runFrontend(const FrontendJob &job,
     }
   }
 
+  // Also add the private framework path, since it is not added by default.
+  if (job.isysroot.empty())
+    args.emplace_back("-iframework /System/Library/PrivateFrameworks");
+  else {
+    SmallString<PATH_MAX> path(job.isysroot);
+    sys::path::append(path, "/System/Library/PrivateFrameworks");
+    std::string tmp("-iframework");
+    tmp += path.str();
+    args.emplace_back(tmp);
+  }
+
   // For c++ and objective-c++, add default stdlib to be libc++.
   if (job.language == clang::Language::CXX ||
       job.language == clang::Language::ObjCXX)
@@ -444,10 +449,6 @@ extern Expected<FrontendContext> runFrontend(const FrontendJob &job,
   // Add extra clang arguments.
   for (const auto &arg : job.clangExtraArgs)
     args.emplace_back(arg);
-
-  // Add prefix headers.
-  for (const auto &header : job.prefixHeaders)
-    args.emplace_back("-include" + header);
 
   args.emplace_back(inputFilePath);
   if (runClang(context, args, std::move(input)))

@@ -31,10 +31,10 @@ std::vector<Output> getAllOutputs(CompileJobCacheResult Result) {
 TEST(CompileJobCacheResultTest, Empty) {
   std::unique_ptr<ObjectStore> CAS = createInMemoryCAS();
   CompileJobCacheResult::Builder B;
-  std::optional<ObjectRef> Result;
+  Optional<ObjectRef> Result;
   ASSERT_THAT_ERROR(B.build(*CAS).moveInto(Result), Succeeded());
 
-  std::optional<CompileJobCacheResult> Proxy;
+  Optional<CompileJobCacheResult> Proxy;
   CompileJobResultSchema Schema(*CAS);
   ASSERT_THAT_ERROR(Schema.load(*Result).moveInto(Proxy), Succeeded());
 
@@ -56,10 +56,10 @@ TEST(CompileJobCacheResultTest, AddOutputs) {
   for (const auto &Output : Expected)
     B.addOutput(Output.Kind, Output.Object);
 
-  std::optional<ObjectRef> Result;
+  Optional<ObjectRef> Result;
   ASSERT_THAT_ERROR(B.build(*CAS).moveInto(Result), Succeeded());
 
-  std::optional<CompileJobCacheResult> Proxy;
+  Optional<CompileJobCacheResult> Proxy;
   CompileJobResultSchema Schema(*CAS);
   ASSERT_THAT_ERROR(Schema.load(*Result).moveInto(Proxy), Succeeded());
 
@@ -89,10 +89,10 @@ TEST(CompileJobCacheResultTest, AddKindMap) {
 
   EXPECT_THAT_ERROR(B.addOutput("/other", Obj3), llvm::Failed());
 
-  std::optional<ObjectRef> Result;
+  Optional<ObjectRef> Result;
   ASSERT_THAT_ERROR(B.build(*CAS).moveInto(Result), Succeeded());
 
-  std::optional<CompileJobCacheResult> Proxy;
+  Optional<CompileJobCacheResult> Proxy;
   CompileJobResultSchema Schema(*CAS);
   ASSERT_THAT_ERROR(Schema.load(*Result).moveInto(Proxy), Succeeded());
 

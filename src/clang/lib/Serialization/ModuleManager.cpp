@@ -42,18 +42,8 @@ using namespace clang;
 using namespace serialization;
 
 ModuleFile *ModuleManager::lookupByFileName(StringRef Name) const {
-  auto Entry = FileMgr.getOptionalFileRef(Name, /*OpenFile=*/false,
-                                          /*CacheFailure=*/false);
-#if !defined(__APPLE__)
-  if (Entry) {
-    // On Linux ext4 FileManager's inode caching system does not
-    // provide us correct behaviour for ModuleCache directories.
-    // inode can be reused after PCM delete resulting in cache misleading.
-    if (auto BypassFile = FileMgr.getBypassFile(*Entry))
-      Entry = *BypassFile;
-  }
-#endif
-
+  auto Entry = FileMgr.getFile(Name, /*OpenFile=*/false,
+                               /*CacheFailure=*/false);
   if (Entry)
     return lookup(*Entry);
 
@@ -69,7 +59,11 @@ ModuleFile *ModuleManager::lookupByModuleName(StringRef Name) const {
 }
 
 ModuleFile *ModuleManager::lookup(const FileEntry *File) const {
-  return Modules.lookup(File);
+  auto Known = Modules.find(File);
+  if (Known == Modules.end())
+    return nullptr;
+
+  return Known->second;
 }
 
 std::unique_ptr<llvm::MemoryBuffer>
@@ -450,25 +444,22 @@ void ModuleManager::visit(llvm::function_ref<bool(ModuleFile &M)> Visitor,
 
 bool ModuleManager::lookupModuleFile(StringRef FileName, off_t ExpectedSize,
                                      time_t ExpectedModTime,
-                                     OptionalFileEntryRef &File) {
-  File = std::nullopt;
+                                     Optional<FileEntryRef> &File) {
+  File = None;
   if (FileName == "-")
     return false;
 
   // Open the file immediately to ensure there is no race between stat'ing and
   // opening the file.
-  OptionalFileEntryRef FileOrErr =
-      FileMgr.getOptionalFileRef(FileName, /*OpenFile=*/true,
-                                 /*CacheFailure=*/false);
+  Optional<FileEntryRef> FileOrErr =
+      expectedToOptional(FileMgr.getFileRef(FileName, /*OpenFile=*/true,
+                                            /*CacheFailure=*/false));
 #if !defined(__APPLE__)
   if (FileOrErr) {
     // On Linux ext4 FileManager's inode caching system does not
     // provide us correct behaviour for ModuleCache directories.
     // inode can be reused after PCM delete resulting in cache misleading.
-    // Only use the bypass file if bypass succeed in case the underlying file
-    // system doesn't support bypass (thus there is no need for the workaround).
-    if (auto Bypass = FileMgr.getBypassFile(*FileOrErr))
-      FileOrErr = *Bypass;
+    FileOrErr = FileMgr.getBypassFile(*FileOrErr);
   }
 #endif
 

@@ -51,13 +51,12 @@ extern const char *RunAsVoidFunctionWrapperName;
 extern const char *RunAsIntFunctionWrapperName;
 
 using SPSSimpleExecutorDylibManagerOpenSignature =
-    shared::SPSExpected<shared::SPSExecutorAddr>(shared::SPSExecutorAddr,
-                                                 shared::SPSString, uint64_t);
+    shared::SPSExpected<uint64_t>(shared::SPSExecutorAddr, shared::SPSString,
+                                  uint64_t);
 
 using SPSSimpleExecutorDylibManagerLookupSignature =
     shared::SPSExpected<shared::SPSSequence<shared::SPSExecutorAddr>>(
-        shared::SPSExecutorAddr, shared::SPSExecutorAddr,
-        shared::SPSRemoteSymbolLookupSet);
+        shared::SPSExecutorAddr, uint64_t, shared::SPSRemoteSymbolLookupSet);
 
 using SPSSimpleExecutorMemoryManagerReserveSignature =
     shared::SPSExpected<shared::SPSExecutorAddr>(shared::SPSExecutorAddr,

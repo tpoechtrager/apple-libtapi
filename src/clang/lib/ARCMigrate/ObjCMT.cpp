@@ -153,9 +153,10 @@ protected:
   bool canModifyFile(StringRef Path) {
     if (AllowListFilenames.empty())
       return true;
-    return AllowListFilenames.contains(llvm::sys::path::filename(Path));
+    return AllowListFilenames.find(llvm::sys::path::filename(Path)) !=
+           AllowListFilenames.end();
   }
-  bool canModifyFile(OptionalFileEntryRef FE) {
+  bool canModifyFile(Optional<FileEntryRef> FE) {
     if (!FE)
       return false;
     return canModifyFile(FE->getName());
@@ -201,7 +202,7 @@ ObjCMigrateAction::CreateASTConsumer(CompilerInstance &CI, StringRef InFile) {
   Consumers.push_back(WrapperFrontendAction::CreateASTConsumer(CI, InFile));
   Consumers.push_back(std::make_unique<ObjCMigrateASTConsumer>(
       MigrateDir, ObjCMigAction, Remapper, CompInst->getFileManager(), PPRec,
-      CompInst->getPreprocessor(), false, std::nullopt));
+      CompInst->getPreprocessor(), false, None));
   return std::make_unique<MultiplexConsumer>(std::move(Consumers));
 }
 
@@ -1957,8 +1958,7 @@ void ObjCMigrateASTConsumer::HandleTranslationUnit(ASTContext &Ctx) {
         I = rewriter.buffer_begin(), E = rewriter.buffer_end(); I != E; ++I) {
     FileID FID = I->first;
     RewriteBuffer &buf = I->second;
-    OptionalFileEntryRef file =
-        Ctx.getSourceManager().getFileEntryRefForID(FID);
+    Optional<FileEntryRef> file = Ctx.getSourceManager().getFileEntryRefForID(FID);
     assert(file);
     SmallString<512> newText;
     llvm::raw_svector_ostream vecOS(newText);
@@ -2028,7 +2028,7 @@ MigrateSourceAction::CreateASTConsumer(CompilerInstance &CI, StringRef InFile) {
 
 namespace {
 struct EditEntry {
-  OptionalFileEntryRef File;
+  Optional<FileEntryRef> File;
   unsigned Offset = 0;
   unsigned RemoveLen = 0;
   std::string Text;

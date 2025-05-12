@@ -22,8 +22,11 @@
 
 namespace llvm {
 
+class FunctionPass;
 class Module;
 class Function;
+
+FunctionPass *createLintLegacyPassPass();
 
 /// Lint a module.
 ///

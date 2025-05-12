@@ -40,7 +40,6 @@
 #include "llvm/Pass.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Target/TargetMachine.h"
-#include <optional>
 
 using namespace llvm;
 
@@ -91,7 +90,7 @@ bool IndirectBrExpandPass::runOnFunction(Function &F) {
     return false;
   TLI = STI.getTargetLowering();
 
-  std::optional<DomTreeUpdater> DTU;
+  Optional<DomTreeUpdater> DTU;
   if (auto *DTWP = getAnalysisIfAvailable<DominatorTreeWrapperPass>())
     DTU.emplace(DTWP->getDomTree(), DomTreeUpdater::UpdateStrategy::Lazy);
 
@@ -199,7 +198,7 @@ bool IndirectBrExpandPass::runOnFunction(Function &F) {
       CommonITy = ITy;
   }
 
-  auto GetSwitchValue = [CommonITy](IndirectBrInst *IBr) {
+  auto GetSwitchValue = [DL, CommonITy](IndirectBrInst *IBr) {
     return CastInst::CreatePointerCast(
         IBr->getAddress(), CommonITy,
         Twine(IBr->getAddress()->getName()) + ".switch_cast", IBr);

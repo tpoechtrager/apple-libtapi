@@ -98,6 +98,9 @@
 /* Define if zstd compression is available */
 #cmakedefine01 LLVM_ENABLE_ZSTD
 
+/* Define if LLVM was built with a dependency to the libtensorflow dynamic library */
+#cmakedefine LLVM_HAVE_TF_API
+
 /* Define if LLVM is using tflite instead of libtensorflow */
 #cmakedefine LLVM_HAVE_TFLITE
 
@@ -122,8 +125,5 @@
 
 /* Define to 1 if you have the DIA SDK installed, and to 0 if you don't. */
 #cmakedefine01 LLVM_ENABLE_DIA_SDK
-
-/* Define if plugins enabled */
-#cmakedefine LLVM_ENABLE_PLUGINS
 
 #endif

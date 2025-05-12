@@ -3,7 +3,6 @@ set(LLVM_LINK_COMPONENTS
   Core
   FrontendOpenMP
   Support
-  TargetParser
   )
 
 # FIXME: the entry points to the interpreter should be moved out of clangAST
@@ -73,8 +72,6 @@ add_clang_library(clangAST
   Interp/EvalEmitter.cpp
   Interp/Frame.cpp
   Interp/Function.cpp
-  Interp/InterpBuiltin.cpp
-  Interp/Floating.cpp
   Interp/Interp.cpp
   Interp/InterpBlock.cpp
   Interp/InterpFrame.cpp
@@ -133,5 +130,4 @@ add_clang_library(clangAST
   ClangAttrDocTable
   Opcodes
   omp_gen
-  intrinsics_gen
   )

@@ -1,7 +1,6 @@
 set(LLVM_LINK_COMPONENTS
   Core
   Support
-  TargetParser
   )
 
 add_clang_unittest(ClangCodeGenTests
@@ -17,6 +16,7 @@ clang_target_link_libraries(ClangCodeGenTests
   clangBasic
   clangCodeGen
   clangFrontend
+  clangInterpreter
   clangLex
   clangParse
   clangSerialization

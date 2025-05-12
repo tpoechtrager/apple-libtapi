@@ -71,8 +71,3 @@ PreservedAnalyses ShaderFlagsAnalysisPrinter::run(Module &M,
   Flags.print(OS);
   return PreservedAnalyses::all();
 }
-
-char ShaderFlagsAnalysisWrapper::ID = 0;
-
-INITIALIZE_PASS(ShaderFlagsAnalysisWrapper, "dx-shader-flag-analysis",
-                "DXIL Shader Flag Analysis", true, true)

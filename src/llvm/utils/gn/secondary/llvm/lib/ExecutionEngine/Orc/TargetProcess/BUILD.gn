@@ -3,7 +3,6 @@ static_library("TargetProcess") {
   deps = [
     "//llvm/lib/ExecutionEngine/Orc/Shared",
     "//llvm/lib/Support",
-    "//llvm/lib/TargetParser",
   ]
   sources = [
     "ExecutorSharedMemoryMapperService.cpp",

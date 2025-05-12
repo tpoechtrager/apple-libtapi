@@ -27,12 +27,12 @@ bool JSONReader::canRead(file_magic magic, MemoryBufferRef memBufferRef,
                          FileType types) const {
   if (!memBufferRef.getBufferIdentifier().endswith(".tbd"))
     return false;
-  auto result = TextAPIReader::canRead(memBufferRef);
+  auto result = TextAPIReader::get(memBufferRef);
   if (!result) {
     consumeError(result.takeError());
     return false;
   }
-  return *result >= TBD_V5;
+  return *result && (*result)->getFileType() >= TBD_V5;
 }
 
 Expected<APIs> JSONReader::readFile(std::unique_ptr<MemoryBuffer> memBuffer,
@@ -43,8 +43,6 @@ Expected<APIs> JSONReader::readFile(std::unique_ptr<MemoryBuffer> memBuffer,
   if (!interfaceOrErr)
     return interfaceOrErr.takeError();
   auto interface = std::move(*interfaceOrErr);
-  assert(interface->getFileType() >= TBD_V5 &&
-         "expected json supported tapi file.");
 
   APIs apis;
   addInterfaceFileToAPIs(apis, interface.get());
@@ -59,7 +57,7 @@ Error JSONWriter::writeFile(raw_ostream &os, const InterfaceFile *file,
   if (file == nullptr)
     return errorCodeToError(std::make_error_code(std::errc::invalid_argument));
 
-  return TextAPIWriter::writeToStream(os, *file, fileType, /*Compact=*/false);
+  return TextAPIWriter::writeToStream(os, *file, /*Compact=*/false);
 }
 
 TAPI_NAMESPACE_INTERNAL_END

@@ -10,11 +10,11 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "llvm/Transforms/IPO/ExtractGV.h"
+#include "llvm/ADT/SetVector.h"
 #include "llvm/IR/Module.h"
-#include "llvm/IR/PassManager.h"
+#include "llvm/Pass.h"
+#include "llvm/Transforms/IPO.h"
 #include <algorithm>
-
 using namespace llvm;
 
 /// Make sure GV is visible from both modules. Delete is true if it is
@@ -36,7 +36,7 @@ static void makeVisible(GlobalValue &GV, bool Delete) {
   }
 
   // Map linkonce* to weak* so that llvm doesn't drop this GV.
-  switch (GV.getLinkage()) {
+  switch(GV.getLinkage()) {
   default:
     llvm_unreachable("Unexpected linkage");
   case GlobalValue::LinkOnceAnyLinkage:
@@ -48,102 +48,110 @@ static void makeVisible(GlobalValue &GV, bool Delete) {
   }
 }
 
-/// If deleteS is true, this pass deletes the specified global values.
-/// Otherwise, it deletes as much of the module as possible, except for the
-/// global values specified.
-ExtractGVPass::ExtractGVPass(std::vector<GlobalValue *> &GVs, bool deleteS,
-                             bool keepConstInit)
-    : Named(GVs.begin(), GVs.end()), deleteStuff(deleteS),
-      keepConstInit(keepConstInit) {}
+namespace {
+  /// A pass to extract specific global values and their dependencies.
+  class GVExtractorPass : public ModulePass {
+    SetVector<GlobalValue *> Named;
+    bool deleteStuff;
+    bool keepConstInit;
+  public:
+    static char ID; // Pass identification, replacement for typeid
 
-PreservedAnalyses ExtractGVPass::run(Module &M, ModuleAnalysisManager &) {
-  // Visit the global inline asm.
-  if (!deleteStuff)
-    M.setModuleInlineAsm("");
+    /// If deleteS is true, this pass deletes the specified global values.
+    /// Otherwise, it deletes as much of the module as possible, except for the
+    /// global values specified.
+    explicit GVExtractorPass(std::vector<GlobalValue*> &GVs,
+                             bool deleteS = true, bool keepConstInit = false)
+      : ModulePass(ID), Named(GVs.begin(), GVs.end()), deleteStuff(deleteS),
+        keepConstInit(keepConstInit) {}
 
-  // For simplicity, just give all GlobalValues ExternalLinkage. A trickier
-  // implementation could figure out which GlobalValues are actually
-  // referenced by the Named set, and which GlobalValues in the rest of
-  // the module are referenced by the NamedSet, and get away with leaving
-  // more internal and private things internal and private. But for now,
-  // be conservative and simple.
+    bool runOnModule(Module &M) override {
+      if (skipModule(M))
+        return false;
 
-  // Visit the GlobalVariables.
-  for (GlobalVariable &GV : M.globals()) {
-    bool Delete = deleteStuff == (bool)Named.count(&GV) &&
-                  !GV.isDeclaration() && (!GV.isConstant() || !keepConstInit);
-    if (!Delete) {
-      if (GV.hasAvailableExternallyLinkage())
-        continue;
-      if (GV.getName() == "llvm.global_ctors")
-        continue;
-    }
+      // Visit the global inline asm.
+      if (!deleteStuff)
+        M.setModuleInlineAsm("");
 
-    makeVisible(GV, Delete);
+      // For simplicity, just give all GlobalValues ExternalLinkage. A trickier
+      // implementation could figure out which GlobalValues are actually
+      // referenced by the Named set, and which GlobalValues in the rest of
+      // the module are referenced by the NamedSet, and get away with leaving
+      // more internal and private things internal and private. But for now,
+      // be conservative and simple.
 
-    if (Delete) {
-      // Make this a declaration and drop it's comdat.
-      GV.setInitializer(nullptr);
-      GV.setComdat(nullptr);
-    }
-  }
+      // Visit the GlobalVariables.
+      for (GlobalVariable &GV : M.globals()) {
+        bool Delete = deleteStuff == (bool)Named.count(&GV) &&
+                      !GV.isDeclaration() &&
+                      (!GV.isConstant() || !keepConstInit);
+        if (!Delete) {
+          if (GV.hasAvailableExternallyLinkage())
+            continue;
+          if (GV.getName() == "llvm.global_ctors")
+            continue;
+        }
 
-  // Visit the Functions.
-  for (Function &F : M) {
-    bool Delete = deleteStuff == (bool)Named.count(&F) && !F.isDeclaration();
-    if (!Delete) {
-      if (F.hasAvailableExternallyLinkage())
-        continue;
-    }
+        makeVisible(GV, Delete);
 
-    makeVisible(F, Delete);
-
-    if (Delete) {
-      // Make this a declaration and drop it's comdat.
-      F.deleteBody();
-      F.setComdat(nullptr);
-    }
-  }
-
-  // Visit the Aliases.
-  for (GlobalAlias &GA : llvm::make_early_inc_range(M.aliases())) {
-    bool Delete = deleteStuff == (bool)Named.count(&GA);
-    makeVisible(GA, Delete);
-
-    if (Delete) {
-      Type *Ty = GA.getValueType();
-
-      GA.removeFromParent();
-      llvm::Value *Declaration;
-      if (FunctionType *FTy = dyn_cast<FunctionType>(Ty)) {
-        Declaration = Function::Create(FTy, GlobalValue::ExternalLinkage,
-                                       GA.getAddressSpace(), GA.getName(), &M);
-
-      } else {
-        Declaration = new GlobalVariable(
-            M, Ty, false, GlobalValue::ExternalLinkage, nullptr, GA.getName());
+        if (Delete) {
+          // Make this a declaration and drop it's comdat.
+          GV.setInitializer(nullptr);
+          GV.setComdat(nullptr);
+        }
       }
-      GA.replaceAllUsesWith(Declaration);
-      delete &GA;
+
+      // Visit the Functions.
+      for (Function &F : M) {
+        bool Delete =
+            deleteStuff == (bool)Named.count(&F) && !F.isDeclaration();
+        if (!Delete) {
+          if (F.hasAvailableExternallyLinkage())
+            continue;
+        }
+
+        makeVisible(F, Delete);
+
+        if (Delete) {
+          // Make this a declaration and drop it's comdat.
+          F.deleteBody();
+          F.setComdat(nullptr);
+        }
+      }
+
+      // Visit the Aliases.
+      for (GlobalAlias &GA : llvm::make_early_inc_range(M.aliases())) {
+        bool Delete = deleteStuff == (bool)Named.count(&GA);
+        makeVisible(GA, Delete);
+
+        if (Delete) {
+          Type *Ty = GA.getValueType();
+
+          GA.removeFromParent();
+          llvm::Value *Declaration;
+          if (FunctionType *FTy = dyn_cast<FunctionType>(Ty)) {
+            Declaration =
+                Function::Create(FTy, GlobalValue::ExternalLinkage,
+                                 GA.getAddressSpace(), GA.getName(), &M);
+
+          } else {
+            Declaration =
+                new GlobalVariable(M, Ty, false, GlobalValue::ExternalLinkage,
+                                   nullptr, GA.getName());
+          }
+          GA.replaceAllUsesWith(Declaration);
+          delete &GA;
+        }
+      }
+
+      return true;
     }
-  }
+  };
 
-  // Visit the IFuncs.
-  for (GlobalIFunc &IF : llvm::make_early_inc_range(M.ifuncs())) {
-    bool Delete = deleteStuff == (bool)Named.count(&IF);
-    makeVisible(IF, Delete);
+  char GVExtractorPass::ID = 0;
+}
 
-    if (!Delete)
-      continue;
-
-    auto *FuncType = dyn_cast<FunctionType>(IF.getValueType());
-    IF.removeFromParent();
-    llvm::Value *Declaration =
-        Function::Create(FuncType, GlobalValue::ExternalLinkage,
-                         IF.getAddressSpace(), IF.getName(), &M);
-    IF.replaceAllUsesWith(Declaration);
-    delete &IF;
-  }
-
-  return PreservedAnalyses::none();
+ModulePass *llvm::createGVExtractionPass(std::vector<GlobalValue *> &GVs,
+                                         bool deleteFn, bool keepConstInit) {
+  return new GVExtractorPass(GVs, deleteFn, keepConstInit);
 }

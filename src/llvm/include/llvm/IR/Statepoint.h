@@ -16,6 +16,7 @@
 #ifndef LLVM_IR_STATEPOINT_H
 #define LLVM_IR_STATEPOINT_H
 
+#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/iterator_range.h"
 #include "llvm/IR/Attributes.h"
 #include "llvm/IR/Constants.h"
@@ -29,7 +30,6 @@
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
-#include <optional>
 #include <vector>
 
 namespace llvm {
@@ -233,8 +233,8 @@ std::vector<const GCRelocateInst *> GCStatepointInst::getGCRelocates() const {
 /// have attributes that describe properties of gc.statepoint call they will be
 /// eventually be wrapped in.  This struct is used represent such directives.
 struct StatepointDirectives {
-  std::optional<uint32_t> NumPatchBytes;
-  std::optional<uint64_t> StatepointID;
+  Optional<uint32_t> NumPatchBytes;
+  Optional<uint64_t> StatepointID;
 
   static const uint64_t DefaultStatepointID = 0xABCDEF00;
   static const uint64_t DeoptBundleStatepointID = 0xABCDEF0F;

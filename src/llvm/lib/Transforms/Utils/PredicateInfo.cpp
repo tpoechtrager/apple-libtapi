@@ -783,7 +783,7 @@ PredicateInfo::~PredicateInfo() {
   }
 }
 
-std::optional<PredicateConstraint> PredicateBase::getConstraint() const {
+Optional<PredicateConstraint> PredicateBase::getConstraint() const {
   switch (Type) {
   case PT_Assume:
   case PT_Branch: {
@@ -800,7 +800,7 @@ std::optional<PredicateConstraint> PredicateBase::getConstraint() const {
     CmpInst *Cmp = dyn_cast<CmpInst>(Condition);
     if (!Cmp) {
       // TODO: Make this an assertion once RenamedOp is fully accurate.
-      return std::nullopt;
+      return None;
     }
 
     CmpInst::Predicate Pred;
@@ -813,7 +813,7 @@ std::optional<PredicateConstraint> PredicateBase::getConstraint() const {
       OtherOp = Cmp->getOperand(0);
     } else {
       // TODO: Make this an assertion once RenamedOp is fully accurate.
-      return std::nullopt;
+      return None;
     }
 
     // Invert predicate along false edge.
@@ -825,7 +825,7 @@ std::optional<PredicateConstraint> PredicateBase::getConstraint() const {
   case PT_Switch:
     if (Condition != RenamedOp) {
       // TODO: Make this an assertion once RenamedOp is fully accurate.
-      return std::nullopt;
+      return None;
     }
 
     return {{CmpInst::ICMP_EQ, cast<PredicateSwitch>(this)->CaseValue}};

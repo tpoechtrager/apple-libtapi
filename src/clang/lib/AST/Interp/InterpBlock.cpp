@@ -16,16 +16,11 @@
 using namespace clang;
 using namespace clang::interp;
 
-void Block::addPointer(Pointer *P) {
-  assert(P);
-  if (IsStatic) {
-    assert(!Pointers);
-    return;
-  }
 
-#ifndef NDEBUG
-  assert(!hasPointer(P));
-#endif
+
+void Block::addPointer(Pointer *P) {
+  if (IsStatic)
+    return;
   if (Pointers)
     Pointers->Prev = P;
   P->Next = Pointers;
@@ -34,19 +29,10 @@ void Block::addPointer(Pointer *P) {
 }
 
 void Block::removePointer(Pointer *P) {
-  assert(P);
-  if (IsStatic) {
-    assert(!Pointers);
+  if (IsStatic)
     return;
-  }
-
-#ifndef NDEBUG
-  assert(hasPointer(P));
-#endif
-
   if (Pointers == P)
     Pointers = P->Next;
-
   if (P->Prev)
     P->Prev->Next = P->Next;
   if (P->Next)
@@ -58,38 +44,21 @@ void Block::cleanup() {
     (reinterpret_cast<DeadBlock *>(this + 1) - 1)->free();
 }
 
-void Block::replacePointer(Pointer *Old, Pointer *New) {
-  assert(Old);
-  assert(New);
-  if (IsStatic) {
-    assert(!Pointers);
+void Block::movePointer(Pointer *From, Pointer *To) {
+  if (IsStatic)
     return;
-  }
+  To->Prev = From->Prev;
+  if (To->Prev)
+    To->Prev->Next = To;
+  To->Next = From->Next;
+  if (To->Next)
+    To->Next->Prev = To;
+  if (Pointers == From)
+    Pointers = To;
 
-#ifndef NDEBUG
-  assert(hasPointer(Old));
-#endif
-
-  removePointer(Old);
-  addPointer(New);
-
-  Old->Pointee = nullptr;
-
-#ifndef NDEBUG
-  assert(!hasPointer(Old));
-  assert(hasPointer(New));
-#endif
+  From->Prev = nullptr;
+  From->Next = nullptr;
 }
-
-#ifndef NDEBUG
-bool Block::hasPointer(const Pointer *P) const {
-  for (const Pointer *C = Pointers; C; C = C->Next) {
-    if (C == P)
-      return true;
-  }
-  return false;
-}
-#endif
 
 DeadBlock::DeadBlock(DeadBlock *&Root, Block *Blk)
     : Root(Root), B(Blk->Desc, Blk->IsStatic, Blk->IsExtern, /*isDead=*/true) {
@@ -114,5 +83,5 @@ void DeadBlock::free() {
     Next->Prev = Prev;
   if (Root == this)
     Root = Next;
-  std::free(this);
+  ::free(this);
 }

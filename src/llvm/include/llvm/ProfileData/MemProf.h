@@ -11,7 +11,6 @@
 #include "llvm/Support/raw_ostream.h"
 
 #include <cstdint>
-#include <optional>
 
 namespace llvm {
 namespace memprof {
@@ -145,7 +144,7 @@ struct Frame {
   GlobalValue::GUID Function;
   // The symbol name for the function. Only populated in the Frame by the reader
   // if requested during initialization. This field should not be serialized.
-  std::optional<std::string> SymbolName;
+  llvm::Optional<std::string> SymbolName;
   // The source line offset of the call from the beginning of parent function.
   uint32_t LineOffset;
   // The source column number of the call to help distinguish multiple calls

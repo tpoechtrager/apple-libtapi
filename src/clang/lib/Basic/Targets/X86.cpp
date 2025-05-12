@@ -17,27 +17,26 @@
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/StringSwitch.h"
-#include "llvm/TargetParser/X86TargetParser.h"
-#include <optional>
+#include "llvm/Support/X86TargetParser.h"
 
 namespace clang {
 namespace targets {
 
-static constexpr Builtin::Info BuiltinInfoX86[] = {
+const Builtin::Info BuiltinInfoX86[] = {
 #define BUILTIN(ID, TYPE, ATTRS)                                               \
-  {#ID, TYPE, ATTRS, nullptr, HeaderDesc::NO_HEADER, ALL_LANGUAGES},
+  {#ID, TYPE, ATTRS, nullptr, ALL_LANGUAGES, nullptr},
 #define TARGET_BUILTIN(ID, TYPE, ATTRS, FEATURE)                               \
-  {#ID, TYPE, ATTRS, FEATURE, HeaderDesc::NO_HEADER, ALL_LANGUAGES},
+  {#ID, TYPE, ATTRS, nullptr, ALL_LANGUAGES, FEATURE},
 #define TARGET_HEADER_BUILTIN(ID, TYPE, ATTRS, HEADER, LANGS, FEATURE)         \
-  {#ID, TYPE, ATTRS, FEATURE, HeaderDesc::HEADER, LANGS},
+  {#ID, TYPE, ATTRS, HEADER, LANGS, FEATURE},
 #include "clang/Basic/BuiltinsX86.def"
 
 #define BUILTIN(ID, TYPE, ATTRS)                                               \
-  {#ID, TYPE, ATTRS, nullptr, HeaderDesc::NO_HEADER, ALL_LANGUAGES},
+  {#ID, TYPE, ATTRS, nullptr, ALL_LANGUAGES, nullptr},
 #define TARGET_BUILTIN(ID, TYPE, ATTRS, FEATURE)                               \
-  {#ID, TYPE, ATTRS, FEATURE, HeaderDesc::NO_HEADER, ALL_LANGUAGES},
+  {#ID, TYPE, ATTRS, nullptr, ALL_LANGUAGES, FEATURE},
 #define TARGET_HEADER_BUILTIN(ID, TYPE, ATTRS, HEADER, LANGS, FEATURE)         \
-  {#ID, TYPE, ATTRS, FEATURE, HeaderDesc::HEADER, LANGS},
+  {#ID, TYPE, ATTRS, HEADER, LANGS, FEATURE},
 #include "clang/Basic/BuiltinsX86_64.def"
 };
 
@@ -261,14 +260,8 @@ bool X86TargetInfo::handleTargetFeatures(std::vector<std::string> &Features,
       HasAVX512VP2INTERSECT = true;
     } else if (Feature == "+sha") {
       HasSHA = true;
-    } else if (Feature == "+sha512") {
-      HasSHA512 = true;
     } else if (Feature == "+shstk") {
       HasSHSTK = true;
-    } else if (Feature == "+sm3") {
-      HasSM3 = true;
-    } else if (Feature == "+sm4") {
-      HasSM4 = true;
     } else if (Feature == "+movbe") {
       HasMOVBE = true;
     } else if (Feature == "+sgx") {
@@ -297,8 +290,6 @@ bool X86TargetInfo::handleTargetFeatures(std::vector<std::string> &Features,
       HasCLWB = true;
     } else if (Feature == "+wbnoinvd") {
       HasWBNOINVD = true;
-    } else if (Feature == "+prefetchi") {
-      HasPREFETCHI = true;
     } else if (Feature == "+prefetchwt1") {
       HasPREFETCHWT1 = true;
     } else if (Feature == "+clzero") {
@@ -335,28 +326,12 @@ bool X86TargetInfo::handleTargetFeatures(std::vector<std::string> &Features,
       HasHRESET = true;
     } else if (Feature == "+amx-bf16") {
       HasAMXBF16 = true;
-    } else if (Feature == "+amx-fp16") {
-      HasAMXFP16 = true;
     } else if (Feature == "+amx-int8") {
       HasAMXINT8 = true;
     } else if (Feature == "+amx-tile") {
       HasAMXTILE = true;
-    } else if (Feature == "+amx-complex") {
-      HasAMXCOMPLEX = true;
-    } else if (Feature == "+cmpccxadd") {
-      HasCMPCCXADD = true;
-    } else if (Feature == "+raoint") {
-      HasRAOINT = true;
-    } else if (Feature == "+avxifma") {
-      HasAVXIFMA = true;
-    } else if (Feature == "+avxneconvert") {
-      HasAVXNECONVERT= true;
     } else if (Feature == "+avxvnni") {
       HasAVXVNNI = true;
-    } else if (Feature == "+avxvnniint16") {
-      HasAVXVNNIINT16 = true;
-    } else if (Feature == "+avxvnniint8") {
-      HasAVXVNNIINT8 = true;
     } else if (Feature == "+serialize") {
       HasSERIALIZE = true;
     } else if (Feature == "+tsxldtrk") {
@@ -367,8 +342,6 @@ bool X86TargetInfo::handleTargetFeatures(std::vector<std::string> &Features,
       HasCRC32 = true;
     } else if (Feature == "+x87") {
       HasX87 = true;
-    } else if (Feature == "+fullbf16") {
-      HasFullBFloat16 = true;
     }
 
     X86SSEEnum Level = llvm::StringSwitch<X86SSEEnum>(Feature)
@@ -386,15 +359,6 @@ bool X86TargetInfo::handleTargetFeatures(std::vector<std::string> &Features,
 
     HasFloat16 = SSELevel >= SSE2;
 
-    // X86 target has bfloat16 emulation support in the backend, where
-    // bfloat16 is treated as a 32-bit float, arithmetic operations are
-    // performed in 32-bit, and the result is converted back to bfloat16.
-    // Truncation and extension between bfloat16 and 32-bit float are supported
-    // by the compiler-rt library. However, native bfloat16 support is currently
-    // not available in the X86 target. Hence, HasFullBFloat16 will be false
-    // until native bfloat16 support is available. HasFullBFloat16 is used to
-    // determine whether to automatically use excess floating point precision
-    // for bfloat16 arithmetic operations in the front-end.
     HasBFloat16 = SSELevel >= SSE2;
 
     MMX3DNowEnum ThreeDNowLevel = llvm::StringSwitch<MMX3DNowEnum>(Feature)
@@ -420,6 +384,9 @@ bool X86TargetInfo::handleTargetFeatures(std::vector<std::string> &Features,
         << (FPMath == FP_SSE ? "sse" : "387");
     return false;
   }
+
+  SimdDefaultAlign =
+      hasFeature("avx512f") ? 512 : hasFeature("avx") ? 256 : 128;
 
   // FIXME: We should allow long double type on 32-bits to match with GCC.
   // This requires backend to be able to lower f80 without x87 first.
@@ -543,13 +510,6 @@ void X86TargetInfo::getTargetDefines(const LangOptions &Opts,
   case CK_Tigerlake:
   case CK_SapphireRapids:
   case CK_Alderlake:
-  case CK_Raptorlake:
-  case CK_Meteorlake:
-  case CK_Sierraforest:
-  case CK_Grandridge:
-  case CK_Graniterapids:
-  case CK_GraniterapidsD:
-  case CK_Emeraldrapids:
     // FIXME: Historically, we defined this legacy name, it would be nice to
     // remove it at some point. We've never exposed fine-grained names for
     // recent primary x86 CPUs, and we should keep it that way.
@@ -627,9 +587,6 @@ void X86TargetInfo::getTargetDefines(const LangOptions &Opts,
     break;
   case CK_ZNVER3:
     defineCPUMacros(Builder, "znver3");
-    break;
-  case CK_ZNVER4:
-    defineCPUMacros(Builder, "znver4");
     break;
   case CK_Geode:
     defineCPUMacros(Builder, "geode");
@@ -758,8 +715,6 @@ void X86TargetInfo::getTargetDefines(const LangOptions &Opts,
     Builder.defineMacro("__AVX512VP2INTERSECT__");
   if (HasSHA)
     Builder.defineMacro("__SHA__");
-  if (HasSHA512)
-    Builder.defineMacro("__SHA512__");
 
   if (HasFXSR)
     Builder.defineMacro("__FXSR__");
@@ -783,12 +738,6 @@ void X86TargetInfo::getTargetDefines(const LangOptions &Opts,
     Builder.defineMacro("__SHSTK__");
   if (HasSGX)
     Builder.defineMacro("__SGX__");
-  if (HasSM3)
-    Builder.defineMacro("__SM3__");
-  if (HasSM4)
-    Builder.defineMacro("__SM4__");
-  if (HasPREFETCHI)
-    Builder.defineMacro("__PREFETCHI__");
   if (HasPREFETCHWT1)
     Builder.defineMacro("__PREFETCHWT1__");
   if (HasCLZERO)
@@ -820,29 +769,13 @@ void X86TargetInfo::getTargetDefines(const LangOptions &Opts,
   if (HasHRESET)
     Builder.defineMacro("__HRESET__");
   if (HasAMXTILE)
-    Builder.defineMacro("__AMX_TILE__");
+    Builder.defineMacro("__AMXTILE__");
   if (HasAMXINT8)
-    Builder.defineMacro("__AMX_INT8__");
+    Builder.defineMacro("__AMXINT8__");
   if (HasAMXBF16)
-    Builder.defineMacro("__AMX_BF16__");
-  if (HasAMXFP16)
-    Builder.defineMacro("__AMX_FP16__");
-  if (HasAMXCOMPLEX)
-    Builder.defineMacro("__AMX_COMPLEX__");
-  if (HasCMPCCXADD)
-    Builder.defineMacro("__CMPCCXADD__");
-  if (HasRAOINT)
-    Builder.defineMacro("__RAOINT__");
-  if (HasAVXIFMA)
-    Builder.defineMacro("__AVXIFMA__");
-  if (HasAVXNECONVERT)
-    Builder.defineMacro("__AVXNECONVERT__");
+    Builder.defineMacro("__AMXBF16__");
   if (HasAVXVNNI)
     Builder.defineMacro("__AVXVNNI__");
-  if (HasAVXVNNIINT16)
-    Builder.defineMacro("__AVXVNNIINT16__");
-  if (HasAVXVNNIINT8)
-    Builder.defineMacro("__AVXVNNIINT8__");
   if (HasSERIALIZE)
     Builder.defineMacro("__SERIALIZE__");
   if (HasTSXLDTRK)
@@ -944,8 +877,6 @@ bool X86TargetInfo::isValidFeatureName(StringRef Name) const {
       .Case("adx", true)
       .Case("aes", true)
       .Case("amx-bf16", true)
-      .Case("amx-complex", true)
-      .Case("amx-fp16", true)
       .Case("amx-int8", true)
       .Case("amx-tile", true)
       .Case("avx", true)
@@ -966,18 +897,13 @@ bool X86TargetInfo::isValidFeatureName(StringRef Name) const {
       .Case("avx512vbmi2", true)
       .Case("avx512ifma", true)
       .Case("avx512vp2intersect", true)
-      .Case("avxifma", true)
-      .Case("avxneconvert", true)
       .Case("avxvnni", true)
-      .Case("avxvnniint16", true)
-      .Case("avxvnniint8", true)
       .Case("bmi", true)
       .Case("bmi2", true)
       .Case("cldemote", true)
       .Case("clflushopt", true)
       .Case("clwb", true)
       .Case("clzero", true)
-      .Case("cmpccxadd", true)
       .Case("crc32", true)
       .Case("cx16", true)
       .Case("enqcmd", true)
@@ -1003,11 +929,9 @@ bool X86TargetInfo::isValidFeatureName(StringRef Name) const {
       .Case("pconfig", true)
       .Case("pku", true)
       .Case("popcnt", true)
-      .Case("prefetchi", true)
       .Case("prefetchwt1", true)
       .Case("prfchw", true)
       .Case("ptwrite", true)
-      .Case("raoint", true)
       .Case("rdpid", true)
       .Case("rdpru", true)
       .Case("rdrnd", true)
@@ -1017,10 +941,7 @@ bool X86TargetInfo::isValidFeatureName(StringRef Name) const {
       .Case("serialize", true)
       .Case("sgx", true)
       .Case("sha", true)
-      .Case("sha512", true)
       .Case("shstk", true)
-      .Case("sm3", true)
-      .Case("sm4", true)
       .Case("sse", true)
       .Case("sse2", true)
       .Case("sse3", true)
@@ -1050,10 +971,9 @@ bool X86TargetInfo::hasFeature(StringRef Feature) const {
       .Case("adx", HasADX)
       .Case("aes", HasAES)
       .Case("amx-bf16", HasAMXBF16)
-      .Case("amx-complex", HasAMXCOMPLEX)
-      .Case("amx-fp16", HasAMXFP16)
       .Case("amx-int8", HasAMXINT8)
       .Case("amx-tile", HasAMXTILE)
+      .Case("avxvnni", HasAVXVNNI)
       .Case("avx", SSELevel >= AVX)
       .Case("avx2", SSELevel >= AVX2)
       .Case("avx512f", SSELevel >= AVX512F)
@@ -1072,18 +992,12 @@ bool X86TargetInfo::hasFeature(StringRef Feature) const {
       .Case("avx512vbmi2", HasAVX512VBMI2)
       .Case("avx512ifma", HasAVX512IFMA)
       .Case("avx512vp2intersect", HasAVX512VP2INTERSECT)
-      .Case("avxifma", HasAVXIFMA)
-      .Case("avxneconvert", HasAVXNECONVERT)
-      .Case("avxvnni", HasAVXVNNI)
-      .Case("avxvnniint16", HasAVXVNNIINT16)
-      .Case("avxvnniint8", HasAVXVNNIINT8)
       .Case("bmi", HasBMI)
       .Case("bmi2", HasBMI2)
       .Case("cldemote", HasCLDEMOTE)
       .Case("clflushopt", HasCLFLUSHOPT)
       .Case("clwb", HasCLWB)
       .Case("clzero", HasCLZERO)
-      .Case("cmpccxadd", HasCMPCCXADD)
       .Case("crc32", HasCRC32)
       .Case("cx8", HasCX8)
       .Case("cx16", HasCX16)
@@ -1111,11 +1025,9 @@ bool X86TargetInfo::hasFeature(StringRef Feature) const {
       .Case("pconfig", HasPCONFIG)
       .Case("pku", HasPKU)
       .Case("popcnt", HasPOPCNT)
-      .Case("prefetchi", HasPREFETCHI)
       .Case("prefetchwt1", HasPREFETCHWT1)
       .Case("prfchw", HasPRFCHW)
       .Case("ptwrite", HasPTWRITE)
-      .Case("raoint", HasRAOINT)
       .Case("rdpid", HasRDPID)
       .Case("rdpru", HasRDPRU)
       .Case("rdrnd", HasRDRND)
@@ -1126,10 +1038,7 @@ bool X86TargetInfo::hasFeature(StringRef Feature) const {
       .Case("serialize", HasSERIALIZE)
       .Case("sgx", HasSGX)
       .Case("sha", HasSHA)
-      .Case("sha512", HasSHA512)
       .Case("shstk", HasSHSTK)
-      .Case("sm3", HasSM3)
-      .Case("sm4", HasSM4)
       .Case("sse", SSELevel >= SSE1)
       .Case("sse2", SSELevel >= SSE2)
       .Case("sse3", SSELevel >= SSE3)
@@ -1153,7 +1062,6 @@ bool X86TargetInfo::hasFeature(StringRef Feature) const {
       .Case("xsavec", HasXSAVEC)
       .Case("xsaves", HasXSAVES)
       .Case("xsaveopt", HasXSAVEOPT)
-      .Case("fullbf16", HasFullBFloat16)
       .Default(false);
 }
 
@@ -1165,7 +1073,7 @@ bool X86TargetInfo::hasFeature(StringRef Feature) const {
 bool X86TargetInfo::validateCpuSupports(StringRef FeatureStr) const {
   return llvm::StringSwitch<bool>(FeatureStr)
 #define X86_FEATURE_COMPAT(ENUM, STR, PRIORITY) .Case(STR, true)
-#include "llvm/TargetParser/X86TargetParser.def"
+#include "llvm/Support/X86TargetParser.def"
       .Default(false);
 }
 
@@ -1174,7 +1082,7 @@ static llvm::X86::ProcessorFeatures getFeature(StringRef Name) {
 #define X86_FEATURE_COMPAT(ENUM, STR, PRIORITY)                                \
   .Case(STR, llvm::X86::FEATURE_##ENUM)
 
-#include "llvm/TargetParser/X86TargetParser.def"
+#include "llvm/Support/X86TargetParser.def"
       ;
   // Note, this function should only be used after ensuring the value is
   // correct, so it asserts if the value is out of range.
@@ -1196,19 +1104,43 @@ unsigned X86TargetInfo::multiVersionSortPriority(StringRef Name) const {
 }
 
 bool X86TargetInfo::validateCPUSpecificCPUDispatch(StringRef Name) const {
-  return llvm::X86::validateCPUSpecificCPUDispatch(Name);
+  return llvm::StringSwitch<bool>(Name)
+#define CPU_SPECIFIC(NAME, TUNE_NAME, MANGLING, FEATURES) .Case(NAME, true)
+#define CPU_SPECIFIC_ALIAS(NEW_NAME, TUNE_NAME, NAME) .Case(NEW_NAME, true)
+#include "llvm/Support/X86TargetParser.def"
+      .Default(false);
+}
+
+static StringRef CPUSpecificCPUDispatchNameDealias(StringRef Name) {
+  return llvm::StringSwitch<StringRef>(Name)
+#define CPU_SPECIFIC_ALIAS(NEW_NAME, TUNE_NAME, NAME) .Case(NEW_NAME, NAME)
+#include "llvm/Support/X86TargetParser.def"
+      .Default(Name);
 }
 
 char X86TargetInfo::CPUSpecificManglingCharacter(StringRef Name) const {
-  return llvm::X86::getCPUDispatchMangling(Name);
+  return llvm::StringSwitch<char>(CPUSpecificCPUDispatchNameDealias(Name))
+#define CPU_SPECIFIC(NAME, TUNE_NAME, MANGLING, FEATURES) .Case(NAME, MANGLING)
+#include "llvm/Support/X86TargetParser.def"
+      .Default(0);
 }
 
 void X86TargetInfo::getCPUSpecificCPUDispatchFeatures(
     StringRef Name, llvm::SmallVectorImpl<StringRef> &Features) const {
-  SmallVector<StringRef, 32> TargetCPUFeatures;
-  llvm::X86::getFeaturesForCPU(Name, TargetCPUFeatures, true);
-  for (auto &F : TargetCPUFeatures)
-    Features.push_back(F);
+  StringRef WholeList =
+      llvm::StringSwitch<StringRef>(CPUSpecificCPUDispatchNameDealias(Name))
+#define CPU_SPECIFIC(NAME, TUNE_NAME, MANGLING, FEATURES) .Case(NAME, FEATURES)
+#include "llvm/Support/X86TargetParser.def"
+          .Default("");
+  WholeList.split(Features, ',', /*MaxSplit=*/-1, /*KeepEmpty=*/false);
+}
+
+StringRef X86TargetInfo::getCPUSpecificTuneName(StringRef Name) const {
+  return llvm::StringSwitch<StringRef>(Name)
+#define CPU_SPECIFIC(NAME, TUNE_NAME, MANGLING, FEATURES) .Case(NAME, TUNE_NAME)
+#define CPU_SPECIFIC_ALIAS(NEW_NAME, TUNE_NAME, NAME) .Case(NEW_NAME, TUNE_NAME)
+#include "llvm/Support/X86TargetParser.def"
+      .Default("");
 }
 
 // We can't use a generic validation scheme for the cpus accepted here
@@ -1220,13 +1152,12 @@ bool X86TargetInfo::validateCpuIs(StringRef FeatureStr) const {
 #define X86_VENDOR(ENUM, STRING) .Case(STRING, true)
 #define X86_CPU_TYPE_ALIAS(ENUM, ALIAS) .Case(ALIAS, true)
 #define X86_CPU_TYPE(ENUM, STR) .Case(STR, true)
-#define X86_CPU_SUBTYPE_ALIAS(ENUM, ALIAS) .Case(ALIAS, true)
 #define X86_CPU_SUBTYPE(ENUM, STR) .Case(STR, true)
-#include "llvm/TargetParser/X86TargetParser.def"
+#include "llvm/Support/X86TargetParser.def"
       .Default(false);
 }
 
-static unsigned matchAsmCCConstraint(const char *Name) {
+static unsigned matchAsmCCConstraint(const char *&Name) {
   auto RV = llvm::StringSwitch<unsigned>(Name)
                 .Case("@cca", 4)
                 .Case("@ccae", 5)
@@ -1366,7 +1297,7 @@ bool X86TargetInfo::validateAsmConstraint(
 // | Sandy Bridge                       |                      64 | https://en.wikipedia.org/wiki/Sandy_Bridge and https://www.7-cpu.com/cpu/SandyBridge.html                                                                    |
 // | Ivy Bridge                         |                      64 | https://blog.stuffedcow.net/2013/01/ivb-cache-replacement/ and https://www.7-cpu.com/cpu/IvyBridge.html                                                      |
 // | Haswell                            |                      64 | https://www.7-cpu.com/cpu/Haswell.html                                                                                                                       |
-// | Broadwell                          |                      64 | https://www.7-cpu.com/cpu/Broadwell.html                                                                                                                     |
+// | Boadwell                           |                      64 | https://www.7-cpu.com/cpu/Broadwell.html                                                                                                                     |
 // | Skylake (including skylake-avx512) |                      64 | https://www.nas.nasa.gov/hecc/support/kb/skylake-processors_550.html "Cache Hierarchy"                                                                       |
 // | Cascade Lake                       |                      64 | https://www.nas.nasa.gov/hecc/support/kb/cascade-lake-processors_579.html "Cache Hierarchy"                                                                  |
 // | Skylake                            |                      64 | https://en.wikichip.org/wiki/intel/microarchitectures/kaby_lake "Memory Hierarchy"                                                                           |
@@ -1374,7 +1305,7 @@ bool X86TargetInfo::validateAsmConstraint(
 // | Knights Landing                    |                      64 | https://software.intel.com/en-us/articles/intel-xeon-phi-processor-7200-family-memory-management-optimizations "The Intel® Xeon Phi™ Processor Architecture" |
 // | Knights Mill                       |                      64 | https://software.intel.com/sites/default/files/managed/9e/bc/64-ia-32-architectures-optimization-manual.pdf?countrylabel=Colombia "2.5.5.2 L1 DCache "       |
 // +------------------------------------+-------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------+
-std::optional<unsigned> X86TargetInfo::getCPUCacheLineSize() const {
+Optional<unsigned> X86TargetInfo::getCPUCacheLineSize() const {
   using namespace llvm::X86;
   switch (CPU) {
     // i386
@@ -1435,13 +1366,6 @@ std::optional<unsigned> X86TargetInfo::getCPUCacheLineSize() const {
     case CK_Rocketlake:
     case CK_IcelakeServer:
     case CK_Alderlake:
-    case CK_Raptorlake:
-    case CK_Meteorlake:
-    case CK_Sierraforest:
-    case CK_Grandridge:
-    case CK_Graniterapids:
-    case CK_GraniterapidsD:
-    case CK_Emeraldrapids:
     case CK_KNL:
     case CK_KNM:
     // K7
@@ -1463,7 +1387,6 @@ std::optional<unsigned> X86TargetInfo::getCPUCacheLineSize() const {
     case CK_ZNVER1:
     case CK_ZNVER2:
     case CK_ZNVER3:
-    case CK_ZNVER4:
     // Deprecated
     case CK_x86_64:
     case CK_x86_64_v2:
@@ -1477,7 +1400,7 @@ std::optional<unsigned> X86TargetInfo::getCPUCacheLineSize() const {
     // The following currently have unknown cache line sizes (but they are probably all 64):
     // Core
     case CK_None:
-      return std::nullopt;
+      return None;
   }
   llvm_unreachable("Unknown CPU kind");
 }
@@ -1617,19 +1540,19 @@ void X86TargetInfo::fillValidTuneCPUList(SmallVectorImpl<StringRef> &Values) con
 }
 
 ArrayRef<const char *> X86TargetInfo::getGCCRegNames() const {
-  return llvm::ArrayRef(GCCRegNames);
+  return llvm::makeArrayRef(GCCRegNames);
 }
 
 ArrayRef<TargetInfo::AddlRegName> X86TargetInfo::getGCCAddlRegNames() const {
-  return llvm::ArrayRef(AddlRegNames);
+  return llvm::makeArrayRef(AddlRegNames);
 }
 
 ArrayRef<Builtin::Info> X86_32TargetInfo::getTargetBuiltins() const {
-  return llvm::ArrayRef(BuiltinInfoX86, clang::X86::LastX86CommonBuiltin -
-                                            Builtin::FirstTSBuiltin + 1);
+  return llvm::makeArrayRef(BuiltinInfoX86, clang::X86::LastX86CommonBuiltin -
+                                                Builtin::FirstTSBuiltin + 1);
 }
 
 ArrayRef<Builtin::Info> X86_64TargetInfo::getTargetBuiltins() const {
-  return llvm::ArrayRef(BuiltinInfoX86,
-                        X86::LastTSBuiltin - Builtin::FirstTSBuiltin);
+  return llvm::makeArrayRef(BuiltinInfoX86,
+                            X86::LastTSBuiltin - Builtin::FirstTSBuiltin);
 }

@@ -17,14 +17,12 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/IR/ProfileSummary.h"
-#include "llvm/Object/BuildID.h"
 #include "llvm/ProfileData/InstrProf.h"
 #include "llvm/ProfileData/InstrProfCorrelator.h"
 #include "llvm/ProfileData/MemProf.h"
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/LineIterator.h"
-#include "llvm/Support/MathExtras.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/OnDiskHashTable.h"
 #include "llvm/Support/SwapByteOrder.h"
@@ -103,12 +101,7 @@ public:
   /// Read a single record.
   virtual Error readNextRecord(NamedInstrProfRecord &Record) = 0;
 
-  /// Read a list of binary ids.
-  virtual Error readBinaryIds(std::vector<llvm::object::BuildID> &BinaryIds) {
-    return success();
-  }
-
-  /// Print binary ids.
+  /// Print binary ids on stream OS.
   virtual Error printBinaryIds(raw_ostream &OS) { return success(); };
 
   /// Iterator over profile data.
@@ -136,9 +129,6 @@ public:
   /// Return true if profile includes a memory profile.
   virtual bool hasMemoryProfile() const = 0;
 
-  /// Return true if this has a temporal profile.
-  virtual bool hasTemporalProfile() const = 0;
-
   /// Returns a BitsetEnum describing the attributes of the profile. To check
   /// individual attributes prefer using the helpers above.
   virtual InstrProfKind getProfileKind() const = 0;
@@ -160,10 +150,6 @@ public:
 
 protected:
   std::unique_ptr<InstrProfSymtab> Symtab;
-  /// A list of temporal profile traces.
-  SmallVector<TemporalProfTraceTy> TemporalProfTraces;
-  /// The total number of temporal profile traces seen.
-  uint64_t TemporalProfTraceStreamSize = 0;
 
   /// Set the current error and return same.
   Error error(instrprof_error Err, const std::string &ErrMsg = "") {
@@ -208,20 +194,6 @@ public:
   static Expected<std::unique_ptr<InstrProfReader>>
   create(std::unique_ptr<MemoryBuffer> Buffer,
          const InstrProfCorrelator *Correlator = nullptr);
-
-  /// \param Weight for raw profiles use this as the temporal profile trace
-  ///               weight
-  /// \returns a list of temporal profile traces.
-  virtual SmallVector<TemporalProfTraceTy> &
-  getTemporalProfTraces(std::optional<uint64_t> Weight = {}) {
-    // For non-raw profiles we ignore the input weight and instead use the
-    // weights already in the traces.
-    return TemporalProfTraces;
-  }
-  /// \returns the total number of temporal profile traces seen.
-  uint64_t getTemporalProfTraceStreamSize() {
-    return TemporalProfTraceStreamSize;
-  }
 };
 
 /// Reader for the simple text based instrprof format.
@@ -242,8 +214,6 @@ private:
   InstrProfKind ProfileKind = InstrProfKind::Unknown;
 
   Error readValueProfileData(InstrProfRecord &Record);
-
-  Error readTemporalProfTraceData();
 
 public:
   TextInstrProfReader(std::unique_ptr<MemoryBuffer> DataBuffer_)
@@ -283,10 +253,6 @@ public:
     return false;
   }
 
-  bool hasTemporalProfile() const override {
-    return static_cast<bool>(ProfileKind & InstrProfKind::TemporalProfile);
-  }
-
   InstrProfKind getProfileKind() const override { return ProfileKind; }
 
   /// Read the header.
@@ -296,8 +262,8 @@ public:
   Error readNextRecord(NamedInstrProfRecord &Record) override;
 
   InstrProfSymtab &getSymtab() override {
-    assert(Symtab);
-    return *Symtab;
+    assert(Symtab.get());
+    return *Symtab.get();
   }
 };
 
@@ -316,8 +282,6 @@ private:
   /// If available, this hold the ProfileData array used to correlate raw
   /// instrumentation data to their functions.
   const InstrProfCorrelatorImpl<IntPtrT> *Correlator;
-  /// A list of timestamps paired with a function name reference.
-  std::vector<std::pair<uint64_t, uint64_t>> TemporalProfTimestamps;
   bool ShouldSwapBytes;
   // The value of the version field of the raw profile data header. The lower 56
   // bits specifies the format version and the most significant 8 bits specify
@@ -337,9 +301,7 @@ private:
   uint32_t ValueKindLast;
   uint32_t CurValueDataSize;
 
-  /// Total size of binary ids.
-  uint64_t BinaryIdsSize{0};
-  /// Start address of binary id length and data pairs.
+  uint64_t BinaryIdsSize;
   const uint8_t *BinaryIdsStart;
 
 public:
@@ -354,7 +316,6 @@ public:
   static bool hasFormat(const MemoryBuffer &DataBuffer);
   Error readHeader() override;
   Error readNextRecord(NamedInstrProfRecord &Record) override;
-  Error readBinaryIds(std::vector<llvm::object::BuildID> &BinaryIds) override;
   Error printBinaryIds(raw_ostream &OS) override;
 
   uint64_t getVersion() const override { return Version; }
@@ -389,10 +350,6 @@ public:
     return false;
   }
 
-  bool hasTemporalProfile() const override {
-    return (Version & VARIANT_MASK_TEMPORAL_PROF) != 0;
-  }
-
   /// Returns a BitsetEnum describing the attributes of the raw instr profile.
   InstrProfKind getProfileKind() const override;
 
@@ -400,9 +357,6 @@ public:
     assert(Symtab.get());
     return *Symtab.get();
   }
-
-  SmallVector<TemporalProfTraceTy> &
-  getTemporalProfTraces(std::optional<uint64_t> Weight = {}) override;
 
 private:
   Error createSymtab(InstrProfSymtab &Symtab);
@@ -541,7 +495,6 @@ struct InstrProfReaderIndexBase {
   virtual bool hasSingleByteCoverage() const = 0;
   virtual bool functionEntryOnly() const = 0;
   virtual bool hasMemoryProfile() const = 0;
-  virtual bool hasTemporalProfile() const = 0;
   virtual InstrProfKind getProfileKind() const = 0;
   virtual Error populateSymtab(InstrProfSymtab &) = 0;
 };
@@ -612,10 +565,6 @@ public:
     return (FormatVersion & VARIANT_MASK_MEMPROF) != 0;
   }
 
-  bool hasTemporalProfile() const override {
-    return (FormatVersion & VARIANT_MASK_TEMPORAL_PROF) != 0;
-  }
-
   InstrProfKind getProfileKind() const override;
 
   Error populateSymtab(InstrProfSymtab &Symtab) override {
@@ -653,10 +602,6 @@ private:
   std::unique_ptr<MemProfRecordHashTable> MemProfRecordTable;
   /// MemProf frame profile data on-disk indexed via frame id.
   std::unique_ptr<MemProfFrameHashTable> MemProfFrameTable;
-  /// Total size of binary ids.
-  uint64_t BinaryIdsSize{0};
-  /// Start address of binary id length and data pairs.
-  const uint8_t *BinaryIdsStart = nullptr;
 
   // Index to the current record in the record array.
   unsigned RecordIndex;
@@ -694,10 +639,6 @@ public:
   bool functionEntryOnly() const override { return Index->functionEntryOnly(); }
 
   bool hasMemoryProfile() const override { return Index->hasMemoryProfile(); }
-
-  bool hasTemporalProfile() const override {
-    return Index->hasTemporalProfile();
-  }
 
   /// Returns a BitsetEnum describing the attributes of the indexed instr
   /// profile.
@@ -766,15 +707,12 @@ public:
   ProfileSummary &getSummary(bool UseCS) {
     if (UseCS) {
       assert(CS_Summary && "No context sensitive summary");
-      return *CS_Summary;
+      return *(CS_Summary.get());
     } else {
       assert(Summary && "No profile summary");
-      return *Summary;
+      return *(Summary.get());
     }
   }
-
-  Error readBinaryIds(std::vector<llvm::object::BuildID> &BinaryIds) override;
-  Error printBinaryIds(raw_ostream &OS) override;
 };
 
 } // end namespace llvm

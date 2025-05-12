@@ -29,10 +29,10 @@ using namespace llvm;
 struct Status {
   // Mask is a bitmask where a '1' indicates the corresponding Mode bit has a
   // known value
-  unsigned Mask = 0;
-  unsigned Mode = 0;
+  unsigned Mask;
+  unsigned Mode;
 
-  Status() = default;
+  Status() : Mask(0), Mode(0){};
 
   Status(unsigned NewMask, unsigned NewMode) : Mask(NewMask), Mode(NewMode) {
     Mode &= Mask;
@@ -96,13 +96,13 @@ public:
 
   // In Phase 1 we record the first instruction that has a mode requirement,
   // which is used in Phase 3 if we need to insert a mode change.
-  MachineInstr *FirstInsertionPoint = nullptr;
+  MachineInstr *FirstInsertionPoint;
 
   // A flag to indicate whether an Exit value has been set (we can't tell by
   // examining the Exit value itself as all values may be valid results).
-  bool ExitSet = false;
+  bool ExitSet;
 
-  BlockData() = default;
+  BlockData() : FirstInsertionPoint(nullptr), ExitSet(false){};
 };
 
 namespace {
@@ -222,8 +222,8 @@ Status SIModeRegister::getInstructionMode(MachineInstr &MI,
 void SIModeRegister::insertSetreg(MachineBasicBlock &MBB, MachineInstr *MI,
                                   const SIInstrInfo *TII, Status InstrMode) {
   while (InstrMode.Mask) {
-    unsigned Offset = llvm::countr_zero<unsigned>(InstrMode.Mask);
-    unsigned Width = llvm::countr_one<unsigned>(InstrMode.Mask >> Offset);
+    unsigned Offset = countTrailingZeros<unsigned>(InstrMode.Mask);
+    unsigned Width = countTrailingOnes<unsigned>(InstrMode.Mask >> Offset);
     unsigned Value = (InstrMode.Mode >> Offset) & ((1 << Width) - 1);
     BuildMI(MBB, MI, nullptr, TII->get(AMDGPU::S_SETREG_IMM32_B32))
         .addImm(Value)

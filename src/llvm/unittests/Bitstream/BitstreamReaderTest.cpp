@@ -108,7 +108,7 @@ TEST(BitstreamReaderTest, readRecordWithBlobWhileStreaming) {
       Abbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Blob));
       AbbrevID = Stream.EmitAbbrev(std::move(Abbrev));
       unsigned Record[] = {RecordID};
-      Stream.EmitRecordWithBlob(AbbrevID, ArrayRef(Record), BlobIn);
+      Stream.EmitRecordWithBlob(AbbrevID, makeArrayRef(Record), BlobIn);
 
       Stream.ExitBlock();
     }
@@ -161,7 +161,7 @@ TEST(BitstreamReaderTest, shortRead) {
   }
 }
 
-static_assert(std::is_trivially_copyable_v<BitCodeAbbrevOp>,
+static_assert(std::is_trivially_copyable<BitCodeAbbrevOp>::value,
               "trivially copyable");
 
 } // end anonymous namespace

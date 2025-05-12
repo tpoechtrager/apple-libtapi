@@ -46,20 +46,14 @@ void SkeletonEmitter::run(raw_ostream &OS) {
   (void)Records; // To suppress unused variable warning; remove on use.
 }
 
-// Choose either option A or B.
+namespace llvm {
 
-//===----------------------------------------------------------------------===//
-// Option A: Register the backed as class <SkeletonEmitter>
-static TableGen::Emitter::OptClass<SkeletonEmitter>
-    X("gen-skeleton-class", "Generate example skeleton class");
+// The only thing that should be in the llvm namespace is the
+// emitter entry point function.
 
-//===----------------------------------------------------------------------===//
-// Option B: Register "EmitSkeleton" directly
-// The emitter entry may be private scope.
-static void EmitSkeleton(RecordKeeper &RK, raw_ostream &OS) {
+void EmitSkeleton(RecordKeeper &RK, raw_ostream &OS) {
   // Instantiate the emitter class and invoke run().
   SkeletonEmitter(RK).run(OS);
 }
 
-static TableGen::Emitter::Opt Y("gen-skeleton-entry", EmitSkeleton,
-                                "Generate example skeleton entry");
+} // namespace llvm

@@ -29,7 +29,7 @@ private:
                                   StringRef error);
   Expected<StringRef> parsePath(const Object *obj);
   Expected<HeaderType> parseType(const Object *obj);
-  std::optional<clang::Language> parseLanguage(const Object *obj);
+  Optional<clang::Language> parseLanguage(const Object *obj);
   bool parseSwiftCompatibilityHeaderIndicator(const Object *obj);
   Error parseHeaders(Array &headers);
 
@@ -76,11 +76,11 @@ FileListReader::Implementation::parsePath(const Object *obj) {
   return *path;
 }
 
-std::optional<clang::Language>
+Optional<clang::Language>
 FileListReader::Implementation::parseLanguage(const Object *obj) {
   auto language = obj->getString("language");
   if (!language)
-    return std::nullopt;
+    return None;
 
   return StringSwitch<clang::Language>(*language)
       .Case("c", clang::Language::C)

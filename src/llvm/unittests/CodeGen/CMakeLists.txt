@@ -4,7 +4,6 @@ set(LLVM_LINK_COMPONENTS
   AsmParser
   AsmPrinter
   CodeGen
-  CodeGenTypes
   Core
   FileCheck
   MC
@@ -13,7 +12,6 @@ set(LLVM_LINK_COMPONENTS
   SelectionDAG
   Support
   Target
-  TargetParser
   )
 
 add_llvm_unittest(CodeGenTests
@@ -21,21 +19,18 @@ add_llvm_unittest(CodeGenTests
   AllocationOrderTest.cpp
   AMDGPUMetadataTest.cpp
   AsmPrinterDwarfTest.cpp
-  CCStateTest.cpp
   DIEHashTest.cpp
   DIETest.cpp
   DwarfStringPoolEntryRefTest.cpp
   InstrRefLDVTest.cpp
   LowLevelTypeTest.cpp
   LexicalScopesTest.cpp
-  MachineBasicBlockTest.cpp
   MachineInstrBundleIteratorTest.cpp
   MachineInstrTest.cpp
   MachineOperandTest.cpp
   RegAllocScoreTest.cpp
   PassManagerTest.cpp
   ScalableVectorMVTsTest.cpp
-  SchedBoundary.cpp
   SelectionDAGAddressAnalysisTest.cpp
   TypeTraitsTest.cpp
   TargetOptionsTest.cpp

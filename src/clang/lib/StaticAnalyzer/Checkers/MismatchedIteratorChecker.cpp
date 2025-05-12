@@ -176,10 +176,8 @@ void MismatchedIteratorChecker::checkPreCall(const CallEvent &Call,
         const auto *Param = Func->getParamDecl(J);
         const auto *ParamType =
             Param->getType()->getAs<SubstTemplateTypeParmType>();
-        if (!ParamType)
-          continue;
-        const TemplateTypeParmDecl *D = ParamType->getReplacedParameter();
-        if (D != TPDecl)
+        if (!ParamType ||
+            ParamType->getReplacedParameter()->getDecl() != TPDecl)
           continue;
         if (LHS.isUndef()) {
           LHS = Call.getArgSVal(J);

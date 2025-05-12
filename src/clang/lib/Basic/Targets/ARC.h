@@ -15,8 +15,8 @@
 
 #include "clang/Basic/TargetInfo.h"
 #include "clang/Basic/TargetOptions.h"
+#include "llvm/ADT/Triple.h"
 #include "llvm/Support/Compiler.h"
-#include "llvm/TargetParser/Triple.h"
 
 namespace clang {
 namespace targets {
@@ -40,15 +40,13 @@ public:
   void getTargetDefines(const LangOptions &Opts,
                         MacroBuilder &Builder) const override;
 
-  ArrayRef<Builtin::Info> getTargetBuiltins() const override {
-    return std::nullopt;
-  }
+  ArrayRef<Builtin::Info> getTargetBuiltins() const override { return None; }
 
   BuiltinVaListKind getBuiltinVaListKind() const override {
     return TargetInfo::VoidPtrBuiltinVaList;
   }
 
-  std::string_view getClobbers() const override { return ""; }
+  const char *getClobbers() const override { return ""; }
 
   ArrayRef<const char *> getGCCRegNames() const override {
     static const char *const GCCRegNames[] = {
@@ -56,11 +54,11 @@ public:
         "r8",  "r9",  "r10", "r11", "r12", "r13",    "r14", "r15",
         "r16", "r17", "r18", "r19", "r20", "r21",    "r22", "r23",
         "r24", "r25", "gp",  "sp",  "fp",  "ilink1", "r30", "blink"};
-    return llvm::ArrayRef(GCCRegNames);
+    return llvm::makeArrayRef(GCCRegNames);
   }
 
   ArrayRef<TargetInfo::GCCRegAlias> getGCCRegAliases() const override {
-    return std::nullopt;
+    return None;
   }
 
   bool validateAsmConstraint(const char *&Name,

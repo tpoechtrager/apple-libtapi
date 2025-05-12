@@ -112,6 +112,8 @@
 #include "llvm/IR/User.h"
 #include "llvm/IR/Value.h"
 #include "llvm/IR/ValueHandle.h"
+#include "llvm/InitializePasses.h"
+#include "llvm/Pass.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
@@ -213,7 +215,7 @@ private:
       if (LHS.getHash() != RHS.getHash())
         return LHS.getHash() < RHS.getHash();
       FunctionComparator FCmp(LHS.getFunc(), RHS.getFunc(), GlobalNumbers);
-      return FCmp.compare() < 0;
+      return FCmp.compare() == -1;
     }
   };
   using FnTreeType = std::set<FunctionNode, FunctionNodeCmp>;
@@ -292,7 +294,33 @@ private:
   // there is exactly one mapping F -> FN for each FunctionNode FN in FnTree.
   DenseMap<AssertingVH<Function>, FnTreeType::iterator> FNodesInTree;
 };
+
+class MergeFunctionsLegacyPass : public ModulePass {
+public:
+  static char ID;
+
+  MergeFunctionsLegacyPass(): ModulePass(ID) {
+    initializeMergeFunctionsLegacyPassPass(*PassRegistry::getPassRegistry());
+  }
+
+  bool runOnModule(Module &M) override {
+    if (skipModule(M))
+      return false;
+
+    MergeFunctions MF;
+    return MF.runOnModule(M);
+  }
+};
+
 } // end anonymous namespace
+
+char MergeFunctionsLegacyPass::ID = 0;
+INITIALIZE_PASS(MergeFunctionsLegacyPass, "mergefunc",
+                "Merge Functions", false, false)
+
+ModulePass *llvm::createMergeFunctionsPass() {
+  return new MergeFunctionsLegacyPass();
+}
 
 PreservedAnalyses MergeFunctionsPass::run(Module &M,
                                           ModuleAnalysisManager &AM) {
@@ -465,11 +493,12 @@ static Value *createCast(IRBuilder<> &Builder, Value *V, Type *DestTy) {
     assert(SrcTy->getStructNumElements() == DestTy->getStructNumElements());
     Value *Result = PoisonValue::get(DestTy);
     for (unsigned int I = 0, E = SrcTy->getStructNumElements(); I < E; ++I) {
-      Value *Element =
-          createCast(Builder, Builder.CreateExtractValue(V, ArrayRef(I)),
-                     DestTy->getStructElementType(I));
+      Value *Element = createCast(
+          Builder, Builder.CreateExtractValue(V, makeArrayRef(I)),
+          DestTy->getStructElementType(I));
 
-      Result = Builder.CreateInsertValue(Result, Element, ArrayRef(I));
+      Result =
+          Builder.CreateInsertValue(Result, Element, makeArrayRef(I));
     }
     return Result;
   }
@@ -746,12 +775,7 @@ void MergeFunctions::writeAlias(Function *F, Function *G) {
   auto *GA = GlobalAlias::create(G->getValueType(), PtrType->getAddressSpace(),
                                  G->getLinkage(), "", BitcastF, G->getParent());
 
-  const MaybeAlign FAlign = F->getAlign();
-  const MaybeAlign GAlign = G->getAlign();
-  if (FAlign || GAlign)
-    F->setAlignment(std::max(FAlign.valueOrOne(), GAlign.valueOrOne()));
-  else
-    F->setAlignment(std::nullopt);
+  F->setAlignment(MaybeAlign(std::max(F->getAlignment(), G->getAlignment())));
   GA->takeName(G);
   GA->setVisibility(G->getVisibility());
   GA->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
@@ -798,18 +822,12 @@ void MergeFunctions::mergeTwoFunctions(Function *F, Function *G) {
     removeUsers(F);
     F->replaceAllUsesWith(NewF);
 
-    // We collect alignment before writeThunkOrAlias that overwrites NewF and
-    // G's content.
-    const MaybeAlign NewFAlign = NewF->getAlign();
-    const MaybeAlign GAlign = G->getAlign();
+    MaybeAlign MaxAlignment(std::max(G->getAlignment(), NewF->getAlignment()));
 
     writeThunkOrAlias(F, G);
     writeThunkOrAlias(F, NewF);
 
-    if (NewFAlign || GAlign)
-      F->setAlignment(std::max(NewFAlign.valueOrOne(), GAlign.valueOrOne()));
-    else
-      F->setAlignment(std::nullopt);
+    F->setAlignment(MaxAlignment);
     F->setLinkage(GlobalValue::PrivateLinkage);
     ++NumDoubleWeak;
     ++NumFunctionsMerged;

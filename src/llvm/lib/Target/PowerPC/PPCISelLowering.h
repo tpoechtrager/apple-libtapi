@@ -18,7 +18,6 @@
 #include "llvm/CodeGen/CallingConvLower.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineMemOperand.h"
-#include "llvm/CodeGen/MachineValueType.h"
 #include "llvm/CodeGen/SelectionDAG.h"
 #include "llvm/CodeGen/SelectionDAGNodes.h"
 #include "llvm/CodeGen/TargetLowering.h"
@@ -29,7 +28,7 @@
 #include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/Metadata.h"
 #include "llvm/IR/Type.h"
-#include <optional>
+#include "llvm/Support/MachineValueType.h"
 #include <utility>
 
 namespace llvm {
@@ -78,6 +77,10 @@ namespace llvm {
     FCTIDUZ,
     FCTIWUZ,
 
+    /// Floating-point-to-integer conversion instructions
+    FP_TO_UINT_IN_VSR,
+    FP_TO_SINT_IN_VSR,
+
     /// VEXTS, ByteWidth - takes an input in VSFRC and produces an output in
     /// VSFRC that is sign-extended from ByteWidth to a 64-byte integer.
     VEXTS,
@@ -120,7 +123,6 @@ namespace llvm {
     /// XXPERMDI - The PPC XXPERMDI instruction
     ///
     XXPERMDI,
-    XXPERM,
 
     /// The CMPB instruction (takes two operands of i32 or i64).
     CMPB,
@@ -206,8 +208,8 @@ namespace llvm {
     BCTRL_RM,
     BCTRL_LOAD_TOC_RM,
 
-    /// Return with a glue operand, matched by 'blr'
-    RET_GLUE,
+    /// Return with a flag operand, matched by 'blr'
+    RET_FLAG,
 
     /// R32 = MFOCRF(CRREG, INFLAG) - Represents the MFOCRF instruction.
     /// This copies the bits corresponding to the specified CRREG into the
@@ -332,11 +334,11 @@ namespace llvm {
     /// finds the offset of "sym" relative to the thread pointer.
     LD_GOT_TPREL_L,
 
-    /// G8RC = ADD_TLS G8RReg, Symbol - Can be used by the initial-exec
-    /// and local-exec TLS models, produces an ADD instruction that adds
-    /// the contents of G8RReg to the thread pointer.  Symbol contains a
-    /// relocation sym\@tls which is to be replaced by the thread pointer
-    /// and identifies to the linker that the instruction is part of a
+    /// G8RC = ADD_TLS G8RReg, Symbol - Used by the initial-exec TLS
+    /// model, produces an ADD instruction that adds the contents of
+    /// G8RReg to the thread pointer.  Symbol contains a relocation
+    /// sym\@tls which is to be replaced by the thread pointer and
+    /// identifies to the linker that the instruction is part of a
     /// TLS sequence.
     ADD_TLS,
 
@@ -355,11 +357,6 @@ namespace llvm {
     /// model, produces a call to __tls_get_addr(sym\@tlsgd).  Hidden by
     /// ADDIS_TLSGD_L_ADDR until after register assignment.
     GET_TLS_ADDR,
-
-    /// %x3 = GET_TPOINTER - Used for the local-exec TLS model on 32-bit AIX,
-    /// produces a call to .__get_tpointer to retrieve the thread pointer
-    /// At the end of the call, the thread pointer is found in R3.
-    GET_TPOINTER,
 
     /// G8RC = ADDI_TLSGD_L_ADDR G8RReg, Symbol, Symbol - Op that
     /// combines ADDI_TLSGD_L and GET_TLS_ADDR until expansion following
@@ -440,6 +437,21 @@ namespace llvm {
     /// An SDNode for swaps that are not associated with any loads/stores
     /// and thereby have no chain.
     SWAP_NO_CHAIN,
+
+    /// An SDNode for Power9 vector absolute value difference.
+    /// operand #0 vector
+    /// operand #1 vector
+    /// operand #2 constant i32 0 or 1, to indicate whether needs to patch
+    /// the most significant bit for signed i32
+    ///
+    /// Power9 VABSD* instructions are designed to support unsigned integer
+    /// vectors (byte/halfword/word), if we want to make use of them for signed
+    /// integer vectors, we have to flip their sign bits first. To flip sign bit
+    /// for byte/halfword integer vector would become inefficient, but for word
+    /// integer vector, we can leverage XVNEGSP to make it efficiently. eg:
+    /// abs(sub(a,b)) => VABSDUW(a+0x80000000, b+0x80000000)
+    ///               => VABSDUW((XVNEGSP a), (XVNEGSP b))
+    VABSD,
 
     /// FP_EXTEND_HALF(VECTOR, IDX) - Custom extend upper (IDX=0) half or
     /// lower (IDX=1) half of v4f32 to v2f64.
@@ -841,7 +853,7 @@ namespace llvm {
     /// Returns false if it can be represented by [r+imm], which are preferred.
     bool SelectAddressRegReg(SDValue N, SDValue &Base, SDValue &Index,
                              SelectionDAG &DAG,
-                             MaybeAlign EncodingAlignment = std::nullopt) const;
+                             MaybeAlign EncodingAlignment = None) const;
 
     /// SelectAddressRegImm - Returns true if the address N can be represented
     /// by a base register plus a signed 16-bit displacement [r+imm], and if it
@@ -1064,7 +1076,7 @@ namespace llvm {
     bool allowsMisalignedMemoryAccesses(
         EVT VT, unsigned AddrSpace, Align Alignment = Align(1),
         MachineMemOperand::Flags Flags = MachineMemOperand::MONone,
-        unsigned *Fast = nullptr) const override;
+        bool *Fast = nullptr) const override;
 
     /// isFMAFasterThanFMulAndFAdd - Return true if an FMA operation is faster
     /// than a pair of fmul and fadd instructions. fmuladd intrinsics will be
@@ -1149,10 +1161,10 @@ namespace llvm {
     PPC::AddrMode SelectForceXFormMode(SDValue N, SDValue &Disp, SDValue &Base,
                                        SelectionDAG &DAG) const;
 
-    bool splitValueIntoRegisterParts(
-        SelectionDAG & DAG, const SDLoc &DL, SDValue Val, SDValue *Parts,
-        unsigned NumParts, MVT PartVT, std::optional<CallingConv::ID> CC)
-        const override;
+    bool
+    splitValueIntoRegisterParts(SelectionDAG &DAG, const SDLoc &DL, SDValue Val,
+                                SDValue *Parts, unsigned NumParts, MVT PartVT,
+                                Optional<CallingConv::ID> CC) const override;
     /// Structure that collects some common arguments that get passed around
     /// between the functions for call lowering.
     struct CallFlags {
@@ -1173,7 +1185,6 @@ namespace llvm {
 
     CCAssignFn *ccAssignFnForCall(CallingConv::ID CC, bool Return,
                                   bool IsVarArg) const;
-    bool supportsTailCallFor(const CallBase *CB) const;
 
   private:
     struct ReuseLoadInfo {
@@ -1226,25 +1237,17 @@ namespace llvm {
     SDValue getFramePointerFrameIndex(SelectionDAG & DAG) const;
     SDValue getReturnAddrFrameIndex(SelectionDAG & DAG) const;
 
-    bool IsEligibleForTailCallOptimization(
-        const GlobalValue *CalleeGV, CallingConv::ID CalleeCC,
-        CallingConv::ID CallerCC, bool isVarArg,
-        const SmallVectorImpl<ISD::InputArg> &Ins) const;
+    bool
+    IsEligibleForTailCallOptimization(SDValue Callee,
+                                      CallingConv::ID CalleeCC,
+                                      bool isVarArg,
+                                      const SmallVectorImpl<ISD::InputArg> &Ins,
+                                      SelectionDAG& DAG) const;
 
     bool IsEligibleForTailCallOptimization_64SVR4(
-        const GlobalValue *CalleeGV, CallingConv::ID CalleeCC,
-        CallingConv::ID CallerCC, const CallBase *CB, bool isVarArg,
-        const SmallVectorImpl<ISD::OutputArg> &Outs,
-        const SmallVectorImpl<ISD::InputArg> &Ins, const Function *CallerFunc,
-        bool isCalleeExternalSymbol) const;
-
-    bool isEligibleForTCO(const GlobalValue *CalleeGV, CallingConv::ID CalleeCC,
-                          CallingConv::ID CallerCC, const CallBase *CB,
-                          bool isVarArg,
-                          const SmallVectorImpl<ISD::OutputArg> &Outs,
-                          const SmallVectorImpl<ISD::InputArg> &Ins,
-                          const Function *CallerFunc,
-                          bool isCalleeExternalSymbol) const;
+        SDValue Callee, CallingConv::ID CalleeCC, const CallBase *CB,
+        bool isVarArg, const SmallVectorImpl<ISD::OutputArg> &Outs,
+        const SmallVectorImpl<ISD::InputArg> &Ins, SelectionDAG &DAG) const;
 
     SDValue EmitTailCallLoadFPAndRetAddr(SelectionDAG &DAG, int SPDiff,
                                          SDValue Chain, SDValue &LROpOut,
@@ -1280,21 +1283,18 @@ namespace llvm {
     SDValue LowerFP_TO_INT(SDValue Op, SelectionDAG &DAG,
                            const SDLoc &dl) const;
     SDValue LowerINT_TO_FP(SDValue Op, SelectionDAG &DAG) const;
-    SDValue LowerGET_ROUNDING(SDValue Op, SelectionDAG &DAG) const;
+    SDValue LowerFLT_ROUNDS_(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerSHL_PARTS(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerSRL_PARTS(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerSRA_PARTS(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerFunnelShift(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerBUILD_VECTOR(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerVECTOR_SHUFFLE(SDValue Op, SelectionDAG &DAG) const;
-    SDValue LowerVPERM(SDValue Op, SelectionDAG &DAG, ArrayRef<int> PermMask,
-                       EVT VT, SDValue V1, SDValue V2) const;
     SDValue LowerINSERT_VECTOR_ELT(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerINTRINSIC_WO_CHAIN(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerINTRINSIC_VOID(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerBSWAP(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerATOMIC_CMP_SWAP(SDValue Op, SelectionDAG &DAG) const;
-    SDValue LowerIS_FPCLASS(SDValue Op, SelectionDAG &DAG) const;
     SDValue lowerToLibCall(const char *LibCallName, SDValue Op,
                            SelectionDAG &DAG) const;
     SDValue lowerLibCallBasedOnType(const char *LibCallFloatName,
@@ -1324,7 +1324,7 @@ namespace llvm {
     SDValue LowerVectorLoad(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerVectorStore(SDValue Op, SelectionDAG &DAG) const;
 
-    SDValue LowerCallResult(SDValue Chain, SDValue InGlue,
+    SDValue LowerCallResult(SDValue Chain, SDValue InFlag,
                             CallingConv::ID CallConv, bool isVarArg,
                             const SmallVectorImpl<ISD::InputArg> &Ins,
                             const SDLoc &dl, SelectionDAG &DAG,
@@ -1332,7 +1332,7 @@ namespace llvm {
 
     SDValue FinishCall(CallFlags CFlags, const SDLoc &dl, SelectionDAG &DAG,
                        SmallVector<std::pair<unsigned, SDValue>, 8> &RegsToPass,
-                       SDValue InGlue, SDValue Chain, SDValue CallSeqStart,
+                       SDValue InFlag, SDValue Chain, SDValue CallSeqStart,
                        SDValue &Callee, int SPDiff, unsigned NumBytes,
                        const SmallVectorImpl<ISD::InputArg> &Ins,
                        SmallVectorImpl<SDValue> &InVals,
@@ -1418,6 +1418,8 @@ namespace llvm {
     SDValue combineFMALike(SDNode *N, DAGCombinerInfo &DCI) const;
     SDValue combineTRUNCATE(SDNode *N, DAGCombinerInfo &DCI) const;
     SDValue combineSetCC(SDNode *N, DAGCombinerInfo &DCI) const;
+    SDValue combineABS(SDNode *N, DAGCombinerInfo &DCI) const;
+    SDValue combineVSelect(SDNode *N, DAGCombinerInfo &DCI) const;
     SDValue combineVectorShuffle(ShuffleVectorSDNode *SVN,
                                  SelectionDAG &DAG) const;
     SDValue combineVReverseMemOP(ShuffleVectorSDNode *SVN, LSBaseSDNode *LSBase,
@@ -1462,6 +1464,7 @@ namespace llvm {
     // tail call. This will cause the optimizers to attempt to move, or
     // duplicate return instructions to help enable tail call optimizations.
     bool mayBeEmittedAsTailCall(const CallInst *CI) const override;
+    bool hasBitPreservingFPLogic(EVT VT) const override;
     bool isMaskAndCmp0FoldingBeneficial(const Instruction &AndI) const override;
 
     /// getAddrModeForFlags - Based on the set of address flags, select the most

@@ -17,10 +17,8 @@
 #define LLVM_UTILS_TABLEGEN_X86RECOGNIZABLEINSTR_H
 
 #include "CodeGenInstruction.h"
+#include "llvm/Support/DataTypes.h"
 #include "llvm/Support/X86DisassemblerDecoderCommon.h"
-#include <cstdint>
-#include <string>
-#include <vector>
 
 struct InstructionSpecifier;
 
@@ -108,7 +106,6 @@ namespace X86Local {
     RawFrmImm16   = 8,
     AddCCFrm      = 9,
     PrefixByte    = 10,
-    MRMDestMem4VOp3CC = 20,
     MRMr0          = 21,
     MRMSrcMemFSIB  = 22,
     MRMDestMemFSIB = 23,
@@ -182,8 +179,10 @@ struct RecognizableInstrBase {
   bool HasREX_W;
   /// The hasVEX_4V field from the record
   bool HasVEX_4V;
-  /// The IgnoresW field from the record
-  bool IgnoresW;
+  /// The HasVEX_WPrefix field from the record
+  bool HasVEX_W;
+  /// The IgnoresVEX_W field from the record
+  bool IgnoresVEX_W;
   /// The hasVEX_L field from the record
   bool HasVEX_L;
   /// The ignoreVEX_L field from the record

@@ -136,7 +136,6 @@ private:
   bool removeDeadStuffFromFunction(Function *F);
   bool deleteDeadVarargs(Function &F);
   bool removeDeadArgumentsFromCallers(Function &F);
-  void propagateVirtMustcallLiveness(const Module &M);
 };
 
 } // end namespace llvm

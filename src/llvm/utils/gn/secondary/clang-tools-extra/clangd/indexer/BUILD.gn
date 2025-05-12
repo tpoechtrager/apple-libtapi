@@ -10,11 +10,6 @@ executable("clangd-indexer") {
     "//clang/lib/Tooling",
     "//llvm/lib/Support",
   ]
-  include_dirs = [
-    "..",
-
-    # For "clang-include-cleaner/..." includes.
-    "//clang-tools-extra/include-cleaner/include",
-  ]
+  include_dirs = [ ".." ]
   sources = [ "IndexerMain.cpp" ]
 }

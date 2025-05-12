@@ -11,7 +11,7 @@
 
 #include "clang/Basic/IdentifierTable.h"
 #include "llvm/ADT/ArrayRef.h"
-#include <optional>
+#include "llvm/ADT/Optional.h"
 
 namespace clang {
   class ASTContext;
@@ -89,7 +89,7 @@ public:
   Selector getNSArraySelector(NSArrayMethodKind MK) const;
 
   /// Return NSArrayMethodKind if \p Sel is such a selector.
-  std::optional<NSArrayMethodKind> getNSArrayMethodKind(Selector Sel);
+  Optional<NSArrayMethodKind> getNSArrayMethodKind(Selector Sel);
 
   /// Enumerates the NSDictionary/NSMutableDictionary methods used
   /// to generate literals and to apply some checks.
@@ -114,7 +114,7 @@ public:
   Selector getNSDictionarySelector(NSDictionaryMethodKind MK) const;
 
   /// Return NSDictionaryMethodKind if \p Sel is such a selector.
-  std::optional<NSDictionaryMethodKind> getNSDictionaryMethodKind(Selector Sel);
+  Optional<NSDictionaryMethodKind> getNSDictionaryMethodKind(Selector Sel);
 
   /// Enumerates the NSMutableSet/NSOrderedSet methods used
   /// to apply some checks.
@@ -131,7 +131,7 @@ public:
   Selector getNSSetSelector(NSSetMethodKind MK) const;
 
   /// Return NSSetMethodKind if \p Sel is such a selector.
-  std::optional<NSSetMethodKind> getNSSetMethodKind(Selector Sel);
+  Optional<NSSetMethodKind> getNSSetMethodKind(Selector Sel);
 
   /// Returns selector for "objectForKeyedSubscript:".
   Selector getObjectForKeyedSubscriptSelector() const {
@@ -203,13 +203,13 @@ public:
   }
 
   /// Return NSNumberLiteralMethodKind if \p Sel is such a selector.
-  std::optional<NSNumberLiteralMethodKind>
-  getNSNumberLiteralMethodKind(Selector Sel) const;
+  Optional<NSNumberLiteralMethodKind>
+      getNSNumberLiteralMethodKind(Selector Sel) const;
 
   /// Determine the appropriate NSNumber factory method kind for a
   /// literal of the given type.
-  std::optional<NSNumberLiteralMethodKind>
-  getNSNumberFactoryMethodKind(QualType T) const;
+  Optional<NSNumberLiteralMethodKind>
+      getNSNumberFactoryMethodKind(QualType T) const;
 
   /// Returns true if \param T is a typedef of "BOOL" in objective-c.
   bool isObjCBOOLType(QualType T) const;

@@ -42,15 +42,15 @@ class MachineLoopInfo;
 
 class SpillPlacement : public MachineFunctionPass {
   struct Node;
-  const MachineFunction *MF = nullptr;
-  const EdgeBundles *bundles = nullptr;
-  const MachineLoopInfo *loops = nullptr;
-  const MachineBlockFrequencyInfo *MBFI = nullptr;
+  const MachineFunction *MF;
+  const EdgeBundles *bundles;
+  const MachineLoopInfo *loops;
+  const MachineBlockFrequencyInfo *MBFI;
   Node *nodes = nullptr;
 
   // Nodes that are active in the current computation. Owned by the prepare()
   // caller.
-  BitVector *ActiveNodes = nullptr;
+  BitVector *ActiveNodes;
 
   // Nodes with active links. Populated by scanActiveBundles.
   SmallVector<unsigned, 8> Linked;

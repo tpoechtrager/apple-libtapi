@@ -28,9 +28,9 @@ namespace ast_matchers {
 namespace dynamic {
 
 struct SourceLocation {
-  SourceLocation() = default;
-  unsigned Line = 0;
-  unsigned Column = 0;
+  SourceLocation() : Line(), Column() {}
+  unsigned Line;
+  unsigned Column;
 };
 
 struct SourceRange {

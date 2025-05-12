@@ -12,7 +12,7 @@
 
 #include "AVRMCAsmInfo.h"
 
-#include "llvm/TargetParser/Triple.h"
+#include "llvm/ADT/Triple.h"
 
 namespace llvm {
 
@@ -20,7 +20,6 @@ AVRMCAsmInfo::AVRMCAsmInfo(const Triple &TT, const MCTargetOptions &Options) {
   CodePointerSize = 2;
   CalleeSaveStackSlotSize = 2;
   CommentString = ";";
-  SeparatorString = "$";
   PrivateGlobalPrefix = ".L";
   PrivateLabelPrefix = ".L";
   UsesELFSectionDirectiveForBSS = true;

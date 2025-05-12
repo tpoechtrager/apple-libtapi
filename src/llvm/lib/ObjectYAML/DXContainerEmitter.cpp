@@ -12,7 +12,6 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/BinaryFormat/DXContainer.h"
-#include "llvm/MC/DXContainerPSVInfo.h"
 #include "llvm/ObjectYAML/ObjectYAML.h"
 #include "llvm/ObjectYAML/yaml2obj.h"
 #include "llvm/Support/Errc.h"
@@ -126,8 +125,7 @@ void DXContainerWriter::writeParts(raw_ostream &OS) {
     dxbc::PartType PT = dxbc::parsePartType(P.Name);
 
     uint64_t DataStart = OS.tell();
-    switch (PT) {
-    case dxbc::PartType::DXIL: {
+    if (PT == dxbc::PartType::DXIL) {
       if (!P.Program)
         continue;
       dxbc::ProgramHeader Header;
@@ -142,17 +140,17 @@ void DXContainerWriter::writeParts(raw_ostream &OS) {
 
       // Compute the optional fields if needed...
       if (P.Program->DXILOffset)
-        Header.Bitcode.Offset = *P.Program->DXILOffset;
+        Header.Bitcode.Offset = P.Program->DXILOffset.value();
       else
         Header.Bitcode.Offset = sizeof(dxbc::BitcodeHeader);
 
       if (P.Program->DXILSize)
-        Header.Bitcode.Size = *P.Program->DXILSize;
+        Header.Bitcode.Size = P.Program->DXILSize.value();
       else
         Header.Bitcode.Size = P.Program->DXIL ? P.Program->DXIL->size() : 0;
 
       if (P.Program->Size)
-        Header.Size = *P.Program->Size;
+        Header.Size = P.Program->Size.value();
       else
         Header.Size = sizeof(dxbc::ProgramHeader) + Header.Bitcode.Size;
 
@@ -169,9 +167,7 @@ void DXContainerWriter::writeParts(raw_ostream &OS) {
         OS.write(reinterpret_cast<char *>(P.Program->DXIL->data()),
                  P.Program->DXIL->size());
       }
-      break;
-    }
-    case dxbc::PartType::SFI0: {
+    } else if (PT == dxbc::PartType::SFI0) {
       // If we don't have any flags we can continue here and the data will be
       // zeroed out.
       if (!P.Flags.has_value())
@@ -180,35 +176,6 @@ void DXContainerWriter::writeParts(raw_ostream &OS) {
       if (sys::IsBigEndianHost)
         sys::swapByteOrder(Flags);
       OS.write(reinterpret_cast<char *>(&Flags), sizeof(uint64_t));
-      break;
-    }
-    case dxbc::PartType::HASH: {
-      if (!P.Hash.has_value())
-        continue;
-      dxbc::ShaderHash Hash = {0, {0}};
-      if (P.Hash->IncludesSource)
-        Hash.Flags |= static_cast<uint32_t>(dxbc::HashFlags::IncludesSource);
-      memcpy(&Hash.Digest[0], &P.Hash->Digest[0], 16);
-      if (sys::IsBigEndianHost)
-        Hash.swapBytes();
-      OS.write(reinterpret_cast<char *>(&Hash), sizeof(dxbc::ShaderHash));
-      break;
-    }
-    case dxbc::PartType::PSV0: {
-      if (!P.Info.has_value())
-        continue;
-      mcdxbc::PSVRuntimeInfo PSV;
-      memcpy(&PSV.BaseData, &P.Info->Info, sizeof(dxbc::PSV::v2::RuntimeInfo));
-      PSV.Resources = P.Info->Resources;
-
-      if (sys::IsBigEndianHost)
-        PSV.swapBytes(static_cast<Triple::EnvironmentType>(
-            Triple::Pixel + P.Info->Info.ShaderStage));
-      PSV.write(OS, P.Info->Version);
-      break;
-    }
-    case dxbc::PartType::Unknown:
-      break; // Skip any handling for unrecognized parts.
     }
     uint64_t BytesWritten = OS.tell() - DataStart;
     RollingOffset += BytesWritten;

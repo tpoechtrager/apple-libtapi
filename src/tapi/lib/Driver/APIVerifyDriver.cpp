@@ -13,8 +13,8 @@
 //===----------------------------------------------------------------------===//
 #include "tapi/APIVerifier/APIVerifier.h"
 #include "tapi/Config/Version.h"
-#include "tapi/Core/APIJSONSerializer.h"
 #include "tapi/Core/APIPrinter.h"
+#include "tapi/Core/APIJSONSerializer.h"
 #include "tapi/Core/HeaderFile.h"
 #include "tapi/Diagnostics/Diagnostics.h"
 #include "tapi/Driver/DirectoryScanner.h"
@@ -22,10 +22,8 @@
 #include "tapi/Driver/HeaderGlob.h"
 #include "tapi/Driver/Options.h"
 #include "tapi/Frontend/Frontend.h"
-#include "clang/Basic/FileManager.h"
-#include "clang/Basic/Version.inc"
-#include "clang/Config/config.h"
 #include "llvm/ADT/SmallString.h"
+#include "llvm/ADT/Triple.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Format.h"
 #include "llvm/Support/ManagedStatic.h"
@@ -35,7 +33,9 @@
 #include "llvm/Support/Signals.h"
 #include "llvm/Support/YAMLTraits.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/TargetParser/Triple.h"
+#include "clang/Basic/FileManager.h"
+#include "clang/Basic/Version.inc"
+#include "clang/Config/config.h"
 
 using namespace llvm;
 using namespace TAPI_INTERNAL;
@@ -218,7 +218,6 @@ bool Driver::APIVerify::run(DiagnosticsEngine &diag, Options &opts) {
     job.frameworkPaths = opts.frontendOptions.frameworkPaths;
     job.systemFrameworkPaths = context.additionalFrameworks;
     job.systemIncludePaths = context.additionalIncludes;
-    job.afterIncludePaths = opts.frontendOptions.afterIncludePaths;
     auto contextOrError = runFrontend(job);
     if (auto err = contextOrError.takeError())
       return canIgnoreFrontendError(err);

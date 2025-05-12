@@ -11,11 +11,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "CodeGenDAGPatterns.h"
-#include "CodeGenInstruction.h"
-#include "CodeGenRegisters.h"
-#include "CodeGenTarget.h"
 #include "DAGISelMatcher.h"
-#include "SDNodeProperties.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/StringMap.h"
@@ -84,8 +80,9 @@ class MatcherTableEmitter {
   }
 
 public:
-  MatcherTableEmitter(const CodeGenDAGPatterns &cgp)
-      : CGP(cgp), OpcodeCounts(Matcher::HighestKind + 1, 0) {}
+  MatcherTableEmitter(const CodeGenDAGPatterns &cgp) : CGP(cgp) {
+    OpcodeCounts.assign(Matcher::HighestKind+1, 0);
+  }
 
   unsigned EmitMatcherList(const Matcher *N, const unsigned Indent,
                            unsigned StartIdx, raw_ostream &OS);
@@ -775,13 +772,11 @@ EmitMatcher(const Matcher *N, const unsigned Indent, unsigned CurrentIdx,
     if (CompressVTs)
       OS << EN->getNumVTs();
 
-    const CodeGenInstruction &CGI = EN->getInstruction();
-    OS << ", TARGET_VAL(" << CGI.Namespace << "::" << CGI.TheDef->getName()
-       << "), 0";
+    OS << ", TARGET_VAL(" << EN->getOpcodeName() << "), 0";
 
     if (EN->hasChain())   OS << "|OPFL_Chain";
-    if (EN->hasInGlue())  OS << "|OPFL_GlueInput";
-    if (EN->hasOutGlue()) OS << "|OPFL_GlueOutput";
+    if (EN->hasInFlag())  OS << "|OPFL_GlueInput";
+    if (EN->hasOutFlag()) OS << "|OPFL_GlueOutput";
     if (EN->hasMemRefs()) OS << "|OPFL_MemRefs";
     if (EN->getNumFixedArityOperands() != -1)
       OS << "|OPFL_Variadic" << EN->getNumFixedArityOperands();

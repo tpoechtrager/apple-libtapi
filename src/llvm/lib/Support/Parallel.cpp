@@ -12,8 +12,8 @@
 #include "llvm/Support/Threading.h"
 
 #include <atomic>
-#include <deque>
 #include <future>
+#include <stack>
 #include <thread>
 #include <vector>
 
@@ -24,11 +24,11 @@ namespace parallel {
 #if LLVM_ENABLE_THREADS
 
 #ifdef _WIN32
-static thread_local unsigned threadIndex = UINT_MAX;
+static thread_local unsigned threadIndex;
 
-unsigned getThreadIndex() { GET_THREAD_INDEX_IMPL; }
+unsigned getThreadIndex() { return threadIndex; }
 #else
-thread_local unsigned threadIndex = UINT_MAX;
+thread_local unsigned threadIndex;
 #endif
 
 namespace detail {
@@ -39,8 +39,7 @@ namespace {
 class Executor {
 public:
   virtual ~Executor() = default;
-  virtual void add(std::function<void()> func, bool Sequential = false) = 0;
-  virtual size_t getThreadCount() const = 0;
+  virtual void add(std::function<void()> func) = 0;
 
   static Executor *getDefaultExecutor();
 };
@@ -50,16 +49,13 @@ public:
 class ThreadPoolExecutor : public Executor {
 public:
   explicit ThreadPoolExecutor(ThreadPoolStrategy S = hardware_concurrency()) {
-    ThreadCount = S.compute_thread_count();
+    unsigned ThreadCount = S.compute_thread_count();
     // Spawn all but one of the threads in another thread as spawning threads
     // can take a while.
     Threads.reserve(ThreadCount);
     Threads.resize(1);
     std::lock_guard<std::mutex> Lock(Mutex);
-    // Use operator[] before creating the thread to avoid data race in .size()
-    // in “safe libc++” mode.
-    auto &Thread0 = Threads[0];
-    Thread0 = std::thread([this, S] {
+    Threads[0] = std::thread([this, ThreadCount, S] {
       for (unsigned I = 1; I < ThreadCount; ++I) {
         Threads.emplace_back([=] { work(S, I); });
         if (Stop)
@@ -98,61 +94,36 @@ public:
     static void call(void *Ptr) { ((ThreadPoolExecutor *)Ptr)->stop(); }
   };
 
-  void add(std::function<void()> F, bool Sequential = false) override {
+  void add(std::function<void()> F) override {
     {
       std::lock_guard<std::mutex> Lock(Mutex);
-      if (Sequential)
-        WorkQueueSequential.emplace_front(std::move(F));
-      else
-        WorkQueue.emplace_back(std::move(F));
+      WorkStack.push(std::move(F));
     }
     Cond.notify_one();
   }
 
-  size_t getThreadCount() const override { return ThreadCount; }
-
 private:
-  bool hasSequentialTasks() const {
-    return !WorkQueueSequential.empty() && !SequentialQueueIsLocked;
-  }
-
-  bool hasGeneralTasks() const { return !WorkQueue.empty(); }
-
   void work(ThreadPoolStrategy S, unsigned ThreadID) {
     threadIndex = ThreadID;
     S.apply_thread_strategy(ThreadID);
     while (true) {
       std::unique_lock<std::mutex> Lock(Mutex);
-      Cond.wait(Lock, [&] {
-        return Stop || hasGeneralTasks() || hasSequentialTasks();
-      });
+      Cond.wait(Lock, [&] { return Stop || !WorkStack.empty(); });
       if (Stop)
         break;
-      bool Sequential = hasSequentialTasks();
-      if (Sequential)
-        SequentialQueueIsLocked = true;
-      else
-        assert(hasGeneralTasks());
-
-      auto &Queue = Sequential ? WorkQueueSequential : WorkQueue;
-      auto Task = std::move(Queue.back());
-      Queue.pop_back();
+      auto Task = std::move(WorkStack.top());
+      WorkStack.pop();
       Lock.unlock();
       Task();
-      if (Sequential)
-        SequentialQueueIsLocked = false;
     }
   }
 
   std::atomic<bool> Stop{false};
-  std::atomic<bool> SequentialQueueIsLocked{false};
-  std::deque<std::function<void()>> WorkQueue;
-  std::deque<std::function<void()>> WorkQueueSequential;
+  std::stack<std::function<void()>> WorkStack;
   std::mutex Mutex;
   std::condition_variable Cond;
   std::promise<void> ThreadsCreated;
   std::vector<std::thread> Threads;
-  unsigned ThreadCount;
 };
 
 Executor *Executor::getDefaultExecutor() {
@@ -182,53 +153,54 @@ Executor *Executor::getDefaultExecutor() {
 }
 } // namespace
 } // namespace detail
-
-size_t getThreadCount() {
-  return detail::Executor::getDefaultExecutor()->getThreadCount();
-}
 #endif
+
+static std::atomic<int> TaskGroupInstances;
 
 // Latch::sync() called by the dtor may cause one thread to block. If is a dead
 // lock if all threads in the default executor are blocked. To prevent the dead
-// lock, only allow the root TaskGroup to run tasks parallelly. In the scenario
+// lock, only allow the first TaskGroup to run tasks parallelly. In the scenario
 // of nested parallel_for_each(), only the outermost one runs parallelly.
-TaskGroup::TaskGroup()
-#if LLVM_ENABLE_THREADS
-    : Parallel((parallel::strategy.ThreadsRequested != 1) &&
-               (threadIndex == UINT_MAX)) {}
-#else
-    : Parallel(false) {}
-#endif
+TaskGroup::TaskGroup() : Parallel(TaskGroupInstances++ == 0) {}
 TaskGroup::~TaskGroup() {
   // We must ensure that all the workloads have finished before decrementing the
   // instances count.
   L.sync();
+  --TaskGroupInstances;
 }
 
-void TaskGroup::spawn(std::function<void()> F, bool Sequential) {
+void TaskGroup::spawn(std::function<void()> F) {
 #if LLVM_ENABLE_THREADS
   if (Parallel) {
     L.inc();
-    detail::Executor::getDefaultExecutor()->add(
-        [&, F = std::move(F)] {
-          F();
-          L.dec();
-        },
-        Sequential);
+    detail::Executor::getDefaultExecutor()->add([&, F = std::move(F)] {
+      F();
+      L.dec();
+    });
     return;
   }
 #endif
   F();
 }
 
+void TaskGroup::execute(std::function<void()> F) {
+  if (parallel::strategy.ThreadsRequested == 1)
+    F();
+  else
+    spawn(F);
+}
 } // namespace parallel
 } // namespace llvm
 
 void llvm::parallelFor(size_t Begin, size_t End,
                        llvm::function_ref<void(size_t)> Fn) {
+  // If we have zero or one items, then do not incur the overhead of spinning up
+  // a task group.  They are surprisingly expensive, and because they do not
+  // support nested parallelism, a single entry task group can block parallel
+  // execution underneath them.
 #if LLVM_ENABLE_THREADS
-  if (parallel::strategy.ThreadsRequested != 1) {
-    auto NumItems = End - Begin;
+  auto NumItems = End - Begin;
+  if (NumItems > 1 && parallel::strategy.ThreadsRequested != 1) {
     // Limit the number of tasks to MaxTasksPerGroup to limit job scheduling
     // overhead on large inputs.
     auto TaskSize = NumItems / parallel::detail::MaxTasksPerGroup;
@@ -242,12 +214,8 @@ void llvm::parallelFor(size_t Begin, size_t End,
           Fn(I);
       });
     }
-    if (Begin != End) {
-      TG.spawn([=, &Fn] {
-        for (size_t I = Begin; I != End; ++I)
-          Fn(I);
-      });
-    }
+    for (; Begin != End; ++Begin)
+      Fn(Begin);
     return;
   }
 #endif

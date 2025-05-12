@@ -31,8 +31,7 @@ void ScopedPrinter::printBinaryImpl(StringRef Label, StringRef Str,
     startLine() << Label << ":";
     if (!Str.empty())
       OS << " " << Str;
-    OS << " (" << format_bytes(Data, std::nullopt, Data.size(), 1, 0, true)
-       << ")\n";
+    OS << " (" << format_bytes(Data, None, Data.size(), 1, 0, true) << ")\n";
   }
 }
 

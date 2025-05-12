@@ -66,12 +66,12 @@ Expected<GlobalPtrAuthInfo> GlobalPtrAuthInfo::tryAnalyze(const Value *V) {
   return GlobalPtrAuthInfo(GV);
 }
 
-std::optional<GlobalPtrAuthInfo> GlobalPtrAuthInfo::analyze(const Value *V) {
+Optional<GlobalPtrAuthInfo> GlobalPtrAuthInfo::analyze(const Value *V) {
   if (auto PAIOrErr = tryAnalyze(V)) {
     return *PAIOrErr;
   } else {
     consumeError(PAIOrErr.takeError());
-    return std::nullopt;
+    return None;
   }
 }
 

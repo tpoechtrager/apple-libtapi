@@ -38,17 +38,17 @@ public:
   llvm::DenseSet<const VarDecl *> &S;
 
   bool TraverseObjCAtFinallyStmt(ObjCAtFinallyStmt *S) {
-    SaveAndRestore inFinally(inEH, true);
+    SaveAndRestore<bool> inFinally(inEH, true);
     return ::RecursiveASTVisitor<EHCodeVisitor>::TraverseObjCAtFinallyStmt(S);
   }
 
   bool TraverseObjCAtCatchStmt(ObjCAtCatchStmt *S) {
-    SaveAndRestore inCatch(inEH, true);
+    SaveAndRestore<bool> inCatch(inEH, true);
     return ::RecursiveASTVisitor<EHCodeVisitor>::TraverseObjCAtCatchStmt(S);
   }
 
   bool TraverseCXXCatchStmt(CXXCatchStmt *S) {
-    SaveAndRestore inCatch(inEH, true);
+    SaveAndRestore<bool> inCatch(inEH, true);
     return TraverseStmt(S->getHandlerBlock());
   }
 
@@ -93,9 +93,9 @@ void ReachableCode::computeReachableBlocks() {
     if (isReachable)
       continue;
     isReachable = true;
-
-    for (const CFGBlock *succ : block->succs())
-      if (succ)
+    for (CFGBlock::const_succ_iterator i = block->succ_begin(),
+                                       e = block->succ_end(); i != e; ++i)
+      if (const CFGBlock *succ = *i)
         worklist.push_back(succ);
   }
 }

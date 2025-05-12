@@ -50,12 +50,6 @@ public:
   void emitRawBytes(StringRef Data) override;
 };
 
-class NVPTXAsmTargetStreamer : public NVPTXTargetStreamer {
-public:
-  NVPTXAsmTargetStreamer(MCStreamer &S);
-  ~NVPTXAsmTargetStreamer() override;
-};
-
 } // end namespace llvm
 
 #endif

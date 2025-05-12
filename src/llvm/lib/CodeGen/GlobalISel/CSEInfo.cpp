@@ -61,10 +61,6 @@ bool CSEConfigFull::shouldCSEOpc(unsigned Opc) {
   case TargetOpcode::G_TRUNC:
   case TargetOpcode::G_PTR_ADD:
   case TargetOpcode::G_EXTRACT:
-  case TargetOpcode::G_SELECT:
-  case TargetOpcode::G_BUILD_VECTOR:
-  case TargetOpcode::G_BUILD_VECTOR_TRUNC:
-  case TargetOpcode::G_SEXT_INREG:
     return true;
   }
   return false;
@@ -217,14 +213,10 @@ void GISelCSEInfo::handleRemoveInst(MachineInstr *MI) {
 }
 
 void GISelCSEInfo::handleRecordedInsts() {
-  if (HandlingRecordedInstrs)
-    return;
-  HandlingRecordedInstrs = true;
   while (!TemporaryInsts.empty()) {
     auto *MI = TemporaryInsts.pop_back_val();
     handleRecordedInst(MI);
   }
-  HandlingRecordedInstrs = false;
 }
 
 bool GISelCSEInfo::shouldCSE(unsigned Opc) const {
@@ -396,10 +388,9 @@ GISelInstProfileBuilder::addNodeIDReg(Register Reg) const {
     addNodeIDRegType(Ty);
 
   if (const RegClassOrRegBank &RCOrRB = MRI.getRegClassOrRegBank(Reg)) {
-    if (const auto *RB = dyn_cast_if_present<const RegisterBank *>(RCOrRB))
+    if (const auto *RB = RCOrRB.dyn_cast<const RegisterBank *>())
       addNodeIDRegType(RB);
-    else if (const auto *RC =
-                 dyn_cast_if_present<const TargetRegisterClass *>(RCOrRB))
+    else if (const auto *RC = RCOrRB.dyn_cast<const TargetRegisterClass *>())
       addNodeIDRegType(RC);
   }
   return *this;

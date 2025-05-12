@@ -32,6 +32,7 @@
 
 namespace llvm {
 
+class AAResults;
 class LiveInterval;
 class LiveRange;
 class LiveIntervals;
@@ -151,13 +152,13 @@ private:
 
   /// NumGapBlocks - Number of duplicate entries in UseBlocks for blocks where
   /// the live range has a gap.
-  unsigned NumGapBlocks = 0u;
+  unsigned NumGapBlocks;
 
   /// ThroughBlocks - Block numbers where CurLI is live through without uses.
   BitVector ThroughBlocks;
 
   /// NumThroughBlocks - Number of live-through blocks.
-  unsigned NumThroughBlocks = 0u;
+  unsigned NumThroughBlocks;
 
   // Sumarize statistics by counting instructions using CurLI.
   void analyzeUses();
@@ -487,7 +488,7 @@ public:
 
   /// overlapIntv - Indicate that all instructions in range should use the open
   /// interval if End does not have tied-def usage of the register and in this
-  /// case complement interval is used. Let the complement interval be live.
+  /// case compliment interval is used. Let the complement interval be live.
   ///
   /// This doubles the register pressure, but is sometimes required to deal with
   /// register uses after the last valid split point.

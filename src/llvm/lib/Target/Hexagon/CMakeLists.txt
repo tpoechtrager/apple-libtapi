@@ -72,7 +72,6 @@ add_llvm_target(HexagonCodeGen
   Analysis
   AsmPrinter
   CodeGen
-  CodeGenTypes
   Core
   HexagonAsmParser
   HexagonDesc
@@ -83,12 +82,11 @@ add_llvm_target(HexagonCodeGen
   SelectionDAG
   Support
   Target
-  TargetParser
   TransformUtils
 
   ADD_TO_COMPONENT
   Hexagon
-  )
+)
 
 add_subdirectory(AsmParser)
 add_subdirectory(Disassembler)

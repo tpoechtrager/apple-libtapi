@@ -80,7 +80,7 @@ public:
     unsigned NextCascade = 1;
 
   public:
-    ExtraRegInfo() {}
+    ExtraRegInfo() = default;
     ExtraRegInfo(const ExtraRegInfo &) = delete;
 
     LiveRangeStage getStage(Register Reg) const { return Info[Reg].Stage; }
@@ -166,26 +166,26 @@ private:
       SmallVector<std::pair<const LiveInterval *, MCRegister>, 8>;
 
   // context
-  MachineFunction *MF = nullptr;
+  MachineFunction *MF;
 
   // Shortcuts to some useful interface.
-  const TargetInstrInfo *TII = nullptr;
+  const TargetInstrInfo *TII;
 
   // analyses
-  SlotIndexes *Indexes = nullptr;
-  MachineBlockFrequencyInfo *MBFI = nullptr;
-  MachineDominatorTree *DomTree = nullptr;
-  MachineLoopInfo *Loops = nullptr;
-  MachineOptimizationRemarkEmitter *ORE = nullptr;
-  EdgeBundles *Bundles = nullptr;
-  SpillPlacement *SpillPlacer = nullptr;
-  LiveDebugVariables *DebugVars = nullptr;
+  SlotIndexes *Indexes;
+  MachineBlockFrequencyInfo *MBFI;
+  MachineDominatorTree *DomTree;
+  MachineLoopInfo *Loops;
+  MachineOptimizationRemarkEmitter *ORE;
+  EdgeBundles *Bundles;
+  SpillPlacement *SpillPlacer;
+  LiveDebugVariables *DebugVars;
 
   // state
   std::unique_ptr<Spiller> SpillerInstance;
   PQueue Queue;
   std::unique_ptr<VirtRegAuxInfo> VRAI;
-  std::optional<ExtraRegInfo> ExtraInfo;
+  Optional<ExtraRegInfo> ExtraInfo;
   std::unique_ptr<RegAllocEvictionAdvisor> EvictAdvisor;
 
   std::unique_ptr<RegAllocPriorityAdvisor> PriorityAdvisor;
@@ -204,7 +204,7 @@ private:
     CO_Interf = 2
   };
 
-  uint8_t CutOffInfo = CutOffStage::CO_None;
+  uint8_t CutOffInfo;
 
 #ifndef NDEBUG
   static const char *const StageName[];
@@ -278,9 +278,9 @@ private:
 
   /// Flags for the live range priority calculation, determined once per
   /// machine function.
-  bool RegClassPriorityTrumpsGlobalness = false;
+  bool RegClassPriorityTrumpsGlobalness;
 
-  bool ReverseLocalAssignment = false;
+  bool ReverseLocalAssignment;
 
 public:
   RAGreedy(const RegClassFilterFunc F = allocateAllRegClasses);

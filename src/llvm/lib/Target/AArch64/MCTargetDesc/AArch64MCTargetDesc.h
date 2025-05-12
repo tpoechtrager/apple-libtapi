@@ -63,7 +63,6 @@ MCTargetStreamer *createAArch64AsmTargetStreamer(MCStreamer &S,
 
 namespace AArch64_MC {
 void initLLVMToCVRegMapping(MCRegisterInfo *MRI);
-bool isHForm(const MCInst &MI, const MCInstrInfo *MCII);
 bool isQForm(const MCInst &MI, const MCInstrInfo *MCII);
 bool isFpOrNEON(const MCInst &MI, const MCInstrInfo *MCII);
 }

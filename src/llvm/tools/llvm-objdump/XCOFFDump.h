@@ -13,16 +13,14 @@
 
 namespace llvm {
 
-class formatted_raw_ostream;
-class MCSubtargetInfo;
 struct SymbolInfoTy;
 
 namespace objdump {
-std::optional<XCOFF::StorageMappingClass>
+Optional<XCOFF::StorageMappingClass>
 getXCOFFSymbolCsectSMC(const object::XCOFFObjectFile &Obj,
                        const object::SymbolRef &Sym);
 
-std::optional<object::SymbolRef>
+Optional<object::SymbolRef>
 getXCOFFSymbolContainingSymbolRef(const object::XCOFFObjectFile &Obj,
                                   const object::SymbolRef &Sym);
 
@@ -34,11 +32,6 @@ std::string getXCOFFSymbolDescription(const SymbolInfoTy &SymbolInfo,
 Error getXCOFFRelocationValueString(const object::XCOFFObjectFile &Obj,
                                     const object::RelocationRef &RelRef,
                                     llvm::SmallVectorImpl<char> &Result);
-
-void dumpTracebackTable(ArrayRef<uint8_t> Bytes, uint64_t Address,
-                        formatted_raw_ostream &OS, uint64_t End,
-                        const MCSubtargetInfo &STI,
-                        const object::XCOFFObjectFile *Obj);
 } // namespace objdump
 } // namespace llvm
 #endif

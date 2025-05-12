@@ -67,7 +67,7 @@ void ReexportFileWriter::visitObjCInterface(const ObjCInterfaceRecord &record) {
     impl.symbols.emplace_back((ObjC2MetaClassNamePrefix + record.name).str());
   }
 
-  if (record.hasExceptionAttribute())
+  if (record.hasExceptionAttribute)
     impl.symbols.emplace_back((ObjC2EHTypePrefix + record.name).str());
 
   auto addIvars = [&](ArrayRef<const ObjCInstanceVariableRecord *> ivars) {

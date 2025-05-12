@@ -357,11 +357,11 @@ private:
     }
 
     ArrayRef<CXXBaseSpecifier> bases() const {
-      return llvm::ArrayRef(getBases(), NumBases);
+      return llvm::makeArrayRef(getBases(), NumBases);
     }
 
     ArrayRef<CXXBaseSpecifier> vbases() const {
-      return llvm::ArrayRef(getVBases(), NumVBases);
+      return llvm::makeArrayRef(getVBases(), NumVBases);
     }
 
   private:
@@ -395,7 +395,7 @@ private:
     unsigned NumCaptures : 15;
 
     /// The number of explicit captures in this lambda.
-    unsigned NumExplicitCaptures : 12;
+    unsigned NumExplicitCaptures : 13;
 
     /// Has known `internal` linkage.
     unsigned HasKnownInternalLinkage : 1;
@@ -404,21 +404,15 @@ private:
     /// mangling in the Itanium C++ ABI.
     unsigned ManglingNumber : 31;
 
-    /// The index of this lambda within its context declaration. This is not in
-    /// general the same as the mangling number.
-    unsigned IndexInContext;
-
     /// The declaration that provides context for this lambda, if the
     /// actual DeclContext does not suffice. This is used for lambdas that
     /// occur within default arguments of function parameters within the class
     /// or within a data member initializer.
     LazyDeclPtr ContextDecl;
 
-    /// The lists of captures, both explicit and implicit, for this
-    /// lambda. One list is provided for each merged copy of the lambda.
-    /// The first list corresponds to the canonical definition.
-    /// The destructor is registered by AddCaptureList when necessary.
-    llvm::TinyPtrVector<Capture*> Captures;
+    /// The list of captures, both explicit and implicit, for this
+    /// lambda.
+    Capture *Captures = nullptr;
 
     /// The type of the call method.
     TypeSourceInfo *MethodTyInfo;
@@ -428,7 +422,7 @@ private:
         : DefinitionData(D), DependencyKind(DK), IsGenericLambda(IsGeneric),
           CaptureDefault(CaptureDefault), NumCaptures(0),
           NumExplicitCaptures(0), HasKnownInternalLinkage(0), ManglingNumber(0),
-          IndexInContext(0), MethodTyInfo(Info) {
+          MethodTyInfo(Info) {
       IsLambda = true;
 
       // C++1z [expr.prim.lambda]p4:
@@ -436,9 +430,6 @@ private:
       Aggregate = false;
       PlainOldData = false;
     }
-
-    // Add a list of captures.
-    void AddCaptureList(ASTContext &Ctx, Capture *CaptureList);
   };
 
   struct DefinitionData *dataPtr() const {
@@ -1067,11 +1058,6 @@ public:
   ///
   /// \note No entries will be added for init-captures, as they do not capture
   /// variables.
-  ///
-  /// \note If multiple versions of the lambda are merged together, they may
-  /// have different variable declarations corresponding to the same capture.
-  /// In that case, all of those variable declarations will be added to the
-  /// Captures list, so it may have more than one variable listed per field.
   void
   getCaptureFields(llvm::DenseMap<const ValueDecl *, FieldDecl *> &Captures,
                    FieldDecl *&ThisCapture) const;
@@ -1084,9 +1070,7 @@ public:
   }
 
   capture_const_iterator captures_begin() const {
-    if (!isLambda()) return nullptr;
-    LambdaDefinitionData &LambdaData = getLambdaData();
-    return LambdaData.Captures.empty() ? nullptr : LambdaData.Captures.front();
+    return isLambda() ? getLambdaData().Captures : nullptr;
   }
 
   capture_const_iterator captures_end() const {
@@ -1095,11 +1079,6 @@ public:
   }
 
   unsigned capture_size() const { return getLambdaData().NumCaptures; }
-
-  const LambdaCapture *getCapture(unsigned I) const {
-    assert(isLambda() && I < capture_size() && "invalid index for capture");
-    return captures_begin() + I;
-  }
 
   using conversion_iterator = UnresolvedSetIterator;
 
@@ -1169,10 +1148,6 @@ public:
   ///
   /// \note This does NOT include a check for union-ness.
   bool isEmpty() const { return data().Empty; }
-  /// Marks this record as empty. This is used by DWARFASTParserClang
-  /// when parsing records with empty fields having [[no_unique_address]]
-  /// attribute
-  void markEmpty() { data().Empty = true; }
 
   void setInitMethod(bool Val) { data().HasInitMethod = Val; }
   bool hasInitMethod() const { return data().HasInitMethod; }
@@ -1197,7 +1172,7 @@ public:
 
   /// Determine whether this class has a pure virtual function.
   ///
-  /// The class is abstract per (C++ [class.abstract]p2) if it declares
+  /// The class is is abstract per (C++ [class.abstract]p2) if it declares
   /// a pure virtual function or inherits a pure virtual function that is
   /// not overridden.
   bool isAbstract() const { return data().Abstract; }
@@ -1450,7 +1425,7 @@ public:
   }
 
   /// Notify the class that this destructor is now selected.
-  ///
+  /// 
   /// Important properties of the class depend on destructor properties. Since
   /// C++20, it is possible to have multiple destructor declarations in a class
   /// out of which one will be selected at the end.
@@ -1776,31 +1751,18 @@ public:
   /// the declaration context suffices.
   Decl *getLambdaContextDecl() const;
 
-  /// Retrieve the index of this lambda within the context declaration returned
-  /// by getLambdaContextDecl().
-  unsigned getLambdaIndexInContext() const {
+  /// Set the mangling number and context declaration for a lambda
+  /// class.
+  void setLambdaMangling(unsigned ManglingNumber, Decl *ContextDecl,
+                         bool HasKnownInternalLinkage = false) {
     assert(isLambda() && "Not a lambda closure type!");
-    return getLambdaData().IndexInContext;
+    getLambdaData().ManglingNumber = ManglingNumber;
+    getLambdaData().ContextDecl = ContextDecl;
+    getLambdaData().HasKnownInternalLinkage = HasKnownInternalLinkage;
   }
 
-  /// Information about how a lambda is numbered within its context.
-  struct LambdaNumbering {
-    Decl *ContextDecl = nullptr;
-    unsigned IndexInContext = 0;
-    unsigned ManglingNumber = 0;
-    unsigned DeviceManglingNumber = 0;
-    bool HasKnownInternalLinkage = false;
-  };
-
-  /// Set the mangling numbers and context declaration for a lambda class.
-  void setLambdaNumbering(LambdaNumbering Numbering);
-
-  // Get the mangling numbers and context declaration for a lambda class.
-  LambdaNumbering getLambdaNumbering() const {
-    return {getLambdaContextDecl(), getLambdaIndexInContext(),
-            getLambdaManglingNumber(), getDeviceLambdaManglingNumber(),
-            hasKnownLambdaInternalLinkage()};
-  }
+  /// Set the device side mangling number.
+  void setDeviceLambdaManglingNumber(unsigned Num) const;
 
   /// Retrieve the device side mangling number.
   unsigned getDeviceLambdaManglingNumber() const;
@@ -1850,20 +1812,6 @@ public:
 
   TypeSourceInfo *getLambdaTypeInfo() const {
     return getLambdaData().MethodTyInfo;
-  }
-
-  void setLambdaTypeInfo(TypeSourceInfo *TS) {
-    assert(DefinitionData && DefinitionData->IsLambda &&
-           "setting lambda property of non-lambda class");
-    auto &DL = static_cast<LambdaDefinitionData &>(*DefinitionData);
-    DL.MethodTyInfo = TS;
-  }
-
-  void setLambdaIsGeneric(bool IsGeneric) {
-    assert(DefinitionData && DefinitionData->IsLambda &&
-           "setting lambda property of non-lambda class");
-    auto &DL = static_cast<LambdaDefinitionData &>(*DefinitionData);
-    DL.IsGenericLambda = IsGeneric;
   }
 
   // Determine whether this type is an Interface Like type for
@@ -1942,13 +1890,13 @@ private:
                         ExplicitSpecifier ES,
                         const DeclarationNameInfo &NameInfo, QualType T,
                         TypeSourceInfo *TInfo, SourceLocation EndLocation,
-                        CXXConstructorDecl *Ctor, DeductionCandidate Kind)
+                        CXXConstructorDecl *Ctor)
       : FunctionDecl(CXXDeductionGuide, C, DC, StartLoc, NameInfo, T, TInfo,
                      SC_None, false, false, ConstexprSpecKind::Unspecified),
         Ctor(Ctor), ExplicitSpec(ES) {
     if (EndLocation.isValid())
       setRangeEnd(EndLocation);
-    setDeductionCandidateKind(Kind);
+    setIsCopyDeductionCandidate(false);
   }
 
   CXXConstructorDecl *Ctor;
@@ -1963,8 +1911,7 @@ public:
   Create(ASTContext &C, DeclContext *DC, SourceLocation StartLoc,
          ExplicitSpecifier ES, const DeclarationNameInfo &NameInfo, QualType T,
          TypeSourceInfo *TInfo, SourceLocation EndLocation,
-         CXXConstructorDecl *Ctor = nullptr,
-         DeductionCandidate Kind = DeductionCandidate::Normal);
+         CXXConstructorDecl *Ctor = nullptr);
 
   static CXXDeductionGuideDecl *CreateDeserialized(ASTContext &C, unsigned ID);
 
@@ -1981,15 +1928,16 @@ public:
 
   /// Get the constructor from which this deduction guide was generated, if
   /// this is an implicit deduction guide.
-  CXXConstructorDecl *getCorrespondingConstructor() const { return Ctor; }
-
-  void setDeductionCandidateKind(DeductionCandidate K) {
-    FunctionDeclBits.DeductionCandidateKind = static_cast<unsigned char>(K);
+  CXXConstructorDecl *getCorrespondingConstructor() const {
+    return Ctor;
   }
 
-  DeductionCandidate getDeductionCandidateKind() const {
-    return static_cast<DeductionCandidate>(
-        FunctionDeclBits.DeductionCandidateKind);
+  void setIsCopyDeductionCandidate(bool isCDC = true) {
+    FunctionDeclBits.IsCopyDeductionCandidate = isCDC;
+  }
+
+  bool isCopyDeductionCandidate() const {
+    return FunctionDeclBits.IsCopyDeductionCandidate;
   }
 
   // Implement isa/cast/dyncast/etc.
@@ -3779,7 +3727,7 @@ public:
   /// Get the set of using declarations that this pack expanded into. Note that
   /// some of these may still be unresolved.
   ArrayRef<NamedDecl *> expansions() const {
-    return llvm::ArrayRef(getTrailingObjects<NamedDecl *>(), NumExpansions);
+    return llvm::makeArrayRef(getTrailingObjects<NamedDecl *>(), NumExpansions);
   }
 
   static UsingPackDecl *Create(ASTContext &C, DeclContext *DC,
@@ -4010,12 +3958,12 @@ public:
 /// Represents a C++11 static_assert declaration.
 class StaticAssertDecl : public Decl {
   llvm::PointerIntPair<Expr *, 1, bool> AssertExprAndFailed;
-  Expr *Message;
+  StringLiteral *Message;
   SourceLocation RParenLoc;
 
   StaticAssertDecl(DeclContext *DC, SourceLocation StaticAssertLoc,
-                   Expr *AssertExpr, Expr *Message, SourceLocation RParenLoc,
-                   bool Failed)
+                   Expr *AssertExpr, StringLiteral *Message,
+                   SourceLocation RParenLoc, bool Failed)
       : Decl(StaticAssert, DC, StaticAssertLoc),
         AssertExprAndFailed(AssertExpr, Failed), Message(Message),
         RParenLoc(RParenLoc) {}
@@ -4027,15 +3975,15 @@ public:
 
   static StaticAssertDecl *Create(ASTContext &C, DeclContext *DC,
                                   SourceLocation StaticAssertLoc,
-                                  Expr *AssertExpr, Expr *Message,
+                                  Expr *AssertExpr, StringLiteral *Message,
                                   SourceLocation RParenLoc, bool Failed);
   static StaticAssertDecl *CreateDeserialized(ASTContext &C, unsigned ID);
 
   Expr *getAssertExpr() { return AssertExprAndFailed.getPointer(); }
   const Expr *getAssertExpr() const { return AssertExprAndFailed.getPointer(); }
 
-  Expr *getMessage() { return Message; }
-  const Expr *getMessage() const { return Message; }
+  StringLiteral *getMessage() { return Message; }
+  const StringLiteral *getMessage() const { return Message; }
 
   bool isFailed() const { return AssertExprAndFailed.getInt(); }
 
@@ -4149,7 +4097,7 @@ public:
                                                unsigned NumBindings);
 
   ArrayRef<BindingDecl *> bindings() const {
-    return llvm::ArrayRef(getTrailingObjects<BindingDecl *>(), NumBindings);
+    return llvm::makeArrayRef(getTrailingObjects<BindingDecl *>(), NumBindings);
   }
 
   void printName(raw_ostream &OS, const PrintingPolicy &Policy) const override;

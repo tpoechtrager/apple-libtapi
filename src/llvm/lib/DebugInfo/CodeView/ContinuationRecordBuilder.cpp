@@ -147,7 +147,7 @@ void ContinuationRecordBuilder::insertSegmentEnd(uint32_t Offset) {
 }
 
 CVType ContinuationRecordBuilder::createSegmentRecord(
-    uint32_t OffBegin, uint32_t OffEnd, std::optional<TypeIndex> RefersTo) {
+    uint32_t OffBegin, uint32_t OffEnd, Optional<TypeIndex> RefersTo) {
   assert(OffEnd - OffBegin <= USHRT_MAX);
 
   MutableArrayRef<uint8_t> Data = Buffer.data();
@@ -224,11 +224,11 @@ std::vector<CVType> ContinuationRecordBuilder::end(TypeIndex Index) {
   std::vector<CVType> Types;
   Types.reserve(SegmentOffsets.size());
 
-  ArrayRef SO = SegmentOffsets;
+  auto SO = makeArrayRef(SegmentOffsets);
 
   uint32_t End = SegmentWriter.getOffset();
 
-  std::optional<TypeIndex> RefersTo;
+  Optional<TypeIndex> RefersTo;
   for (uint32_t Offset : reverse(SO)) {
     Types.push_back(createSegmentRecord(Offset, End, RefersTo));
 

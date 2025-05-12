@@ -21,7 +21,7 @@ namespace {
 TEST_F(AArch64GISelMITest, SimpleAlias) {
   setUp();
   if (!TM)
-    GTEST_SKIP();
+    return;
 
   LLT S64 = LLT::scalar(64);
   LLT P0 = LLT::pointer(0, 64);
@@ -73,7 +73,7 @@ TEST_F(AArch64GISelMITest, SimpleAlias) {
 TEST_F(AArch64GISelMITest, OffsetAliasing) {
   setUp();
   if (!TM)
-    GTEST_SKIP();
+    return;
 
   LLT S64 = LLT::scalar(64);
   LLT P0 = LLT::pointer(0, 64);
@@ -103,7 +103,7 @@ TEST_F(AArch64GISelMITest, OffsetAliasing) {
 TEST_F(AArch64GISelMITest, FrameIndexAliasing) {
   setUp();
   if (!TM)
-    GTEST_SKIP();
+    return;
 
   LLT S64 = LLT::scalar(64);
   LLT P0 = LLT::pointer(0, 64);

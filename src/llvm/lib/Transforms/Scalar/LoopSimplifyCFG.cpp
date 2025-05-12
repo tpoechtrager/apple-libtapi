@@ -32,7 +32,6 @@
 #include "llvm/Transforms/Scalar/LoopPassManager.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
-#include <optional>
 using namespace llvm;
 
 #define DEBUG_TYPE "loop-simplifycfg"
@@ -661,8 +660,7 @@ static bool constantFoldTerminators(Loop &L, DominatorTree &DT, LoopInfo &LI,
 }
 
 static bool mergeBlocksIntoPredecessors(Loop &L, DominatorTree &DT,
-                                        LoopInfo &LI, MemorySSAUpdater *MSSAU,
-                                        ScalarEvolution &SE) {
+                                        LoopInfo &LI, MemorySSAUpdater *MSSAU) {
   bool Changed = false;
   DomTreeUpdater DTU(DT, DomTreeUpdater::UpdateStrategy::Eager);
   // Copy blocks into a temporary array to avoid iterator invalidation issues
@@ -689,9 +687,6 @@ static bool mergeBlocksIntoPredecessors(Loop &L, DominatorTree &DT,
     Changed = true;
   }
 
-  if (Changed)
-    SE.forgetBlockAndLoopDispositions();
-
   return Changed;
 }
 
@@ -707,7 +702,7 @@ static bool simplifyLoopCFG(Loop &L, DominatorTree &DT, LoopInfo &LI,
     return true;
 
   // Eliminate unconditional branches by merging blocks into their predecessors.
-  Changed |= mergeBlocksIntoPredecessors(L, DT, LI, MSSAU, SE);
+  Changed |= mergeBlocksIntoPredecessors(L, DT, LI, MSSAU);
 
   if (Changed)
     SE.forgetTopmostLoop(&L);
@@ -718,12 +713,12 @@ static bool simplifyLoopCFG(Loop &L, DominatorTree &DT, LoopInfo &LI,
 PreservedAnalyses LoopSimplifyCFGPass::run(Loop &L, LoopAnalysisManager &AM,
                                            LoopStandardAnalysisResults &AR,
                                            LPMUpdater &LPMU) {
-  std::optional<MemorySSAUpdater> MSSAU;
+  Optional<MemorySSAUpdater> MSSAU;
   if (AR.MSSA)
     MSSAU = MemorySSAUpdater(AR.MSSA);
   bool DeleteCurrentLoop = false;
-  if (!simplifyLoopCFG(L, AR.DT, AR.LI, AR.SE, MSSAU ? &*MSSAU : nullptr,
-                       DeleteCurrentLoop))
+  if (!simplifyLoopCFG(L, AR.DT, AR.LI, AR.SE,
+                       MSSAU ? MSSAU.getPointer() : nullptr, DeleteCurrentLoop))
     return PreservedAnalyses::all();
 
   if (DeleteCurrentLoop)
@@ -751,14 +746,15 @@ public:
     LoopInfo &LI = getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
     ScalarEvolution &SE = getAnalysis<ScalarEvolutionWrapperPass>().getSE();
     auto *MSSAA = getAnalysisIfAvailable<MemorySSAWrapperPass>();
-    std::optional<MemorySSAUpdater> MSSAU;
+    Optional<MemorySSAUpdater> MSSAU;
     if (MSSAA)
       MSSAU = MemorySSAUpdater(&MSSAA->getMSSA());
     if (MSSAA && VerifyMemorySSA)
       MSSAU->getMemorySSA()->verifyMemorySSA();
     bool DeleteCurrentLoop = false;
-    bool Changed = simplifyLoopCFG(*L, DT, LI, SE, MSSAU ? &*MSSAU : nullptr,
-                                   DeleteCurrentLoop);
+    bool Changed =
+        simplifyLoopCFG(*L, DT, LI, SE, MSSAU ? MSSAU.getPointer() : nullptr,
+                        DeleteCurrentLoop);
     if (DeleteCurrentLoop)
       LPM.markLoopAsDeleted(*L);
     return Changed;

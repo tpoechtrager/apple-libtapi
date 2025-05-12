@@ -27,15 +27,14 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "clang/StaticAnalyzer/Checkers/BuiltinCheckerRegistration.h"
 #include "clang/AST/Attr.h"
 #include "clang/AST/DeclObjC.h"
 #include "clang/AST/StmtVisitor.h"
-#include "clang/StaticAnalyzer/Checkers/BuiltinCheckerRegistration.h"
 #include "clang/StaticAnalyzer/Core/BugReporter/BugReporter.h"
 #include "clang/StaticAnalyzer/Core/Checker.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/AnalysisManager.h"
 #include "llvm/ADT/DenseMap.h"
-#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallString.h"
 
@@ -81,8 +80,9 @@ class IvarInvalidationCheckerImpl {
     bool hasMethod(const ObjCMethodDecl *MD) {
       if (IsInvalidated)
         return true;
-      for (const ObjCMethodDecl *Curr : InvalidationMethods) {
-        if (Curr == MD) {
+      for (MethodSet::iterator I = InvalidationMethods.begin(),
+          E = InvalidationMethods.end(); I != E; ++I) {
+        if (*I == MD) {
           IsInvalidated = true;
           return true;
         }
@@ -318,7 +318,9 @@ const ObjCIvarDecl *IvarInvalidationCheckerImpl::findPropertyBackingIvar(
 
   // Lookup IVars named "_PropName"or "PropName" among the tracked Ivars.
   StringRef PropName = Prop->getIdentifier()->getName();
-  for (const ObjCIvarDecl *Iv : llvm::make_first_range(TrackedIvars)) {
+  for (IvarSet::const_iterator I = TrackedIvars.begin(),
+                               E = TrackedIvars.end(); I != E; ++I) {
+    const ObjCIvarDecl *Iv = I->first;
     StringRef IvarName = Iv->getName();
 
     if (IvarName == PropName)
@@ -379,7 +381,9 @@ visit(const ObjCImplementationDecl *ImplD) const {
   ObjCInterfaceDecl::PropertyMap PropMap;
   InterfaceD->collectPropertiesToImplement(PropMap);
 
-  for (const ObjCPropertyDecl *PD : llvm::make_second_range(PropMap)) {
+  for (ObjCInterfaceDecl::PropertyMap::iterator
+      I = PropMap.begin(), E = PropMap.end(); I != E; ++I) {
+    const ObjCPropertyDecl *PD = I->second;
     if (PD->isClassProperty())
       continue;
 
@@ -418,7 +422,11 @@ visit(const ObjCImplementationDecl *ImplD) const {
   // Remove ivars invalidated by the partial invalidation methods. They do not
   // need to be invalidated in the regular invalidation methods.
   bool AtImplementationContainsAtLeastOnePartialInvalidationMethod = false;
-  for (const ObjCMethodDecl *InterfD : PartialInfo.InvalidationMethods) {
+  for (MethodSet::iterator
+      I = PartialInfo.InvalidationMethods.begin(),
+      E = PartialInfo.InvalidationMethods.end(); I != E; ++I) {
+    const ObjCMethodDecl *InterfD = *I;
+
     // Get the corresponding method in the @implementation.
     const ObjCMethodDecl *D = ImplD->getMethod(InterfD->getSelector(),
                                                InterfD->isInstanceMethod());
@@ -467,7 +475,10 @@ visit(const ObjCImplementationDecl *ImplD) const {
 
   // Check that all ivars are invalidated by the invalidation methods.
   bool AtImplementationContainsAtLeastOneInvalidationMethod = false;
-  for (const ObjCMethodDecl *InterfD : Info.InvalidationMethods) {
+  for (MethodSet::iterator I = Info.InvalidationMethods.begin(),
+                           E = Info.InvalidationMethods.end(); I != E; ++I) {
+    const ObjCMethodDecl *InterfD = *I;
+
     // Get the corresponding method in the @implementation.
     const ObjCMethodDecl *D = ImplD->getMethod(InterfD->getSelector(),
                                                InterfD->isInstanceMethod());
@@ -490,8 +501,9 @@ visit(const ObjCImplementationDecl *ImplD) const {
         continue;
 
       // Warn on the ivars that were not invalidated by the method.
-      for (const ObjCIvarDecl *Ivar : llvm::make_first_range(IvarsI))
-        reportIvarNeedsInvalidation(Ivar, IvarToPopertyMap, D);
+      for (IvarSet::const_iterator
+          I = IvarsI.begin(), E = IvarsI.end(); I != E; ++I)
+        reportIvarNeedsInvalidation(I->first, IvarToPopertyMap, D);
     }
   }
 
@@ -500,8 +512,9 @@ visit(const ObjCImplementationDecl *ImplD) const {
     if (AtImplementationContainsAtLeastOnePartialInvalidationMethod) {
       // Warn on the ivars that were not invalidated by the prrtial
       // invalidation methods.
-      for (const ObjCIvarDecl *Ivar : llvm::make_first_range(Ivars))
-        reportIvarNeedsInvalidation(Ivar, IvarToPopertyMap, nullptr);
+      for (IvarSet::const_iterator
+           I = Ivars.begin(), E = Ivars.end(); I != E; ++I)
+        reportIvarNeedsInvalidation(I->first, IvarToPopertyMap, nullptr);
     } else {
       // Otherwise, no invalidation methods were implemented.
       reportNoInvalidationMethod(Filter.checkName_InstanceVariableInvalidation,

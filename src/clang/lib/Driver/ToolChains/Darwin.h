@@ -10,7 +10,6 @@
 #define LLVM_CLANG_LIB_DRIVER_TOOLCHAINS_DARWIN_H
 
 #include "Cuda.h"
-#include "LazyDetector.h"
 #include "ROCm.h"
 #include "clang/Basic/DarwinSDKInfo.h"
 #include "clang/Basic/LangOptions.h"
@@ -29,8 +28,7 @@ namespace tools {
 
 namespace darwin {
 llvm::Triple::ArchType getArchTypeForMachOArchName(StringRef Str);
-void setTripleTypeForMachOArchName(llvm::Triple &T, StringRef Str,
-                                   const llvm::opt::ArgList &Args);
+void setTripleTypeForMachOArchName(llvm::Triple &T, StringRef Str);
 
 class LLVM_LIBRARY_VISIBILITY MachOTool : public Tool {
   virtual void anchor();
@@ -66,7 +64,7 @@ class LLVM_LIBRARY_VISIBILITY Linker : public MachOTool {
   void AddLinkArgs(Compilation &C, const llvm::opt::ArgList &Args,
                    llvm::opt::ArgStringList &CmdArgs,
                    const InputInfoList &Inputs, VersionTuple Version,
-                   bool LinkerIsLLD, bool UsePlatformVersion) const;
+                   bool LinkerIsLLD) const;
 
 public:
   Linker(const ToolChain &TC) : MachOTool("darwin::Linker", "linker", TC) {}
@@ -150,7 +148,7 @@ private:
   mutable std::unique_ptr<tools::darwin::VerifyDebug> VerifyDebug;
 
   /// The version of the linker known to be available in the tool chain.
-  mutable std::optional<VersionTuple> LinkerVersion;
+  mutable Optional<VersionTuple> LinkerVersion;
 
 public:
   MachO(const Driver &D, const llvm::Triple &Triple,
@@ -240,6 +238,10 @@ public:
     // expected to use /usr/include/Block.h.
     return true;
   }
+  bool IsIntegratedAssemblerDefault() const override {
+    // Default integrated assembler to on for Apple's MachO targets.
+    return true;
+  }
 
   bool IsMathErrnoDefault() const override { return false; }
 
@@ -299,7 +301,6 @@ public:
     TvOS,
     WatchOS,
     DriverKit,
-    XROS,
     LastDarwinPlatform = DriverKit
   };
   enum DarwinEnvironmentKind {
@@ -317,13 +318,13 @@ public:
   mutable VersionTuple OSTargetVersion;
 
   /// The information about the darwin SDK that was used.
-  mutable std::optional<DarwinSDKInfo> SDKInfo;
+  mutable Optional<DarwinSDKInfo> SDKInfo;
 
   /// The target variant triple that was specified (if any).
-  mutable std::optional<llvm::Triple> TargetVariantTriple;
+  mutable Optional<llvm::Triple> TargetVariantTriple;
 
-  LazyDetector<CudaInstallationDetector> CudaInstallation;
-  LazyDetector<RocmInstallationDetector> RocmInstallation;
+  CudaInstallationDetector CudaInstallation;
+  RocmInstallationDetector RocmInstallation;
 
 private:
   void AddDeploymentTarget(llvm::opt::DerivedArgList &Args) const;
@@ -405,16 +406,6 @@ public:
     assert(TargetInitialized && "Target not initialized!");
     return isTargetIPhoneOS() || isTargetIOSSimulator();
   }
-
-  bool isTargetXROSDevice() const {
-    return TargetPlatform == XROS && TargetEnvironment == NativeEnvironment;
-  }
-
-  bool isTargetXROSSimulator() const {
-    return TargetPlatform == XROS && TargetEnvironment == Simulator;
-  }
-
-  bool isTargetXROS() const { return TargetPlatform == XROS; }
 
   bool isTargetTvOS() const {
     assert(TargetInitialized && "Target not initialized!");
@@ -505,6 +496,12 @@ public:
                 : TargetVersion) < VersionTuple(V0, V1, V2);
   }
 
+  /// Returns the darwin target variant triple, the variant of the deployment
+  /// target for which the code is being compiled.
+  Optional<llvm::Triple> getTargetVariantTriple() const override {
+    return TargetVariantTriple;
+  }
+
 protected:
   /// Return true if c++17 aligned allocation/deallocation functions are not
   /// implemented in the c++ standard library of the deployment target we are
@@ -514,10 +511,6 @@ protected:
   void addClangTargetOptions(const llvm::opt::ArgList &DriverArgs,
                              llvm::opt::ArgStringList &CC1Args,
                              Action::OffloadKind DeviceOffloadKind) const override;
-
-  void addClangCC1ASTargetOptions(
-      const llvm::opt::ArgList &Args,
-      llvm::opt::ArgStringList &CC1ASArgs) const override;
 
   StringRef getPlatformFamily() const;
   StringRef getOSLibraryNameSuffix(bool IgnoreSim = false) const override;
@@ -558,8 +551,7 @@ public:
   GetDefaultStackProtectorLevel(bool KernelOrKext) const override {
     // Stack protectors default to on for user code on 10.5,
     // and for everything in 10.6 and beyond
-    if (isTargetIOSBased() || isTargetWatchOSBased() || isTargetDriverKit() ||
-        isTargetXROS())
+    if (isTargetIOSBased() || isTargetWatchOSBased() || isTargetDriverKit())
       return LangOptions::SSPOn;
     else if (isTargetMacOSBased() && !isMacosxVersionLT(10, 6))
       return LangOptions::SSPOn;

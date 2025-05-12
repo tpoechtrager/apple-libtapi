@@ -14,7 +14,6 @@
 
 #include "Delta.h"
 #include "ReducerWorkItem.h"
-#include "TestRunner.h"
 #include "Utils.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Analysis/ModuleSummaryAnalysis.h"
@@ -28,6 +27,7 @@
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/MemoryBufferRef.h"
 #include "llvm/Support/ThreadPool.h"
+#include "llvm/Support/ToolOutputFile.h"
 #include <fstream>
 #include <set>
 
@@ -45,15 +45,76 @@ static cl::opt<unsigned int> StartingGranularityLevel(
     cl::desc("Number of times to divide chunks prior to first test"),
     cl::cat(LLVMReduceOptions));
 
+static cl::opt<bool> TmpFilesAsBitcode(
+    "write-tmp-files-as-bitcode",
+    cl::desc("Write temporary files as bitcode, instead of textual IR"),
+    cl::init(false), cl::cat(LLVMReduceOptions));
+
 #ifdef LLVM_ENABLE_THREADS
 static cl::opt<unsigned> NumJobs(
     "j",
     cl::desc("Maximum number of threads to use to process chunks. Set to 1 to "
-             "disable parallelism."),
+             "disables parallelism."),
     cl::init(1), cl::cat(LLVMReduceOptions));
 #else
 unsigned NumJobs = 1;
 #endif
+
+void writeOutput(ReducerWorkItem &M, llvm::StringRef Message);
+
+void writeBitcode(ReducerWorkItem &M, raw_ostream &OutStream);
+
+void readBitcode(ReducerWorkItem &M, MemoryBufferRef Data, LLVMContext &Ctx,
+                 const char *ToolName);
+
+bool isReduced(ReducerWorkItem &M, TestRunner &Test,
+               SmallString<128> &CurrentFilepath) {
+  // Write ReducerWorkItem to tmp file
+  int FD;
+  std::error_code EC = sys::fs::createTemporaryFile(
+      "llvm-reduce", M.isMIR() ? "mir" : (TmpFilesAsBitcode ? "bc" : "ll"), FD,
+      CurrentFilepath);
+  if (EC) {
+    errs() << "Error making unique filename: " << EC.message() << "!\n";
+    exit(1);
+  }
+
+  if (TmpFilesAsBitcode) {
+    llvm::raw_fd_ostream OutStream(FD, true);
+    writeBitcode(M, OutStream);
+    OutStream.close();
+    if (OutStream.has_error()) {
+      errs() << "Error emitting bitcode to file '" << CurrentFilepath << "'!\n";
+      sys::fs::remove(CurrentFilepath);
+      exit(1);
+    }
+    bool Res = Test.run(CurrentFilepath);
+    sys::fs::remove(CurrentFilepath);
+    return Res;
+  }
+  ToolOutputFile Out(CurrentFilepath, FD);
+  M.print(Out.os(), /*AnnotationWriter=*/nullptr);
+  Out.os().close();
+  if (Out.os().has_error()) {
+    errs() << "Error emitting bitcode to file '" << CurrentFilepath << "'!\n";
+    exit(1);
+  }
+
+  // Current Chunks aren't interesting
+  return Test.run(CurrentFilepath);
+}
+
+/// Counts the amount of lines for a given file
+static int getLines(StringRef Filepath) {
+  int Lines = 0;
+  std::string CurrLine;
+  std::ifstream FileStream{std::string(Filepath)};
+
+  while (std::getline(FileStream, CurrLine))
+    ++Lines;
+
+  return Lines;
+}
 
 /// Splits Chunks in half and prints them.
 /// If unable to split (when chunk size is 1) returns false.
@@ -61,22 +122,22 @@ static bool increaseGranularity(std::vector<Chunk> &Chunks) {
   if (Verbose)
     errs() << "Increasing granularity...";
   std::vector<Chunk> NewChunks;
-  bool SplitAny = false;
+  bool SplitOne = false;
 
-  for (Chunk C : Chunks) {
+  for (auto &C : Chunks) {
     if (C.End - C.Begin == 0)
       NewChunks.push_back(C);
     else {
       int Half = (C.Begin + C.End) / 2;
       NewChunks.push_back({C.Begin, Half});
       NewChunks.push_back({Half + 1, C.End});
-      SplitAny = true;
+      SplitOne = true;
     }
   }
-  if (SplitAny) {
+  if (SplitOne) {
     Chunks = NewChunks;
     if (Verbose) {
-      errs() << "Success! " << NewChunks.size() << " New Chunks:\n";
+      errs() << "Success! New Chunks:\n";
       for (auto C : Chunks) {
         errs() << '\t';
         C.print();
@@ -84,17 +145,18 @@ static bool increaseGranularity(std::vector<Chunk> &Chunks) {
       }
     }
   }
-  return SplitAny;
+  return SplitOne;
 }
 
 // Check if \p ChunkToCheckForUninterestingness is interesting. Returns the
 // modified module if the chunk resulted in a reduction.
+template <typename FuncType>
 static std::unique_ptr<ReducerWorkItem>
-CheckChunk(const Chunk ChunkToCheckForUninterestingness,
-           std::unique_ptr<ReducerWorkItem> Clone, const TestRunner &Test,
-           ReductionFunc ExtractChunksFromModule,
-           const DenseSet<Chunk> &UninterestingChunks,
-           const std::vector<Chunk> &ChunksStillConsideredInteresting) {
+CheckChunk(Chunk &ChunkToCheckForUninterestingness,
+           std::unique_ptr<ReducerWorkItem> Clone, TestRunner &Test,
+           FuncType ExtractChunksFromModule,
+           std::set<Chunk> &UninterestingChunks,
+           std::vector<Chunk> &ChunksStillConsideredInteresting) {
   // Take all of ChunksStillConsideredInteresting chunks, except those we've
   // already deemed uninteresting (UninterestingChunks) but didn't remove
   // from ChunksStillConsideredInteresting yet, and additionally ignore
@@ -104,8 +166,8 @@ CheckChunk(const Chunk ChunkToCheckForUninterestingness,
                         UninterestingChunks.size() - 1);
   copy_if(ChunksStillConsideredInteresting, std::back_inserter(CurrentChunks),
           [&](const Chunk &C) {
-            return C != ChunkToCheckForUninterestingness &&
-                   !UninterestingChunks.count(C);
+            return !UninterestingChunks.count(C) &&
+                   C != ChunkToCheckForUninterestingness;
           });
 
   // Generate Module with only Targets inside Current Chunks
@@ -113,7 +175,7 @@ CheckChunk(const Chunk ChunkToCheckForUninterestingness,
   ExtractChunksFromModule(O, *Clone);
 
   // Some reductions may result in invalid IR. Skip such reductions.
-  if (Clone->verify(&errs())) {
+  if (verifyReducerWorkItem(*Clone, &errs())) {
     if (AbortOnInvalidReduction) {
       errs() << "Invalid reduction, aborting.\n";
       Clone->print(errs());
@@ -134,7 +196,8 @@ CheckChunk(const Chunk ChunkToCheckForUninterestingness,
     errs() << "\n";
   }
 
-  if (!Clone->isReduced(Test)) {
+  SmallString<128> CurrentFilepath;
+  if (!isReduced(*Clone, Test, CurrentFilepath)) {
     // Program became non-reduced, so this chunk appears to be interesting.
     if (Verbose)
       errs() << "\n";
@@ -143,16 +206,17 @@ CheckChunk(const Chunk ChunkToCheckForUninterestingness,
   return Clone;
 }
 
-static SmallString<0> ProcessChunkFromSerializedBitcode(
-    const Chunk ChunkToCheckForUninterestingness, const TestRunner &Test,
-    ReductionFunc ExtractChunksFromModule,
-    const DenseSet<Chunk> &UninterestingChunks,
-    ArrayRef<Chunk> ChunksStillConsideredInteresting, StringRef OriginalBC,
-    std::atomic<bool> &AnyReduced) {
+template <typename FuncType>
+SmallString<0> ProcessChunkFromSerializedBitcode(
+    Chunk &ChunkToCheckForUninterestingness, TestRunner &Test,
+    FuncType ExtractChunksFromModule, std::set<Chunk> &UninterestingChunks,
+    std::vector<Chunk> &ChunksStillConsideredInteresting,
+    SmallString<0> &OriginalBC, std::atomic<bool> &AnyReduced) {
   LLVMContext Ctx;
   auto CloneMMM = std::make_unique<ReducerWorkItem>();
-  MemoryBufferRef Data(OriginalBC, "<bc file>");
-  CloneMMM->readBitcode(Data, Ctx, Test.getToolName());
+  auto Data = MemoryBufferRef(StringRef(OriginalBC.data(), OriginalBC.size()),
+                              "<bc file>");
+  readBitcode(*CloneMMM, Data, Ctx, Test.getToolName());
 
   SmallString<0> Result;
   if (std::unique_ptr<ReducerWorkItem> ChunkResult =
@@ -160,24 +224,27 @@ static SmallString<0> ProcessChunkFromSerializedBitcode(
                      Test, ExtractChunksFromModule, UninterestingChunks,
                      ChunksStillConsideredInteresting)) {
     raw_svector_ostream BCOS(Result);
-    ChunkResult->writeBitcode(BCOS);
+    writeBitcode(*ChunkResult, BCOS);
     // Communicate that the task reduced a chunk.
     AnyReduced = true;
   }
   return Result;
 }
 
-using SharedTaskQueue = std::deque<std::shared_future<SmallString<0>>>;
-
 /// Runs the Delta Debugging algorithm, splits the code into chunks and
 /// reduces the amount of chunks that are considered interesting by the
 /// given test. The number of chunks is determined by a preliminary run of the
 /// reduction pass where no change must be made to the module.
-void llvm::runDeltaPass(TestRunner &Test, ReductionFunc ExtractChunksFromModule,
-                        StringRef Message) {
-  assert(!Test.getProgram().verify(&errs()) &&
+void llvm::runDeltaPass(TestRunner &Test,
+                        ReductionFunc ExtractChunksFromModule) {
+  assert(!verifyReducerWorkItem(Test.getProgram(), &errs()) &&
          "input module is broken before making changes");
-  errs() << "*** " << Message << "...\n";
+
+  SmallString<128> CurrentFilepath;
+  if (!isReduced(Test.getProgram(), Test, CurrentFilepath)) {
+    errs() << "\nInput isn't interesting! Verify interesting-ness test\n";
+    exit(1);
+  }
 
   int Targets;
   {
@@ -189,9 +256,9 @@ void llvm::runDeltaPass(TestRunner &Test, ReductionFunc ExtractChunksFromModule,
     ExtractChunksFromModule(Counter, Test.getProgram());
     Targets = Counter.count();
 
-    assert(!Test.getProgram().verify(&errs()) &&
+    assert(!verifyReducerWorkItem(Test.getProgram(), &errs()) &&
            "input module is broken after counting chunks");
-    assert(Test.getProgram().isReduced(Test) &&
+    assert(isReduced(Test.getProgram(), Test, CurrentFilepath) &&
            "input module no longer interesting after counting chunks");
 
 #ifndef NDEBUG
@@ -199,7 +266,7 @@ void llvm::runDeltaPass(TestRunner &Test, ReductionFunc ExtractChunksFromModule,
     std::vector<Chunk> NoChunks = {{0, INT_MAX}};
     Oracle NoChunksCounter(NoChunks);
     std::unique_ptr<ReducerWorkItem> Clone =
-      Test.getProgram().clone(Test.getTargetMachine());
+        cloneReducerWorkItem(Test.getProgram(), Test.getTargetMachine());
     ExtractChunksFromModule(NoChunksCounter, *Clone);
     assert(Targets == NoChunksCounter.count() &&
            "number of chunks changes when reducing");
@@ -208,7 +275,6 @@ void llvm::runDeltaPass(TestRunner &Test, ReductionFunc ExtractChunksFromModule,
   if (!Targets) {
     if (Verbose)
       errs() << "\nNothing to reduce\n";
-    errs() << "----------------------------\n";
     return;
   }
 
@@ -229,17 +295,17 @@ void llvm::runDeltaPass(TestRunner &Test, ReductionFunc ExtractChunksFromModule,
   do {
     FoundAtLeastOneNewUninterestingChunkWithCurrentGranularity = false;
 
-    DenseSet<Chunk> UninterestingChunks;
+    std::set<Chunk> UninterestingChunks;
 
     // When running with more than one thread, serialize the original bitcode
     // to OriginalBC.
     SmallString<0> OriginalBC;
     if (NumJobs > 1) {
       raw_svector_ostream BCOS(OriginalBC);
-      Test.getProgram().writeBitcode(BCOS);
+      writeBitcode(Test.getProgram(), BCOS);
     }
 
-    SharedTaskQueue TaskQueue;
+    std::deque<std::shared_future<SmallString<0>>> TaskQueue;
     for (auto I = ChunksStillConsideredInteresting.rbegin(),
               E = ChunksStillConsideredInteresting.rend();
          I != E; ++I) {
@@ -253,7 +319,7 @@ void llvm::runDeltaPass(TestRunner &Test, ReductionFunc ExtractChunksFromModule,
         unsigned NumChunksProcessed = 0;
 
         ThreadPool &ChunkThreadPool = *ChunkThreadPoolPtr;
-        assert(TaskQueue.empty());
+        TaskQueue.clear();
 
         AnyReduced = false;
         // Queue jobs to process NumInitialTasks chunks in parallel using
@@ -263,12 +329,14 @@ void llvm::runDeltaPass(TestRunner &Test, ReductionFunc ExtractChunksFromModule,
         // LLVMContext object. If a task reduces the input, serialize the result
         // back in the corresponding Result element.
         for (unsigned J = 0; J < NumInitialTasks; ++J) {
-          Chunk ChunkToCheck = *(I + J);
           TaskQueue.emplace_back(ChunkThreadPool.async(
-              ProcessChunkFromSerializedBitcode, ChunkToCheck, std::ref(Test),
-              ExtractChunksFromModule, UninterestingChunks,
-              ChunksStillConsideredInteresting, OriginalBC,
-              std::ref(AnyReduced)));
+              [J, I, &Test, &ExtractChunksFromModule, &UninterestingChunks,
+               &ChunksStillConsideredInteresting, &OriginalBC, &AnyReduced]() {
+                return ProcessChunkFromSerializedBitcode(
+                    *(I + J), Test, ExtractChunksFromModule,
+                    UninterestingChunks, ChunksStillConsideredInteresting,
+                    OriginalBC, AnyReduced);
+              }));
         }
 
         // Start processing results of the queued tasks. We wait for the first
@@ -287,47 +355,48 @@ void llvm::runDeltaPass(TestRunner &Test, ReductionFunc ExtractChunksFromModule,
           if (Res.empty()) {
             unsigned NumScheduledTasks = NumChunksProcessed + TaskQueue.size();
             if (!AnyReduced && I + NumScheduledTasks != E) {
-              Chunk ChunkToCheck = *(I + NumScheduledTasks);
+              Chunk &ChunkToCheck = *(I + NumScheduledTasks);
               TaskQueue.emplace_back(ChunkThreadPool.async(
-                  ProcessChunkFromSerializedBitcode, ChunkToCheck,
-                  std::ref(Test), ExtractChunksFromModule, UninterestingChunks,
-                  ChunksStillConsideredInteresting, OriginalBC,
-                  std::ref(AnyReduced)));
+                  [&Test, &ExtractChunksFromModule, &UninterestingChunks,
+                   &ChunksStillConsideredInteresting, &OriginalBC,
+                   &ChunkToCheck, &AnyReduced]() {
+                    return ProcessChunkFromSerializedBitcode(
+                        ChunkToCheck, Test, ExtractChunksFromModule,
+                        UninterestingChunks, ChunksStillConsideredInteresting,
+                        OriginalBC, AnyReduced);
+                  }));
             }
             continue;
           }
 
           Result = std::make_unique<ReducerWorkItem>();
-          MemoryBufferRef Data(StringRef(Res), "<bc file>");
-          Result->readBitcode(Data, Test.getProgram().M->getContext(),
-                              Test.getToolName());
+          auto Data = MemoryBufferRef(StringRef(Res.data(), Res.size()),
+                                      "<bc file>");
+          readBitcode(*Result, Data, Test.getProgram().M->getContext(),
+                      Test.getToolName());
           break;
         }
-
-        // If we broke out of the loop, we still need to wait for everything to
-        // avoid race access to the chunk set.
-        //
-        // TODO: Create a way to kill remaining items we're ignoring; they could
-        // take a long time.
-        ChunkThreadPoolPtr->wait();
-        TaskQueue.clear();
-
         // Forward I to the last chunk processed in parallel.
         I += NumChunksProcessed - 1;
       } else {
-        Result =
-            CheckChunk(*I, Test.getProgram().clone(Test.getTargetMachine()),
-                       Test, ExtractChunksFromModule, UninterestingChunks,
-                       ChunksStillConsideredInteresting);
+        Result = CheckChunk(
+            *I,
+            cloneReducerWorkItem(Test.getProgram(), Test.getTargetMachine()),
+            Test, ExtractChunksFromModule, UninterestingChunks,
+            ChunksStillConsideredInteresting);
       }
 
       if (!Result)
         continue;
 
-      const Chunk ChunkToCheckForUninterestingness = *I;
+      Chunk &ChunkToCheckForUninterestingness = *I;
       FoundAtLeastOneNewUninterestingChunkWithCurrentGranularity = true;
       UninterestingChunks.insert(ChunkToCheckForUninterestingness);
       ReducedProgram = std::move(Result);
+      if (Verbose)
+        errs() << " **** SUCCESS | lines: " << getLines(CurrentFilepath)
+               << "\n";
+      writeOutput(*ReducedProgram, "Saved new best reduction to ");
     }
     // Delete uninteresting chunks
     erase_if(ChunksStillConsideredInteresting,
@@ -339,12 +408,8 @@ void llvm::runDeltaPass(TestRunner &Test, ReductionFunc ExtractChunksFromModule,
             increaseGranularity(ChunksStillConsideredInteresting)));
 
   // If we reduced the testcase replace it
-  if (ReducedProgram) {
+  if (ReducedProgram)
     Test.setProgram(std::move(ReducedProgram));
-    // FIXME: Report meaningful progress info
-    Test.writeOutput(" **** SUCCESS | Saved new best reduction to ");
-  }
   if (Verbose)
     errs() << "Couldn't increase anymore.\n";
-  errs() << "----------------------------\n";
 }

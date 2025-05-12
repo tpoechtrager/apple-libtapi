@@ -18,7 +18,6 @@
 #include "tapi/Defines.h"
 #include "llvm/Support/Error.h"
 
-#include <optional>
 #include <functional>
 #include <string>
 #include <vector>
@@ -28,7 +27,7 @@ TAPI_NAMESPACE_INTERNAL_BEGIN
 class FileManager;
 
 using PathSeq = std::vector<std::string>;
-using PathToPlatform = std::pair<std::string, std::optional<PlatformType>>;
+using PathToPlatform = std::pair<std::string, llvm::Optional<PlatformType>>;
 using PathToPlatformSeq = std::vector<PathToPlatform>;
 
 void replace_extension(SmallVectorImpl<char> &path, const Twine &extension);

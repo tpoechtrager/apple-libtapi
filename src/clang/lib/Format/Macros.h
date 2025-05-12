@@ -106,23 +106,17 @@ public:
                 IdentifierTable &IdentTable);
   ~MacroExpander();
 
-  /// Returns whether any macro \p Name is defined, regardless of overloads.
+  /// Returns whether a macro \p Name is defined.
   bool defined(llvm::StringRef Name) const;
 
-  /// Returns whetherh there is an object-like overload, i.e. where the macro
-  /// has no arguments and should not consume subsequent parentheses.
+  /// Returns whether the macro has no arguments and should not consume
+  /// subsequent parentheses.
   bool objectLike(llvm::StringRef Name) const;
-
-  /// Returns whether macro \p Name provides an overload with the given arity.
-  bool hasArity(llvm::StringRef Name, unsigned Arity) const;
 
   /// Returns the expanded stream of format tokens for \p ID, where
   /// each element in \p Args is a positional argument to the macro call.
-  /// If \p Args is not set, the object-like overload is used.
-  /// If \p Args is set, the overload with the arity equal to \c Args.size() is
-  /// used.
-  llvm::SmallVector<FormatToken *, 8>
-  expand(FormatToken *ID, std::optional<ArgsList> OptionalArgs) const;
+  llvm::SmallVector<FormatToken *, 8> expand(FormatToken *ID,
+                                             ArgsList Args) const;
 
 private:
   struct Definition;
@@ -135,8 +129,7 @@ private:
   llvm::SpecificBumpPtrAllocator<FormatToken> &Allocator;
   IdentifierTable &IdentTable;
   SmallVector<std::unique_ptr<llvm::MemoryBuffer>> Buffers;
-  llvm::StringMap<llvm::DenseMap<int, Definition>> FunctionLike;
-  llvm::StringMap<Definition> ObjectLike;
+  llvm::StringMap<Definition> Definitions;
 };
 
 /// Converts a sequence of UnwrappedLines containing expanded macros into a
@@ -156,7 +149,7 @@ private:
 ///
 /// After this point, the state of the spelled/expanded stream is "in sync"
 /// (both at the start of an UnwrappedLine, with no macros open), so the
-/// Reconstructor can be thrown away and parsing can continue.
+/// Unexpander can be thrown away and parsing can continue.
 ///
 /// Given a mapping from the macro name identifier token in the macro call
 /// to the tokens of the macro call, for example:

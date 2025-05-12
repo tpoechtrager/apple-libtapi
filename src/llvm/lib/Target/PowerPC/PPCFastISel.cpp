@@ -20,6 +20,7 @@
 #include "PPCMachineFunctionInfo.h"
 #include "PPCSubtarget.h"
 #include "PPCTargetMachine.h"
+#include "llvm/ADT/Optional.h"
 #include "llvm/CodeGen/CallingConvLower.h"
 #include "llvm/CodeGen/FastISel.h"
 #include "llvm/CodeGen/FunctionLoweringInfo.h"
@@ -197,8 +198,8 @@ class PPCFastISel final : public FastISel {
 
 } // end anonymous namespace
 
-static std::optional<PPC::Predicate> getComparePred(CmpInst::Predicate Pred) {
-    switch (Pred) {
+static Optional<PPC::Predicate> getComparePred(CmpInst::Predicate Pred) {
+  switch (Pred) {
     // These are not representable with any single compare.
     case CmpInst::FCMP_FALSE:
     case CmpInst::FCMP_TRUE:
@@ -225,7 +226,7 @@ static std::optional<PPC::Predicate> getComparePred(CmpInst::Predicate Pred) {
     case CmpInst::FCMP_OLE:
     case CmpInst::FCMP_ONE:
     default:
-      return std::nullopt;
+      return Optional<PPC::Predicate>();
 
     case CmpInst::FCMP_OEQ:
     case CmpInst::ICMP_EQ:
@@ -769,8 +770,7 @@ bool PPCFastISel::SelectBranch(const Instruction *I) {
   // For now, just try the simplest case where it's fed by a compare.
   if (const CmpInst *CI = dyn_cast<CmpInst>(BI->getCondition())) {
     if (isValueAvailable(CI)) {
-      std::optional<PPC::Predicate> OptPPCPred =
-          getComparePred(CI->getPredicate());
+      Optional<PPC::Predicate> OptPPCPred = getComparePred(CI->getPredicate());
       if (!OptPPCPred)
         return false;
 
@@ -1404,7 +1404,7 @@ bool PPCFastISel::processCallArgs(SmallVectorImpl<Value*> &Args,
   }
 
   // Get a count of how many bytes are to be pushed onto the stack.
-  NumBytes = CCInfo.getStackSize();
+  NumBytes = CCInfo.getNextStackOffset();
 
   // The prolog code of the callee may store up to 8 GPR argument registers to
   // the stack, allowing va_start to index over them in memory if its varargs.
@@ -1555,8 +1555,8 @@ bool PPCFastISel::fastLowerCall(CallLoweringInfo &CLI) {
   if (!Callee && !Symbol)
     return false;
 
-  // Allow SelectionDAG isel to handle tail calls and long calls.
-  if (IsTailCall || Subtarget->useLongCalls())
+  // Allow SelectionDAG isel to handle tail calls.
+  if (IsTailCall)
     return false;
 
   // Let SDISel handle vararg functions.
@@ -2155,7 +2155,7 @@ unsigned PPCFastISel::PPCMaterialize64BitInt(int64_t Imm,
   // If the value doesn't fit in 32 bits, see if we can shift it
   // so that it fits in 32 bits.
   if (!isInt<32>(Imm)) {
-    Shift = llvm::countr_zero<uint64_t>(Imm);
+    Shift = countTrailingZeros<uint64_t>(Imm);
     int64_t ImmSh = static_cast<uint64_t>(Imm) >> Shift;
 
     if (isInt<32>(ImmSh))

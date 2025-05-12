@@ -105,8 +105,8 @@ void DWARFDebugMacro::dump(raw_ostream &OS) const {
 }
 
 Error DWARFDebugMacro::parseImpl(
-    std::optional<DWARFUnitVector::compile_unit_range> Units,
-    std::optional<DataExtractor> StringExtractor, DWARFDataExtractor Data,
+    Optional<DWARFUnitVector::compile_unit_range> Units,
+    Optional<DataExtractor> StringExtractor, DWARFDataExtractor Data,
     bool IsMacro) {
   uint64_t Offset = 0;
   MacroList *M = nullptr;

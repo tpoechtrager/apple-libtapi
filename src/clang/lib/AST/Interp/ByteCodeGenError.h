@@ -20,19 +20,19 @@ namespace interp {
 /// Error thrown by the compiler.
 struct ByteCodeGenError : public llvm::ErrorInfo<ByteCodeGenError> {
 public:
-  ByteCodeGenError(SourceRange Range) : Range(Range) {}
-  ByteCodeGenError(const Stmt *S) : ByteCodeGenError(S->getSourceRange()) {}
-  ByteCodeGenError(const Decl *D) : ByteCodeGenError(D->getSourceRange()) {}
+  ByteCodeGenError(SourceLocation Loc) : Loc(Loc) {}
+  ByteCodeGenError(const Stmt *S) : ByteCodeGenError(S->getBeginLoc()) {}
+  ByteCodeGenError(const Decl *D) : ByteCodeGenError(D->getBeginLoc()) {}
 
   void log(raw_ostream &OS) const override { OS << "unimplemented feature"; }
 
-  const SourceRange &getRange() const { return Range; }
+  const SourceLocation &getLoc() const { return Loc; }
 
   static char ID;
 
 private:
-  // Range of the item where the error occurred.
-  SourceRange Range;
+  // Start of the item where the error occurred.
+  SourceLocation Loc;
 
   // Users are not expected to use error_code.
   std::error_code convertToErrorCode() const override {

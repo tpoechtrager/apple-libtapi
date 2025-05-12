@@ -108,7 +108,9 @@ public:
 
   unsigned getModuleIndex() const { return Layout.Mod; }
 
-  ArrayRef<std::string> source_files() const { return SourceFiles; }
+  ArrayRef<std::string> source_files() const {
+    return makeArrayRef(SourceFiles);
+  }
 
   uint32_t calculateSerializedLength() const;
 

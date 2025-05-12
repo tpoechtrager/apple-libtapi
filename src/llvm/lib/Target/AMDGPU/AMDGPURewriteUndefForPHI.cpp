@@ -10,7 +10,7 @@
 // StructurizedCFG pass, and this pass has some additional limitation that make
 // it can only run after SIAnnotateControlFlow.
 //
-// To achieve optimal code generation for AMDGPU, we assume that uniformity
+// To achieve optimal code generation for AMDGPU, we assume that divergence
 // analysis reports the PHI in join block of divergent branch as uniform if
 // it has one unique uniform value plus additional undefined/poisoned incoming
 // value. That is to say the later compiler pipeline will ensure such PHI always
@@ -56,7 +56,7 @@
 // \---
 
 #include "AMDGPU.h"
-#include "llvm/Analysis/UniformityAnalysis.h"
+#include "llvm/Analysis/LegacyDivergenceAnalysis.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Dominators.h"
@@ -81,11 +81,11 @@ public:
   }
 
   void getAnalysisUsage(AnalysisUsage &AU) const override {
-    AU.addRequired<UniformityInfoWrapperPass>();
+    AU.addRequired<LegacyDivergenceAnalysis>();
     AU.addRequired<DominatorTreeWrapperPass>();
 
     AU.addPreserved<DominatorTreeWrapperPass>();
-    AU.addPreserved<UniformityInfoWrapperPass>();
+    AU.addPreserved<LegacyDivergenceAnalysis>();
     AU.setPreservesCFG();
   }
 };
@@ -95,17 +95,17 @@ char AMDGPURewriteUndefForPHI::ID = 0;
 
 INITIALIZE_PASS_BEGIN(AMDGPURewriteUndefForPHI, DEBUG_TYPE,
                       "Rewrite undef for PHI", false, false)
-INITIALIZE_PASS_DEPENDENCY(UniformityInfoWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(LegacyDivergenceAnalysis)
 INITIALIZE_PASS_DEPENDENCY(DominatorTreeWrapperPass)
 INITIALIZE_PASS_END(AMDGPURewriteUndefForPHI, DEBUG_TYPE,
                     "Rewrite undef for PHI", false, false)
 
-bool rewritePHIs(Function &F, UniformityInfo &UA, DominatorTree *DT) {
+bool rewritePHIs(Function &F, LegacyDivergenceAnalysis *DA, DominatorTree *DT) {
   bool Changed = false;
   SmallVector<PHINode *> ToBeDeleted;
   for (auto &BB : F) {
     for (auto &PHI : BB.phis()) {
-      if (UA.isDivergent(&PHI))
+      if (DA->isDivergent(&PHI))
         continue;
 
       // The unique incoming value except undef/poison for the PHI node.
@@ -147,7 +147,7 @@ bool rewritePHIs(Function &F, UniformityInfo &UA, DominatorTree *DT) {
       // TODO: We should still be able to replace undef value if the unique
       // value is a Constant.
       if (!UniqueDefinedIncoming || Undefs.empty() ||
-          !UA.isDivergent(DominateBB->getTerminator()))
+          !DA->isDivergent(DominateBB->getTerminator()))
         continue;
 
       // We only replace the undef when DominateBB truly dominates all the
@@ -171,10 +171,9 @@ bool rewritePHIs(Function &F, UniformityInfo &UA, DominatorTree *DT) {
 }
 
 bool AMDGPURewriteUndefForPHI::runOnFunction(Function &F) {
-  UniformityInfo &UA =
-      getAnalysis<UniformityInfoWrapperPass>().getUniformityInfo();
+  LegacyDivergenceAnalysis *DA = &getAnalysis<LegacyDivergenceAnalysis>();
   DominatorTree *DT = &getAnalysis<DominatorTreeWrapperPass>().getDomTree();
-  return rewritePHIs(F, UA, DT);
+  return rewritePHIs(F, DA, DT);
 }
 
 FunctionPass *llvm::createAMDGPURewriteUndefForPHIPass() {

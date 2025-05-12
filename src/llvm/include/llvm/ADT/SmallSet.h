@@ -14,6 +14,7 @@
 #ifndef LLVM_ADT_SMALLSET_H
 #define LLVM_ADT_SMALLSET_H
 
+#include "llvm/ADT/None.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/STLExtras.h"
@@ -149,9 +150,7 @@ class SmallSet {
   static_assert(N <= 32, "N should be small");
 
 public:
-  using key_type = T;
   using size_type = size_t;
-  using value_type = T;
   using const_iterator = SmallSetIterator<T, N, C>;
 
   SmallSet() = default;

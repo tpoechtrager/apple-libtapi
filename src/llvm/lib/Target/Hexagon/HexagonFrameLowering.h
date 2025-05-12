@@ -114,7 +114,7 @@ private:
   using CSIVect = std::vector<CalleeSavedInfo>;
 
   void expandAlloca(MachineInstr *AI, const HexagonInstrInfo &TII,
-      Register SP, unsigned CF) const;
+      unsigned SP, unsigned CF) const;
   void insertPrologueInBlock(MachineBasicBlock &MBB, bool PrologueStubs) const;
   void insertEpilogueInBlock(MachineBasicBlock &MBB) const;
   void insertAllocframe(MachineBasicBlock &MBB,
@@ -131,40 +131,40 @@ private:
 
   bool expandCopy(MachineBasicBlock &B, MachineBasicBlock::iterator It,
       MachineRegisterInfo &MRI, const HexagonInstrInfo &HII,
-      SmallVectorImpl<Register> &NewRegs) const;
+      SmallVectorImpl<unsigned> &NewRegs) const;
   bool expandStoreInt(MachineBasicBlock &B, MachineBasicBlock::iterator It,
       MachineRegisterInfo &MRI, const HexagonInstrInfo &HII,
-      SmallVectorImpl<Register> &NewRegs) const;
+      SmallVectorImpl<unsigned> &NewRegs) const;
   bool expandLoadInt(MachineBasicBlock &B, MachineBasicBlock::iterator It,
       MachineRegisterInfo &MRI, const HexagonInstrInfo &HII,
-      SmallVectorImpl<Register> &NewRegs) const;
+      SmallVectorImpl<unsigned> &NewRegs) const;
   bool expandStoreVecPred(MachineBasicBlock &B, MachineBasicBlock::iterator It,
       MachineRegisterInfo &MRI, const HexagonInstrInfo &HII,
-      SmallVectorImpl<Register> &NewRegs) const;
+      SmallVectorImpl<unsigned> &NewRegs) const;
   bool expandLoadVecPred(MachineBasicBlock &B, MachineBasicBlock::iterator It,
       MachineRegisterInfo &MRI, const HexagonInstrInfo &HII,
-      SmallVectorImpl<Register> &NewRegs) const;
+      SmallVectorImpl<unsigned> &NewRegs) const;
   bool expandStoreVec2(MachineBasicBlock &B, MachineBasicBlock::iterator It,
       MachineRegisterInfo &MRI, const HexagonInstrInfo &HII,
-      SmallVectorImpl<Register> &NewRegs) const;
+      SmallVectorImpl<unsigned> &NewRegs) const;
   bool expandLoadVec2(MachineBasicBlock &B, MachineBasicBlock::iterator It,
       MachineRegisterInfo &MRI, const HexagonInstrInfo &HII,
-      SmallVectorImpl<Register> &NewRegs) const;
+      SmallVectorImpl<unsigned> &NewRegs) const;
   bool expandStoreVec(MachineBasicBlock &B, MachineBasicBlock::iterator It,
       MachineRegisterInfo &MRI, const HexagonInstrInfo &HII,
-      SmallVectorImpl<Register> &NewRegs) const;
+      SmallVectorImpl<unsigned> &NewRegs) const;
   bool expandLoadVec(MachineBasicBlock &B, MachineBasicBlock::iterator It,
       MachineRegisterInfo &MRI, const HexagonInstrInfo &HII,
-      SmallVectorImpl<Register> &NewRegs) const;
+      SmallVectorImpl<unsigned> &NewRegs) const;
   bool expandSpillMacros(MachineFunction &MF,
-      SmallVectorImpl<Register> &NewRegs) const;
+      SmallVectorImpl<unsigned> &NewRegs) const;
 
-  Register findPhysReg(MachineFunction &MF, HexagonBlockRanges::IndexRange &FIR,
+  unsigned findPhysReg(MachineFunction &MF, HexagonBlockRanges::IndexRange &FIR,
       HexagonBlockRanges::InstrIndexMap &IndexMap,
       HexagonBlockRanges::RegToRangeMap &DeadMap,
       const TargetRegisterClass *RC) const;
   void optimizeSpillSlots(MachineFunction &MF,
-      SmallVectorImpl<Register> &VRegs) const;
+      SmallVectorImpl<unsigned> &VRegs) const;
 
   void findShrunkPrologEpilog(MachineFunction &MF, MachineBasicBlock *&PrologB,
       MachineBasicBlock *&EpilogB) const;

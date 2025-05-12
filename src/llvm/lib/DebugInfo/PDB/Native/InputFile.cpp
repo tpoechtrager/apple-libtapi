@@ -8,7 +8,6 @@
 
 #include "llvm/DebugInfo/PDB/Native/InputFile.h"
 
-#include "llvm/ADT/StringExtras.h"
 #include "llvm/BinaryFormat/Magic.h"
 #include "llvm/DebugInfo/CodeView/CodeView.h"
 #include "llvm/DebugInfo/CodeView/LazyRandomTypeCollection.h"
@@ -348,32 +347,32 @@ Expected<InputFile> InputFile::open(StringRef Path, bool AllowUnknownFile) {
 
 PDBFile &InputFile::pdb() {
   assert(isPdb());
-  return *cast<PDBFile *>(PdbOrObj);
+  return *PdbOrObj.get<PDBFile *>();
 }
 
 const PDBFile &InputFile::pdb() const {
   assert(isPdb());
-  return *cast<PDBFile *>(PdbOrObj);
+  return *PdbOrObj.get<PDBFile *>();
 }
 
 object::COFFObjectFile &InputFile::obj() {
   assert(isObj());
-  return *cast<object::COFFObjectFile *>(PdbOrObj);
+  return *PdbOrObj.get<object::COFFObjectFile *>();
 }
 
 const object::COFFObjectFile &InputFile::obj() const {
   assert(isObj());
-  return *cast<object::COFFObjectFile *>(PdbOrObj);
+  return *PdbOrObj.get<object::COFFObjectFile *>();
 }
 
 MemoryBuffer &InputFile::unknown() {
   assert(isUnknown());
-  return *cast<MemoryBuffer *>(PdbOrObj);
+  return *PdbOrObj.get<MemoryBuffer *>();
 }
 
 const MemoryBuffer &InputFile::unknown() const {
   assert(isUnknown());
-  return *cast<MemoryBuffer *>(PdbOrObj);
+  return *PdbOrObj.get<MemoryBuffer *>();
 }
 
 StringRef InputFile::getFilePath() const {
@@ -403,13 +402,13 @@ bool InputFile::hasIds() const {
   return pdb().hasPDBIpiStream();
 }
 
-bool InputFile::isPdb() const { return isa<PDBFile *>(PdbOrObj); }
+bool InputFile::isPdb() const { return PdbOrObj.is<PDBFile *>(); }
 
 bool InputFile::isObj() const {
-  return isa<object::COFFObjectFile *>(PdbOrObj);
+  return PdbOrObj.is<object::COFFObjectFile *>();
 }
 
-bool InputFile::isUnknown() const { return isa<MemoryBuffer *>(PdbOrObj); }
+bool InputFile::isUnknown() const { return PdbOrObj.is<MemoryBuffer *>(); }
 
 codeview::LazyRandomTypeCollection &
 InputFile::getOrCreateTypeCollection(TypeCollectionKind Kind) {
@@ -563,13 +562,13 @@ static bool isMyCode(const SymbolGroup &Group) {
   StringRef Name = Group.name();
   if (Name.startswith("Import:"))
     return false;
-  if (Name.ends_with_insensitive(".dll"))
+  if (Name.endswith_insensitive(".dll"))
     return false;
   if (Name.equals_insensitive("* linker *"))
     return false;
-  if (Name.starts_with_insensitive("f:\\binaries\\Intermediate\\vctools"))
+  if (Name.startswith_insensitive("f:\\binaries\\Intermediate\\vctools"))
     return false;
-  if (Name.starts_with_insensitive("f:\\dd\\vctools\\crt"))
+  if (Name.startswith_insensitive("f:\\dd\\vctools\\crt"))
     return false;
   return true;
 }

@@ -233,7 +233,7 @@ void CheckerRegistry::initializeRegistry(const CheckerManager &Mgr) {
   // done recursively, its arguably cheaper, but for sure less error prone to
   // recalculate from scratch.
   auto IsEnabled = [&](const CheckerInfo *Checker) {
-    return Tmp.contains(Checker);
+    return llvm::is_contained(Tmp, Checker);
   };
   for (const CheckerInfo &Checker : Data.Checkers) {
     if (!Checker.isEnabled(Mgr))
@@ -525,3 +525,4 @@ void CheckerRegistry::validateCheckerOptions() const {
         << SuppliedCheckerOrPackage;
   }
 }
+

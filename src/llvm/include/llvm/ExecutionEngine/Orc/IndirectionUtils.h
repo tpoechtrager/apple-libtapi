@@ -63,17 +63,17 @@ namespace orc {
 class TrampolinePool {
 public:
   using NotifyLandingResolvedFunction =
-      unique_function<void(ExecutorAddr) const>;
+      unique_function<void(JITTargetAddress) const>;
 
   using ResolveLandingFunction = unique_function<void(
-      ExecutorAddr TrampolineAddr,
+      JITTargetAddress TrampolineAddr,
       NotifyLandingResolvedFunction OnLandingResolved) const>;
 
   virtual ~TrampolinePool();
 
   /// Get an available trampoline address.
   /// Returns an error if no trampoline can be created.
-  Expected<ExecutorAddr> getTrampoline() {
+  Expected<JITTargetAddress> getTrampoline() {
     std::lock_guard<std::mutex> Lock(TPMutex);
     if (AvailableTrampolines.empty()) {
       if (auto Err = grow())
@@ -86,7 +86,7 @@ public:
   }
 
   /// Returns the given trampoline to the pool for re-use.
-  void releaseTrampoline(ExecutorAddr TrampolineAddr) {
+  void releaseTrampoline(JITTargetAddress TrampolineAddr) {
     std::lock_guard<std::mutex> Lock(TPMutex);
     AvailableTrampolines.push_back(TrampolineAddr);
   }
@@ -95,7 +95,7 @@ protected:
   virtual Error grow() = 0;
 
   std::mutex TPMutex;
-  std::vector<ExecutorAddr> AvailableTrampolines;
+  std::vector<JITTargetAddress> AvailableTrampolines;
 };
 
 /// A trampoline pool for trampolines within the current process.
@@ -121,14 +121,14 @@ private:
     LocalTrampolinePool<ORCABI> *TrampolinePool =
         static_cast<LocalTrampolinePool *>(TrampolinePoolPtr);
 
-    std::promise<ExecutorAddr> LandingAddressP;
+    std::promise<JITTargetAddress> LandingAddressP;
     auto LandingAddressF = LandingAddressP.get_future();
 
-    TrampolinePool->ResolveLanding(ExecutorAddr::fromPtr(TrampolineId),
-                                   [&](ExecutorAddr LandingAddress) {
+    TrampolinePool->ResolveLanding(pointerToJITTargetAddress(TrampolineId),
+                                   [&](JITTargetAddress LandingAddress) {
                                      LandingAddressP.set_value(LandingAddress);
                                    });
-    return LandingAddressF.get().getValue();
+    return LandingAddressF.get();
   }
 
   LocalTrampolinePool(ResolveLandingFunction ResolveLanding, Error &Err)
@@ -147,9 +147,9 @@ private:
     }
 
     ORCABI::writeResolverCode(static_cast<char *>(ResolverBlock.base()),
-                              ExecutorAddr::fromPtr(ResolverBlock.base()),
-                              ExecutorAddr::fromPtr(&reenter),
-                              ExecutorAddr::fromPtr(this));
+                              pointerToJITTargetAddress(ResolverBlock.base()),
+                              pointerToJITTargetAddress(&reenter),
+                              pointerToJITTargetAddress(this));
 
     EC = sys::Memory::protectMappedMemory(ResolverBlock.getMemoryBlock(),
                                           sys::Memory::MF_READ |
@@ -177,12 +177,12 @@ private:
 
     char *TrampolineMem = static_cast<char *>(TrampolineBlock.base());
     ORCABI::writeTrampolines(
-        TrampolineMem, ExecutorAddr::fromPtr(TrampolineMem),
-        ExecutorAddr::fromPtr(ResolverBlock.base()), NumTrampolines);
+        TrampolineMem, pointerToJITTargetAddress(TrampolineMem),
+        pointerToJITTargetAddress(ResolverBlock.base()), NumTrampolines);
 
     for (unsigned I = 0; I < NumTrampolines; ++I)
-      AvailableTrampolines.push_back(
-          ExecutorAddr::fromPtr(TrampolineMem + (I * ORCABI::TrampolineSize)));
+      AvailableTrampolines.push_back(pointerToJITTargetAddress(
+          TrampolineMem + (I * ORCABI::TrampolineSize)));
 
     if (auto EC = sys::Memory::protectMappedMemory(
                     TrampolineBlock.getMemoryBlock(),
@@ -202,22 +202,22 @@ private:
 /// Target-independent base class for compile callback management.
 class JITCompileCallbackManager {
 public:
-  using CompileFunction = std::function<ExecutorAddr()>;
+  using CompileFunction = std::function<JITTargetAddress()>;
 
   virtual ~JITCompileCallbackManager() = default;
 
   /// Reserve a compile callback.
-  Expected<ExecutorAddr> getCompileCallback(CompileFunction Compile);
+  Expected<JITTargetAddress> getCompileCallback(CompileFunction Compile);
 
   /// Execute the callback for the given trampoline id. Called by the JIT
   ///        to compile functions on demand.
-  ExecutorAddr executeCompileCallback(ExecutorAddr TrampolineAddr);
+  JITTargetAddress executeCompileCallback(JITTargetAddress TrampolineAddr);
 
 protected:
   /// Construct a JITCompileCallbackManager.
   JITCompileCallbackManager(std::unique_ptr<TrampolinePool> TP,
                             ExecutionSession &ES,
-                            ExecutorAddr ErrorHandlerAddress)
+                            JITTargetAddress ErrorHandlerAddress)
       : TP(std::move(TP)), ES(ES),
         CallbacksJD(ES.createBareJITDylib("<Callbacks>")),
         ErrorHandlerAddress(ErrorHandlerAddress) {}
@@ -231,8 +231,8 @@ private:
   std::unique_ptr<TrampolinePool> TP;
   ExecutionSession &ES;
   JITDylib &CallbacksJD;
-  ExecutorAddr ErrorHandlerAddress;
-  std::map<ExecutorAddr, SymbolStringPtr> AddrToSymbol;
+  JITTargetAddress ErrorHandlerAddress;
+  std::map<JITTargetAddress, SymbolStringPtr> AddrToSymbol;
   size_t NextCallbackId = 0;
 };
 
@@ -242,7 +242,7 @@ class LocalJITCompileCallbackManager : public JITCompileCallbackManager {
 public:
   /// Create a new LocalJITCompileCallbackManager.
   static Expected<std::unique_ptr<LocalJITCompileCallbackManager>>
-  Create(ExecutionSession &ES, ExecutorAddr ErrorHandlerAddress) {
+  Create(ExecutionSession &ES, JITTargetAddress ErrorHandlerAddress) {
     Error Err = Error::success();
     auto CCMgr = std::unique_ptr<LocalJITCompileCallbackManager>(
         new LocalJITCompileCallbackManager(ES, ErrorHandlerAddress, Err));
@@ -256,14 +256,15 @@ private:
   /// @param ErrorHandlerAddress The address of an error handler in the target
   ///                            process to be used if a compile callback fails.
   LocalJITCompileCallbackManager(ExecutionSession &ES,
-                                 ExecutorAddr ErrorHandlerAddress, Error &Err)
+                                 JITTargetAddress ErrorHandlerAddress,
+                                 Error &Err)
       : JITCompileCallbackManager(nullptr, ES, ErrorHandlerAddress) {
     using NotifyLandingResolvedFunction =
         TrampolinePool::NotifyLandingResolvedFunction;
 
     ErrorAsOutParameter _(&Err);
     auto TP = LocalTrampolinePool<ORCABI>::Create(
-        [this](ExecutorAddr TrampolineAddr,
+        [this](JITTargetAddress TrampolineAddr,
                NotifyLandingResolvedFunction NotifyLandingResolved) {
           NotifyLandingResolved(executeCompileCallback(TrampolineAddr));
         });
@@ -281,12 +282,12 @@ private:
 class IndirectStubsManager {
 public:
   /// Map type for initializing the manager. See init.
-  using StubInitsMap = StringMap<std::pair<ExecutorAddr, JITSymbolFlags>>;
+  using StubInitsMap = StringMap<std::pair<JITTargetAddress, JITSymbolFlags>>;
 
   virtual ~IndirectStubsManager() = default;
 
   /// Create a single stub with the given name, target address and flags.
-  virtual Error createStub(StringRef StubName, ExecutorAddr StubAddr,
+  virtual Error createStub(StringRef StubName, JITTargetAddress StubAddr,
                            JITSymbolFlags StubFlags) = 0;
 
   /// Create StubInits.size() stubs with the given names, target
@@ -296,14 +297,13 @@ public:
   /// Find the stub with the given name. If ExportedStubsOnly is true,
   ///        this will only return a result if the stub's flags indicate that it
   ///        is exported.
-  virtual ExecutorSymbolDef findStub(StringRef Name,
-                                     bool ExportedStubsOnly) = 0;
+  virtual JITEvaluatedSymbol findStub(StringRef Name, bool ExportedStubsOnly) = 0;
 
   /// Find the implementation-pointer for the stub.
-  virtual ExecutorSymbolDef findPointer(StringRef Name) = 0;
+  virtual JITEvaluatedSymbol findPointer(StringRef Name) = 0;
 
   /// Change the value of the implementation pointer for the stub.
-  virtual Error updatePointer(StringRef Name, ExecutorAddr NewAddr) = 0;
+  virtual Error updatePointer(StringRef Name, JITTargetAddress NewAddr) = 0;
 
 private:
   virtual void anchor();
@@ -334,10 +334,10 @@ public:
     sys::MemoryBlock StubsBlock(StubsAndPtrsMem.base(), ISAS.StubBytes);
     auto StubsBlockMem = static_cast<char *>(StubsAndPtrsMem.base());
     auto PtrBlockAddress =
-        ExecutorAddr::fromPtr(StubsBlockMem) + ISAS.StubBytes;
+        pointerToJITTargetAddress(StubsBlockMem) + ISAS.StubBytes;
 
     ORCABI::writeIndirectStubsBlock(StubsBlockMem,
-                                    ExecutorAddr::fromPtr(StubsBlockMem),
+                                    pointerToJITTargetAddress(StubsBlockMem),
                                     PtrBlockAddress, ISAS.NumStubs);
 
     if (auto EC = sys::Memory::protectMappedMemory(
@@ -369,7 +369,7 @@ private:
 template <typename TargetT>
 class LocalIndirectStubsManager : public IndirectStubsManager {
 public:
-  Error createStub(StringRef StubName, ExecutorAddr StubAddr,
+  Error createStub(StringRef StubName, JITTargetAddress StubAddr,
                    JITSymbolFlags StubFlags) override {
     std::lock_guard<std::mutex> Lock(StubsMutex);
     if (auto Err = reserveStubs(1))
@@ -392,34 +392,36 @@ public:
     return Error::success();
   }
 
-  ExecutorSymbolDef findStub(StringRef Name, bool ExportedStubsOnly) override {
+  JITEvaluatedSymbol findStub(StringRef Name, bool ExportedStubsOnly) override {
     std::lock_guard<std::mutex> Lock(StubsMutex);
     auto I = StubIndexes.find(Name);
     if (I == StubIndexes.end())
-      return ExecutorSymbolDef();
+      return nullptr;
     auto Key = I->second.first;
-    void *StubPtr = IndirectStubsInfos[Key.first].getStub(Key.second);
-    assert(StubPtr && "Missing stub address");
-    auto StubAddr = ExecutorAddr::fromPtr(StubPtr);
-    auto StubSymbol = ExecutorSymbolDef(StubAddr, I->second.second);
+    void *StubAddr = IndirectStubsInfos[Key.first].getStub(Key.second);
+    assert(StubAddr && "Missing stub address");
+    auto StubTargetAddr =
+        static_cast<JITTargetAddress>(reinterpret_cast<uintptr_t>(StubAddr));
+    auto StubSymbol = JITEvaluatedSymbol(StubTargetAddr, I->second.second);
     if (ExportedStubsOnly && !StubSymbol.getFlags().isExported())
-      return ExecutorSymbolDef();
+      return nullptr;
     return StubSymbol;
   }
 
-  ExecutorSymbolDef findPointer(StringRef Name) override {
+  JITEvaluatedSymbol findPointer(StringRef Name) override {
     std::lock_guard<std::mutex> Lock(StubsMutex);
     auto I = StubIndexes.find(Name);
     if (I == StubIndexes.end())
-      return ExecutorSymbolDef();
+      return nullptr;
     auto Key = I->second.first;
-    void *PtrPtr = IndirectStubsInfos[Key.first].getPtr(Key.second);
-    assert(PtrPtr && "Missing pointer address");
-    auto PtrAddr = ExecutorAddr::fromPtr(PtrPtr);
-    return ExecutorSymbolDef(PtrAddr, I->second.second);
+    void *PtrAddr = IndirectStubsInfos[Key.first].getPtr(Key.second);
+    assert(PtrAddr && "Missing pointer address");
+    auto PtrTargetAddr =
+        static_cast<JITTargetAddress>(reinterpret_cast<uintptr_t>(PtrAddr));
+    return JITEvaluatedSymbol(PtrTargetAddr, I->second.second);
   }
 
-  Error updatePointer(StringRef Name, ExecutorAddr NewAddr) override {
+  Error updatePointer(StringRef Name, JITTargetAddress NewAddr) override {
     using AtomicIntPtr = std::atomic<uintptr_t>;
 
     std::lock_guard<std::mutex> Lock(StubsMutex);
@@ -428,7 +430,7 @@ public:
     auto Key = I->second.first;
     AtomicIntPtr *AtomicStubPtr = reinterpret_cast<AtomicIntPtr *>(
         IndirectStubsInfos[Key.first].getPtr(Key.second));
-    *AtomicStubPtr = static_cast<uintptr_t>(NewAddr.getValue());
+    *AtomicStubPtr = static_cast<uintptr_t>(NewAddr);
     return Error::success();
   }
 
@@ -449,12 +451,12 @@ private:
     return Error::success();
   }
 
-  void createStubInternal(StringRef StubName, ExecutorAddr InitAddr,
+  void createStubInternal(StringRef StubName, JITTargetAddress InitAddr,
                           JITSymbolFlags StubFlags) {
     auto Key = FreeStubs.back();
     FreeStubs.pop_back();
     *IndirectStubsInfos[Key.first].getPtr(Key.second) =
-        InitAddr.toPtr<void *>();
+        jitTargetAddressToPointer<void *>(InitAddr);
     StubIndexes[StubName] = std::make_pair(Key, StubFlags);
   }
 
@@ -473,7 +475,7 @@ private:
 /// manager if a compile callback fails.
 Expected<std::unique_ptr<JITCompileCallbackManager>>
 createLocalCompileCallbackManager(const Triple &T, ExecutionSession &ES,
-                                  ExecutorAddr ErrorHandlerAddress);
+                                  JITTargetAddress ErrorHandlerAddress);
 
 /// Create a local indriect stubs manager builder.
 ///
@@ -486,7 +488,7 @@ createLocalIndirectStubsManagerBuilder(const Triple &T);
 ///
 ///   Usage example: Turn a trampoline address into a function pointer constant
 /// for use in a stub.
-Constant *createIRTypedAddress(FunctionType &FT, ExecutorAddr Addr);
+Constant *createIRTypedAddress(FunctionType &FT, JITTargetAddress Addr);
 
 /// Create a function pointer with the given type, name, and initializer
 ///        in the given Module.
@@ -513,7 +515,7 @@ private:
 /// Clone a function declaration into a new module.
 ///
 ///   This function can be used as the first step towards creating a callback
-/// stub (see makeStub).
+/// stub (see makeStub), or moving a function body (see moveFunctionBody).
 ///
 ///   If the VMap argument is non-null, a mapping will be added between F and
 /// the new declaration, and between each of F's arguments and the new
@@ -525,13 +527,42 @@ private:
 Function *cloneFunctionDecl(Module &Dst, const Function &F,
                             ValueToValueMapTy *VMap = nullptr);
 
+/// Move the body of function 'F' to a cloned function declaration in a
+///        different module (See related cloneFunctionDecl).
+///
+///   If the target function declaration is not supplied via the NewF parameter
+/// then it will be looked up via the VMap.
+///
+///   This will delete the body of function 'F' from its original parent module,
+/// but leave its declaration.
+void moveFunctionBody(Function &OrigF, ValueToValueMapTy &VMap,
+                      ValueMaterializer *Materializer = nullptr,
+                      Function *NewF = nullptr);
+
 /// Clone a global variable declaration into a new module.
 GlobalVariable *cloneGlobalVariableDecl(Module &Dst, const GlobalVariable &GV,
                                         ValueToValueMapTy *VMap = nullptr);
 
+/// Move global variable GV from its parent module to cloned global
+///        declaration in a different module.
+///
+///   If the target global declaration is not supplied via the NewGV parameter
+/// then it will be looked up via the VMap.
+///
+///   This will delete the initializer of GV from its original parent module,
+/// but leave its declaration.
+void moveGlobalVariableInitializer(GlobalVariable &OrigGV,
+                                   ValueToValueMapTy &VMap,
+                                   ValueMaterializer *Materializer = nullptr,
+                                   GlobalVariable *NewGV = nullptr);
+
 /// Clone a global alias declaration into a new module.
 GlobalAlias *cloneGlobalAliasDecl(Module &Dst, const GlobalAlias &OrigA,
                                   ValueToValueMapTy &VMap);
+
+/// Clone module flags metadata into the destination module.
+void cloneModuleFlagsMetadata(Module &Dst, const Module &Src,
+                              ValueToValueMapTy &VMap);
 
 /// Introduce relocations to \p Sym in its own definition if there are any
 /// pointers formed via PC-relative address that do not already have a

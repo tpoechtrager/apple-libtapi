@@ -9,7 +9,6 @@ add_llvm_component_library(LLVMBPFDesc
   MC
   BPFInfo
   Support
-  TargetParser
 
   ADD_TO_COMPONENT
   BPF

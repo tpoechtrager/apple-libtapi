@@ -15,24 +15,15 @@
 #ifndef LLVM_IR_SSACONTEXT_H
 #define LLVM_IR_SSACONTEXT_H
 
-#include "llvm/ADT/GenericSSAContext.h"
-#include "llvm/IR/BasicBlock.h"
-#include "llvm/IR/ModuleSlotTracker.h"
 #include "llvm/Support/Printable.h"
-
-#include <memory>
 
 namespace llvm {
 class BasicBlock;
 class Function;
 class Instruction;
 class Value;
-template <typename> class SmallVectorImpl;
 template <typename, bool> class DominatorTreeBase;
-
-inline auto instrs(const BasicBlock &BB) {
-  return llvm::make_range(BB.begin(), BB.end());
-}
+template <typename _FunctionT> class GenericSSAContext;
 
 template <> class GenericSSAContext<Function> {
   Function *F;
@@ -42,35 +33,16 @@ public:
   using FunctionT = Function;
   using InstructionT = Instruction;
   using ValueRefT = Value *;
-  using ConstValueRefT = const Value *;
-  using UseT = Use;
   using DominatorTreeT = DominatorTreeBase<BlockT, false>;
 
-  static constexpr Value *ValueRefNull = nullptr;
+  static BasicBlock *getEntryBlock(Function &F);
 
   void setFunction(Function &Fn);
   Function *getFunction() const { return F; }
 
-  static BasicBlock *getEntryBlock(Function &F);
-  static const BasicBlock *getEntryBlock(const Function &F);
-
-  static void appendBlockDefs(SmallVectorImpl<Value *> &defs,
-                              BasicBlock &block);
-  static void appendBlockDefs(SmallVectorImpl<const Value *> &defs,
-                              const BasicBlock &block);
-
-  static void appendBlockTerms(SmallVectorImpl<Instruction *> &terms,
-                               BasicBlock &block);
-  static void appendBlockTerms(SmallVectorImpl<const Instruction *> &terms,
-                               const BasicBlock &block);
-
-  static bool comesBefore(const Instruction *lhs, const Instruction *rhs);
-  static bool isConstantOrUndefValuePhi(const Instruction &Instr);
-  const BasicBlock *getDefBlock(const Value *value) const;
-
-  Printable print(const BasicBlock *Block) const;
-  Printable print(const Instruction *Inst) const;
-  Printable print(const Value *Value) const;
+  Printable print(BasicBlock *Block) const;
+  Printable print(Instruction *Inst) const;
+  Printable print(Value *Value) const;
 };
 
 using SSAContext = GenericSSAContext<Function>;

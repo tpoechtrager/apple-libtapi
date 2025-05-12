@@ -271,8 +271,9 @@ public:
     const Table &Config = mgr.options.Config;
 
     SmallVector<const Table::MapEntryTy *, 32> Keys;
-    for (const auto &Entry : Config)
-      Keys.push_back(&Entry);
+    for (Table::const_iterator I = Config.begin(), E = Config.end(); I != E;
+         ++I)
+      Keys.push_back(&*I);
     llvm::array_pod_sort(Keys.begin(), Keys.end(), compareEntry);
 
     llvm::errs() << "[config]\n";

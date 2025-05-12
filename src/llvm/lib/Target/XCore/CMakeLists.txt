@@ -32,13 +32,11 @@ add_llvm_target(XCoreCodeGen
   Analysis
   AsmPrinter
   CodeGen
-  CodeGenTypes
   Core
   MC
   SelectionDAG
   Support
   Target
-  TargetParser
   TransformUtils
   XCoreDesc
   XCoreInfo

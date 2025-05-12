@@ -357,6 +357,7 @@ namespace {
 
     bool getCell(const RegisterSubReg &R, const CellMap &Inputs, LatticeCell &RC);
     bool constToInt(const Constant *C, APInt &Val) const;
+    bool constToFloat(const Constant *C, APFloat &Val) const;
     const ConstantInt *intToConst(const APInt &Val) const;
 
     // Compares.
@@ -1686,9 +1687,9 @@ bool MachineConstEvaluator::evaluateCLBi(const APInt &A1, bool Zeros,
     return false;
   unsigned Count = 0;
   if (Zeros && (Count == 0))
-    Count = A1.countl_zero();
+    Count = A1.countLeadingZeros();
   if (Ones && (Count == 0))
-    Count = A1.countl_one();
+    Count = A1.countLeadingOnes();
   Result = APInt(BW, static_cast<uint64_t>(Count), false);
   return true;
 }
@@ -1721,9 +1722,9 @@ bool MachineConstEvaluator::evaluateCTBi(const APInt &A1, bool Zeros,
     return false;
   unsigned Count = 0;
   if (Zeros && (Count == 0))
-    Count = A1.countr_zero();
+    Count = A1.countTrailingZeros();
   if (Ones && (Count == 0))
-    Count = A1.countr_one();
+    Count = A1.countTrailingOnes();
   Result = APInt(BW, static_cast<uint64_t>(Count), false);
   return true;
 }

@@ -17,10 +17,10 @@
 #include "llvm/IR/Instruction.h"
 
 namespace llvm {
-class AssumptionCache;
-class DominatorTree;
-class DataLayout;
-class TargetLibraryInfo;
+  class AssumptionCache;
+  class DominatorTree;
+  class DataLayout;
+  class TargetLibraryInfo;
 
 /// PHITransAddr - An address value which tracks and handles phi translation.
 /// As we walk "up" the CFG through predecessors, we need to ensure that the
@@ -49,68 +49,71 @@ class PHITransAddr {
   SmallVector<Instruction*, 4> InstInputs;
 
 public:
-  PHITransAddr(Value *Addr, const DataLayout &DL, AssumptionCache *AC)
-      : Addr(Addr), DL(DL), AC(AC) {
+  PHITransAddr(Value *addr, const DataLayout &DL, AssumptionCache *AC)
+      : Addr(addr), DL(DL), AC(AC) {
     // If the address is an instruction, the whole thing is considered an input.
-    addAsInput(Addr);
+    if (Instruction *I = dyn_cast<Instruction>(Addr))
+      InstInputs.push_back(I);
   }
 
   Value *getAddr() const { return Addr; }
 
-  /// needsPHITranslationFromBlock - Return true if moving from the specified
+  /// NeedsPHITranslationFromBlock - Return true if moving from the specified
   /// BasicBlock to its predecessors requires PHI translation.
-  bool needsPHITranslationFromBlock(BasicBlock *BB) const {
+  bool NeedsPHITranslationFromBlock(BasicBlock *BB) const {
     // We do need translation if one of our input instructions is defined in
     // this block.
-    return any_of(InstInputs, [BB](const auto &InstInput) {
-      return InstInput->getParent() == BB;
-    });
+    for (unsigned i = 0, e = InstInputs.size(); i != e; ++i)
+      if (InstInputs[i]->getParent() == BB)
+        return true;
+    return false;
   }
 
-  /// isPotentiallyPHITranslatable - If this needs PHI translation, return true
+  /// IsPotentiallyPHITranslatable - If this needs PHI translation, return true
   /// if we have some hope of doing it.  This should be used as a filter to
   /// avoid calling PHITranslateValue in hopeless situations.
-  bool isPotentiallyPHITranslatable() const;
+  bool IsPotentiallyPHITranslatable() const;
 
-  /// translateValue - PHI translate the current address up the CFG from
+  /// PHITranslateValue - PHI translate the current address up the CFG from
   /// CurBB to Pred, updating our state to reflect any needed changes.  If
-  /// 'MustDominate' is true, the translated value must dominate PredBB.
-  Value *translateValue(BasicBlock *CurBB, BasicBlock *PredBB,
-                        const DominatorTree *DT, bool MustDominate);
+  /// 'MustDominate' is true, the translated value must dominate
+  /// PredBB.  This returns true on failure and sets Addr to null.
+  bool PHITranslateValue(BasicBlock *CurBB, BasicBlock *PredBB,
+                         const DominatorTree *DT, bool MustDominate);
 
-  /// translateWithInsertion - PHI translate this value into the specified
+  /// PHITranslateWithInsertion - PHI translate this value into the specified
   /// predecessor block, inserting a computation of the value if it is
   /// unavailable.
   ///
   /// All newly created instructions are added to the NewInsts list.  This
   /// returns null on failure.
   ///
-  Value *translateWithInsertion(BasicBlock *CurBB, BasicBlock *PredBB,
-                                const DominatorTree &DT,
-                                SmallVectorImpl<Instruction *> &NewInsts);
+  Value *PHITranslateWithInsertion(BasicBlock *CurBB, BasicBlock *PredBB,
+                                   const DominatorTree &DT,
+                                   SmallVectorImpl<Instruction *> &NewInsts);
 
   void dump() const;
 
-  /// verify - Check internal consistency of this data structure.  If the
+  /// Verify - Check internal consistency of this data structure.  If the
   /// structure is valid, it returns true.  If invalid, it prints errors and
   /// returns false.
-  bool verify() const;
+  bool Verify() const;
 
 private:
-  Value *translateSubExpr(Value *V, BasicBlock *CurBB, BasicBlock *PredBB,
-                          const DominatorTree *DT);
+  Value *PHITranslateSubExpr(Value *V, BasicBlock *CurBB, BasicBlock *PredBB,
+                             const DominatorTree *DT);
 
-  /// insertTranslatedSubExpr - Insert a computation of the PHI translated
+  /// InsertPHITranslatedSubExpr - Insert a computation of the PHI translated
   /// version of 'V' for the edge PredBB->CurBB into the end of the PredBB
   /// block.  All newly created instructions are added to the NewInsts list.
   /// This returns null on failure.
   ///
-  Value *insertTranslatedSubExpr(Value *InVal, BasicBlock *CurBB,
-                                 BasicBlock *PredBB, const DominatorTree &DT,
-                                 SmallVectorImpl<Instruction *> &NewInsts);
+  Value *InsertPHITranslatedSubExpr(Value *InVal, BasicBlock *CurBB,
+                                    BasicBlock *PredBB, const DominatorTree &DT,
+                                    SmallVectorImpl<Instruction *> &NewInsts);
 
-  /// addAsInput - If the specified value is an instruction, add it as an input.
-  Value *addAsInput(Value *V) {
+  /// AddAsInput - If the specified value is an instruction, add it as an input.
+  Value *AddAsInput(Value *V) {
     // If V is an instruction, it is now an input.
     if (Instruction *VI = dyn_cast<Instruction>(V))
       InstInputs.push_back(VI);

@@ -165,8 +165,7 @@ typedef enum {
   LLVMTokenTypeKind,     /**< Tokens */
   LLVMScalableVectorTypeKind, /**< Scalable SIMD vector type */
   LLVMBFloatTypeKind,    /**< 16 bit brain floating point type */
-  LLVMX86_AMXTypeKind,   /**< X86 AMX */
-  LLVMTargetExtTypeKind, /**< Target extension type */
+  LLVMX86_AMXTypeKind    /**< X86 AMX */
 } LLVMTypeKind;
 
 typedef enum {
@@ -285,8 +284,7 @@ typedef enum {
   LLVMInlineAsmValueKind,
 
   LLVMInstructionValueKind,
-  LLVMPoisonValueValueKind,
-  LLVMConstantTargetNoneValueKind,
+  LLVMPoisonValueValueKind
 } LLVMValueKind;
 
 typedef enum {
@@ -474,20 +472,12 @@ typedef unsigned LLVMAttributeIndex;
  * @}
  */
 
+void LLVMInitializeCore(LLVMPassRegistryRef R);
+
 /** Deallocate and destroy all ManagedStatic variables.
     @see llvm::llvm_shutdown
     @see ManagedStatic */
 void LLVMShutdown(void);
-
-/*===-- Version query -----------------------------------------------------===*/
-
-/**
- * Return the major, minor, and patch version of LLVM
- *
- * The version components are returned via the function's three output
- * parameters or skipped if a NULL pointer was supplied.
- */
-void LLVMGetVersion(unsigned *Major, unsigned *Minor, unsigned *Patch);
 
 /*===-- Error handling ----------------------------------------------------===*/
 
@@ -563,6 +553,13 @@ LLVMBool LLVMContextShouldDiscardValueNames(LLVMContextRef C);
  * @see LLVMContext::setDiscardValueNames()
  */
 void LLVMContextSetDiscardValueNames(LLVMContextRef C, LLVMBool Discard);
+
+/**
+ * Set whether the given context is in opaque pointer mode.
+ *
+ * @see LLVMContext::setOpaquePointers()
+ */
+void LLVMContextSetOpaquePointers(LLVMContextRef C, LLVMBool OpaquePointers);
 
 /**
  * Destroy a context instance.
@@ -1409,6 +1406,8 @@ LLVMBool LLVMIsLiteralStruct(LLVMTypeRef StructTy);
 /**
  * Obtain the element type of an array or vector type.
  *
+ * This currently also works for pointer types, but this usage is deprecated.
+ *
  * @see llvm::SequentialType::getElementType()
  */
 LLVMTypeRef LLVMGetElementType(LLVMTypeRef Ty);
@@ -1433,41 +1432,18 @@ unsigned LLVMGetNumContainedTypes(LLVMTypeRef Tp);
  * The created type will exist in the context that its element type
  * exists in.
  *
- * @deprecated LLVMArrayType is deprecated in favor of the API accurate
- * LLVMArrayType2
  * @see llvm::ArrayType::get()
  */
 LLVMTypeRef LLVMArrayType(LLVMTypeRef ElementType, unsigned ElementCount);
 
 /**
- * Create a fixed size array type that refers to a specific type.
- *
- * The created type will exist in the context that its element type
- * exists in.
- *
- * @see llvm::ArrayType::get()
- */
-LLVMTypeRef LLVMArrayType2(LLVMTypeRef ElementType, uint64_t ElementCount);
-
-/**
  * Obtain the length of an array type.
  *
  * This only works on types that represent arrays.
  *
- * @deprecated LLVMGetArrayLength is deprecated in favor of the API accurate
- * LLVMGetArrayLength2
  * @see llvm::ArrayType::getNumElements()
  */
 unsigned LLVMGetArrayLength(LLVMTypeRef ArrayTy);
-
-/**
- * Obtain the length of an array type.
- *
- * This only works on types that represent arrays.
- *
- * @see llvm::ArrayType::getNumElements()
- */
-uint64_t LLVMGetArrayLength2(LLVMTypeRef ArrayTy);
 
 /**
  * Create a pointer type that points to a defined type.
@@ -1584,15 +1560,6 @@ LLVMTypeRef LLVMVoidType(void);
 LLVMTypeRef LLVMLabelType(void);
 LLVMTypeRef LLVMX86MMXType(void);
 LLVMTypeRef LLVMX86AMXType(void);
-
-/**
- * Create a target extension type in LLVM context.
- */
-LLVMTypeRef LLVMTargetExtTypeInContext(LLVMContextRef C, const char *Name,
-                                       LLVMTypeRef *TypeParams,
-                                       unsigned TypeParamCount,
-                                       unsigned *IntParams,
-                                       unsigned IntParamCount);
 
 /**
  * @}
@@ -1804,7 +1771,6 @@ LLVMBool LLVMIsPoison(LLVMValueRef Val);
 LLVM_FOR_EACH_VALUE_SUBCLASS(LLVM_DECLARE_VALUE_CAST)
 
 LLVMValueRef LLVMIsAMDNode(LLVMValueRef Val);
-LLVMValueRef LLVMIsAValueAsMetadata(LLVMValueRef Val);
 LLVMValueRef LLVMIsAMDString(LLVMValueRef Val);
 
 /** Deprecated: Use LLVMGetValueName2 instead. */
@@ -2137,20 +2103,10 @@ LLVMValueRef LLVMConstStruct(LLVMValueRef *ConstantVals, unsigned Count,
 /**
  * Create a ConstantArray from values.
  *
- * @deprecated LLVMConstArray is deprecated in favor of the API accurate
- * LLVMConstArray2
  * @see llvm::ConstantArray::get()
  */
 LLVMValueRef LLVMConstArray(LLVMTypeRef ElementTy,
                             LLVMValueRef *ConstantVals, unsigned Length);
-
-/**
- * Create a ConstantArray from values.
- *
- * @see llvm::ConstantArray::get()
- */
-LLVMValueRef LLVMConstArray2(LLVMTypeRef ElementTy, LLVMValueRef *ConstantVals,
-                             uint64_t Length);
 
 /**
  * Create a non-anonymous ConstantStruct from values.
@@ -2226,8 +2182,18 @@ LLVMValueRef LLVMConstFCmp(LLVMRealPredicate Predicate,
 LLVMValueRef LLVMConstShl(LLVMValueRef LHSConstant, LLVMValueRef RHSConstant);
 LLVMValueRef LLVMConstLShr(LLVMValueRef LHSConstant, LLVMValueRef RHSConstant);
 LLVMValueRef LLVMConstAShr(LLVMValueRef LHSConstant, LLVMValueRef RHSConstant);
+LLVM_ATTRIBUTE_C_DEPRECATED(
+    LLVMValueRef LLVMConstGEP(LLVMValueRef ConstantVal,
+                              LLVMValueRef *ConstantIndices,
+                              unsigned NumIndices),
+    "Use LLVMConstGEP2 instead to support opaque pointers");
 LLVMValueRef LLVMConstGEP2(LLVMTypeRef Ty, LLVMValueRef ConstantVal,
                            LLVMValueRef *ConstantIndices, unsigned NumIndices);
+LLVM_ATTRIBUTE_C_DEPRECATED(
+    LLVMValueRef LLVMConstInBoundsGEP(LLVMValueRef ConstantVal,
+                                      LLVMValueRef *ConstantIndices,
+                                      unsigned NumIndices),
+    "Use LLVMConstInBoundsGEP2 instead to support opaque pointers");
 LLVMValueRef LLVMConstInBoundsGEP2(LLVMTypeRef Ty, LLVMValueRef ConstantVal,
                                    LLVMValueRef *ConstantIndices,
                                    unsigned NumIndices);
@@ -2255,6 +2221,9 @@ LLVMValueRef LLVMConstPointerCast(LLVMValueRef ConstantVal,
 LLVMValueRef LLVMConstIntCast(LLVMValueRef ConstantVal, LLVMTypeRef ToType,
                               LLVMBool isSigned);
 LLVMValueRef LLVMConstFPCast(LLVMValueRef ConstantVal, LLVMTypeRef ToType);
+LLVMValueRef LLVMConstSelect(LLVMValueRef ConstantCondition,
+                             LLVMValueRef ConstantIfTrue,
+                             LLVMValueRef ConstantIfFalse);
 LLVMValueRef LLVMConstExtractElement(LLVMValueRef VectorConstant,
                                      LLVMValueRef IndexConstant);
 LLVMValueRef LLVMConstInsertElement(LLVMValueRef VectorConstant,
@@ -2439,6 +2408,11 @@ void LLVMSetExternallyInitialized(LLVMValueRef GlobalVar, LLVMBool IsExtInit);
  *
  * @{
  */
+
+LLVM_ATTRIBUTE_C_DEPRECATED(
+    LLVMValueRef LLVMAddAlias(LLVMModuleRef M, LLVMTypeRef Ty,
+                              LLVMValueRef Aliasee, const char *Name),
+    "Use LLVMAddAlias2 instead to support opaque pointers");
 
 /**
  * Add a GlobalAlias with the given value type, address space and aliasee.
@@ -2940,14 +2914,6 @@ unsigned LLVMGetMDNodeNumOperands(LLVMValueRef V);
  * @param Dest Destination array for operands.
  */
 void LLVMGetMDNodeOperands(LLVMValueRef V, LLVMValueRef *Dest);
-
-/**
- * Replace an operand at a specific index in a llvm::MDNode value.
- *
- * @see llvm::MDNode::replaceOperandWith()
- */
-void LLVMReplaceMDNodeOperandWith(LLVMValueRef V, unsigned Index,
-                                  LLVMMetadataRef Replacement);
 
 /** Deprecated: Use LLVMMDStringInContext2 instead. */
 LLVMValueRef LLVMMDStringInContext(LLVMContextRef C, const char *Str,
@@ -3757,6 +3723,12 @@ LLVMValueRef LLVMBuildSwitch(LLVMBuilderRef, LLVMValueRef V,
                              LLVMBasicBlockRef Else, unsigned NumCases);
 LLVMValueRef LLVMBuildIndirectBr(LLVMBuilderRef B, LLVMValueRef Addr,
                                  unsigned NumDests);
+LLVM_ATTRIBUTE_C_DEPRECATED(
+    LLVMValueRef LLVMBuildInvoke(LLVMBuilderRef, LLVMValueRef Fn,
+                                 LLVMValueRef *Args, unsigned NumArgs,
+                                 LLVMBasicBlockRef Then,
+                                 LLVMBasicBlockRef Catch, const char *Name),
+    "Use LLVMBuildInvoke2 instead to support opaque pointers");
 LLVMValueRef LLVMBuildInvoke2(LLVMBuilderRef, LLVMTypeRef Ty, LLVMValueRef Fn,
                               LLVMValueRef *Args, unsigned NumArgs,
                               LLVMBasicBlockRef Then, LLVMBasicBlockRef Catch,
@@ -3913,13 +3885,6 @@ LLVMValueRef LLVMBuildNUWNeg(LLVMBuilderRef B, LLVMValueRef V,
 LLVMValueRef LLVMBuildFNeg(LLVMBuilderRef, LLVMValueRef V, const char *Name);
 LLVMValueRef LLVMBuildNot(LLVMBuilderRef, LLVMValueRef V, const char *Name);
 
-LLVMBool LLVMGetNUW(LLVMValueRef ArithInst);
-void LLVMSetNUW(LLVMValueRef ArithInst, LLVMBool HasNUW);
-LLVMBool LLVMGetNSW(LLVMValueRef ArithInst);
-void LLVMSetNSW(LLVMValueRef ArithInst, LLVMBool HasNSW);
-LLVMBool LLVMGetExact(LLVMValueRef DivOrShrInst);
-void LLVMSetExact(LLVMValueRef DivOrShrInst, LLVMBool IsExact);
-
 /* Memory */
 LLVMValueRef LLVMBuildMalloc(LLVMBuilderRef, LLVMTypeRef Ty, const char *Name);
 LLVMValueRef LLVMBuildArrayMalloc(LLVMBuilderRef, LLVMTypeRef Ty,
@@ -3957,9 +3922,27 @@ LLVMValueRef LLVMBuildAlloca(LLVMBuilderRef, LLVMTypeRef Ty, const char *Name);
 LLVMValueRef LLVMBuildArrayAlloca(LLVMBuilderRef, LLVMTypeRef Ty,
                                   LLVMValueRef Val, const char *Name);
 LLVMValueRef LLVMBuildFree(LLVMBuilderRef, LLVMValueRef PointerVal);
+LLVM_ATTRIBUTE_C_DEPRECATED(
+    LLVMValueRef LLVMBuildLoad(LLVMBuilderRef, LLVMValueRef PointerVal,
+                               const char *Name),
+    "Use LLVMBuildLoad2 instead to support opaque pointers");
 LLVMValueRef LLVMBuildLoad2(LLVMBuilderRef, LLVMTypeRef Ty,
                             LLVMValueRef PointerVal, const char *Name);
 LLVMValueRef LLVMBuildStore(LLVMBuilderRef, LLVMValueRef Val, LLVMValueRef Ptr);
+LLVM_ATTRIBUTE_C_DEPRECATED(
+    LLVMValueRef LLVMBuildGEP(LLVMBuilderRef B, LLVMValueRef Pointer,
+                              LLVMValueRef *Indices, unsigned NumIndices,
+                              const char *Name),
+    "Use LLVMBuildGEP2 instead to support opaque pointers");
+LLVM_ATTRIBUTE_C_DEPRECATED(
+    LLVMValueRef LLVMBuildInBoundsGEP(LLVMBuilderRef B, LLVMValueRef Pointer,
+                                      LLVMValueRef *Indices,
+                                      unsigned NumIndices, const char *Name),
+    "Use LLVMBuildInBoundsGEP2 instead to support opaque pointers");
+LLVM_ATTRIBUTE_C_DEPRECATED(
+    LLVMValueRef LLVMBuildStructGEP(LLVMBuilderRef B, LLVMValueRef Pointer,
+                                    unsigned Idx, const char *Name),
+    "Use LLVMBuildStructGEP2 instead to support opaque pointers");
 LLVMValueRef LLVMBuildGEP2(LLVMBuilderRef B, LLVMTypeRef Ty,
                            LLVMValueRef Pointer, LLVMValueRef *Indices,
                            unsigned NumIndices, const char *Name);
@@ -4042,6 +4025,11 @@ LLVMValueRef LLVMBuildFCmp(LLVMBuilderRef, LLVMRealPredicate Op,
 
 /* Miscellaneous instructions */
 LLVMValueRef LLVMBuildPhi(LLVMBuilderRef, LLVMTypeRef Ty, const char *Name);
+LLVM_ATTRIBUTE_C_DEPRECATED(
+    LLVMValueRef LLVMBuildCall(LLVMBuilderRef, LLVMValueRef Fn,
+                               LLVMValueRef *Args, unsigned NumArgs,
+                               const char *Name),
+    "Use LLVMBuildCall2 instead to support opaque pointers");
 LLVMValueRef LLVMBuildCall2(LLVMBuilderRef, LLVMTypeRef, LLVMValueRef Fn,
                             LLVMValueRef *Args, unsigned NumArgs,
                             const char *Name);
@@ -4070,6 +4058,10 @@ LLVMValueRef LLVMBuildIsNull(LLVMBuilderRef, LLVMValueRef Val,
                              const char *Name);
 LLVMValueRef LLVMBuildIsNotNull(LLVMBuilderRef, LLVMValueRef Val,
                                 const char *Name);
+LLVM_ATTRIBUTE_C_DEPRECATED(
+    LLVMValueRef LLVMBuildPtrDiff(LLVMBuilderRef, LLVMValueRef LHS,
+                                  LLVMValueRef RHS, const char *Name),
+    "Use LLVMBuildPtrDiff2 instead to support opaque pointers");
 LLVMValueRef LLVMBuildPtrDiff2(LLVMBuilderRef, LLVMTypeRef ElemTy,
                                LLVMValueRef LHS, LLVMValueRef RHS,
                                const char *Name);
@@ -4100,8 +4092,8 @@ int LLVMGetUndefMaskElem(void);
  * Get the mask value at position Elt in the mask of a ShuffleVector
  * instruction.
  *
- * \Returns the result of \c LLVMGetUndefMaskElem() if the mask value is
- * poison at that position.
+ * \Returns the result of \c LLVMGetUndefMaskElem() if the mask value is undef
+ * at that position.
  */
 int LLVMGetMaskValue(LLVMValueRef ShuffleVectorInst, unsigned Elt);
 
@@ -4162,6 +4154,21 @@ LLVMMemoryBufferRef LLVMCreateMemoryBufferWithMemoryRangeCopy(const char *InputD
 const char *LLVMGetBufferStart(LLVMMemoryBufferRef MemBuf);
 size_t LLVMGetBufferSize(LLVMMemoryBufferRef MemBuf);
 void LLVMDisposeMemoryBuffer(LLVMMemoryBufferRef MemBuf);
+
+/**
+ * @}
+ */
+
+/**
+ * @defgroup LLVMCCorePassRegistry Pass Registry
+ * @ingroup LLVMCCore
+ *
+ * @{
+ */
+
+/** Return the global pass registry, for use with initialization functions.
+    @see llvm::PassRegistry::getPassRegistry */
+LLVMPassRegistryRef LLVMGetGlobalPassRegistry(void);
 
 /**
  * @}

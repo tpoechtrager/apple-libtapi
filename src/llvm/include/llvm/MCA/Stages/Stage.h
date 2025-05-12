@@ -25,7 +25,7 @@ namespace mca {
 class InstRef;
 
 class Stage {
-  Stage *NextInSequence = nullptr;
+  Stage *NextInSequence;
   std::set<HWEventListener *> Listeners;
 
   Stage(const Stage &Other) = delete;
@@ -35,7 +35,7 @@ protected:
   const std::set<HWEventListener *> &getListeners() const { return Listeners; }
 
 public:
-  Stage() = default;
+  Stage() : NextInSequence(nullptr) {}
   virtual ~Stage();
 
   /// Returns true if it can execute IR during this cycle.

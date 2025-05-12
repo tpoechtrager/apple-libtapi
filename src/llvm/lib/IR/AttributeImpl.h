@@ -24,7 +24,6 @@
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
-#include <optional>
 #include <string>
 #include <utility>
 
@@ -230,7 +229,7 @@ class AttributeSetNode final
 
   static AttributeSetNode *getSorted(LLVMContext &C,
                                      ArrayRef<Attribute> SortedAttrs);
-  std::optional<Attribute> findEnumAttribute(Attribute::AttrKind Kind) const;
+  Optional<Attribute> findEnumAttribute(Attribute::AttrKind Kind) const;
 
 public:
   // AttributesSetNode is uniqued, these should not be available.
@@ -259,14 +258,11 @@ public:
   MaybeAlign getStackAlignment() const;
   uint64_t getDereferenceableBytes() const;
   uint64_t getDereferenceableOrNullBytes() const;
-  std::optional<std::pair<unsigned, std::optional<unsigned>>> getAllocSizeArgs()
-      const;
+  Optional<std::pair<unsigned, Optional<unsigned>>> getAllocSizeArgs() const;
   unsigned getVScaleRangeMin() const;
-  std::optional<unsigned> getVScaleRangeMax() const;
+  Optional<unsigned> getVScaleRangeMax() const;
   UWTableKind getUWTableKind() const;
   AllocFnKind getAllocKind() const;
-  MemoryEffects getMemoryEffects() const;
-  FPClassTest getNoFPClass() const;
   std::string getAsString(bool InAttrGrp) const;
   Type *getAttributeType(Attribute::AttrKind Kind) const;
 
@@ -276,7 +272,7 @@ public:
   iterator end() const { return begin() + NumAttrs; }
 
   void Profile(FoldingSetNodeID &ID) const {
-    Profile(ID, ArrayRef(begin(), end()));
+    Profile(ID, makeArrayRef(begin(), end()));
   }
 
   static void Profile(FoldingSetNodeID &ID, ArrayRef<Attribute> AttrList) {

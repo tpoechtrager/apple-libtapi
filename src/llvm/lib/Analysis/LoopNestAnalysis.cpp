@@ -84,7 +84,7 @@ static CmpInst *getInnerLoopGuardCmp(const Loop &InnerLoop) {
 static bool checkSafeInstruction(const Instruction &I,
                                  const CmpInst *InnerLoopGuardCmp,
                                  const CmpInst *OuterLoopLatchCmp,
-                                 std::optional<Loop::LoopBounds> OuterLoopLB) {
+                                 Optional<Loop::LoopBounds> OuterLoopLB) {
 
   bool IsAllowed =
       isSafeToSpeculativelyExecute(&I) || isa<PHINode>(I) || isa<BranchInst>(I);
@@ -128,7 +128,7 @@ LoopNest::LoopNestEnum LoopNest::analyzeLoopNestForPerfectNest(
 
   // Bail out if we cannot retrieve the outer loop bounds.
   auto OuterLoopLB = OuterLoop.getBounds(SE);
-  if (OuterLoopLB == std::nullopt) {
+  if (OuterLoopLB == None) {
     LLVM_DEBUG(dbgs() << "Cannot compute loop bounds of OuterLoop: "
                       << OuterLoop << "\n";);
     return OuterLoopLowerBoundUnknown;
@@ -295,7 +295,7 @@ const BasicBlock &LoopNest::skipEmptyBlockUntil(const BasicBlock *From,
     return *From;
 
   auto IsEmpty = [](const BasicBlock *BB) {
-    return (BB->size() == 1);
+    return (BB->getInstList().size() == 1);
   };
 
   // Visited is used to avoid running into an infinite loop.
@@ -379,7 +379,7 @@ static bool checkLoopsStructure(const Loop &OuterLoop, const Loop &InnerLoop,
 
         // Ensure the inner loop guard successor is empty before skipping
         // blocks.
-        if (Succ->size() == 1) {
+        if (Succ->getInstList().size() == 1) {
           PotentialInnerPreHeader =
               &LoopNest::skipEmptyBlockUntil(Succ, InnerLoopPreHeader);
           PotentialOuterLatch =

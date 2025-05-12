@@ -15,7 +15,6 @@
 
 #include "llvm/Remarks/RemarkSerializer.h"
 #include "llvm/Support/YAMLTraits.h"
-#include <optional>
 
 namespace llvm {
 namespace remarks {
@@ -36,12 +35,12 @@ struct YAMLRemarkSerializer : public RemarkSerializer {
   yaml::Output YAMLOutput;
 
   YAMLRemarkSerializer(raw_ostream &OS, SerializerMode Mode,
-                       std::optional<StringTable> StrTab = std::nullopt);
+                       Optional<StringTable> StrTab = None);
 
   void emit(const Remark &Remark) override;
-  std::unique_ptr<MetaSerializer> metaSerializer(
-      raw_ostream &OS,
-      std::optional<StringRef> ExternalFilename = std::nullopt) override;
+  std::unique_ptr<MetaSerializer>
+  metaSerializer(raw_ostream &OS,
+                 Optional<StringRef> ExternalFilename = None) override;
 
   static bool classof(const RemarkSerializer *S) {
     return S->SerializerFormat == Format::YAML;
@@ -50,13 +49,13 @@ struct YAMLRemarkSerializer : public RemarkSerializer {
 protected:
   YAMLRemarkSerializer(Format SerializerFormat, raw_ostream &OS,
                        SerializerMode Mode,
-                       std::optional<StringTable> StrTab = std::nullopt);
+                       Optional<StringTable> StrTab = None);
 };
 
 struct YAMLMetaSerializer : public MetaSerializer {
-  std::optional<StringRef> ExternalFilename;
+  Optional<StringRef> ExternalFilename;
 
-  YAMLMetaSerializer(raw_ostream &OS, std::optional<StringRef> ExternalFilename)
+  YAMLMetaSerializer(raw_ostream &OS, Optional<StringRef> ExternalFilename)
       : MetaSerializer(OS), ExternalFilename(ExternalFilename) {}
 
   void emit() override;
@@ -82,9 +81,9 @@ struct YAMLStrTabRemarkSerializer : public YAMLRemarkSerializer {
   /// Override to emit the metadata if necessary.
   void emit(const Remark &Remark) override;
 
-  std::unique_ptr<MetaSerializer> metaSerializer(
-      raw_ostream &OS,
-      std::optional<StringRef> ExternalFilename = std::nullopt) override;
+  std::unique_ptr<MetaSerializer>
+  metaSerializer(raw_ostream &OS,
+                 Optional<StringRef> ExternalFilename = None) override;
 
   static bool classof(const RemarkSerializer *S) {
     return S->SerializerFormat == Format::YAMLStrTab;
@@ -96,7 +95,7 @@ struct YAMLStrTabMetaSerializer : public YAMLMetaSerializer {
   const StringTable &StrTab;
 
   YAMLStrTabMetaSerializer(raw_ostream &OS,
-                           std::optional<StringRef> ExternalFilename,
+                           Optional<StringRef> ExternalFilename,
                            const StringTable &StrTab)
       : YAMLMetaSerializer(OS, ExternalFilename), StrTab(StrTab) {}
 

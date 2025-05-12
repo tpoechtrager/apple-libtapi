@@ -18,7 +18,7 @@ namespace {
 struct MockOutputBackendData {
   int Cloned = 0;
   int FilesCreated = 0;
-  std::optional<OutputConfig> LastConfig;
+  Optional<OutputConfig> LastConfig;
   unique_function<Error()> FileCreator;
 };
 
@@ -36,7 +36,7 @@ struct MockOutputBackend final : public OutputBackend {
   }
 
   Expected<std::unique_ptr<OutputFileImpl>>
-  createFileImpl(StringRef, std::optional<OutputConfig> Config) override {
+  createFileImpl(StringRef, Optional<OutputConfig> Config) override {
     ++Data.FilesCreated;
     Data.LastConfig = Config;
     if (Data.FileCreator)
@@ -46,7 +46,7 @@ struct MockOutputBackend final : public OutputBackend {
 
   Expected<OutputFile>
   createAutoDiscardFile(const Twine &OutputPath,
-                        std::optional<OutputConfig> Config = std::nullopt) {
+                        Optional<OutputConfig> Config = None) {
     return consumeDiscardOnDestroy(createFile(OutputPath, Config));
   }
 
@@ -94,7 +94,7 @@ TEST(VirtualOutputBackendTest, createFile) {
                     Succeeded());
   EXPECT_EQ(1, Data.FilesCreated);
   EXPECT_EQ(FilePath, F.getPath());
-  EXPECT_EQ(std::nullopt, Data.LastConfig);
+  EXPECT_EQ(None, Data.LastConfig);
 
   // Confirm OutputBackend has not installed a discard handler.
 #if GTEST_HAS_DEATH_TEST

@@ -53,12 +53,11 @@ static bool getInlineStackHelper(const InlineInfo &II, uint64_t Addr,
   return false;
 }
 
-std::optional<InlineInfo::InlineArray>
-InlineInfo::getInlineStack(uint64_t Addr) const {
+llvm::Optional<InlineInfo::InlineArray> InlineInfo::getInlineStack(uint64_t Addr) const {
   InlineArray Result;
   if (getInlineStackHelper(*this, Addr, Result))
     return Result;
-  return std::nullopt;
+  return llvm::None;
 }
 
 /// Skip an InlineInfo object in the specified data at the specified offset.
@@ -135,7 +134,7 @@ static bool lookup(const GsymReader &GR, DataExtractor &Data, uint64_t &Offset,
       Done = lookup(GR, Data, Offset, ChildBaseAddr, Addr, SrcLocs, Err);
   }
 
-  std::optional<FileEntry> CallFile = GR.getFile(Inline.CallFile);
+  Optional<FileEntry> CallFile = GR.getFile(Inline.CallFile);
   if (!CallFile) {
     Err = createStringError(std::errc::invalid_argument,
                             "failed to extract file[%" PRIu32 "]",

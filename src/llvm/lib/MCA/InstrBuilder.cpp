@@ -30,9 +30,8 @@ char RecycledInstErr::ID = 0;
 InstrBuilder::InstrBuilder(const llvm::MCSubtargetInfo &sti,
                            const llvm::MCInstrInfo &mcii,
                            const llvm::MCRegisterInfo &mri,
-                           const llvm::MCInstrAnalysis *mcia,
-                           const mca::InstrumentManager &im)
-    : STI(sti), MCII(mcii), MRI(mri), MCIA(mcia), IM(im), FirstCallInst(true),
+                           const llvm::MCInstrAnalysis *mcia)
+    : STI(sti), MCII(mcii), MRI(mri), MCIA(mcia), FirstCallInst(true),
       FirstReturnInst(true) {
   const MCSchedModel &SM = STI.getSchedModel();
   ProcResourceMasks.resize(SM.getNumProcResourceKinds());
@@ -102,8 +101,8 @@ static void initializeUsedResources(InstrDesc &ID,
   // Sort elements by mask popcount, so that we prioritize resource units over
   // resource groups, and smaller groups over larger groups.
   sort(Worklist, [](const ResourcePlusCycles &A, const ResourcePlusCycles &B) {
-    unsigned popcntA = llvm::popcount(A.first);
-    unsigned popcntB = llvm::popcount(B.first);
+    unsigned popcntA = countPopulation(A.first);
+    unsigned popcntB = countPopulation(B.first);
     if (popcntA < popcntB)
       return true;
     if (popcntA > popcntB)
@@ -122,19 +121,19 @@ static void initializeUsedResources(InstrDesc &ID,
   for (unsigned I = 0, E = Worklist.size(); I < E; ++I) {
     ResourcePlusCycles &A = Worklist[I];
     if (!A.second.size()) {
-      assert(llvm::popcount(A.first) > 1 && "Expected a group!");
-      UsedResourceGroups |= llvm::bit_floor(A.first);
+      assert(countPopulation(A.first) > 1 && "Expected a group!");
+      UsedResourceGroups |= PowerOf2Floor(A.first);
       continue;
     }
 
     ID.Resources.emplace_back(A);
     uint64_t NormalizedMask = A.first;
 
-    if (llvm::popcount(A.first) == 1) {
+    if (countPopulation(A.first) == 1) {
       UsedResourceUnits |= A.first;
     } else {
       // Remove the leading 1 from the resource group mask.
-      NormalizedMask ^= llvm::bit_floor(NormalizedMask);
+      NormalizedMask ^= PowerOf2Floor(NormalizedMask);
       if (UnitsFromResourceGroups & NormalizedMask)
         ID.HasPartiallyOverlappingGroups = true;
 
@@ -146,7 +145,7 @@ static void initializeUsedResources(InstrDesc &ID,
       ResourcePlusCycles &B = Worklist[J];
       if ((NormalizedMask & B.first) == NormalizedMask) {
         B.second.CS.subtract(A.second.size() - SuperResources[A.first]);
-        if (llvm::popcount(B.first) > 1)
+        if (countPopulation(B.first) > 1)
           B.second.NumUnits++;
       }
     }
@@ -170,11 +169,11 @@ static void initializeUsedResources(InstrDesc &ID,
   // extra delay on top of the 2 cycles latency.
   // During those extra cycles, HWPort01 is not usable by other instructions.
   for (ResourcePlusCycles &RPC : ID.Resources) {
-    if (llvm::popcount(RPC.first) > 1 && !RPC.second.isReserved()) {
+    if (countPopulation(RPC.first) > 1 && !RPC.second.isReserved()) {
       // Remove the leading 1 from the resource group mask.
-      uint64_t Mask = RPC.first ^ llvm::bit_floor(RPC.first);
-      uint64_t MaxResourceUnits = llvm::popcount(Mask);
-      if (RPC.second.NumUnits > (unsigned)llvm::popcount(Mask)) {
+      uint64_t Mask = RPC.first ^ PowerOf2Floor(RPC.first);
+      uint64_t MaxResourceUnits = countPopulation(Mask);
+      if (RPC.second.NumUnits > countPopulation(Mask)) {
         RPC.second.setReserved();
         RPC.second.NumUnits = MaxResourceUnits;
       }
@@ -312,7 +311,7 @@ void InstrBuilder::populateWrites(InstrDesc &ID, const MCInst &MCI,
   // According to assumption 2. register reads start at #(NumExplicitDefs-1).
   // That means, register R1 from the example is both read and written.
   unsigned NumExplicitDefs = MCDesc.getNumDefs();
-  unsigned NumImplicitDefs = MCDesc.implicit_defs().size();
+  unsigned NumImplicitDefs = MCDesc.getNumImplicitDefs();
   unsigned NumWriteLatencyEntries = SCDesc.NumWriteLatencyEntries;
   unsigned TotalDefs = NumExplicitDefs + NumImplicitDefs;
   if (MCDesc.hasOptionalDef())
@@ -331,7 +330,7 @@ void InstrBuilder::populateWrites(InstrDesc &ID, const MCInst &MCI,
     if (!Op.isReg())
       continue;
 
-    if (MCDesc.operands()[CurrentDef].isOptionalDef()) {
+    if (MCDesc.OpInfo[CurrentDef].isOptionalDef()) {
       OptionalDefIdx = CurrentDef++;
       continue;
     }
@@ -365,7 +364,7 @@ void InstrBuilder::populateWrites(InstrDesc &ID, const MCInst &MCI,
     unsigned Index = NumExplicitDefs + CurrentDef;
     WriteDescriptor &Write = ID.Writes[Index];
     Write.OpIndex = ~CurrentDef;
-    Write.RegisterID = MCDesc.implicit_defs()[CurrentDef];
+    Write.RegisterID = MCDesc.getImplicitDefs()[CurrentDef];
     if (Index < NumWriteLatencyEntries) {
       const MCWriteLatencyEntry &WLE =
           *STI.getWriteLatencyEntry(&SCDesc, Index);
@@ -435,7 +434,7 @@ void InstrBuilder::populateReads(InstrDesc &ID, const MCInst &MCI,
                                  unsigned SchedClassID) {
   const MCInstrDesc &MCDesc = MCII.get(MCI.getOpcode());
   unsigned NumExplicitUses = MCDesc.getNumOperands() - MCDesc.getNumDefs();
-  unsigned NumImplicitUses = MCDesc.implicit_uses().size();
+  unsigned NumImplicitUses = MCDesc.getNumImplicitUses();
   // Remove the optional definition.
   if (MCDesc.hasOptionalDef())
     --NumExplicitUses;
@@ -464,7 +463,7 @@ void InstrBuilder::populateReads(InstrDesc &ID, const MCInst &MCI,
     ReadDescriptor &Read = ID.Reads[CurrentUse + I];
     Read.OpIndex = ~I;
     Read.UseIndex = NumExplicitUses + I;
-    Read.RegisterID = MCDesc.implicit_uses()[I];
+    Read.RegisterID = MCDesc.getImplicitUses()[I];
     Read.SchedClassID = SchedClassID;
     LLVM_DEBUG(dbgs() << "\t\t[Use][I] OpIdx=" << ~Read.OpIndex
                       << ", UseIndex=" << Read.UseIndex << ", RegisterID="
@@ -510,8 +509,7 @@ Error InstrBuilder::verifyInstrDesc(const InstrDesc &ID,
 }
 
 Expected<const InstrDesc &>
-InstrBuilder::createInstrDescImpl(const MCInst &MCI,
-                                  const SmallVector<Instrument *> &IVec) {
+InstrBuilder::createInstrDescImpl(const MCInst &MCI) {
   assert(STI.getSchedModel().hasInstrSchedModel() &&
          "Itineraries are not yet supported!");
 
@@ -521,8 +519,7 @@ InstrBuilder::createInstrDescImpl(const MCInst &MCI,
   const MCSchedModel &SM = STI.getSchedModel();
 
   // Then obtain the scheduling class information from the instruction.
-  // Allow InstrumentManager to override and use a different SchedClassID
-  unsigned SchedClassID = IM.getSchedClassID(MCII, MCI, IVec);
+  unsigned SchedClassID = MCDesc.getSchedClass();
   bool IsVariant = SM.getSchedClassDesc(SchedClassID)->isVariant();
 
   // Try to solve variant scheduling classes.
@@ -589,41 +586,30 @@ InstrBuilder::createInstrDescImpl(const MCInst &MCI,
   // Now add the new descriptor.
   bool IsVariadic = MCDesc.isVariadic();
   if ((ID->IsRecyclable = !IsVariadic && !IsVariant)) {
-    auto DKey = std::make_pair(MCI.getOpcode(), SchedClassID);
-    Descriptors[DKey] = std::move(ID);
-    return *Descriptors[DKey];
+    Descriptors[MCI.getOpcode()] = std::move(ID);
+    return *Descriptors[MCI.getOpcode()];
   }
 
-  auto VDKey = std::make_pair(&MCI, SchedClassID);
-  VariantDescriptors[VDKey] = std::move(ID);
-  return *VariantDescriptors[VDKey];
+  VariantDescriptors[&MCI] = std::move(ID);
+  return *VariantDescriptors[&MCI];
 }
 
 Expected<const InstrDesc &>
-InstrBuilder::getOrCreateInstrDesc(const MCInst &MCI,
-                                   const SmallVector<Instrument *> &IVec) {
-  // Cache lookup using SchedClassID from Instrumentation
-  unsigned SchedClassID = IM.getSchedClassID(MCII, MCI, IVec);
+InstrBuilder::getOrCreateInstrDesc(const MCInst &MCI) {
+  if (Descriptors.find_as(MCI.getOpcode()) != Descriptors.end())
+    return *Descriptors[MCI.getOpcode()];
 
-  auto DKey = std::make_pair(MCI.getOpcode(), SchedClassID);
-  if (Descriptors.find_as(DKey) != Descriptors.end())
-    return *Descriptors[DKey];
+  if (VariantDescriptors.find(&MCI) != VariantDescriptors.end())
+    return *VariantDescriptors[&MCI];
 
-  unsigned CPUID = STI.getSchedModel().getProcessorID();
-  SchedClassID = STI.resolveVariantSchedClass(SchedClassID, &MCI, &MCII, CPUID);
-  auto VDKey = std::make_pair(&MCI, SchedClassID);
-  if (VariantDescriptors.contains(VDKey))
-    return *VariantDescriptors[VDKey];
-
-  return createInstrDescImpl(MCI, IVec);
+  return createInstrDescImpl(MCI);
 }
 
 STATISTIC(NumVariantInst, "Number of MCInsts that doesn't have static Desc");
 
 Expected<std::unique_ptr<Instruction>>
-InstrBuilder::createInstruction(const MCInst &MCI,
-                                const SmallVector<Instrument *> &IVec) {
-  Expected<const InstrDesc &> DescOrErr = getOrCreateInstrDesc(MCI, IVec);
+InstrBuilder::createInstruction(const MCInst &MCI) {
+  Expected<const InstrDesc &> DescOrErr = getOrCreateInstrDesc(MCI);
   if (!DescOrErr)
     return DescOrErr.takeError();
   const InstrDesc &D = *DescOrErr;

@@ -411,10 +411,9 @@ bool MipsLegalizerInfo::legalizeCustom(LegalizerHelper &Helper,
         auto Load_Rem = MIRBuilder.buildLoad(s32, Addr, *RemMemOp);
 
         if (Size == 64)
-          MIRBuilder.buildMergeLikeInstr(Val, {Load_P2Half, Load_Rem});
+          MIRBuilder.buildMerge(Val, {Load_P2Half, Load_Rem});
         else {
-          auto Merge =
-              MIRBuilder.buildMergeLikeInstr(s64, {Load_P2Half, Load_Rem});
+          auto Merge = MIRBuilder.buildMerge(s64, {Load_P2Half, Load_Rem});
           MIRBuilder.buildTrunc(Val, Merge);
         }
       }
@@ -441,11 +440,10 @@ bool MipsLegalizerInfo::legalizeCustom(LegalizerHelper &Helper,
     // Done. Trunc double to float if needed.
 
     auto C_HiMask = MIRBuilder.buildConstant(s32, UINT32_C(0x43300000));
-    auto Bitcast =
-        MIRBuilder.buildMergeLikeInstr(s64, {Src, C_HiMask.getReg(0)});
+    auto Bitcast = MIRBuilder.buildMerge(s64, {Src, C_HiMask.getReg(0)});
 
     MachineInstrBuilder TwoP52FP = MIRBuilder.buildFConstant(
-        s64, llvm::bit_cast<double>(UINT64_C(0x4330000000000000)));
+        s64, BitsToDouble(UINT64_C(0x4330000000000000)));
 
     if (DstTy == s64)
       MIRBuilder.buildFSub(Dst, Bitcast, TwoP52FP);

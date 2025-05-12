@@ -245,7 +245,7 @@ public:
       Pos.CurToken++;
     }
 
-    P.putBack(llvm::ArrayRef(Toks.begin() + Pos.CurToken, Toks.end()));
+    P.putBack(llvm::makeArrayRef(Toks.begin() + Pos.CurToken, Toks.end()));
     Pos.CurToken = Toks.size();
 
     if (HavePartialTok)
@@ -301,7 +301,7 @@ Parser::parseCommandArgs(TextTokenRetokenizer &Retokenizer, unsigned NumArgs) {
     ParsedArgs++;
   }
 
-  return llvm::ArrayRef(Args, ParsedArgs);
+  return llvm::makeArrayRef(Args, ParsedArgs);
 }
 
 BlockCommandComment *Parser::parseBlockCommand() {
@@ -334,7 +334,7 @@ BlockCommandComment *Parser::parseBlockCommand() {
   if (isTokBlockCommand()) {
     // Block command ahead.  We can't nest block commands, so pretend that this
     // command has an empty argument.
-    ParagraphComment *Paragraph = S.actOnParagraphComment(std::nullopt);
+    ParagraphComment *Paragraph = S.actOnParagraphComment(None);
     if (PC) {
       S.actOnParamCommandFinish(PC, Paragraph);
       return PC;
@@ -376,7 +376,7 @@ BlockCommandComment *Parser::parseBlockCommand() {
 
   ParagraphComment *Paragraph;
   if (EmptyParagraph)
-    Paragraph = S.actOnParagraphComment(std::nullopt);
+    Paragraph = S.actOnParagraphComment(None);
   else {
     BlockContentComment *Block = parseParagraphOrBlockCommand();
     // Since we have checked for a block command, we should have parsed a
@@ -467,14 +467,16 @@ HTMLStartTagComment *Parser::parseHTMLStartTag() {
     }
 
     case tok::html_greater:
-      S.actOnHTMLStartTagFinish(HST, S.copyArray(llvm::ArrayRef(Attrs)),
+      S.actOnHTMLStartTagFinish(HST,
+                                S.copyArray(llvm::makeArrayRef(Attrs)),
                                 Tok.getLocation(),
                                 /* IsSelfClosing = */ false);
       consumeToken();
       return HST;
 
     case tok::html_slash_greater:
-      S.actOnHTMLStartTagFinish(HST, S.copyArray(llvm::ArrayRef(Attrs)),
+      S.actOnHTMLStartTagFinish(HST,
+                                S.copyArray(llvm::makeArrayRef(Attrs)),
                                 Tok.getLocation(),
                                 /* IsSelfClosing = */ true);
       consumeToken();
@@ -492,14 +494,16 @@ HTMLStartTagComment *Parser::parseHTMLStartTag() {
           Tok.is(tok::html_slash_greater))
         continue;
 
-      S.actOnHTMLStartTagFinish(HST, S.copyArray(llvm::ArrayRef(Attrs)),
+      S.actOnHTMLStartTagFinish(HST,
+                                S.copyArray(llvm::makeArrayRef(Attrs)),
                                 SourceLocation(),
                                 /* IsSelfClosing = */ false);
       return HST;
 
     default:
       // Not a token from an HTML start tag.  Thus HTML tag prematurely ended.
-      S.actOnHTMLStartTagFinish(HST, S.copyArray(llvm::ArrayRef(Attrs)),
+      S.actOnHTMLStartTagFinish(HST,
+                                S.copyArray(llvm::makeArrayRef(Attrs)),
                                 SourceLocation(),
                                 /* IsSelfClosing = */ false);
       bool StartLineInvalid;
@@ -638,7 +642,7 @@ BlockContentComment *Parser::parseParagraphOrBlockCommand() {
     break;
   }
 
-  return S.actOnParagraphComment(S.copyArray(llvm::ArrayRef(Content)));
+  return S.actOnParagraphComment(S.copyArray(llvm::makeArrayRef(Content)));
 }
 
 VerbatimBlockComment *Parser::parseVerbatimBlock() {
@@ -675,13 +679,14 @@ VerbatimBlockComment *Parser::parseVerbatimBlock() {
 
   if (Tok.is(tok::verbatim_block_end)) {
     const CommandInfo *Info = Traits.getCommandInfo(Tok.getVerbatimBlockID());
-    S.actOnVerbatimBlockFinish(VB, Tok.getLocation(), Info->Name,
-                               S.copyArray(llvm::ArrayRef(Lines)));
+    S.actOnVerbatimBlockFinish(VB, Tok.getLocation(),
+                               Info->Name,
+                               S.copyArray(llvm::makeArrayRef(Lines)));
     consumeToken();
   } else {
     // Unterminated \\verbatim block
     S.actOnVerbatimBlockFinish(VB, SourceLocation(), "",
-                               S.copyArray(llvm::ArrayRef(Lines)));
+                               S.copyArray(llvm::makeArrayRef(Lines)));
   }
 
   return VB;
@@ -757,7 +762,7 @@ FullComment *Parser::parseFullComment() {
     while (Tok.is(tok::newline))
       consumeToken();
   }
-  return S.actOnFullComment(S.copyArray(llvm::ArrayRef(Blocks)));
+  return S.actOnFullComment(S.copyArray(llvm::makeArrayRef(Blocks)));
 }
 
 } // end namespace comments

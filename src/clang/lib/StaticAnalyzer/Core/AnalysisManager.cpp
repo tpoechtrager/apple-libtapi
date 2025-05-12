@@ -50,14 +50,17 @@ AnalysisManager::AnalysisManager(ASTContext &ASTCtx, Preprocessor &PP,
 
 AnalysisManager::~AnalysisManager() {
   FlushDiagnostics();
-  for (PathDiagnosticConsumer *Consumer : PathConsumers) {
-    delete Consumer;
+  for (PathDiagnosticConsumers::iterator I = PathConsumers.begin(),
+       E = PathConsumers.end(); I != E; ++I) {
+    delete *I;
   }
 }
 
 void AnalysisManager::FlushDiagnostics() {
   PathDiagnosticConsumer::FilesMade filesMade;
-  for (PathDiagnosticConsumer *Consumer : PathConsumers) {
-    Consumer->FlushDiagnostics(&filesMade);
+  for (PathDiagnosticConsumers::iterator I = PathConsumers.begin(),
+       E = PathConsumers.end();
+       I != E; ++I) {
+    (*I)->FlushDiagnostics(&filesMade);
   }
 }

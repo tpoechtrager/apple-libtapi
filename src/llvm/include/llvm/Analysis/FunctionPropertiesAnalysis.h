@@ -20,7 +20,6 @@
 #include "llvm/IR/PassManager.h"
 
 namespace llvm {
-class DominatorTree;
 class Function;
 class LoopInfo;
 
@@ -32,11 +31,7 @@ class FunctionPropertiesInfo {
 
 public:
   static FunctionPropertiesInfo
-  getFunctionPropertiesInfo(const Function &F, const DominatorTree &DT,
-                            const LoopInfo &LI);
-
-  static FunctionPropertiesInfo
-  getFunctionPropertiesInfo(Function &F, FunctionAnalysisManager &FAM);
+  getFunctionPropertiesInfo(const Function &F, FunctionAnalysisManager &FAM);
 
   bool operator==(const FunctionPropertiesInfo &FPI) const {
     return std::memcmp(this, &FPI, sizeof(FunctionPropertiesInfo)) == 0;
@@ -114,21 +109,14 @@ public:
 /// inlining.
 class FunctionPropertiesUpdater {
 public:
-  FunctionPropertiesUpdater(FunctionPropertiesInfo &FPI, CallBase &CB);
+  FunctionPropertiesUpdater(FunctionPropertiesInfo &FPI, const CallBase &CB);
 
   void finish(FunctionAnalysisManager &FAM) const;
-  bool finishAndTest(FunctionAnalysisManager &FAM) const {
-    finish(FAM);
-    return isUpdateValid(Caller, FPI, FAM);
-  }
 
 private:
   FunctionPropertiesInfo &FPI;
-  BasicBlock &CallSiteBB;
-  Function &Caller;
-
-  static bool isUpdateValid(Function &F, const FunctionPropertiesInfo &FPI,
-                            FunctionAnalysisManager &FAM);
+  const BasicBlock &CallSiteBB;
+  const Function &Caller;
 
   DenseSet<const BasicBlock *> Successors;
 };

@@ -93,8 +93,8 @@ public:
   }
 
   static bool isValidLinkage(LinkageTypes L) {
-    return isExternalLinkage(L) || isLocalLinkage(L) || isWeakLinkage(L) ||
-           isLinkOnceLinkage(L) || isAvailableExternallyLinkage(L);
+    return isExternalLinkage(L) || isLocalLinkage(L) ||
+      isWeakLinkage(L) || isLinkOnceLinkage(L);
   }
 
   // Methods for support type inquiry through isa, cast, and dyn_cast:

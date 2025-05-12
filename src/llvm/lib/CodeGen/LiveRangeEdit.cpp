@@ -33,7 +33,7 @@ void LiveRangeEdit::Delegate::anchor() { }
 
 LiveInterval &LiveRangeEdit::createEmptyIntervalFrom(Register OldReg,
                                                      bool createSubRanges) {
-  Register VReg = MRI.cloneVirtualRegister(OldReg);
+  Register VReg = MRI.createVirtualRegister(MRI.getRegClass(OldReg));
   if (VRM)
     VRM->setIsSplitFromReg(VReg, VRM->getOriginal(OldReg));
 
@@ -53,7 +53,7 @@ LiveInterval &LiveRangeEdit::createEmptyIntervalFrom(Register OldReg,
 }
 
 Register LiveRangeEdit::createFrom(Register OldReg) {
-  Register VReg = MRI.cloneVirtualRegister(OldReg);
+  Register VReg = MRI.createVirtualRegister(MRI.getRegClass(OldReg));
   if (VRM) {
     VRM->setIsSplitFromReg(VReg, VRM->getOriginal(OldReg));
   }
@@ -82,7 +82,7 @@ void LiveRangeEdit::scanRemattable() {
   for (VNInfo *VNI : getParent().valnos) {
     if (VNI->isUnused())
       continue;
-    Register Original = VRM->getOriginal(getReg());
+    unsigned Original = VRM->getOriginal(getReg());
     LiveInterval &OrigLI = LIS.getInterval(Original);
     VNInfo *OrigVNI = OrigLI.getVNInfoAt(VNI->def);
     if (!OrigVNI)
@@ -114,7 +114,7 @@ bool LiveRangeEdit::allUsesAvailableAt(const MachineInstr *OrigMI,
 
     // We can't remat physreg uses, unless it is a constant or target wants
     // to ignore this use.
-    if (MO.getReg().isPhysical()) {
+    if (Register::isPhysicalRegister(MO.getReg())) {
       if (MRI.isConstantPhysReg(MO.getReg()) || TII.isIgnorableUse(MO))
         continue;
       return false;
@@ -181,9 +181,11 @@ bool LiveRangeEdit::canRematerializeAt(Remat &RM, VNInfo *OrigVNI,
 
 SlotIndex LiveRangeEdit::rematerializeAt(MachineBasicBlock &MBB,
                                          MachineBasicBlock::iterator MI,
-                                         Register DestReg, const Remat &RM,
+                                         unsigned DestReg,
+                                         const Remat &RM,
                                          const TargetRegisterInfo &tri,
-                                         bool Late, unsigned SubIdx,
+                                         bool Late,
+                                         unsigned SubIdx,
                                          MachineInstr *ReplaceIndexMI) {
   assert(RM.OrigMI && "Invalid remat");
   TII.reMaterialize(MBB, MI, DestReg, SubIdx, *RM.OrigMI, tri);
@@ -286,12 +288,8 @@ void LiveRangeEdit::eliminateDeadDef(MachineInstr *MI, ToShrinkSet &ToShrink) {
 
   // Never delete a bundled instruction.
   if (MI->isBundled()) {
-    // TODO: Handle deleting copy bundles
-    LLVM_DEBUG(dbgs() << "Won't delete dead bundled inst: " << Idx << '\t'
-                      << *MI);
     return;
   }
-
   // Never delete inline asm.
   if (MI->isInlineAsm()) {
     LLVM_DEBUG(dbgs() << "Won't delete: " << Idx << '\t' << *MI);
@@ -308,7 +306,7 @@ void LiveRangeEdit::eliminateDeadDef(MachineInstr *MI, ToShrinkSet &ToShrink) {
   LLVM_DEBUG(dbgs() << "Deleting dead def " << Idx << '\t' << *MI);
 
   // Collect virtual registers to be erased after MI is gone.
-  SmallVector<Register, 8> RegsToErase;
+  SmallVector<unsigned, 8> RegsToErase;
   bool ReadsPhysRegs = false;
   bool isOrigDef = false;
   Register Dest;
@@ -320,7 +318,7 @@ void LiveRangeEdit::eliminateDeadDef(MachineInstr *MI, ToShrinkSet &ToShrink) {
       MI->getDesc().getNumDefs() == 1) {
     Dest = MI->getOperand(0).getReg();
     DestSubReg = MI->getOperand(0).getSubReg();
-    Register Original = VRM->getOriginal(Dest);
+    unsigned Original = VRM->getOriginal(Dest);
     LiveInterval &OrigLI = LIS.getInterval(Original);
     VNInfo *OrigVNI = OrigLI.getVNInfoAt(Idx);
     // The original live-range may have been shrunk to
@@ -338,7 +336,7 @@ void LiveRangeEdit::eliminateDeadDef(MachineInstr *MI, ToShrinkSet &ToShrink) {
     if (!MO.isReg())
       continue;
     Register Reg = MO.getReg();
-    if (!Reg.isVirtual()) {
+    if (!Register::isVirtualRegister(Reg)) {
       // Check if MI reads any unreserved physregs.
       if (Reg && MO.readsReg() && !MRI.isReserved(Reg))
         ReadsPhysRegs = true;
@@ -380,7 +378,7 @@ void LiveRangeEdit::eliminateDeadDef(MachineInstr *MI, ToShrinkSet &ToShrink) {
     // Remove all operands that aren't physregs.
     for (unsigned i = MI->getNumOperands(); i; --i) {
       const MachineOperand &MO = MI->getOperand(i-1);
-      if (MO.isReg() && MO.getReg().isPhysical())
+      if (MO.isReg() && Register::isPhysicalRegister(MO.getReg()))
         continue;
       MI->removeOperand(i-1);
     }
@@ -450,7 +448,7 @@ void LiveRangeEdit::eliminateDeadDefs(SmallVectorImpl<MachineInstr *> &Dead,
     LiveInterval *LI = ToShrink.pop_back_val();
     if (foldAsLoad(LI, Dead))
       continue;
-    Register VReg = LI->reg();
+    unsigned VReg = LI->reg();
     if (TheDelegate)
       TheDelegate->LRE_WillShrinkVirtReg(VReg);
     if (!LIS.shrinkToUses(LI, &Dead))

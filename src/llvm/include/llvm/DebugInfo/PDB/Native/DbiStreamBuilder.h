@@ -9,6 +9,7 @@
 #ifndef LLVM_DEBUGINFO_PDB_NATIVE_DBISTREAMBUILDER_H
 #define LLVM_DEBUGINFO_PDB_NATIVE_DBISTREAMBUILDER_H
 
+#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/BinaryFormat/COFF.h"
@@ -104,7 +105,7 @@ private:
   msf::MSFBuilder &Msf;
   BumpPtrAllocator &Allocator;
 
-  std::optional<PdbRaw_DbiVer> VerHeader;
+  Optional<PdbRaw_DbiVer> VerHeader;
   uint32_t Age;
   uint16_t BuildNumber;
   uint16_t PdbDllVersion;
@@ -119,7 +120,7 @@ private:
 
   std::vector<std::unique_ptr<DbiModuleDescriptorBuilder>> ModiList;
 
-  std::optional<codeview::DebugFrameDataSubsection> NewFpoData;
+  Optional<codeview::DebugFrameDataSubsection> NewFpoData;
   std::vector<object::FpoData> OldFpoData;
 
   StringMap<uint32_t> SourceFileNames;
@@ -129,7 +130,7 @@ private:
   MutableBinaryByteStream FileInfoBuffer;
   std::vector<SectionContrib> SectionContribs;
   std::vector<SecMapEntry> SectionMap;
-  std::array<std::optional<DebugStream>, (int)DbgHeaderType::Max> DbgStreams;
+  std::array<Optional<DebugStream>, (int)DbgHeaderType::Max> DbgStreams;
 };
 } // namespace pdb
 }

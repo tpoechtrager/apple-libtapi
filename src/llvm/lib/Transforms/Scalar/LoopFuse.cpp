@@ -57,14 +57,16 @@
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Verifier.h"
+#include "llvm/InitializePasses.h"
+#include "llvm/Pass.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Utils.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/CodeMoverUtils.h"
 #include "llvm/Transforms/Utils/LoopPeel.h"
-#include "llvm/Transforms/Utils/LoopSimplify.h"
 
 using namespace llvm;
 
@@ -386,13 +388,7 @@ struct FusionCandidateCompare {
   /// Comparison functor to sort two Control Flow Equivalent fusion candidates
   /// into dominance order.
   /// If LHS dominates RHS and RHS post-dominates LHS, return true;
-  /// If RHS dominates LHS and LHS post-dominates RHS, return false;
-  /// If both LHS and RHS are not dominating each other then, non-strictly
-  /// post dominate check will decide the order of candidates. If RHS
-  /// non-strictly post dominates LHS then, return true. If LHS non-strictly
-  /// post dominates RHS then, return false. If both are non-strictly post
-  /// dominate each other then, level in the post dominator tree will decide
-  /// the order of candidates.
+  /// IF RHS dominates LHS and LHS post-dominates RHS, return false;
   bool operator()(const FusionCandidate &LHS,
                   const FusionCandidate &RHS) const {
     const DominatorTree *DT = &(LHS.DT);
@@ -418,29 +414,9 @@ struct FusionCandidateCompare {
       return true;
     }
 
-    // If two FusionCandidates are in the same level of dominator tree,
-    // they will not dominate each other, but may still be control flow
-    // equivalent. To sort those FusionCandidates, nonStrictlyPostDominate()
-    // function is needed.
-    bool WrongOrder =
-        nonStrictlyPostDominate(LHSEntryBlock, RHSEntryBlock, DT, LHS.PDT);
-    bool RightOrder =
-        nonStrictlyPostDominate(RHSEntryBlock, LHSEntryBlock, DT, LHS.PDT);
-    if (WrongOrder && RightOrder) {
-      // If common predecessor of LHS and RHS post dominates both
-      // FusionCandidates then, Order of FusionCandidate can be
-      // identified by its level in post dominator tree.
-      DomTreeNode *LNode = LHS.PDT->getNode(LHSEntryBlock);
-      DomTreeNode *RNode = LHS.PDT->getNode(RHSEntryBlock);
-      return LNode->getLevel() > RNode->getLevel();
-    } else if (WrongOrder)
-      return false;
-    else if (RightOrder)
-      return true;
-
-    // If LHS does not non-strict Postdominate RHS and RHS does not non-strict
-    // Postdominate LHS then, there is no dominance relationship between the
-    // two FusionCandidates. Thus, they should not be in the same set together.
+    // If LHS does not dominate RHS and RHS does not dominate LHS then there is
+    // no dominance relationship between the two FusionCandidates. Thus, they
+    // should not be in the same set together.
     llvm_unreachable(
         "No dominance relationship between these fusion candidates!");
   }
@@ -668,7 +644,7 @@ private:
   void collectFusionCandidates(const LoopVector &LV) {
     for (Loop *L : LV) {
       TTI::PeelingPreferences PP =
-          gatherPeelingPreferences(L, SE, TTI, std::nullopt, std::nullopt);
+          gatherPeelingPreferences(L, SE, TTI, None, None);
       FusionCandidate CurrCand(L, DT, &PDT, ORE, PP);
       if (!CurrCand.isEligibleForFusion(SE))
         continue;
@@ -724,21 +700,21 @@ private:
   /// have the same TripCount. The second is the difference in the two
   /// TripCounts. This information can be used later to determine whether or not
   /// peeling can be performed on either one of the candidates.
-  std::pair<bool, std::optional<unsigned>>
+  std::pair<bool, Optional<unsigned>>
   haveIdenticalTripCounts(const FusionCandidate &FC0,
                           const FusionCandidate &FC1) const {
     const SCEV *TripCount0 = SE.getBackedgeTakenCount(FC0.L);
     if (isa<SCEVCouldNotCompute>(TripCount0)) {
       UncomputableTripCount++;
       LLVM_DEBUG(dbgs() << "Trip count of first loop could not be computed!");
-      return {false, std::nullopt};
+      return {false, None};
     }
 
     const SCEV *TripCount1 = SE.getBackedgeTakenCount(FC1.L);
     if (isa<SCEVCouldNotCompute>(TripCount1)) {
       UncomputableTripCount++;
       LLVM_DEBUG(dbgs() << "Trip count of second loop could not be computed!");
-      return {false, std::nullopt};
+      return {false, None};
     }
 
     LLVM_DEBUG(dbgs() << "\tTrip counts: " << *TripCount0 << " & "
@@ -763,10 +739,10 @@ private:
       LLVM_DEBUG(dbgs() << "Loop(s) do not have a single exit point or do not "
                            "have a constant number of iterations. Peeling "
                            "is not benefical\n");
-      return {false, std::nullopt};
+      return {false, None};
     }
 
-    std::optional<unsigned> Difference;
+    Optional<unsigned> Difference;
     int Diff = TC0 - TC1;
 
     if (Diff > 0)
@@ -790,8 +766,7 @@ private:
     LLVM_DEBUG(dbgs() << "Attempting to peel first " << PeelCount
                       << " iterations of the first loop. \n");
 
-    ValueToValueMapTy VMap;
-    FC0.Peeled = peelLoop(FC0.L, PeelCount, &LI, &SE, DT, &AC, true, VMap);
+    FC0.Peeled = peelLoop(FC0.L, PeelCount, &LI, &SE, DT, &AC, true);
     if (FC0.Peeled) {
       LLVM_DEBUG(dbgs() << "Done Peeling\n");
 
@@ -882,12 +857,12 @@ private:
           // Check if the candidates have identical tripcounts (first value of
           // pair), and if not check the difference in the tripcounts between
           // the loops (second value of pair). The difference is not equal to
-          // std::nullopt iff the loops iterate a constant number of times, and
-          // have a single exit.
-          std::pair<bool, std::optional<unsigned>> IdenticalTripCountRes =
+          // None iff the loops iterate a constant number of times, and have a
+          // single exit.
+          std::pair<bool, Optional<unsigned>> IdenticalTripCountRes =
               haveIdenticalTripCounts(*FC0, *FC1);
           bool SameTripCount = IdenticalTripCountRes.first;
-          std::optional<unsigned> TCDifference = IdenticalTripCountRes.second;
+          Optional<unsigned> TCDifference = IdenticalTripCountRes.second;
 
           // Here we are checking that FC0 (the first loop) can be peeled, and
           // both loops have different tripcounts.
@@ -919,10 +894,9 @@ private:
             continue;
           }
 
-          if ((!FC0->GuardBranch && FC1->GuardBranch) ||
-              (FC0->GuardBranch && !FC1->GuardBranch)) {
-            LLVM_DEBUG(dbgs() << "The one of candidate is guarded while the "
-                                 "another one is not. Not fusing.\n");
+          if (!FC0->GuardBranch && FC1->GuardBranch) {
+            LLVM_DEBUG(dbgs() << "The second candidate is guarded while the "
+                                 "first one is not. Not fusing.\n");
             reportLoopFusion<OptimizationRemarkMissed>(
                 *FC0, *FC1, OnlySecondCandidateIsGuarded);
             continue;
@@ -1089,11 +1063,6 @@ private:
       }
     }
 
-    // PHIs in FC1's header only have FC0 blocks as predecessors. PHIs
-    // cannot be hoisted and should be sunk to the exit of the fused loop.
-    if (isa<PHINode>(I))
-      return false;
-
     // If this isn't a memory inst, hoisting is safe
     if (!I.mayReadOrWriteMemory())
       return true;
@@ -1241,7 +1210,7 @@ private:
       const Loop *ExprL = Expr->getLoop();
       SmallVector<const SCEV *, 2> Operands;
       if (ExprL == &OldL) {
-        append_range(Operands, Expr->operands());
+        Operands.append(Expr->op_begin(), Expr->op_end());
         return SE.getAddRecExpr(Operands, &NewL, Expr->getNoWrapFlags());
       }
 
@@ -2058,6 +2027,51 @@ private:
     return FC0.L;
   }
 };
+
+struct LoopFuseLegacy : public FunctionPass {
+
+  static char ID;
+
+  LoopFuseLegacy() : FunctionPass(ID) {
+    initializeLoopFuseLegacyPass(*PassRegistry::getPassRegistry());
+  }
+
+  void getAnalysisUsage(AnalysisUsage &AU) const override {
+    AU.addRequiredID(LoopSimplifyID);
+    AU.addRequired<ScalarEvolutionWrapperPass>();
+    AU.addRequired<LoopInfoWrapperPass>();
+    AU.addRequired<DominatorTreeWrapperPass>();
+    AU.addRequired<PostDominatorTreeWrapperPass>();
+    AU.addRequired<OptimizationRemarkEmitterWrapperPass>();
+    AU.addRequired<DependenceAnalysisWrapperPass>();
+    AU.addRequired<AssumptionCacheTracker>();
+    AU.addRequired<TargetTransformInfoWrapperPass>();
+
+    AU.addPreserved<ScalarEvolutionWrapperPass>();
+    AU.addPreserved<LoopInfoWrapperPass>();
+    AU.addPreserved<DominatorTreeWrapperPass>();
+    AU.addPreserved<PostDominatorTreeWrapperPass>();
+  }
+
+  bool runOnFunction(Function &F) override {
+    if (skipFunction(F))
+      return false;
+
+    auto &LI = getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
+    auto &DT = getAnalysis<DominatorTreeWrapperPass>().getDomTree();
+    auto &DI = getAnalysis<DependenceAnalysisWrapperPass>().getDI();
+    auto &SE = getAnalysis<ScalarEvolutionWrapperPass>().getSE();
+    auto &PDT = getAnalysis<PostDominatorTreeWrapperPass>().getPostDomTree();
+    auto &ORE = getAnalysis<OptimizationRemarkEmitterWrapperPass>().getORE();
+    auto &AC = getAnalysis<AssumptionCacheTracker>().getAssumptionCache(F);
+    const TargetTransformInfo &TTI =
+        getAnalysis<TargetTransformInfoWrapperPass>().getTTI(F);
+    const DataLayout &DL = F.getParent()->getDataLayout();
+
+    LoopFuser LF(LI, DT, DI, SE, PDT, ORE, DL, AC, TTI);
+    return LF.fuseLoops(F);
+  }
+};
 } // namespace
 
 PreservedAnalyses LoopFusePass::run(Function &F, FunctionAnalysisManager &AM) {
@@ -2071,19 +2085,8 @@ PreservedAnalyses LoopFusePass::run(Function &F, FunctionAnalysisManager &AM) {
   const TargetTransformInfo &TTI = AM.getResult<TargetIRAnalysis>(F);
   const DataLayout &DL = F.getParent()->getDataLayout();
 
-  // Ensure loops are in simplifed form which is a pre-requisite for loop fusion
-  // pass. Added only for new PM since the legacy PM has already added
-  // LoopSimplify pass as a dependency.
-  bool Changed = false;
-  for (auto &L : LI) {
-    Changed |=
-        simplifyLoop(L, &DT, &LI, &SE, &AC, nullptr, false /* PreserveLCSSA */);
-  }
-  if (Changed)
-    PDT.recalculate(F);
-
   LoopFuser LF(LI, DT, DI, SE, PDT, ORE, DL, AC, TTI);
-  Changed |= LF.fuseLoops(F);
+  bool Changed = LF.fuseLoops(F);
   if (!Changed)
     return PreservedAnalyses::all();
 
@@ -2094,3 +2097,19 @@ PreservedAnalyses LoopFusePass::run(Function &F, FunctionAnalysisManager &AM) {
   PA.preserve<LoopAnalysis>();
   return PA;
 }
+
+char LoopFuseLegacy::ID = 0;
+
+INITIALIZE_PASS_BEGIN(LoopFuseLegacy, "loop-fusion", "Loop Fusion", false,
+                      false)
+INITIALIZE_PASS_DEPENDENCY(PostDominatorTreeWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(ScalarEvolutionWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(DominatorTreeWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(DependenceAnalysisWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(LoopInfoWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(OptimizationRemarkEmitterWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(AssumptionCacheTracker)
+INITIALIZE_PASS_DEPENDENCY(TargetTransformInfoWrapperPass)
+INITIALIZE_PASS_END(LoopFuseLegacy, "loop-fusion", "Loop Fusion", false, false)
+
+FunctionPass *llvm::createLoopFusePass() { return new LoopFuseLegacy(); }

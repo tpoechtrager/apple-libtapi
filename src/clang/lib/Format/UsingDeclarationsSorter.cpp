@@ -13,7 +13,6 @@
 //===----------------------------------------------------------------------===//
 
 #include "UsingDeclarationsSorter.h"
-#include "clang/Format/Format.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Regex.h"
 
@@ -33,7 +32,7 @@ namespace {
 // individual names is that all non-namespace names come before all namespace
 // names, and within those groups, names are in case-insensitive lexicographic
 // order.
-int compareLabelsLexicographicNumeric(StringRef A, StringRef B) {
+int compareLabels(StringRef A, StringRef B) {
   SmallVector<StringRef, 2> NamesA;
   A.split(NamesA, "::", /*MaxSplit=*/-1, /*KeepEmpty=*/false);
   SmallVector<StringRef, 2> NamesB;
@@ -65,38 +64,16 @@ int compareLabelsLexicographicNumeric(StringRef A, StringRef B) {
   return 0;
 }
 
-int compareLabelsLexicographic(StringRef A, StringRef B) {
-  SmallVector<StringRef, 2> NamesA;
-  A.split(NamesA, "::", /*MaxSplit=*/-1, /*KeepEmpty=*/false);
-  SmallVector<StringRef, 2> NamesB;
-  B.split(NamesB, "::", /*MaxSplit=*/-1, /*KeepEmpty=*/false);
-  size_t SizeA = NamesA.size();
-  size_t SizeB = NamesB.size();
-  for (size_t I = 0, E = std::min(SizeA, SizeB); I < E; ++I) {
-    // Two namespaces names within a group compare case-insensitively.
-    int C = NamesA[I].compare_insensitive(NamesB[I]);
-    if (C != 0)
-      return C;
-  }
-  if (SizeA < SizeB)
-    return -1;
-  return SizeA == SizeB ? 0 : 1;
-}
-
-int compareLabels(
-    StringRef A, StringRef B,
-    FormatStyle::SortUsingDeclarationsOptions SortUsingDeclarations) {
-  if (SortUsingDeclarations == FormatStyle::SUD_LexicographicNumeric)
-    return compareLabelsLexicographicNumeric(A, B);
-  return compareLabelsLexicographic(A, B);
-}
-
 struct UsingDeclaration {
   const AnnotatedLine *Line;
   std::string Label;
 
   UsingDeclaration(const AnnotatedLine *Line, const std::string &Label)
       : Line(Line), Label(Label) {}
+
+  bool operator<(const UsingDeclaration &Other) const {
+    return compareLabels(Label, Other.Label) < 0;
+  }
 };
 
 /// Computes the label of a using declaration starting at tthe using token
@@ -136,8 +113,7 @@ std::string computeUsingDeclarationLabel(const FormatToken *UsingTok) {
 
 void endUsingDeclarationBlock(
     SmallVectorImpl<UsingDeclaration> *UsingDeclarations,
-    const SourceManager &SourceMgr, tooling::Replacements *Fixes,
-    FormatStyle::SortUsingDeclarationsOptions SortUsingDeclarations) {
+    const SourceManager &SourceMgr, tooling::Replacements *Fixes) {
   bool BlockAffected = false;
   for (const UsingDeclaration &Declaration : *UsingDeclarations) {
     if (Declaration.Line->Affected) {
@@ -151,11 +127,7 @@ void endUsingDeclarationBlock(
   }
   SmallVector<UsingDeclaration, 4> SortedUsingDeclarations(
       UsingDeclarations->begin(), UsingDeclarations->end());
-  auto Comp = [SortUsingDeclarations](const UsingDeclaration &Lhs,
-                                      const UsingDeclaration &Rhs) -> bool {
-    return compareLabels(Lhs.Label, Rhs.Label, SortUsingDeclarations) < 0;
-  };
-  llvm::stable_sort(SortedUsingDeclarations, Comp);
+  llvm::stable_sort(SortedUsingDeclarations);
   SortedUsingDeclarations.erase(
       std::unique(SortedUsingDeclarations.begin(),
                   SortedUsingDeclarations.end(),
@@ -220,26 +192,21 @@ std::pair<tooling::Replacements, unsigned> UsingDeclarationsSorter::analyze(
     const auto *FirstTok = Line->First;
     if (Line->InPPDirective || !Line->startsWith(tok::kw_using) ||
         FirstTok->Finalized) {
-      endUsingDeclarationBlock(&UsingDeclarations, SourceMgr, &Fixes,
-                               Style.SortUsingDeclarations);
+      endUsingDeclarationBlock(&UsingDeclarations, SourceMgr, &Fixes);
       continue;
     }
-    if (FirstTok->NewlinesBefore > 1) {
-      endUsingDeclarationBlock(&UsingDeclarations, SourceMgr, &Fixes,
-                               Style.SortUsingDeclarations);
-    }
+    if (FirstTok->NewlinesBefore > 1)
+      endUsingDeclarationBlock(&UsingDeclarations, SourceMgr, &Fixes);
     const auto *UsingTok =
         FirstTok->is(tok::comment) ? FirstTok->getNextNonComment() : FirstTok;
     std::string Label = computeUsingDeclarationLabel(UsingTok);
     if (Label.empty()) {
-      endUsingDeclarationBlock(&UsingDeclarations, SourceMgr, &Fixes,
-                               Style.SortUsingDeclarations);
+      endUsingDeclarationBlock(&UsingDeclarations, SourceMgr, &Fixes);
       continue;
     }
     UsingDeclarations.push_back(UsingDeclaration(Line, Label));
   }
-  endUsingDeclarationBlock(&UsingDeclarations, SourceMgr, &Fixes,
-                           Style.SortUsingDeclarations);
+  endUsingDeclarationBlock(&UsingDeclarations, SourceMgr, &Fixes);
   return {Fixes, 0};
 }
 

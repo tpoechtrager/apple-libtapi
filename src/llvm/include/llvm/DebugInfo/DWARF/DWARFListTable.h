@@ -112,18 +112,17 @@ public:
 
   void dump(DataExtractor Data, raw_ostream &OS,
             DIDumpOptions DumpOpts = {}) const;
-  std::optional<uint64_t> getOffsetEntry(DataExtractor Data,
-                                         uint32_t Index) const {
+  Optional<uint64_t> getOffsetEntry(DataExtractor Data, uint32_t Index) const {
     if (Index >= HeaderData.OffsetEntryCount)
-      return std::nullopt;
+      return None;
 
     return getOffsetEntry(Data, getHeaderOffset() + getHeaderSize(Format), Format, Index);
   }
 
-  static std::optional<uint64_t> getOffsetEntry(DataExtractor Data,
-                                                uint64_t OffsetTableOffset,
-                                                dwarf::DwarfFormat Format,
-                                                uint32_t Index) {
+  static Optional<uint64_t> getOffsetEntry(DataExtractor Data,
+                                           uint64_t OffsetTableOffset,
+                                           dwarf::DwarfFormat Format,
+                                           uint32_t Index) {
     uint8_t OffsetByteSize = Format == dwarf::DWARF64 ? 8 : 4;
     uint64_t Offset = OffsetTableOffset + OffsetByteSize * Index;
     auto R = Data.getUnsigned(&Offset, OffsetByteSize);
@@ -179,15 +178,13 @@ public:
   uint32_t getOffsetEntryCount() const { return Header.getOffsetEntryCount(); }
   dwarf::DwarfFormat getFormat() const { return Header.getFormat(); }
 
-  void
-  dump(DWARFDataExtractor Data, raw_ostream &OS,
-       llvm::function_ref<std::optional<object::SectionedAddress>(uint32_t)>
-           LookupPooledAddress,
-       DIDumpOptions DumpOpts = {}) const;
+  void dump(DWARFDataExtractor Data, raw_ostream &OS,
+            llvm::function_ref<Optional<object::SectionedAddress>(uint32_t)>
+                LookupPooledAddress,
+            DIDumpOptions DumpOpts = {}) const;
 
   /// Return the contents of the offset entry designated by a given index.
-  std::optional<uint64_t> getOffsetEntry(DataExtractor Data,
-                                         uint32_t Index) const {
+  Optional<uint64_t> getOffsetEntry(DataExtractor Data, uint32_t Index) const {
     return Header.getOffsetEntry(Data, Index);
   }
   /// Return the size of the table header including the length but not including
@@ -253,7 +250,7 @@ Error DWARFListType<ListEntryType>::extract(DWARFDataExtractor Data,
 template <typename DWARFListType>
 void DWARFListTableBase<DWARFListType>::dump(
     DWARFDataExtractor Data, raw_ostream &OS,
-    llvm::function_ref<std::optional<object::SectionedAddress>(uint32_t)>
+    llvm::function_ref<Optional<object::SectionedAddress>(uint32_t)>
         LookupPooledAddress,
     DIDumpOptions DumpOpts) const {
   Header.dump(Data, OS, DumpOpts);

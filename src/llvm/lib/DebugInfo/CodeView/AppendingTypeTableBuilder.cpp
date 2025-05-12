@@ -29,16 +29,16 @@ AppendingTypeTableBuilder::AppendingTypeTableBuilder(BumpPtrAllocator &Storage)
 
 AppendingTypeTableBuilder::~AppendingTypeTableBuilder() = default;
 
-std::optional<TypeIndex> AppendingTypeTableBuilder::getFirst() {
+Optional<TypeIndex> AppendingTypeTableBuilder::getFirst() {
   if (empty())
-    return std::nullopt;
+    return None;
 
   return TypeIndex(TypeIndex::FirstNonSimpleIndex);
 }
 
-std::optional<TypeIndex> AppendingTypeTableBuilder::getNext(TypeIndex Prev) {
+Optional<TypeIndex> AppendingTypeTableBuilder::getNext(TypeIndex Prev) {
   if (++Prev == nextTypeIndex())
-    return std::nullopt;
+    return None;
   return Prev;
 }
 

@@ -23,13 +23,15 @@ class TimerGroup;
 class raw_ostream;
 
 class TimeRecord {
-  double WallTime = 0.0;             ///< Wall clock time elapsed in seconds.
-  double UserTime = 0.0;             ///< User time elapsed.
-  double SystemTime = 0.0;           ///< System time elapsed.
-  ssize_t MemUsed = 0;               ///< Memory allocated (in bytes).
-  uint64_t InstructionsExecuted = 0; ///< Number of instructions executed
+  double WallTime;               ///< Wall clock time elapsed in seconds.
+  double UserTime;               ///< User time elapsed.
+  double SystemTime;             ///< System time elapsed.
+  ssize_t MemUsed;               ///< Memory allocated (in bytes).
+  uint64_t InstructionsExecuted; ///< Number of instructions executed
 public:
-  TimeRecord() = default;
+  TimeRecord()
+      : WallTime(0), UserTime(0), SystemTime(0), MemUsed(0),
+        InstructionsExecuted(0) {}
 
   /// Get the current time and memory usage.  If Start is true we get the memory
   /// usage before the time, otherwise we get time before memory usage.  This

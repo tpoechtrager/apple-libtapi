@@ -8,15 +8,12 @@
 
 #include "llvm/Support/JSON.h"
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/ConvertUTF.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/Format.h"
-#include "llvm/Support/NativeFormatting.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Support/NativeFormatting.h"
 #include <cctype>
-#include <cerrno>
-#include <optional>
 
 namespace llvm {
 namespace json {
@@ -39,30 +36,30 @@ const Value *Object::get(StringRef K) const {
     return nullptr;
   return &I->second;
 }
-std::optional<std::nullptr_t> Object::getNull(StringRef K) const {
+llvm::Optional<std::nullptr_t> Object::getNull(StringRef K) const {
   if (auto *V = get(K))
     return V->getAsNull();
-  return std::nullopt;
+  return llvm::None;
 }
-std::optional<bool> Object::getBoolean(StringRef K) const {
+llvm::Optional<bool> Object::getBoolean(StringRef K) const {
   if (auto *V = get(K))
     return V->getAsBoolean();
-  return std::nullopt;
+  return llvm::None;
 }
-std::optional<double> Object::getNumber(StringRef K) const {
+llvm::Optional<double> Object::getNumber(StringRef K) const {
   if (auto *V = get(K))
     return V->getAsNumber();
-  return std::nullopt;
+  return llvm::None;
 }
-std::optional<int64_t> Object::getInteger(StringRef K) const {
+llvm::Optional<int64_t> Object::getInteger(StringRef K) const {
   if (auto *V = get(K))
     return V->getAsInteger();
-  return std::nullopt;
+  return llvm::None;
 }
-std::optional<llvm::StringRef> Object::getString(StringRef K) const {
+llvm::Optional<llvm::StringRef> Object::getString(StringRef K) const {
   if (auto *V = get(K))
     return V->getAsString();
-  return std::nullopt;
+  return llvm::None;
 }
 const json::Object *Object::getObject(StringRef K) const {
   if (auto *V = get(K))
@@ -411,7 +408,7 @@ private:
            C == 'e' || C == 'E' || C == '+' || C == '-' || C == '.';
   }
 
-  std::optional<Error> Err;
+  Optional<Error> Err;
   const char *Start, *P, *End;
 };
 

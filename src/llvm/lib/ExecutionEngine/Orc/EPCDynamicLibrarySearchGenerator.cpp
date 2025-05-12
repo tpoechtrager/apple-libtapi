@@ -53,7 +53,8 @@ Error EPCDynamicLibrarySearchGenerator::tryToGenerate(
   auto ResultI = Result->front().begin();
   for (auto &KV : LookupSymbols) {
     if (*ResultI)
-      NewSymbols[KV.first] = {*ResultI, JITSymbolFlags::Exported};
+      NewSymbols[KV.first] =
+          JITEvaluatedSymbol(*ResultI, JITSymbolFlags::Exported);
     ++ResultI;
   }
 

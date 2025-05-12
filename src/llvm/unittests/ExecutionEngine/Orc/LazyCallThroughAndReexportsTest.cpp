@@ -23,15 +23,14 @@ TEST_F(LazyReexportsTest, BasicLocalCallThroughManagerOperation) {
   // Bail out if we can not detect the host.
   if (!JTMB) {
     consumeError(JTMB.takeError());
-    GTEST_SKIP();
+    return;
   }
 
   // Bail out if we can not build a local call-through manager.
-  auto LCTM = createLocalLazyCallThroughManager(JTMB->getTargetTriple(), ES,
-                                                ExecutorAddr());
+  auto LCTM = createLocalLazyCallThroughManager(JTMB->getTargetTriple(), ES, 0);
   if (!LCTM) {
     consumeError(LCTM.takeError());
-    GTEST_SKIP();
+    return;
   }
 
   auto DummyTarget = ES.intern("DummyTarget");
@@ -43,14 +42,16 @@ TEST_F(LazyReexportsTest, BasicLocalCallThroughManagerOperation) {
       [&](std::unique_ptr<MaterializationResponsibility> R) {
         DummyTargetMaterialized = true;
         // No dependencies registered, can't fail.
-        cantFail(R->notifyResolved({{DummyTarget,
-                                     {ExecutorAddr::fromPtr(&dummyTarget),
-                                      JITSymbolFlags::Exported}}}));
+        cantFail(R->notifyResolved(
+            {{DummyTarget,
+              JITEvaluatedSymbol(static_cast<JITTargetAddress>(
+                                     reinterpret_cast<uintptr_t>(&dummyTarget)),
+                                 JITSymbolFlags::Exported)}}));
         cantFail(R->notifyEmitted());
       })));
 
   unsigned NotifyResolvedCount = 0;
-  auto NotifyResolved = [&](ExecutorAddr ResolvedAddr) {
+  auto NotifyResolved = [&](JITTargetAddress ResolvedAddr) {
     ++NotifyResolvedCount;
     return Error::success();
   };
@@ -58,7 +59,8 @@ TEST_F(LazyReexportsTest, BasicLocalCallThroughManagerOperation) {
   auto CallThroughTrampoline = cantFail((*LCTM)->getCallThroughTrampoline(
       JD, DummyTarget, std::move(NotifyResolved)));
 
-  auto CTTPtr = CallThroughTrampoline.toPtr<int (*)()>();
+  auto CTTPtr = reinterpret_cast<int (*)()>(
+      static_cast<uintptr_t>(CallThroughTrampoline));
 
   // Call twice to verify nothing unexpected happens on redundant calls.
   auto Result = CTTPtr();

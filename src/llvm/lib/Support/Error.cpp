@@ -7,8 +7,6 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Support/Error.h"
-#include "llvm/ADT/SmallVector.h"
-#include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/Support/ErrorHandling.h"
 #include <system_error>
@@ -72,15 +70,6 @@ void logAllUnhandledErrors(Error E, raw_ostream &OS, Twine ErrorBanner) {
   });
 }
 
-/// Write all error messages (if any) in E to a string. The newline character
-/// is used to separate error messages.
-std::string toString(Error E) {
-  SmallVector<std::string, 2> Errors;
-  handleAllErrors(std::move(E), [&Errors](const ErrorInfoBase &EI) {
-    Errors.push_back(EI.message());
-  });
-  return join(Errors.begin(), Errors.end(), "\n");
-}
 
 std::error_code ErrorList::convertToErrorCode() const {
   return std::error_code(static_cast<int>(ErrorErrorCode::MultipleErrors),
@@ -135,9 +124,6 @@ StringError::StringError(std::error_code EC, const Twine &S)
 StringError::StringError(const Twine &S, std::error_code EC)
     : Msg(S.str()), EC(EC), PrintMsgOnly(true) {}
 
-StringError::StringError(std::string &&S, std::error_code EC, bool PrintMsgOnly)
-    : Msg(S), EC(EC), PrintMsgOnly(PrintMsgOnly) {}
-
 void StringError::log(raw_ostream &OS) const {
   if (PrintMsgOnly) {
     OS << Msg;
@@ -152,7 +138,7 @@ std::error_code StringError::convertToErrorCode() const {
   return EC;
 }
 
-Error createStringError(std::string &&Msg, std::error_code EC) {
+Error createStringError(std::error_code EC, char const *Msg) {
   return make_error<StringError>(Msg, EC);
 }
 
@@ -163,7 +149,7 @@ void report_fatal_error(Error Err, bool GenCrashDiag) {
     raw_string_ostream ErrStream(ErrMsg);
     logAllUnhandledErrors(std::move(Err), ErrStream);
   }
-  report_fatal_error(Twine(ErrMsg), GenCrashDiag);
+  report_fatal_error(Twine(ErrMsg));
 }
 
 } // end namespace llvm

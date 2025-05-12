@@ -26,8 +26,12 @@
 namespace llvm {
 namespace objdump {
 
+unsigned getInstStartColumn(const MCSubtargetInfo &STI) {
+  return !ShowRawInsn ? 16 : STI.getTargetTriple().isX86() ? 40 : 24;
+}
+
 bool LiveVariable::liveAtAddress(object::SectionedAddress Addr) {
-  if (LocExpr.Range == std::nullopt)
+  if (LocExpr.Range == None)
     return false;
   return LocExpr.Range->SectionIndex == Addr.SectionIndex &&
          LocExpr.Range->LowPC <= Addr.Address &&
@@ -38,17 +42,7 @@ void LiveVariable::print(raw_ostream &OS, const MCRegisterInfo &MRI) const {
   DataExtractor Data({LocExpr.Expr.data(), LocExpr.Expr.size()},
                      Unit->getContext().isLittleEndian(), 0);
   DWARFExpression Expression(Data, Unit->getAddressByteSize());
-
-  auto GetRegName = [&MRI, &OS](uint64_t DwarfRegNum, bool IsEH) -> StringRef {
-    if (std::optional<unsigned> LLVMRegNum =
-            MRI.getLLVMRegNum(DwarfRegNum, IsEH))
-      if (const char *RegName = MRI.getName(*LLVMRegNum))
-        return StringRef(RegName);
-    OS << "<unknown register " << DwarfRegNum << ">";
-    return {};
-  };
-
-  Expression.printCompact(OS, GetRegName);
+  Expression.printCompact(OS, MRI);
 }
 
 void LiveVariablePrinter::addVariable(DWARFDie FuncDie, DWARFDie VarDie) {
@@ -448,34 +442,6 @@ void SourcePrinter::printLines(formatted_raw_ostream &OS,
   }
 }
 
-// Get the source line text for LineInfo:
-// - use LineInfo::LineSource if available;
-// - use LineCache if LineInfo::Source otherwise.
-StringRef SourcePrinter::getLine(const DILineInfo &LineInfo,
-                                 StringRef ObjectFilename) {
-  if (LineInfo.LineSource)
-    return LineInfo.LineSource.value();
-
-  if (SourceCache.find(LineInfo.FileName) == SourceCache.end())
-    if (!cacheSource(LineInfo))
-      return {};
-
-  auto LineBuffer = LineCache.find(LineInfo.FileName);
-  if (LineBuffer == LineCache.end())
-    return {};
-
-  if (LineInfo.Line > LineBuffer->second.size()) {
-    reportWarning(
-        formatv("debug info line number {0} exceeds the number of lines in {1}",
-                LineInfo.Line, LineInfo.FileName),
-        ObjectFilename);
-    return {};
-  }
-
-  // Vector begins at 0, line numbers are non-zero
-  return LineBuffer->second[LineInfo.Line - 1];
-}
-
 void SourcePrinter::printSources(formatted_raw_ostream &OS,
                                  const DILineInfo &LineInfo,
                                  StringRef ObjectFilename, StringRef Delimiter,
@@ -485,9 +451,21 @@ void SourcePrinter::printSources(formatted_raw_ostream &OS,
        OldLineInfo.FileName == LineInfo.FileName))
     return;
 
-  StringRef Line = getLine(LineInfo, ObjectFilename);
-  if (!Line.empty()) {
-    OS << Delimiter << Line;
+  if (SourceCache.find(LineInfo.FileName) == SourceCache.end())
+    if (!cacheSource(LineInfo))
+      return;
+  auto LineBuffer = LineCache.find(LineInfo.FileName);
+  if (LineBuffer != LineCache.end()) {
+    if (LineInfo.Line > LineBuffer->second.size()) {
+      reportWarning(
+          formatv(
+              "debug info line number {0} exceeds the number of lines in {1}",
+              LineInfo.Line, LineInfo.FileName),
+          ObjectFilename);
+      return;
+    }
+    // Vector begins at 0, line numbers are non-zero
+    OS << Delimiter << LineBuffer->second[LineInfo.Line - 1];
     LVP.printBetweenInsts(OS, true);
   }
 }

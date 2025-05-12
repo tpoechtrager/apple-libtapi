@@ -29,8 +29,8 @@ class SFINAEResponse;
 def SFINAE_Suppress            : SFINAEResponse;
 
 // Textual substitutions which may be performed on the text of diagnostics
-class TextSubstitution<string Summary> {
-  string Substitution = Summary;
+class TextSubstitution<string Text> {
+  string Substitution = Text;
   // TODO: These are only here to allow substitutions to be declared inline with
   // diagnostics
   string Component = "";
@@ -53,9 +53,9 @@ class DiagGroup<string Name, list<DiagGroup> subgroups = []> {
 class InGroup<DiagGroup G> { DiagGroup Group = G; }
 
 // All diagnostics emitted by the compiler are an indirect subclass of this.
-class Diagnostic<string summary, DiagClass DC, Severity defaultmapping> {
+class Diagnostic<string text, DiagClass DC, Severity defaultmapping> {
   string         Component = ?;
-  string         Summary = summary;
+  string         Text = text;
   DiagClass      Class = DC;
   SFINAEResponse SFINAE = SFINAE_Suppress;
   bit            AccessControl = 0;
@@ -109,7 +109,6 @@ def err_install_name_mismatch : Error<"install_name does not match: '%0' (provid
 def err_current_version_mismatch : Error<"current_version does not match: '%0' (provided) vs '%1' (found)">;
 def err_compatibility_version_mismatch : Error<"compatibility_version does not match: '%0' (provided) vs '%1' (found)">;
 def err_appextension_safe_mismatch : Error<"ApplicationExtensionSafe flag does not match: '%0' (provided) vs '%1' (found)">;
-def err_shared_cache_eligiblity_mismatch : Error<"NotForDyldSharedCache flag does not match: '%0' (provided) vs '%1' (found)">;
 def err_reexported_libraries_missing : Error<"re-exported library missing from %0: '%1'">;
 def err_reexported_libraries_mismatch : Error<"re-exported libraries do not match: '%0' (provided) vs '%1' (found)">;
 def err_allowable_clients_missing : Error<"allowable client missing from %0: '%1'">;
@@ -118,20 +117,16 @@ def err_parent_umbrella_missing: Error<"parent umbrella missing from %0: '%1'">;
 def err_parent_umbrella_mismatch : Error<"parent umbrella does not match: '%0' (provided) vs '%1' (found)">;
 def warn_rpaths_missing : Warning<"runpath search paths missing from %0: '%1'">;
 def warn_rpaths_mismatch : Warning<"runpath search paths do not match: '%0' (provided) vs '%1' (found)">;
-def err_relinkable_libraries_missing : Error<"relinked libraries missing from %0: '%1'">;
-def err_relinkable_libraries_mismatch : Error<"relinked libraries do not match: '%0' (provided) vs '%1' (found)">;
 def err_no_twolevel_namespace : Error<"flat namespace libraries are not supported">;
 def err_library_missing_symbol : Error<"declaration has external linkage, but dynamic library doesn't have symbol '%0'">;
-def warn_library_missing_symbol : Warning<"declaration has external linkage, but dynamic library doesn't have symbol '%0'">;
 def err_header_hidden_symbol : Error<"symbol exported in dynamic library, but marked hidden in declaration '%0'">;
 def err_header_availability_mismatch : Error<"declaration '%0' is marked %select{available|unavailable}1,"
   " but symbol is %select{not |}2exported in dynamic library">;
 def err_dylib_symbol_flags_mismatch : Error<"dynamic library symbol '%0' is "
-  "%select{weak defined|thread local}1, but its declaration is not">;
+  "%select{weak defined|thread local}1, but it's declaration is not">;
 def err_header_symbol_flags_mismatch : Error<"declaration '%0' is "
   "%select{weak defined|thread local}1, but symbol is not in dynamic library">;
 def err_library_hidden_symbol : Error<"declaration has external linkage, but symbol has internal linkage in dynamic library '%0'">;
-def warn_library_hidden_symbol : Warning<"declaration has external linkage, but symbol has internal linkage in dynamic library '%0'">;
 def err_parsing_disabled : Error<"parsing of all headers disabled">;
 def err_no_directory : Error<"input '%0' is not a directory">;
 def err_not_a_dylib : Error<"input '%0' is not a dynamic library">;
@@ -155,9 +150,6 @@ def err_invalid_verifier_allowlist_file: Error<"cannot parse allowlist file %0: 
 def err_inlining_not_supported: Error<"inlining is not supported for output file type '%0'">;
 def err_merge_file: Error<"unable to merge '%0': '%1'">;
 def err_invalid_platform_name: Error<"invalid platform name '%0'">;
-def err_invalid_label: Error<"label '%0' is reserved to -X: use a different label name">;
-def err_prefix_header_usage: Error<"'%0' can only be set with -Xproject">;
-def err_pch: Error<"precompiled headers are not supported: remove '%0'">;
 
 def warn : Warning<"%0">;
 def warn_truncating_current_version : Warning<
@@ -186,10 +178,9 @@ def warn_target: Warning<"violations found for %0">;
 def warn_header_availability_mismatch : Warning<"declaration '%0' is marked %select{available|unavailable}1,"
   " but symbol is %select{not |}2exported in dynamic library">;
 def warn_dylib_symbol_flags_mismatch : Warning<"dynamic library symbol '%0' is "
-  "%select{weak defined|thread local}1, but its declaration is not">;
+  "%select{weak defined|thread local}1, but it's declaration is not">;
 def warn_header_symbol_flags_mismatch : Warning<"declaration '%0' is "
   "%select{weak defined|thread local}1, but symbol is not in dynamic library">;
-def warn_ignored_option : Warning<"the option '%0' is invalid and will be ignored">;
 
 
 } // end of command line category.
@@ -237,7 +228,7 @@ def warn_api_incomplete : Warning<"%0 is missing from target %1 but required for
 
 let CategoryName = "SDKDB" in {
 
-def warn_sdkdb_duplicated_global : Warning<"duplicated symbol '%0' found in '%1'">;
+def warn_sdkdb_duplicated_global : Warning<"duplicated symbol '%0' inside SDKDB">;
 def warn_sdkdb_duplicated_objc_class : Warning<"duplicated ObjC interface '%0' inside SDKDB">;
 def warn_sdkdb_duplicated_objc_category : Warning<"duplicated ObjC category '%0(%1)' inside SDKDB">;
 def warn_sdkdb_duplicated_enum : Warning<"duplicated enum '%0' inside SDKDB">;
@@ -263,17 +254,15 @@ def err_sdkdb_missing_frontend_api: Error<"missing %select{enum|enum constant|ty
 def err_sdkdb_global_regression : Error<"regression for API '%0' in '%1' for target '%2': %3">;
 def err_sdkdb_missing_objc : Error<"missing objc %select{class|category|protocol}0 '%1' in '%2' for target '%3'">;
 def err_sdkdb_objc_container_regression : Error<"regression for ObjC %select{class|category|protocol}0 '%1' in '%2' for target '%3': %4">;
-def err_sdkdb_objc_method_regression : Error<"regression for ObjC %select{class|instance}1 method '%0' in %select{class|category|protocol}2 '%3' in '%4' for target '%5': %6">;
+def err_sdkdb_objc_selector_regression : Error<"regression for ObjC selector '%0' in %select{class|category|protocol}1 '%2' in '%3' for target '%4': %5">;
 def err_sdkdb_frontend_api_regression: Error<"regression for %select{enum|enum constant|typedef}0 '%1' for target '%2': %3">;
 
 def warn_sdkdb_new_global : Warning<"new API %select{symbol|global variable|function}0 '%1' in '%2' for target '%3'">;
 def warn_sdkdb_new_objc : Warning<"new API objc %select{class|category|protocol}0 '%1' in '%2' for target '%3'">;
 def warn_sdkdb_new_frontend_api : Warning<"new API %select{enum|enum constant|typedef}0 '%1' for target '%2'">;
-def warn_sdkdb_new_objc_method : Warning<"new API ObjC %select{class|instance}1 method '%0' in %select{class|category|protocol}2 '%3' in '%4' for target '%5'">;
+def warn_sdkdb_new_objc_selector : Warning<"new API ObjC selector '%0' in %select{class|category|protocol}1 '%2' in '%3' for target '%4'">;
 def warn_sdkdb_new_api : Warning<"new %select{frontend API|library '%2'}0 from project '%1' for target '%3'">;
 
-def note_sdkdb_previous_definition : Note<"previous definition in %0">;
-def note_sdkdb_moved_symbol : Note<"symbol moved from '%0' to '%1'">;
 } // end of SDKDB category.
 
 } // end of TAPI component.

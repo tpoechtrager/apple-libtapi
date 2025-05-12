@@ -18,12 +18,10 @@
 #include "llvm/Support/FileSystem.h"
 #include <atomic>
 #include <mutex>
-#include <optional>
 
 namespace llvm {
 
 class MemoryBuffer;
-class raw_ostream;
 
 namespace cas {
 
@@ -162,13 +160,13 @@ public:
       assert((uint64_t)Offset.get() < (1LL << 48));
     }
 
-    std::optional<HintT> getHint(const OnDiskHashMappedTrie &This) const {
+    Optional<HintT> getHint(const OnDiskHashMappedTrie &This) const {
       if (!IsHint)
-        return std::nullopt;
+        return None;
       HintT H(ValueOrHint);
       assert(H.P == &This && "Expected hint to be for This");
       if (H.P != &This)
-        return std::nullopt;
+        return None;
       return H;
     }
 
@@ -204,12 +202,13 @@ public:
   };
 
   pointer getMutablePointer(const_pointer CP) {
-    if (std::optional<HintT> H = CP.getHint(*this))
+    if (Optional<HintT> H = CP.getHint(*this))
       return pointer(CP.getOffset(), *H);
     if (!CP)
       return pointer();
-    ValueProxy V{CP->Hash, MutableArrayRef(const_cast<char *>(CP->Data.data()),
-                                           CP->Data.size())};
+    ValueProxy V{CP->Hash,
+                 makeMutableArrayRef(const_cast<char *>(CP->Data.data()),
+                                     CP->Data.size())};
     return pointer(CP.getOffset(), V);
   }
 
@@ -295,9 +294,9 @@ public:
   static Expected<OnDiskHashMappedTrie>
   create(const Twine &Path, const Twine &TrieName, size_t NumHashBits,
          uint64_t DataSize, uint64_t MaxFileSize,
-         std::optional<uint64_t> NewFileInitialSize,
-         std::optional<size_t> NewTableNumRootBits = std::nullopt,
-         std::optional<size_t> NewTableNumSubtrieBits = std::nullopt);
+         Optional<uint64_t> NewFileInitialSize,
+         Optional<size_t> NewTableNumRootBits = None,
+         Optional<size_t> NewTableNumSubtrieBits = None);
 
   OnDiskHashMappedTrie(OnDiskHashMappedTrie &&RHS);
   OnDiskHashMappedTrie &operator=(OnDiskHashMappedTrie &&RHS);
@@ -366,7 +365,7 @@ public:
 
   static Expected<OnDiskDataAllocator>
   create(const Twine &Path, const Twine &TableName, uint64_t MaxFileSize,
-         std::optional<uint64_t> NewFileInitialSize,
+         Optional<uint64_t> NewFileInitialSize,
          uint32_t UserHeaderSize = 0,
          function_ref<void(void *)> UserHeaderInit = nullptr);
 

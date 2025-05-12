@@ -17,7 +17,6 @@
 #include "llvm/Remarks/Remark.h"
 #include "llvm/Support/Error.h"
 #include <memory>
-#include <optional>
 #include <string>
 
 namespace llvm {
@@ -86,7 +85,7 @@ Expected<std::unique_ptr<ToolOutputFile>>
 setupLLVMOptimizationRemarks(LLVMContext &Context, StringRef RemarksFilename,
                              StringRef RemarksPasses, StringRef RemarksFormat,
                              bool RemarksWithHotness,
-                             std::optional<uint64_t> RemarksHotnessThreshold = 0);
+                             Optional<uint64_t> RemarksHotnessThreshold = 0);
 
 /// Setup optimization remarks that output directly to a raw_ostream.
 /// \p OS is managed by the caller and should be open for writing as long as \p
@@ -94,7 +93,7 @@ setupLLVMOptimizationRemarks(LLVMContext &Context, StringRef RemarksFilename,
 Error setupLLVMOptimizationRemarks(
     LLVMContext &Context, raw_ostream &OS, StringRef RemarksPasses,
     StringRef RemarksFormat, bool RemarksWithHotness,
-    std::optional<uint64_t> RemarksHotnessThreshold = 0);
+    Optional<uint64_t> RemarksHotnessThreshold = 0);
 
 } // end namespace llvm
 

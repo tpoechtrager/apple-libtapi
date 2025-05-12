@@ -22,13 +22,7 @@
 namespace llvm {
 
 struct CoroSplitPass : PassInfoMixin<CoroSplitPass> {
-  const std::function<bool(Instruction &)> MaterializableCallback;
-
-  CoroSplitPass(bool OptimizeFrame = false);
-  CoroSplitPass(std::function<bool(Instruction &)> MaterializableCallback,
-                bool OptimizeFrame = false)
-      : MaterializableCallback(MaterializableCallback),
-        OptimizeFrame(OptimizeFrame) {}
+  CoroSplitPass(bool OptimizeFrame = false) : OptimizeFrame(OptimizeFrame) {}
 
   PreservedAnalyses run(LazyCallGraph::SCC &C, CGSCCAnalysisManager &AM,
                         LazyCallGraph &CG, CGSCCUpdateResult &UR);

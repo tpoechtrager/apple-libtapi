@@ -15,12 +15,13 @@
 
 #include "ByteStreamer.h"
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/None.h"
+#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/DebugInfoMetadata.h"
 #include <cassert>
 #include <cstdint>
 #include <iterator>
-#include <optional>
 
 namespace llvm {
 
@@ -52,9 +53,9 @@ public:
   DIExpressionCursor(const DIExpressionCursor &) = default;
 
   /// Consume one operation.
-  std::optional<DIExpression::ExprOperand> take() {
+  Optional<DIExpression::ExprOperand> take() {
     if (Start == End)
-      return std::nullopt;
+      return None;
     return *(Start++);
   }
 
@@ -62,20 +63,20 @@ public:
   void consume(unsigned N) { std::advance(Start, N); }
 
   /// Return the current operation.
-  std::optional<DIExpression::ExprOperand> peek() const {
+  Optional<DIExpression::ExprOperand> peek() const {
     if (Start == End)
-      return std::nullopt;
+      return None;
     return *(Start);
   }
 
   /// Return the next operation.
-  std::optional<DIExpression::ExprOperand> peekNext() const {
+  Optional<DIExpression::ExprOperand> peekNext() const {
     if (Start == End)
-      return std::nullopt;
+      return None;
 
     auto Next = Start.getNext();
     if (Next == End)
-      return std::nullopt;
+      return None;
 
     return *Next;
   }
@@ -87,7 +88,7 @@ public:
   DIExpression::expr_op_iterator end() const { return End; }
 
   /// Retrieve the fragment information, if any.
-  std::optional<DIExpression::FragmentInfo> getFragmentInfo() const {
+  Optional<DIExpression::FragmentInfo> getFragmentInfo() const {
     return DIExpression::getFragmentInfo(Start, End);
   }
 };
@@ -169,7 +170,7 @@ public:
 
   bool isParameterValue() { return LocationFlags & CallSiteParamValue; }
 
-  std::optional<uint8_t> TagOffset;
+  Optional<uint8_t> TagOffset;
 
 protected:
   /// Push a DW_OP_piece / DW_OP_bit_piece for emitting later, if one is needed

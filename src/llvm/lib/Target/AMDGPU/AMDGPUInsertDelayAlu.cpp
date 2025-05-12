@@ -51,7 +51,7 @@ public:
         MI.getOpcode() == AMDGPU::S_SENDMSG_RTN_B64)
       return true;
     if (MI.getOpcode() == AMDGPU::S_WAITCNT_DEPCTR &&
-        AMDGPU::DepCtr::decodeFieldVaVdst(MI.getOperand(0).getImm()) == 0)
+        (MI.getOperand(0).getImm() & 0xf000) == 0)
       return true;
     return false;
   }
@@ -77,15 +77,11 @@ public:
   struct DelayInfo {
     // One larger than the maximum number of (non-TRANS) VALU instructions we
     // can encode in an s_delay_alu instruction.
-    static constexpr unsigned VALU_MAX = 5;
+    static const unsigned VALU_MAX = 5;
 
     // One larger than the maximum number of TRANS instructions we can encode in
     // an s_delay_alu instruction.
-    static constexpr unsigned TRANS_MAX = 4;
-
-    // One larger than the maximum number of SALU cycles we can encode in an
-    // s_delay_alu instruction.
-    static constexpr unsigned SALU_CYCLES_MAX = 4;
+    static const unsigned TRANS_MAX = 4;
 
     // If it was written by a (non-TRANS) VALU, remember how many clock cycles
     // are left until it completes, and how many other (non-TRANS) VALU we have
@@ -124,9 +120,7 @@ public:
         TRANSNumVALU = 0;
         break;
       case SALU:
-        // Guard against pseudo-instructions like SI_CALL which are marked as
-        // SALU but with a very high latency.
-        SALUCycles = std::min(Cycles, SALU_CYCLES_MAX);
+        SALUCycles = Cycles;
         break;
       }
     }
@@ -284,7 +278,6 @@ public:
 
     // Wait for an SALU instruction.
     if (Delay.SALUCycles) {
-      assert(Delay.SALUCycles < DelayInfo::SALU_CYCLES_MAX);
       if (Imm & 0x780) {
         // We have already encoded a VALU and a TRANS delay. There's no room in
         // the encoding for an SALU delay as well, so just drop it.
@@ -356,7 +349,6 @@ public:
 
       if (instructionWaitsForVALU(MI)) {
         // Forget about all outstanding VALU delays.
-        // TODO: This is overkill since it also forgets about SALU delays.
         State = DelayState();
       } else if (Type != OTHER) {
         DelayInfo Delay;
@@ -368,11 +360,11 @@ public:
             // ignore this operand.
             if (MI.getOpcode() == AMDGPU::V_WRITELANE_B32 && Op.isTied())
               continue;
-            for (MCRegUnit Unit : TRI->regunits(Op.getReg())) {
-              auto It = State.find(Unit);
+            for (MCRegUnitIterator UI(Op.getReg(), TRI); UI.isValid(); ++UI) {
+              auto It = State.find(*UI);
               if (It != State.end()) {
                 Delay.merge(It->second);
-                State.erase(Unit);
+                State.erase(*UI);
               }
             }
           }
@@ -388,9 +380,9 @@ public:
         // TODO: Scan implicit defs too?
         for (const auto &Op : MI.defs()) {
           unsigned Latency = SchedModel.computeOperandLatency(
-              &MI, Op.getOperandNo(), nullptr, 0);
-          for (MCRegUnit Unit : TRI->regunits(Op.getReg()))
-            State[Unit] = DelayInfo(Type, Latency);
+              &MI, MI.getOperandNo(&Op), nullptr, 0);
+          for (MCRegUnitIterator UI(Op.getReg(), TRI); UI.isValid(); ++UI)
+            State[*UI] = DelayInfo(Type, Latency);
         }
       }
 

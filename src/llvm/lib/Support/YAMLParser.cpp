@@ -13,6 +13,7 @@
 #include "llvm/Support/YAMLParser.h"
 #include "llvm/ADT/AllocatorList.h"
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/None.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
@@ -258,9 +259,8 @@ public:
   Token getNext();
 
   void printError(SMLoc Loc, SourceMgr::DiagKind Kind, const Twine &Message,
-                  ArrayRef<SMRange> Ranges = std::nullopt) {
-    SM.PrintMessage(Loc, Kind, Message, Ranges, /* FixIts= */ std::nullopt,
-                    ShowColors);
+                  ArrayRef<SMRange> Ranges = None) {
+    SM.PrintMessage(Loc, Kind, Message, Ranges, /* FixIts= */ None, ShowColors);
   }
 
   void setError(const Twine &Message, StringRef::iterator Position) {
@@ -760,7 +760,7 @@ std::string yaml::escape(StringRef Input, bool EscapePrintable) {
   return EscapedInput;
 }
 
-std::optional<bool> yaml::parseBool(StringRef S) {
+llvm::Optional<bool> yaml::parseBool(StringRef S) {
   switch (S.size()) {
   case 1:
     switch (S.front()) {
@@ -771,7 +771,7 @@ std::optional<bool> yaml::parseBool(StringRef S) {
     case 'N':
       return false;
     default:
-      return std::nullopt;
+      return None;
     }
   case 2:
     switch (S.front()) {
@@ -782,7 +782,7 @@ std::optional<bool> yaml::parseBool(StringRef S) {
     case 'o':
       if (S[1] == 'n') //[Oo]n
         return true;
-      return std::nullopt;
+      return None;
     case 'N':
       if (S[1] == 'O') // NO
         return false;
@@ -790,9 +790,9 @@ std::optional<bool> yaml::parseBool(StringRef S) {
     case 'n':
       if (S[1] == 'o') //[Nn]o
         return false;
-      return std::nullopt;
+      return None;
     default:
-      return std::nullopt;
+      return None;
     }
   case 3:
     switch (S.front()) {
@@ -803,7 +803,7 @@ std::optional<bool> yaml::parseBool(StringRef S) {
     case 'o':
       if (S.drop_front() == "ff") //[Oo]ff
         return false;
-      return std::nullopt;
+      return None;
     case 'Y':
       if (S.drop_front() == "ES") // YES
         return true;
@@ -811,9 +811,9 @@ std::optional<bool> yaml::parseBool(StringRef S) {
     case 'y':
       if (S.drop_front() == "es") //[Yy]es
         return true;
-      return std::nullopt;
+      return None;
     default:
-      return std::nullopt;
+      return None;
     }
   case 4:
     switch (S.front()) {
@@ -824,9 +824,9 @@ std::optional<bool> yaml::parseBool(StringRef S) {
     case 't':
       if (S.drop_front() == "rue") //[Tt]rue
         return true;
-      return std::nullopt;
+      return None;
     default:
-      return std::nullopt;
+      return None;
     }
   case 5:
     switch (S.front()) {
@@ -837,12 +837,12 @@ std::optional<bool> yaml::parseBool(StringRef S) {
     case 'f':
       if (S.drop_front() == "alse") //[Ff]alse
         return false;
-      return std::nullopt;
+      return None;
     default:
-      return std::nullopt;
+      return None;
     }
   default:
-    return std::nullopt;
+    return None;
   }
 }
 
@@ -2041,11 +2041,8 @@ StringRef ScalarNode::getValue(SmallVectorImpl<char> &Storage) const {
     }
     return UnquotedValue;
   }
-  // Plain.
-  // Trim whitespace ('b-char' and 's-white').
-  // NOTE: Alternatively we could change the scanner to not include whitespace
-  //       here in the first place.
-  return Value.rtrim("\x0A\x0D\x20\x09");
+  // Plain or block.
+  return Value.rtrim(' ');
 }
 
 StringRef ScalarNode::unescapeDoubleQuoted( StringRef UnquotedValue

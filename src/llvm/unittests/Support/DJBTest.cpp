@@ -25,28 +25,28 @@ TEST(DJBTest, caseFolding) {
 
       {{"I"}, {"i"}},
       // Latin Small Letter Dotless I
-      {{/*U+130*/ "\xc4\xb0"}, {"i"}},
+      {{u8"\u0130"}, {"i"}},
       // Latin Capital Letter I With Dot Above
-      {{/*U+131*/ "\xc4\xb1"}, {"i"}},
+      {{u8"\u0131"}, {"i"}},
 
       // Latin Capital Letter A With Grave
-      {{/*U+c0*/ "\xc3\x80"}, {/*U+e0*/ "\xc3\xa0"}},
+      {{u8"\u00c0"}, {u8"\u00e0"}},
       // Latin Capital Letter A With Macron
-      {{/*U+100*/ "\xc4\x80"}, {/*U+101*/ "\xc4\x81"}},
+      {{u8"\u0100"}, {u8"\u0101"}},
       // Latin Capital Letter L With Acute
-      {{/*U+139*/ "\xc4\xb9"}, {/*U+13a*/ "\xc4\xba"}},
+      {{u8"\u0139"}, {u8"\u013a"}},
       // Cyrillic Capital Letter Ie
-      {{/*U+415*/ "\xd0\x95"}, {/*U+435*/ "\xd0\xb5"}},
+      {{u8"\u0415"}, {u8"\u0435"}},
       // Latin Capital Letter A With Circumflex And Grave
-      {{/*U+1ea6*/ "\xe1\xba\xa6"}, {/*U+1ea7*/ "\xe1\xba\xa7"}},
+      {{u8"\u1ea6"}, {u8"\u1ea7"}},
       // Kelvin Sign
-      {{/*U+212a*/ "\xe2\x84\xaa"}, {"k"}},
+      {{u8"\u212a"}, {u8"\u006b"}},
       // Glagolitic Capital Letter Chrivi
-      {{/*U+2c1d*/ "\xe2\xb0\x9d"}, {/*U+2c4d*/ "\xe2\xb1\x8d"}},
+      {{u8"\u2c1d"}, {u8"\u2c4d"}},
       // Fullwidth Latin Capital Letter M
-      {{/*U+ff2d*/ "\xef\xbc\xad"}, {/*U+ff4d*/ "\xef\xbd\x8d"}},
+      {{u8"\uff2d"}, {u8"\uff4d"}},
       // Old Hungarian Capital Letter Ej
-      {{/*U+10c92*/ "\xf0\x90\xb2\x92"}, {/*U+10cd2*/ "\xf0\x90\xb3\x92"}},
+      {{u8"\U00010c92"}, {u8"\U00010cd2"}},
   };
 
   for (const TestCase &T : Tests) {
@@ -80,19 +80,16 @@ TEST(DJBTest, knownValuesLowerCase) {
 }
 
 TEST(DJBTest, knownValuesUnicode) {
-  EXPECT_EQ(5866553u, djbHash(/*U+130*/ "\xc4\xb0"));
-  EXPECT_EQ(177678u, caseFoldingDjbHash(/*U+130*/ "\xc4\xb0"));
+  EXPECT_EQ(5866553u, djbHash(u8"\u0130"));
+  EXPECT_EQ(177678u, caseFoldingDjbHash(u8"\u0130"));
   EXPECT_EQ(
       1302161417u,
-      djbHash("\xc4\xb0\xc4\xb1\xc3\x80\xc3\xa0\xc4\x80\xc4\x81\xc4\xb9\xc4\xba"
-              "\xd0\x95\xd0\xb5\xe1\xba\xa6\xe1\xba\xa7\xe2\x84\xaa\x6b\xe2\xb0"
-              "\x9d\xe2\xb1\x8d\xef\xbc\xad\xef\xbd\x8d\xf0\x90\xb2\x92\xf0\x90"
-              "\xb3\x92"));
+      djbHash(
+          u8"\u0130\u0131\u00c0\u00e0\u0100\u0101\u0139\u013a\u0415\u0435\u1ea6"
+          u8"\u1ea7\u212a\u006b\u2c1d\u2c4d\uff2d\uff4d\U00010c92\U00010cd2"));
   EXPECT_EQ(
       1145571043u,
       caseFoldingDjbHash(
-          "\xc4\xb0\xc4\xb1\xc3\x80\xc3\xa0\xc4\x80\xc4\x81\xc4\xb9\xc4\xba"
-          "\xd0\x95\xd0\xb5\xe1\xba\xa6\xe1\xba\xa7\xe2\x84\xaa\x6b\xe2\xb0"
-          "\x9d\xe2\xb1\x8d\xef\xbc\xad\xef\xbd\x8d\xf0\x90\xb2\x92\xf0\x90"
-          "\xb3\x92"));
+          u8"\u0130\u0131\u00c0\u00e0\u0100\u0101\u0139\u013a\u0415\u0435\u1ea6"
+          u8"\u1ea7\u212a\u006b\u2c1d\u2c4d\uff2d\uff4d\U00010c92\U00010cd2"));
 }

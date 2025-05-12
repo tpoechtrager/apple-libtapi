@@ -25,13 +25,32 @@ typedef std::function<std::pair<tooling::Replacements, unsigned>(
     const Environment &)>
     AnalyzerPass;
 
-void addQualifierAlignmentFixerPasses(const FormatStyle &Style,
-                                      SmallVectorImpl<AnalyzerPass> &Passes);
+class QualifierAlignmentFixer : public TokenAnalyzer {
+  // Left to Right ordering requires multiple passes
+  SmallVector<AnalyzerPass, 8> Passes;
+  StringRef &Code;
+  ArrayRef<tooling::Range> Ranges;
+  unsigned FirstStartColumn;
+  unsigned NextStartColumn;
+  unsigned LastStartColumn;
+  StringRef FileName;
 
-void prepareLeftRightOrderingForQualifierAlignmentFixer(
-    const std::vector<std::string> &Order, std::vector<std::string> &LeftOrder,
-    std::vector<std::string> &RightOrder,
-    std::vector<tok::TokenKind> &Qualifiers);
+public:
+  QualifierAlignmentFixer(const Environment &Env, const FormatStyle &Style,
+                          StringRef &Code, ArrayRef<tooling::Range> Ranges,
+                          unsigned FirstStartColumn, unsigned NextStartColumn,
+                          unsigned LastStartColumn, StringRef FileName);
+
+  std::pair<tooling::Replacements, unsigned>
+  analyze(TokenAnnotator &Annotator,
+          SmallVectorImpl<AnnotatedLine *> &AnnotatedLines,
+          FormatTokenLexer &Tokens) override;
+
+  static void PrepareLeftRightOrdering(const std::vector<std::string> &Order,
+                                       std::vector<std::string> &LeftOrder,
+                                       std::vector<std::string> &RightOrder,
+                                       std::vector<tok::TokenKind> &Qualifiers);
+};
 
 class LeftRightQualifierAlignmentFixer : public TokenAnalyzer {
   std::string Qualifier;
@@ -67,13 +86,11 @@ public:
                                  const std::string &Qualifier,
                                  tok::TokenKind QualifierType);
 
-  // Is the Token a simple or qualifier type
-  static bool isQualifierOrType(const FormatToken *Tok);
-  static bool
-  isConfiguredQualifierOrType(const FormatToken *Tok,
-                              const std::vector<tok::TokenKind> &Qualifiers);
+  // is the Token a simple or qualifier type
+  static bool isQualifierOrType(const FormatToken *Tok,
+                                const std::vector<tok::TokenKind> &Qualifiers);
 
-  // Is the Token likely a Macro
+  // is the Token likely a Macro
   static bool isPossibleMacro(const FormatToken *Tok);
 };
 

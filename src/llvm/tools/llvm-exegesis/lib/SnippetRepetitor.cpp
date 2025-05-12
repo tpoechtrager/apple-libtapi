@@ -26,10 +26,8 @@ public:
   // Repeats the snippet until there are at least MinInstructions in the
   // resulting code.
   FillFunction Repeat(ArrayRef<MCInst> Instructions, unsigned MinInstructions,
-                      unsigned LoopBodySize,
-                      bool CleanupMemory) const override {
-    return [this, Instructions, MinInstructions,
-            CleanupMemory](FunctionFiller &Filler) {
+                      unsigned LoopBodySize) const override {
+    return [Instructions, MinInstructions](FunctionFiller &Filler) {
       auto Entry = Filler.getEntry();
       if (!Instructions.empty()) {
         // Add the whole snippet at least once.
@@ -38,7 +36,7 @@ public:
           Entry.addInstruction(Instructions[I % Instructions.size()]);
         }
       }
-      Entry.addReturn(State.getExegesisTarget(), CleanupMemory);
+      Entry.addReturn();
     };
   }
 
@@ -57,23 +55,11 @@ public:
 
   // Loop over the snippet ceil(MinInstructions / Instructions.Size()) times.
   FillFunction Repeat(ArrayRef<MCInst> Instructions, unsigned MinInstructions,
-                      unsigned LoopBodySize,
-                      bool CleanupMemory) const override {
-    return [this, Instructions, MinInstructions, LoopBodySize,
-            CleanupMemory](FunctionFiller &Filler) {
+                      unsigned LoopBodySize) const override {
+    return [this, Instructions, MinInstructions,
+            LoopBodySize](FunctionFiller &Filler) {
       const auto &ET = State.getExegesisTarget();
       auto Entry = Filler.getEntry();
-
-      // We can not use loop snippet repetitor for terminator instructions.
-      for (const MCInst &Inst : Instructions) {
-        const unsigned Opcode = Inst.getOpcode();
-        const MCInstrDesc &MCID = Filler.MCII->get(Opcode);
-        if (!MCID.isTerminator())
-          continue;
-        Entry.addReturn(State.getExegesisTarget(), CleanupMemory);
-        return;
-      }
-
       auto Loop = Filler.addBasicBlock();
       auto Exit = Filler.addBasicBlock();
 
@@ -95,17 +81,13 @@ public:
       // Set up the loop basic block.
       Entry.MBB->addSuccessor(Loop.MBB, BranchProbability::getOne());
       Loop.MBB->addSuccessor(Loop.MBB, BranchProbability::getOne());
-      // If the snippet setup completed, then we can track liveness.
-      if (Loop.MF.getProperties().hasProperty(
-              MachineFunctionProperties::Property::TracksLiveness)) {
-        // The live ins are: the loop counter, the registers that were setup by
-        // the entry block, and entry block live ins.
-        Loop.MBB->addLiveIn(LoopCounter);
-        for (unsigned Reg : Filler.getRegistersSetUp())
-          Loop.MBB->addLiveIn(Reg);
-        for (const auto &LiveIn : Entry.MBB->liveins())
-          Loop.MBB->addLiveIn(LiveIn);
-      }
+      // The live ins are: the loop counter, the registers that were setup by
+      // the entry block, and entry block live ins.
+      Loop.MBB->addLiveIn(LoopCounter);
+      for (unsigned Reg : Filler.getRegistersSetUp())
+        Loop.MBB->addLiveIn(Reg);
+      for (const auto &LiveIn : Entry.MBB->liveins())
+        Loop.MBB->addLiveIn(LiveIn);
       for (auto _ : seq(0U, LoopUnrollFactor)) {
         (void)_;
         Loop.addInstructions(Instructions);
@@ -115,7 +97,7 @@ public:
 
       // Set up the exit basic block.
       Loop.MBB->addSuccessor(Exit.MBB, BranchProbability::getZero());
-      Exit.addReturn(State.getExegesisTarget(), CleanupMemory);
+      Exit.addReturn();
     };
   }
 
@@ -134,14 +116,14 @@ private:
 SnippetRepetitor::~SnippetRepetitor() {}
 
 std::unique_ptr<const SnippetRepetitor>
-SnippetRepetitor::Create(Benchmark::RepetitionModeE Mode,
+SnippetRepetitor::Create(InstructionBenchmark::RepetitionModeE Mode,
                          const LLVMState &State) {
   switch (Mode) {
-  case Benchmark::Duplicate:
+  case InstructionBenchmark::Duplicate:
     return std::make_unique<DuplicateSnippetRepetitor>(State);
-  case Benchmark::Loop:
+  case InstructionBenchmark::Loop:
     return std::make_unique<LoopSnippetRepetitor>(State);
-  case Benchmark::AggregateMin:
+  case InstructionBenchmark::AggregateMin:
     break;
   }
   llvm_unreachable("Unknown RepetitionModeE enum");

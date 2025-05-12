@@ -34,7 +34,7 @@ TEST(Parser, SanityTest) {
   EXPECT_FALSE(ProcessResult);
 
   Record *Foo = Records.getDef("Foo");
-  std::optional<StringRef> Field = Foo->getValueAsOptionalString("strField");
+  Optional<StringRef> Field = Foo->getValueAsOptionalString("strField");
   EXPECT_TRUE(Field.has_value());
-  EXPECT_EQ(*Field, "value");
+  EXPECT_EQ(Field.value(), "value");
 }
