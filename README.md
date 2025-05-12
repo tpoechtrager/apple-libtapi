@@ -1,9 +1,9 @@
-# Apple TAPI library - Version 1600.0.11.8; API: 2.3.0 #
+# Apple TAPI library - Version 1500.0.12.3; API: 2.2.0 #
 
 Sources taken from: 
 
-https://github.com/apple-oss-distributions/tapi/releases/tag/tapi-1600.0.11.8  
-https://github.com/swiftlang/llvm-project/releases/tag/swift-6.0-DEVELOPMENT-SNAPSHOT-2024-07-02-a
+https://github.com/apple-oss-distributions/tapi/releases/tag/tapi-1500.0.12.3  
+https://github.com/apple/llvm-project/tree/swift-DEVELOPMENT-SNAPSHOT-2023-09-05-a
 
 ## Dependencies: ##
 
