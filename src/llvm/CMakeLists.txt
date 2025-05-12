@@ -2,8 +2,8 @@
 
 cmake_minimum_required(VERSION 3.20.0)
 
-set(LLVM_COMMON_CMAKE_UTILS ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
-include(${LLVM_COMMON_CMAKE_UTILS}/modules/CMakePolicy.cmake
+set(LLVM_COMMON_CMAKE_UTILS ${CMAKE_CURRENT_SOURCE_DIR}/../cmake)
+include(${LLVM_COMMON_CMAKE_UTILS}/Modules/CMakePolicy.cmake
   NO_POLICY_SCOPE)
 
 set(CMAKE_BUILD_WITH_INSTALL_NAME_DIR ON)
@@ -1200,6 +1200,10 @@ if( LLVM_INCLUDE_RUNTIMES )
   add_subdirectory(runtimes)
 endif()
 
+if( LLVM_INCLUDE_EXAMPLES )
+  add_subdirectory(examples)
+endif()
+
 if( LLVM_INCLUDE_TESTS )
   if(EXISTS ${LLVM_MAIN_SRC_DIR}/projects/test-suite AND TARGET clang)
     include(LLVMExternalProjectUtils)
@@ -1226,6 +1230,10 @@ if( LLVM_INCLUDE_TESTS )
   add_custom_target(test-depends
       DEPENDS ${LLVM_ALL_LIT_DEPENDS} ${LLVM_ALL_ADDITIONAL_TEST_DEPENDS})
   set_target_properties(test-depends PROPERTIES FOLDER "Tests")
+endif()
+
+if (LLVM_INCLUDE_DOCS)
+  add_subdirectory(docs)
 endif()
 
 add_subdirectory(cmake/modules)
@@ -1331,9 +1339,9 @@ if (LLVM_INCLUDE_BENCHMARKS)
     "Handle -Werror for Google Benchmark based on LLVM_ENABLE_WERROR" FORCE)
   # Since LLVM requires C++11 it is safe to assume that std::regex is available.
   set(HAVE_STD_REGEX ON CACHE BOOL "OK" FORCE)
-  #add_subdirectory(${LLVM_THIRD_PARTY_DIR}/benchmark
-  #  ${CMAKE_CURRENT_BINARY_DIR}/third-party/benchmark)
-  #add_subdirectory(benchmarks)
+  add_subdirectory(${LLVM_THIRD_PARTY_DIR}/benchmark
+    ${CMAKE_CURRENT_BINARY_DIR}/third-party/benchmark)
+  add_subdirectory(benchmarks)
 endif()
 
 if (LLVM_INCLUDE_UTILS AND LLVM_INCLUDE_TOOLS)

@@ -1,9 +1,10 @@
 cmake_minimum_required(VERSION 3.20.0)
 
 if(NOT DEFINED LLVM_COMMON_CMAKE_UTILS)
-  set(LLVM_COMMON_CMAKE_UTILS ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
+  set(LLVM_COMMON_CMAKE_UTILS ${CMAKE_CURRENT_SOURCE_DIR}/../cmake)
 endif()
-include(${LLVM_COMMON_CMAKE_UTILS}/modules/CMakePolicy.cmake)
+include(${LLVM_COMMON_CMAKE_UTILS}/Modules/CMakePolicy.cmake
+  NO_POLICY_SCOPE)
 
 # If we are not building as a part of LLVM, build Clang as an
 # standalone project, using LLVM as an external library:
@@ -16,12 +17,12 @@ endif()
 # we can include cmake files from this directory.
 list(INSERT CMAKE_MODULE_PATH 0
   "${CMAKE_CURRENT_SOURCE_DIR}/cmake/modules"
-  "${LLVM_COMMON_CMAKE_UTILS}/modules"
+  "${LLVM_COMMON_CMAKE_UTILS}/Modules"
   )
 
 # Must go below project(..)
-#include(GNUInstallDirs)
-#include(GetDarwinLinkerVersion)
+include(GNUInstallDirs)
+include(GetDarwinLinkerVersion)
 
 if(CLANG_BUILT_STANDALONE)
   set(CMAKE_CXX_STANDARD 17 CACHE STRING "C++ standard to conform to")
@@ -457,6 +458,9 @@ add_subdirectory(lib)
 add_subdirectory(tools)
 add_subdirectory(runtime)
 
+option(CLANG_BUILD_EXAMPLES "Build CLANG example programs by default." OFF)
+add_subdirectory(examples)
+
 if(APPLE)
   # this line is needed as a cleanup to ensure that any CMakeCaches with the old
   # default value get updated to the new default.
@@ -486,12 +490,19 @@ if( CLANG_INCLUDE_TESTS )
   list(APPEND CLANG_TEST_PARAMS
     clang_unit_site_config=${CMAKE_CURRENT_BINARY_DIR}/test/Unit/lit.site.cfg
   )
+  add_subdirectory(test)
   add_subdirectory(bindings/python/tests)
 
   if(CLANG_BUILT_STANDALONE)
     umbrella_lit_testsuite_end(check-all)
   endif()
   add_subdirectory(utils/perf-training)
+endif()
+
+option(CLANG_INCLUDE_DOCS "Generate build targets for the Clang docs."
+  ${LLVM_INCLUDE_DOCS})
+if( CLANG_INCLUDE_DOCS )
+  add_subdirectory(docs)
 endif()
 
 # Custom target to install all clang libraries.
