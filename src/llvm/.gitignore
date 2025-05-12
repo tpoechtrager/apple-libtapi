@@ -7,30 +7,9 @@
 #==============================================================================#
 
 #==============================================================================#
-# File extensions to be ignored anywhere in the tree.
+# Nested build directory.
 #==============================================================================#
-# Temp files created by most text editors.
-*~
-# Merge files created by git.
-*.orig
-# Reject files created by patch.
-*.rej
-# Byte compiled python modules.
-*.pyc
-# vim swap files
-.*.sw?
-.sw?
-#OS X specific files.
-.DS_store
-
-# Temporary file created by the automerger tool.
-.am.txt
-
-# Ignore the user specified CMake presets in subproject directories.
-/*/CMakeUserPresets.json
-
-# Nested build directory
-/build*
+/build
 
 #==============================================================================#
 # Explicit files to ignore (only matches one).
@@ -42,7 +21,6 @@
 /GRTAGS
 /GSYMS
 /GTAGS
-/ID
 .gitusers
 autom4te.cache
 cscope.files
@@ -54,22 +32,36 @@ autoconf/autom4te.cache
 /CMakeSettings.json
 # CLion project configuration
 /.idea
+# Qt Creator project configuration
+/CMakeLists.txt.user
 
 #==============================================================================#
 # Directories to ignore (do not add trailing '/'s, they skip symlinks).
 #==============================================================================#
+# External projects that are tracked independently.
+projects/*
+!projects/*.*
+!projects/Makefile
+runtimes/*
+!runtimes/*.*
+# Sphinx build tree, if building in-source dir.
+docs/_build
 # VS2017 and VSCode config files.
 .vscode
 .vs
-# pythonenv for github Codespaces
-pythonenv*
-# clangd index. (".clangd" is a config file now, thus trailing slash)
-.clangd/
-.cache
-# static analyzer regression testing project files
-/clang/utils/analyzer/projects/*/CachedSource
-/clang/utils/analyzer/projects/*/PatchedSource
-/clang/utils/analyzer/projects/*/ScanBuildResults
-/clang/utils/analyzer/projects/*/RefScanBuildResults
-# automodapi puts generated documentation files here.
-/lldb/docs/python_api/
+
+#==============================================================================#
+# File extensions to be ignored anywhere in the tree.
+# Placed at the end to override any previous ! patterns.
+#==============================================================================#
+# Temp files created by most text editors.
+*~
+# Merge files created by git.
+*.orig
+# Byte compiled python modules.
+*.pyc
+# vim swap files
+.*.sw?
+.sw?
+#OS X specific files.
+.DS_store
