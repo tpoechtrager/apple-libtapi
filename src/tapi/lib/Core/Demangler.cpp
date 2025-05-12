@@ -32,7 +32,7 @@ bool Demangler::isItaniumEncoding(StringRef mangledName) {
 
 DemangledName Demangler::demangle(StringRef mangledName) {
   DemangledName result{
-      .str = mangledName.str(), .isSwift = false, .isItanium = false};
+      .str = mangledName.str(), .isItanium = false, .isSwift = false};
   char *demangled = nullptr;
 
   if (isItaniumEncoding(mangledName)) {
