@@ -169,6 +169,20 @@ public:
   }
 };
 
+// Find the first architecture in the set that shares the same cpu type as the
+// requested architecture. This should mirror the fallback logic in tapi 2100 for
+// handling macOS 26+ SDK .tbd files that only carry arm64e slices when arm64 is
+// requested.
+static Architecture findCompatibleArch(ArchitectureSet archs,
+                                       Architecture requestedArch) {
+  auto requestedCPUType = getCPUTypeFromArchitecture(requestedArch).first;
+  for (auto arch : archs) {
+    if (getCPUTypeFromArchitecture(arch).first == requestedCPUType)
+      return arch;
+  }
+  return AK_unknown;
+}
+
 static Architecture getArchForCPU(cpu_type_t cpuType, cpu_subtype_t cpuSubType,
                                   bool enforceCpuSubType,
                                   ArchitectureSet archs) {
@@ -179,7 +193,8 @@ static Architecture getArchForCPU(cpu_type_t cpuType, cpu_subtype_t cpuSubType,
 
   if (enforceCpuSubType)
     return AK_unknown;
-  return arch;
+
+  return findCompatibleArch(archs, arch);
 }
 
 LinkerInterfaceFile::LinkerInterfaceFile() noexcept
