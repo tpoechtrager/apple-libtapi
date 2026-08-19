@@ -1300,7 +1300,7 @@ StringRef sys::getHostCPUName() {
   return "generic";
 }
 
-#elif defined(__APPLE__) && defined(__powerpc__)
+#elif defined(__APPLE__) && defined(__POWERPC__)
 StringRef sys::getHostCPUName() {
   host_basic_info_data_t hostInfo;
   mach_msg_type_number_t infoCount;
@@ -1912,7 +1912,10 @@ static Triple withHostArch(Triple T) {
 #elif defined(__x86_64__)
   T.setArch(Triple::x86_64);
   T.setArchName("x86_64");
-#elif defined(__powerpc__)
+#elif defined(__ppc64__)
+  T.setArch(Triple::ppc64);
+  T.setArchName("powerpc64");
+#elif defined(__ppc__)
   T.setArch(Triple::ppc);
   T.setArchName("powerpc");
 #else
