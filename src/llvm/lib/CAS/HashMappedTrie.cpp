@@ -20,7 +20,7 @@ using namespace llvm::cas;
 
 namespace {
 struct TrieNode {
-  const bool IsSubtrie = false;
+  const uint8_t IsSubtrie = false;
 
   TrieNode(bool IsSubtrie) : IsSubtrie(IsSubtrie) {}
 
