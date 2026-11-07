@@ -175,6 +175,16 @@ static Architecture getArchForCPU(cpu_type_t cpuType, cpu_subtype_t cpuSubType,
   if (archs.has(arch))
     return arch;
 
+  if (enforceCpuSubType)
+    return AK_unknown;
+
+  // Find an ABI-compatible slice with the same CPU type.
+  auto requestedCPUType = getCPUTypeFromArchitecture(arch).first;
+  for (auto candidate : archs) {
+    if (getCPUTypeFromArchitecture(candidate).first == requestedCPUType)
+      return candidate;
+  }
+
   return AK_unknown;
 }
 

@@ -937,4 +937,32 @@ TEST(TBDv3, InterfaceInequality) {
   }));
 }
 
+TEST(TBDv3, Arm64eX1RoundTrip) {
+  const char Input[] =
+      "--- !tapi-tbd-v3\n"
+      "archs: [arm64e.x1]\n"
+      "platform: macosx\n"
+      "install-name: /usr/lib/libtest.dylib\n"
+      "exports:\n"
+      "  - archs: [arm64e.x1]\n"
+      "    symbols: [_test]\n"
+      "...\n";
+  auto Result = TextAPIReader::get(MemoryBufferRef(Input, "Test.tbd"));
+  ASSERT_TRUE(!!Result);
+  auto File = std::move(Result.get());
+  EXPECT_EQ(ArchitectureSet(AK_arm64e_x1), File->getArchitectures());
+
+  std::string Output;
+  raw_string_ostream OS(Output);
+  auto WriteResult = TextAPIWriter::writeToStream(OS, *File);
+  ASSERT_FALSE(!!WriteResult);
+  OS.flush();
+  EXPECT_NE(std::string::npos, Output.find("arm64e.x1"));
+  EXPECT_EQ(std::string::npos, Output.find("arm64e_x1"));
+
+  auto RoundTrip = TextAPIReader::get(MemoryBufferRef(Output, "RoundTrip.tbd"));
+  ASSERT_TRUE(!!RoundTrip);
+  EXPECT_EQ(ArchitectureSet(AK_arm64e_x1), (*RoundTrip)->getArchitectures());
+}
+
 } // namespace TBDv3
