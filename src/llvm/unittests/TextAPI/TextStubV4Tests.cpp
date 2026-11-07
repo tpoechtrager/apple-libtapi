@@ -946,4 +946,32 @@ TEST(TBDv4, MalformedFile3) {
             ErrorMessage);
 }
 
+TEST(TBDv4, Arm64eX1RoundTrip) {
+  const char Input[] =
+      "--- !tapi-tbd\n"
+      "tbd-version: 4\n"
+      "targets: [arm64e.x1-macos]\n"
+      "install-name: /usr/lib/libtest.dylib\n"
+      "exports:\n"
+      "  - targets: [arm64e.x1-macos]\n"
+      "    symbols: [_test]\n"
+      "...\n";
+  auto Result = TextAPIReader::get(MemoryBufferRef(Input, "Test.tbd"));
+  ASSERT_TRUE(!!Result);
+  auto File = std::move(Result.get());
+  EXPECT_EQ(ArchitectureSet(AK_arm64e_x1), File->getArchitectures());
+
+  std::string Output;
+  raw_string_ostream OS(Output);
+  auto WriteResult = TextAPIWriter::writeToStream(OS, *File);
+  ASSERT_FALSE(!!WriteResult);
+  OS.flush();
+  EXPECT_NE(std::string::npos, Output.find("arm64e.x1"));
+  EXPECT_EQ(std::string::npos, Output.find("arm64e_x1"));
+
+  auto RoundTrip = TextAPIReader::get(MemoryBufferRef(Output, "RoundTrip.tbd"));
+  ASSERT_TRUE(!!RoundTrip);
+  EXPECT_EQ(ArchitectureSet(AK_arm64e_x1), (*RoundTrip)->getArchitectures());
+}
+
 } // end namespace TBDv4
