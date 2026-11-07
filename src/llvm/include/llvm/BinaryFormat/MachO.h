@@ -1635,6 +1635,7 @@ enum CPUSubTypeARM64 {
   CPU_SUBTYPE_ARM64_ALL = 0,
   CPU_SUBTYPE_ARM64_V8 = 1,
   CPU_SUBTYPE_ARM64E = 2,
+  CPU_SUBTYPE_ARM64E_X1 = 12,
 
   // arm64 reserves bits in the high byte for subtype-specific flags.
   // On arm64e, the 6 low bits represent the ptrauth ABI version.
