@@ -21,7 +21,7 @@ list(INSERT CMAKE_MODULE_PATH 0
 
 # Must go below project(..)
 #include(GNUInstallDirs)
-#include(GetDarwinLinkerVersion)
+include(GetDarwinLinkerVersion)
 
 if(CLANG_BUILT_STANDALONE)
   set(CMAKE_CXX_STANDARD 17 CACHE STRING "C++ standard to conform to")
