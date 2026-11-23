@@ -864,4 +864,34 @@ TEST(TBDv3, Arm64eX1RoundTrip) {
   EXPECT_EQ(ArchitectureSet(AK_arm64e_x1), (*RoundTrip)->getArchitectures());
 }
 
+TEST(TBDv3, Arm64_32RoundTrip) {
+  const char Input[] =
+      "--- !tapi-tbd-v3\n"
+      "archs: [arm64_32]\n"
+      "platform: watchos\n"
+      "install-name: /usr/lib/libtest.dylib\n"
+      "exports:\n"
+      "  - archs: [arm64_32]\n"
+      "    symbols: [_test]\n"
+      "...\n";
+  auto Result = TextAPIReader::get(MemoryBufferRef(Input, "Test.tbd"));
+  ASSERT_TRUE(!!Result);
+  auto File = std::move(Result.get());
+  EXPECT_EQ(ArchitectureSet(AK_arm64_32), File->getArchitectures());
+
+  std::string Output;
+  raw_string_ostream OS(Output);
+  auto WriteResult = TextAPIWriter::writeToStream(OS, *File);
+  ASSERT_FALSE(!!WriteResult);
+  OS.flush();
+  EXPECT_NE(std::string::npos, Output.find("arm64_32"));
+
+  auto RoundTrip = TextAPIReader::get(MemoryBufferRef(Output, "RoundTrip.tbd"));
+  ASSERT_TRUE(!!RoundTrip);
+  EXPECT_EQ(ArchitectureSet(AK_arm64_32), (*RoundTrip)->getArchitectures());
+  EXPECT_EQ(AK_arm64_32,
+            getArchitectureFromCpuType(MachO::CPU_TYPE_ARM64_32,
+                                       MachO::CPU_SUBTYPE_ARM64_32_V8));
+}
+
 } // namespace TBDv3
